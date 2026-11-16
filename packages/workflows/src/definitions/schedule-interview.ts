@@ -456,8 +456,8 @@ export const scheduleInterview: WorkflowDefinition<State> = {
         await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} (${zone}).${place ? ` ${place}` : ""}`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` }, userIds: b.participants.map((p) => p.userId) });
         await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.confirmed", title: `${word}: ${b.candidate.firstName} ${b.candidate.lastName}, ${b.iv.title}`, body: `${when} with ${b.participants.map((p) => p.firstName).join(", ")}.`, action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
         // The interviewer's brief (F7, F8) rides with the confirmation: the round, what it covers, what the evidence says so
-        // far. Pay only for roles that may see it, quotes holding the candidate's contact details only for those who may open
-        // their application (`briefForReader`), as on the interview page.
+        // far. Pay only for roles that may see it, quotes and answers holding the candidate's contact details only for those
+        // who may open their application (`briefForReader`), as on the interview page.
         const brief = b.packet ? await composeInterviewerBrief(ctx.q, { applicationId: b.app.id, candidateFirstName: b.candidate.firstName, packet: b.packet, roundKey: b.iv.roundKey }) : null;
         const memberRoles = new Map((await ctx.q.select({ userId: memberships.userId, role: memberships.role }).from(memberships).where(and(eq(memberships.companyId, ctx.companyId), inArray(memberships.userId, b.participants.map((p) => p.userId))))).map((m) => [m.userId, m.role as MembershipRole]));
         for (const p of b.participants) {

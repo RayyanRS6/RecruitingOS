@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { NOT_ASKED_NOTE, composeInterviewerBrief, renderInterviewerBriefText } from "@ros/agents";
-import { anonymizeCandidate, entitlements } from "@ros/core";
+import { CHAT_WRAP_KEY, anonymizeCandidate, entitlements } from "@ros/core";
 import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, rolePackets, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -376,18 +376,26 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const questions = (packet as unknown as { screening: { questions: Array<{ key: string; question: string; kind: string }> } }).screening.questions;
     const payQuestion = questions.find((q) => q.kind === "compensation")!;
     const workQuestion = questions.find((q) => q.kind === "skills")!;
+    const daysQuestion = questions.find((q) => q.kind === "availability")!;
     expect(payQuestion, "the playbook asks about pay").toBeTruthy();
+    expect(daysQuestion, "the playbook asks when they can work").toBeTruthy();
     const payAnswer = "I am looking for $61 to $64 an hour";
     const workAnswer = "Six years of perio charting and patient education at a busy family practice";
-    await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `pay-brief-${cand.id}`, completedAt: new Date(BASE).toISOString(), answers: { [payQuestion.key]: payAnswer, [workQuestion.key]: workAnswer } });
+    // A second look at the fix below: an answer to another question that names an amount, and the closing answer with her
+    // number, reach an interviewer neither.
+    const daysAnswer = "Tuesday to Friday, from the 1st, at $50 or more";
+    const closingAnswer = "Text me at (949) 555-0177 after 5";
+    await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `pay-brief-${cand.id}`, completedAt: new Date(BASE).toISOString(), answers: { [payQuestion.key]: payAnswer, [workQuestion.key]: workAnswer, [daysQuestion.key]: daysAnswer, [CHAT_WRAP_KEY]: closingAnswer } });
     // The second review of the live-test fixes (#5): the résumé's quote on a must-have the AI interview left unknown names
-    // her pay, and a strength quotes her phone number. The owner reads both; an interviewer reads neither.
+    // her pay, and a strength quotes her phone number. The owner reads both; an interviewer reads neither. A strength quoting
+    // the practice's own figures keeps its claim for an interviewer, without the quote.
     const payMust = packet.requirements.mustHaves[0];
     const payQuote = "Active CA RDH license, 4 years; desired pay $28/hour";
     const phoneQuote = "Perio program lead, call me at (714) 555-0142";
+    const figuresQuote = "Hygiene production up to $90k a month";
     const scorecard = { overall: "potential", confidence: "medium", summary: "Two answers.", strengths: [{ claim: "Gave a concrete answer about recent work", evidence: { source: "screen", quote: workAnswer } }], concerns: [{ claim: "Expects more than the posted range", evidence: { source: "screen", quote: payAnswer } }], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: payMust.key, met: "unknown" }], anomalies: [], questionFindings: [], compensationExpectation: { stated: payAnswer, withinRange: "above" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "hold", rationale: "x" };
     await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard as never, overall: "potential", confidence: "medium" });
-    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence.", strengths: [{ claim: "Leads the perio program", evidence: { source: "resume", quote: phoneQuote } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: payMust.key, met: "yes", evidence: { source: "resume", quote: payQuote } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence.", strengths: [{ claim: "Leads the perio program", evidence: { source: "resume", quote: phoneQuote } }, { claim: "Grew the hygiene schedule", evidence: { source: "resume", quote: figuresQuote } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: payMust.key, met: "yes", evidence: { source: "resume", quote: payQuote } }], anomalies: [], recommendation: "screen", rationale: "x" };
     await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: new Date(Date.now() + 60_000).toISOString() });
     // not on any of their interviews yet: refused
     expect((await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).status).toBe(403);
@@ -425,6 +433,9 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(mail!.text).not.toContain("555-0142");
     expect(mail!.text.split("\n")).toContain(`- ${payMust.text}: met`);
     expect(mail!.text.split("\n")).toContain("- Leads the perio program");
+    // the strength quoting the practice's figures without its quote, and neither the answer naming an amount nor her number
+    expect(mail!.text.split("\n")).toContain("- Grew the hygiene schedule");
+    expect(mail!.text).not.toMatch(/\$90k|\$50 or more|555-0177/);
     // the interviewer's view of that candidate: the brief and little else
     const view = (await (await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).json()) as { viewer: string; allowedActions: string[]; candidate: Record<string, unknown>; brief: { round: { key: string }; includesPay: boolean; pay: unknown; mustHaves: Array<{ key: string; text: string; met: string; quote: string | null }> }; interviews: Array<{ id: string }> };
     expect(view.viewer).toBe("interviewer");
@@ -443,6 +454,7 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(text).not.toContain("$61");
     expect(text).not.toContain("$28");
     expect(text).not.toContain("555-0142");
+    expect(text).not.toMatch(/\$90k|\$50 or more|555-0177/);
     expect(text).not.toContain(payQuestion.question);
     expect((await audits("candidate.viewed")).some((a) => a.actor.id === samId && a.target?.id === cand.id)).toBe(true);
     // another candidate: refused
@@ -455,12 +467,16 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(JSON.stringify(mine.brief)).not.toContain("$61");
     expect(JSON.stringify(mine.brief)).not.toContain("$28");
     expect(JSON.stringify(mine.brief)).not.toContain("555-0142");
+    expect(JSON.stringify(mine.brief)).not.toMatch(/\$90k|\$50 or more|555-0177/);
+    expect(JSON.stringify(mine.brief)).toContain("Grew the hygiene schedule");
     const theirs = (await (await json(owner, "GET", `/api/v1/interviews/${iv.id}`)).json()) as { brief: { includesPay: boolean } | null };
     expect(theirs.brief?.includesPay).toBe(true);
     // the owner may see pay: the answer, the concern and the expectation are all in their copy
     expect(theirs.brief).toMatchObject({ pay: { expectation: payAnswer, withinRange: "above" }, concerns: expect.arrayContaining([expect.objectContaining({ quote: payAnswer, aboutPay: true })]), screen: { answers: expect.arrayContaining([expect.objectContaining({ answer: payAnswer, aboutPay: true })]) } });
     // and the quotes an interviewer does not get: the must-have's, marked as about pay, and the strength's with her number
-    expect(theirs.brief).toMatchObject({ mustHaves: expect.arrayContaining([expect.objectContaining({ key: payMust.key, met: "yes", quote: payQuote, source: "resume", aboutPay: true })]), strengths: expect.arrayContaining([expect.objectContaining({ claim: "Leads the perio program", quote: phoneQuote })]) });
+    expect(theirs.brief).toMatchObject({ mustHaves: expect.arrayContaining([expect.objectContaining({ key: payMust.key, met: "yes", quote: payQuote, source: "resume", aboutPay: true })]), strengths: expect.arrayContaining([expect.objectContaining({ claim: "Leads the perio program", quote: phoneQuote }), expect.objectContaining({ claim: "Grew the hygiene schedule", quote: figuresQuote })]) });
+    // and the answers: the one naming an amount, marked as about pay, and the closing one with her number
+    expect(theirs.brief).toMatchObject({ screen: { answers: expect.arrayContaining([expect.objectContaining({ answer: daysAnswer, aboutPay: true }), expect.objectContaining({ answer: closingAnswer, aboutPay: false })]) } });
     // the interview page's "Message the candidate" leads to the sheet with the text box open
     const sheet = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string }> };
     expect(sheet.interviews.some((i) => i.id === iv.id)).toBe(true);

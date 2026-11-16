@@ -3,7 +3,7 @@ import { quoteWithSource, type EvidenceAssessment, type MembershipRole, type Rol
 import { can, countedFinding, screenAnswersSent, shownSkillFinding, teamScreenView, unsentScreenReadings } from "@ros/core";
 import { assessments, screens, type Queryable } from "@ros/db";
 import { scoringView } from "./scoring-view";
-import { answersOf } from "./screen-focus";
+import { answersOf, isFocusKey } from "./screen-focus";
 import { withoutResumeShownConcerns } from "./screening";
 
 /**
@@ -18,16 +18,19 @@ export type MustHaveFinding = "yes" | "partially" | "no" | "unknown";
 export type CompetencyFinding = "evidenced" | "partially_evidenced" | "not_evidenced" | "contradicted";
 
 /**
- * `aboutPay` marks what speaks to the candidate's pay: the answer to a compensation question, and any answer or finding
- * that repeats what they said about pay or talks about pay, in its claim or its quote. A reader whose role may not see pay
- * never receives these (`redactBriefPay`); docs/spec/02: interviewers never see pay.
+ * `aboutPay` marks what speaks to the candidate's pay, which a reader whose role may not see pay never receives
+ * (`redactBriefPay`; docs/spec/02: interviewers never see pay): an AI interview answer to a question about pay or one
+ * that names pay (`composeInterviewerBrief`), and a finding whose claim talks about pay or whose claim or quote repeats
+ * what they said about pay. A finding whose quote alone names pay (`namesPay`) keeps its claim for that reader, without
+ * the quote: a practice's own "$90k" of collections is not their pay.
  */
 export type BriefFinding = { claim: string; quote: string | null; source: string | null; aboutPay: boolean };
 export type BriefScreenAnswer = { question: string; answer: string; aboutPay: boolean };
 /**
  * A must-have and what the evidence says about it. `source` is where its quote is from: "resume", "application",
  * "screen" (the AI interview) or "recruiter_note", which the sheet and the email say after the quote (`quoteWithSource`).
- * `aboutPay`: its words or its quote speak to pay, so a reader who may not see pay gets it without the quote, `met` kept.
+ * `aboutPay`: its words or its quote speak to pay (a quote naming any amount of money counts, `namesMoney`), so a reader
+ * who may not see pay gets it without the quote, `met` kept.
  */
 export type BriefMustHave = { key: string; text: string; met: MustHaveFinding; quote: string | null; source: string | null; aboutPay: boolean };
 
@@ -54,15 +57,51 @@ export type InterviewerBrief = {
 type AssessmentRow = typeof assessments.$inferSelect;
 type Finding = { claim: string; evidence: { source: string; quote?: string } };
 
-/** A claim or a quote that talks about pay in so many words. Only used to hide things from readers who may not see pay. */
-const PAY_WORDS = /\b(pay|salary|salaries|wage|wages|compensation|pay rate|hourly rate)\b/i;
-/**
- * An amount of money with what it is paid by, as pay is written ("$28/hour", "$28 an hour", "$25-30/hr", "$60k",
- * "$60,000 a year"): a quote with one speaks to pay whatever its other words (the second review of the live-test fixes,
- * #5: "desired pay $28/hour" on a résumé line quoted for a must-have). Only used to hide things from readers who may not
- * see pay.
+/*
+ * What speaks to pay, only ever used to hide things from a reader who may not see pay (the second review of the
+ * live-test fixes, #5, and the second look at its fix). The more that reader would lose, the narrower the test: a
+ * strength or concern whose claim says pay, and an AI interview answer about their work, go whole, so there only pay in
+ * words (in an answer, an hourly amount too) counts; a must-have's quote goes alone, so there any amount of money does.
  */
-const MONEY = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:-|–|to)\s*\$?\d[\d,]*(?:\.\d+)?)?\s*(?:k\b|(?:\/\s*|per\s+|an?\s+)(?:hours?|hrs?|h|years?|yrs?|annum|weeks?|wks?|months?|mos?)\b|(?:hourly|annually|yearly|weekly|monthly)\b)/i;
+/** The word itself; a patient's "co-pay" is not the candidate's. */
+const PAY_WORD = /\b(?<!\bco[- ])pay\b/i;
+/**
+ * The words a pay deal is written in, which never describe the work itself. The dental playbook's Associate Dentist is
+ * paid "a daily guarantee against a percentage of production".
+ */
+const PAY_TERMS = /\b(?:salary|salaries|wages?|compensation|pay rate|hourly rate|guarantee[ds]?|commissions?|earnings|day rate|daily rate)\b/i;
+/** "$" and an amount, or a range of them ("$28", "$1,500.50", "$25-30", "$25 to $30"). */
+const DOLLARS = String.raw`\$\s?\d[\d,]*(?:\.\d+)?(?:\s*(?:-|–|to)\s*\$?\d[\d,]*(?:\.\d+)?)?`;
+/** An amount without "$": two digits at least, so "8 an hour" of patients is not pay. */
+const BARE = String.raw`(?<![\w$.,])\d{2}[\d,]*(?:\.\d+)?`;
+const PER = String.raw`(?:\/\s*|per\s+|an?\s+)`;
+/** An amount by the hour, with or without "$" ("$26/hr", "26 an hour", "$28 hourly"): pay, whatever it answers. */
+const HOURLY = new RegExp(String.raw`(?:${DOLLARS}|${BARE})\s*(?:dollars?\s+)?(?:${PER}(?:hours?|hrs?|h)\b|hourly\b)`, "i");
+/**
+ * An amount written as pay is: with "$", by the hour, week, month or year or in thousands ("$28/hour", "$25-30/hr", "$60k",
+ * "$60,000 a year"); without it, by the hour or the year ("28/hr", "80k a year") or as a base ("80k base").
+ */
+const MONEY = new RegExp(
+  [
+    String.raw`${DOLLARS}\s*(?:k\b|${PER}(?:hours?|hrs?|h|years?|yrs?|annum|weeks?|wks?|months?|mos?)\b|(?:hourly|annually|yearly|weekly|monthly)\b)`,
+    HOURLY.source,
+    String.raw`${BARE}\s?k?\s*${PER}(?:years?|yrs?|annum)\b`,
+    String.raw`\b\d[\d,]*(?:\.\d+)?\s?k\s+base\b`,
+  ].join("|"),
+  "i",
+);
+/** Any amount of money ("$900", "50 dollars"), or one by the day or the shift without "$" ("900/day", "300 a shift"). */
+const ANY_MONEY = new RegExp(String.raw`\$\s?\d|\b\d[\d,]*(?:\.\d+)?\s*(?:dollars|bucks)\b|${BARE}\s?k?\s*${PER}(?:days?|shifts?)\b`, "i");
+
+/** Speaks to pay in words: the word itself or a pay deal's. A claim that does is about pay. */
+const saysPay = (s: string) => PAY_WORD.test(s) || PAY_TERMS.test(s);
+/** Names pay, in words or as an amount written as pay is: a strength's or concern's quote that does goes, its claim stays. */
+const namesPay = (s: string | null | undefined) => !!s && (saysPay(s) || MONEY.test(s));
+/**
+ * Names pay or any amount of money: where only a quote goes and the finding stays (a must-have's: the Associate Dentist's
+ * "$900/day guarantee" on a résumé line), and in an AI interview answer that is not about their work.
+ */
+const namesMoney = (s: string | null | undefined) => !!s && (namesPay(s) || ANY_MONEY.test(s));
 
 /**
  * Where a must-have's quote is from: the words its reading checked it against (the evidence rules). A scorecard's quote is
@@ -140,14 +179,24 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
   const scoredScreen = screenAsmt ? screenRows.find((s) => s.assessmentId === screenAsmt.id) : undefined;
   const screenConcerns = screenAsmt ? withoutResumeShownConcerns(screenAsmt.result, resumeAsmt?.result, input.packet, scoredScreen ? teamScreenView(scoredScreen).transcript : []).concerns : [];
 
-  // What the candidate said about pay: their answer to each compensation question, and the expectation the scorecard recorded.
-  const payKeys = new Set(input.packet.screening.questions.filter((x) => x.kind === "compensation").map((x) => x.key));
+  // What the candidate said about pay: their answer to each question about pay (the job's compensation question, or a
+  // company's written question that asks about pay: a chat with written questions asks only those), and the expectation
+  // the scorecard recorded.
+  const written = input.packet.companyQuestions?.written ?? [];
+  const payKeys = new Set([...input.packet.screening.questions.filter((x) => x.kind === "compensation").map((x) => x.key), ...written.filter((w) => saysPay(w.question) || /\bhourly\b/i.test(w.question)).map((w) => w.key)]);
   const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
   const paySaid = [...[...payKeys].map((k) => answered?.all[k]), screenAsmt?.result.compensationExpectation?.stated].filter((s): s is string => !!s?.trim()).map(norm);
-  const repeatsPay = (text: string | null | undefined) => !!text && paySaid.some((p) => norm(text).includes(p));
-  // A quote speaks to pay with a pay word, an amount written as pay is (`MONEY`), or what they said about pay.
-  const quoteAboutPay = (quote: string | null | undefined) => !!quote && (PAY_WORDS.test(quote) || MONEY.test(quote) || repeatsPay(quote));
-  const findingAboutPay = (f: Finding) => PAY_WORDS.test(f.claim) || repeatsPay(f.claim) || quoteAboutPay(f.evidence?.quote);
+  // a number they gave on its own ("25") is that number, never a piece of "2025" or "$250k"
+  const sayings = paySaid.map((p) => (/^\$?\d[\d,.]*$/.test(p) ? new RegExp(String.raw`(?<![\d.,])${p.replace(/[$.]/g, "\\$&")}(?!\d|[.,]\d)`) : p));
+  const repeatsPay = (text: string | null | undefined) => !!text && sayings.some((p) => (typeof p === "string" ? norm(text).includes(p) : p.test(norm(text))));
+  // A strength or concern goes whole only on this strong signal; one whose quote alone names pay keeps its claim (`redactBriefPay`).
+  const findingAboutPay = (f: Finding) => saysPay(f.claim) || repeatsPay(f.claim) || repeatsPay(f.evidence?.quote);
+  // An answer goes whole. One about their work (to a skill or behavioural question, an open question from the résumé
+  // reading, a company's written question) may hold the practice's own figures, the skill being judged ("about $5k a day
+  // in production", "collections at $150k a month"), and a patient's pay ("what she would pay herself"): there only a pay
+  // deal's words or an hourly amount speak to pay. Any other answer speaks to pay with the word or any amount of money.
+  const workKeys = new Set([...input.packet.screening.questions.filter((x) => x.kind === "skills" || x.kind === "behavioral").map((x) => x.key), ...written.map((w) => w.key)]);
+  const answerAboutPay = (key: string, answer: string) => payKeys.has(key) || repeatsPay(answer) || PAY_TERMS.test(answer) || HOURLY.test(answer) || (!isFocusKey(key) && !workKeys.has(key) && namesMoney(answer));
 
   return {
     candidateFirstName: input.candidateFirstName,
@@ -157,31 +206,33 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
       return { key, name: c?.name ?? key.replace(/_/g, " "), definition: c?.definition ?? "", indicators: c?.indicators ?? [], ...competencyFinding(key), evaluatedIn: c?.evaluatedIn ?? null };
     }),
     questions: round.suggestedQuestions ?? [],
-    // the same test as a finding's, with the must-have's words as the claim (the second review of the live-test fixes, #5)
+    // only the quote goes, so any amount of money in it counts (the second review of the live-test fixes, #5, and the second look at its fix)
     mustHaves: input.packet.requirements.mustHaves.map((m) => {
       const found = mustHaveFinding(m.key);
-      return { key: m.key, text: m.text, ...found, aboutPay: PAY_WORDS.test(m.text) || repeatsPay(m.text) || quoteAboutPay(found.quote) };
+      return { key: m.key, text: m.text, ...found, aboutPay: saysPay(m.text) || repeatsPay(m.text) || namesMoney(found.quote) || repeatsPay(found.quote) };
     }),
     strengths: mergeFindings(screenAsmt?.result.strengths ?? [], resumeAsmt?.result.strengths ?? [], 6, findingAboutPay),
     concerns: mergeFindings(screenConcerns, resumeAsmt?.result.concerns ?? [], 6, findingAboutPay),
-    screen: answered ? { completedAt: answered.completedAt, answers: Object.entries(answered.all).map(([key, answer]) => ({ question: questionText(key), answer: String(answer), aboutPay: payKeys.has(key) || repeatsPay(String(answer)) })) } : null,
+    screen: answered ? { completedAt: answered.completedAt, answers: Object.entries(answered.all).map(([key, answer]) => ({ question: questionText(key), answer: String(answer), aboutPay: answerAboutPay(key, String(answer)) })) } : null,
     pay: screenAsmt ? { expectation: screenAsmt.result.compensationExpectation?.stated ?? null, withinRange: screenAsmt.result.compensationExpectation?.withinRange ?? "unknown" } : null,
     includesPay: true,
   };
 }
 
 /**
- * The same brief for a reader whose role may not see pay: the pay line is removed, and so is every screen answer and
- * finding that speaks to pay (the answer to the compensation question first of all). A must-have stays with what the
- * evidence says about it; only a quote of it that speaks to pay goes. Nothing is zeroed.
+ * The same brief for a reader whose role may not see pay: the pay line is removed, and so is every AI interview answer
+ * that speaks to pay (the answer to the pay question first of all) and every strength or concern whose claim speaks to
+ * pay or that repeats what they said about it. A must-have stays with what the evidence says about it, and a strength or
+ * concern with its claim: only a quote of it that names pay goes. Nothing is zeroed.
  */
 export function redactBriefPay(brief: InterviewerBrief): InterviewerBrief {
   const withoutPay = <T extends { aboutPay: boolean }>(items: T[]) => items.filter((x) => !x.aboutPay);
+  const claimsKept = (items: BriefFinding[]) => withoutPay(items).map((x) => (namesPay(x.quote) ? { ...x, quote: null } : x));
   return {
     ...brief,
     mustHaves: brief.mustHaves.map((m) => (m.aboutPay ? { ...m, quote: null } : m)),
-    strengths: withoutPay(brief.strengths),
-    concerns: withoutPay(brief.concerns),
+    strengths: claimsKept(brief.strengths),
+    concerns: claimsKept(brief.concerns),
     screen: brief.screen ? { ...brief.screen, answers: withoutPay(brief.screen.answers) } : null,
     pay: null,
     includesPay: false,
@@ -192,12 +243,20 @@ export function redactBriefPay(brief: InterviewerBrief): InterviewerBrief {
  * The same brief for a reader who may not open the candidate's application, an interviewer, who never sees the
  * candidate's contact details (services/interviewer-view.ts): a quote holding an email address, a phone number, a street
  * address or zip code, or a web link (what the scoring view hides, `scoringView`) is left out, and what it backs stays,
- * the must-have's finding or the strength's or concern's claim. Names stay: an interviewer reads the candidate's name.
+ * the must-have's finding or the strength's or concern's claim; an AI interview answer holding one, all their own words,
+ * is left out whole, as an answer about pay is. Names stay: an interviewer reads the candidate's name.
  */
 export function redactBriefContact(brief: InterviewerBrief): InterviewerBrief {
   const view = scoringView({});
-  const withoutContact = <T extends { quote: string | null }>(items: T[]) => items.map((x) => (x.quote && view.text(x.quote) !== x.quote ? { ...x, quote: null } : x));
-  return { ...brief, mustHaves: withoutContact(brief.mustHaves), strengths: withoutContact(brief.strengths), concerns: withoutContact(brief.concerns) };
+  const holdsContact = (s: string) => view.text(s) !== s;
+  const withoutContact = <T extends { quote: string | null }>(items: T[]) => items.map((x) => (x.quote && holdsContact(x.quote) ? { ...x, quote: null } : x));
+  return {
+    ...brief,
+    mustHaves: withoutContact(brief.mustHaves),
+    strengths: withoutContact(brief.strengths),
+    concerns: withoutContact(brief.concerns),
+    screen: brief.screen ? { ...brief.screen, answers: brief.screen.answers.filter((a) => !holdsContact(a.answer)) } : null,
+  };
 }
 
 /**

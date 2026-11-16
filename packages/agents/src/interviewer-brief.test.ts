@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
-import { assessments, createDb, migrate, withTenant, type DbHandle } from "@ros/db";
+import type { RolePacket } from "@ros/contracts";
+import { assessments, createDb, migrate, screens, withTenant, type DbHandle } from "@ros/db";
 import { samplePacket } from "./fixtures/sample-packet";
 import { briefForReader, composeInterviewerBrief, redactBriefPay, renderInterviewerBriefText, type InterviewerBrief } from "./interviewer-brief";
 
@@ -86,7 +87,9 @@ describe("the interviewer's brief in words", () => {
 /**
  * The brief from what the readings stored (the second review of the live-test fixes, 12 November 2026). A skill the score
  * counts as not known never reads "contradicted" (#3, #20, #38); a quote naming pay on a must-have the AI interview left
- * unknown never reaches an interviewer (#5); each must-have's quote says where it is from (#16).
+ * unknown never reaches an interviewer (#5); each must-have's quote says where it is from (#16). The second look at that
+ * fix: no pay reaches an interviewer in a quote however it is written, nor in an AI interview answer, and a strength or
+ * concern whose quote alone names an amount keeps its claim.
  */
 describe("the brief from the stored readings", () => {
   let handle: DbHandle;
@@ -108,15 +111,19 @@ describe("the brief from the stored readings", () => {
     await handle.close();
   });
 
-  /** A new applicant with a résumé reading and then a scorecard, and the round's brief composed from them. */
-  async function briefOf(resume: Record<string, unknown>, card: Record<string, unknown>): Promise<InterviewerBrief> {
+  /**
+   * A new applicant with a résumé reading and then a scorecard, and the round's brief composed from them. `answers`: an
+   * AI interview they sent, with these answers by question key.
+   */
+  async function briefOf(resume: Record<string, unknown>, card: Record<string, unknown>, more: { answers?: Record<string, string>; packet?: RolePacket } = {}): Promise<InterviewerBrief> {
     const candidateId = randomUUID();
     const applicationId = randomUUID();
     await handle.db.execute(sql`INSERT INTO candidates (id, company_id, first_name, last_name, email, first_source) VALUES (${candidateId}, ${companyId}, 'Ana', 'Lopez', ${`ana-${candidateId}@example.com`}, 'direct')`);
     await handle.db.execute(sql`INSERT INTO applications (id, company_id, role_id, candidate_id, packet_version, source, status_token, stage) VALUES (${applicationId}, ${companyId}, ${roleId}, ${candidateId}, 1, 'direct', ${`tok-${applicationId}`}, 'interview_recommended')`);
     await handle.db.insert(assessments).values({ companyId, applicationId, kind: "triage", packetVersion: 1, result: reading(resume) as never, overall: "potential", confidence: "medium", createdAt: "2026-11-12T10:00:00.000Z" });
+    if (more.answers) await handle.db.insert(screens).values({ companyId, applicationId, channel: "web", status: "completed", token: `brief-${applicationId}`, completedAt: "2026-11-12T10:30:00.000Z", answers: more.answers });
     await handle.db.insert(assessments).values({ companyId, applicationId, kind: "screen", packetVersion: 1, result: scorecard(card) as never, overall: "potential", confidence: "medium", createdAt: "2026-11-12T11:00:00.000Z" });
-    const brief = await withTenant(handle.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId, candidateFirstName: "Ana", packet, roundKey: "owner" }));
+    const brief = await withTenant(handle.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId, candidateFirstName: "Ana", packet: more.packet ?? packet, roundKey: "owner" }));
     return brief!;
   }
 
@@ -165,5 +172,109 @@ describe("the brief from the stored readings", () => {
     expect(text).toContain("- Chairside experience in a dental office: met\n");
     expect(text).toContain("- Runs the sterilization log\n");
     expect(text).not.toMatch(/\$28|Elm St|92618/);
+  });
+
+  // A second look at that fix: the Associate Dentist's pay is "a daily guarantee against a percentage of production" (the
+  // dental playbook), and a résumé or an answer may name pay without a dollar sign.
+  it("gives an interviewer a must-have's finding without a quote naming pay by the day, without a dollar sign or in a pay deal's words, and keeps a quote naming none", async () => {
+    const cases: Array<[source: "resume" | "screen", quote: string, amount: string]> = [
+      ["resume", "Associate, Bright Smiles 2021-2024, $900/day guarantee + 30% of collections", "$900"],
+      ["resume", "Chairside at Bright Smiles, $400 per day", "$400"],
+      ["resume", "Chairside assistant since 2019. Desired rate: 28/hr", "28/hr"],
+      ["resume", "Chairside at Smile Dental, 28 an hour", "28 an hour"],
+      ["resume", "Lead chairside assistant, 80k base", "80k"],
+      ["screen", "Yes, chairside every day, if the daily guarantee is at least $900", "$900"],
+    ];
+    for (const [source, quote, amount] of cases) {
+      const found = { requirementKey: "mh_chairside", met: "yes", evidence: { source, quote } };
+      const brief = await briefOf(
+        { requirementFindings: [{ requirementKey: "mh_xray", met: "yes", evidence: { source: "resume", quote: "Radiography certificate, 2021" } }, ...(source === "resume" ? [found] : [])] },
+        { requirementFindings: [{ requirementKey: "mh_xray", met: "unknown" }, source === "screen" ? found : { requirementKey: "mh_chairside", met: "unknown" }] },
+      );
+      expect(brief.mustHaves.find((m) => m.key === "mh_chairside"), quote).toMatchObject({ met: "yes", quote, source, aboutPay: true });
+      const theirs = briefForReader(brief, "interviewer");
+      expect(theirs.mustHaves.map((m) => [m.key, m.met, m.quote]), quote).toEqual([["mh_xray", "yes", "Radiography certificate, 2021"], ["mh_chairside", "yes", null]]);
+      const text = renderInterviewerBriefText(theirs);
+      expect(text, quote).toContain("- Chairside experience in a dental office: met\n");
+      expect(text, quote).not.toContain(amount);
+    }
+  });
+
+  // A second look at that fix: a practice's own figures ("$90k" of collections) and a patient's co-pay are not the
+  // candidate's pay, so a strength or concern whose quote alone names an amount keeps its claim, as a must-have keeps "met".
+  it("keeps for an interviewer a strength or concern whose quote alone names pay, without the quote, and leaves out one whose claim speaks to pay or whose quote repeats what they said about it", async () => {
+    const brief = await briefOf(
+      {
+        strengths: [
+          { claim: "Improved the practice's collections", evidence: { source: "resume", quote: "Raised monthly collections from $90k to $120k" } },
+          { claim: "Strong daily production", evidence: { source: "resume", quote: "About $4,500 a day in production" } },
+          { claim: "Explains insurance to patients", evidence: { source: "resume", quote: "Collected the co-pay at check-in and posted insurance payments" } },
+          { claim: "Happy with the posted pay", evidence: { source: "resume", quote: "Front desk lead, 2020-2024" } },
+        ],
+        concerns: [{ claim: "Short stay at the last job", evidence: { source: "resume", quote: "Office Manager, Bright Dental, Feb-Jul 2025, $65k/yr" } }],
+      },
+      { compensationExpectation: { stated: "$34 an hour", withinRange: "above" }, concerns: [{ claim: "Wants more than the posted range", evidence: { source: "screen", quote: "I need $34 an hour to move" } }] },
+    );
+    const quoted = (xs: InterviewerBrief["strengths"]) => xs.map((x) => [x.claim, x.quote]);
+    // the owner's copy keeps them all
+    expect(quoted(brief.strengths)).toEqual([["Improved the practice's collections", "Raised monthly collections from $90k to $120k"], ["Strong daily production", "About $4,500 a day in production"], ["Explains insurance to patients", "Collected the co-pay at check-in and posted insurance payments"], ["Happy with the posted pay", "Front desk lead, 2020-2024"]]);
+    expect(quoted(brief.concerns)).toEqual([["Wants more than the posted range", "I need $34 an hour to move"], ["Short stay at the last job", "Office Manager, Bright Dental, Feb-Jul 2025, $65k/yr"]]);
+    expect(briefForReader(brief, "owner")).toEqual(brief);
+    const theirs = briefForReader(brief, "interviewer");
+    expect(quoted(theirs.strengths)).toEqual([["Improved the practice's collections", null], ["Strong daily production", "About $4,500 a day in production"], ["Explains insurance to patients", "Collected the co-pay at check-in and posted insurance payments"]]);
+    expect(quoted(theirs.concerns)).toEqual([["Short stay at the last job", null]]);
+    const text = renderInterviewerBriefText(theirs);
+    expect(text).toContain("- Improved the practice's collections\n");
+    expect(text).toContain("- Short stay at the last job\n");
+    expect(text).not.toMatch(/\$90k|\$65k|\$34|posted pay|posted range/);
+  });
+
+  // A second look at that fix: what they said in the AI interview is their own words, where pay and contact details are
+  // most often written outside the pay question.
+  it("gives an interviewer none of the AI interview's answers that speak to pay or hold contact details, and keeps those about their work with the practice's own figures", async () => {
+    const answers = {
+      recent: "I assisted on about $5k a day of production",
+      nervous: "I showed her what her plan covers and what she would pay herself, and she calmed down",
+      available: "Tuesday to Friday, from the 1st, at $32 or more",
+      pay: "$28 to $30",
+      mh_chairside: "Four years chairside, last at 26 an hour",
+      wrap_up: "Call me at (714) 555-0142 after 5",
+    };
+    const brief = await briefOf({}, {}, { answers });
+    const said = (b: InterviewerBrief) => (b.screen?.answers ?? []).map((a) => a.answer).sort();
+    expect(said(brief)).toEqual(Object.values(answers).sort());
+    expect(briefForReader(brief, "owner")).toEqual(brief);
+    const theirs = briefForReader(brief, "interviewer");
+    expect(said(theirs)).toEqual([answers.recent, answers.nervous].sort());
+    const text = renderInterviewerBriefText(theirs);
+    expect(text).toContain(`  ${answers.recent}\n`);
+    expect(text).not.toMatch(/\$32|\$28|26 an hour|555-0142|What hourly range/);
+  });
+
+  it("reads a company's written question about pay as the pay question, and an answer about their work naming an hourly amount as about pay", async () => {
+    const asked = samplePacket((p) => {
+      p.interviews.plan[0]!.competencyKeys = ["chairside", "patients", "infection"];
+      p.companyQuestions = { quick: [], written: [{ key: "wq_numbers", question: "Which numbers did you track at your last office?", required: true }, { key: "wq_software", question: "Which dental software have you used?", required: true }, { key: "wq_pay", question: "What pay are you hoping for here?", required: true }] };
+    });
+    const answers = { wq_numbers: "Collections held at $150k a month with AR under 30 days", wq_software: "Dentrix for charting at Smile Dental, where I made 26/hr", wq_pay: "Around 30" };
+    const brief = await briefOf({}, {}, { answers, packet: asked });
+    expect((brief.screen?.answers ?? []).map((a) => [a.question, a.answer]).sort()).toEqual([["What pay are you hoping for here?", answers.wq_pay], ["Which dental software have you used?", answers.wq_software], ["Which numbers did you track at your last office?", answers.wq_numbers]]);
+    const theirs = briefForReader(brief, "interviewer");
+    expect((theirs.screen?.answers ?? []).map((a) => a.answer)).toEqual([answers.wq_numbers]);
+    expect(renderInterviewerBriefText(theirs)).not.toMatch(/26\/hr|Around 30|hoping for/);
+  });
+
+  it("counts a bare number they gave for pay only as that number, never inside a year", async () => {
+    const brief = await briefOf(
+      { requirementFindings: [{ requirementKey: "mh_chairside", met: "yes", evidence: { source: "resume", quote: "Chairside assistant, Smile Dental 2019-2025" } }], strengths: [{ claim: "Stays with an office", evidence: { source: "resume", quote: "Smile Dental, 2019-2025" } }] },
+      { requirementFindings: [{ requirementKey: "mh_chairside", met: "unknown" }], concerns: [{ claim: "Asked about the range twice", evidence: { source: "screen", quote: "Is 25 possible?" } }] },
+      { answers: { pay: "25", recent: "Chairside since 2019, and 2025 was my busiest year" } },
+    );
+    const theirs = briefForReader(brief, "interviewer");
+    expect(theirs.mustHaves.find((m) => m.key === "mh_chairside")).toMatchObject({ met: "yes", quote: "Chairside assistant, Smile Dental 2019-2025", aboutPay: false });
+    expect(theirs.strengths.map((s) => [s.claim, s.quote])).toEqual([["Stays with an office", "Smile Dental, 2019-2025"]]);
+    // its quote repeats the number they gave for pay
+    expect(theirs.concerns).toEqual([]);
+    expect((theirs.screen?.answers ?? []).map((a) => a.answer)).toEqual(["Chairside since 2019, and 2025 was my busiest year"]);
   });
 });

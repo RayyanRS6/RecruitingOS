@@ -23,8 +23,8 @@ export async function participantInterviews(tx: Tx, input: { applicationId: stri
 
 /**
  * The brief for one interview as the viewer's role may see it (`briefForReader`): pay only for roles that hold
- * compensation.read, quotes holding the candidate's contact details only for roles that hold application.read. Null when
- * the packet no longer has the round.
+ * compensation.read, quotes and AI interview answers holding the candidate's contact details only for roles that hold
+ * application.read. Null when the packet no longer has the round.
  */
 export async function interviewBriefFor(tx: Tx, input: { interview: Pick<InterviewRow, "applicationId" | "roundKey">; viewerRole: MembershipRole | null }): Promise<InterviewerBrief | null> {
   const [app] = await tx.select().from(applications).where(eq(applications.id, input.interview.applicationId)).limit(1);
