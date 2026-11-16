@@ -58,6 +58,7 @@ describe("packet.revise: a skill that is the same as a must-have", () => {
     const base = await golden();
     const asked = mustHaveAskedAsSkill(base);
     if (!asked) throw new Error("the golden job has no must-have");
+    const message = typeof c.message === "string" ? c.message : c.message(base);
     const judge = (revision: PacketRevision) => c.expect({ revision, merged: mergeRevision(base, revision, "role"), base });
     const adding = (name: string): PacketRevision => ({
       summary: `I added an essential skill: ${name}.`,
@@ -73,10 +74,30 @@ describe("packet.revise: a skill that is the same as a must-have", () => {
     const renamed: PacketRevision = { summary: "I renamed a skill.", changes: { competencies: base.competencies.map((s, i) => (i === 0 ? { ...s, name: asked.text } : s)) }, notChanged: [] };
     expect(judge(renamed)[0]).toMatch(new RegExp(`^the skill "${asked.text.replace(/[()]/g, "\\$&")}" \\(.*\\) repeats the must-have`));
     // the golden job's own skills are never judged: only one the change adds or renames
-    expect(judge({ summary: "I have not changed anything.", changes: {}, notChanged: [{ request: "Add it as a skill", reason: "The job already has it as a must-have, which counts the most." }] })).toEqual([]);
+    expect(judge({ summary: "I have not changed anything.", changes: {}, notChanged: [{ request: message, reason: "The job already has it as a must-have, which counts the most." }] })).toEqual([]);
     expect(judge({ summary: "Nothing needs to change.", changes: {}, notChanged: [] })).toEqual(["did not say that the job already has it as a must-have"]);
     // taking the must-have out to make it a skill is a change of its own, not this request
     const moved: PacketRevision = { summary: "I made it a skill.", changes: { requirements: { ...base.requirements, mustHaves: base.requirements.mustHaves.filter((m) => m.key !== asked.key) } }, notChanged: [] };
     expect(judge(moved)).toEqual([`the must-have "${asked.text}" is no longer on the job`, "changed requirements although the job already has it as a must-have", "did not say that the job already has it as a must-have"]);
+  });
+
+  it("reads the reply as the owner does: the job already has it as a must-have, said in the summary or under Not done, and named", async () => {
+    // review of the fix for #12: any Not done line passed, whatever its reason, and a right answer in the summary failed
+    const base = await golden();
+    const asked = mustHaveAskedAsSkill(base);
+    if (!asked) throw new Error("the golden job has no must-have");
+    const message = typeof c.message === "string" ? c.message : c.message(base);
+    const judge = (revision: PacketRevision) => c.expect({ revision, merged: mergeRevision(base, revision, "role"), base });
+    const nothing = { changes: {}, notChanged: [] };
+    // said in the summary alone, as v2 asks when nothing needs to change ("quote the words the job already has for it")
+    expect(judge({ ...nothing, summary: `Nothing needs to change: the job already has "${asked.text}" as a must-have, which counts the most.` })).toEqual([]);
+    // named by part of its words, as the owner reads it
+    expect(judge({ ...nothing, summary: "Nothing needs to change: perio is already a must-have, which counts the most." })).toEqual([]);
+    // a Not done line whose reason says nothing of a must-have tells the owner something else
+    expect(judge({ summary: "I have not changed anything.", changes: {}, notChanged: [{ request: message, reason: "Skills are set in the editor." }] })).toEqual(["did not say that the job already has it as a must-have"]);
+    // a must-have, but nothing the owner reads says which
+    expect(judge({ summary: "I have not changed anything.", changes: {}, notChanged: [{ request: "Add it as a skill", reason: "The job already has it as a must-have, which counts the most." }] })).toEqual([`did not name the must-have the job already has: "${asked.text}"`]);
+    // a question back is read in place of the summary
+    expect(judge({ ...nothing, summary: `Nothing needs to change: the job already has "${asked.text}" as a must-have.`, question: "Do you want it as a skill as well?" })).toEqual(["did not say that the job already has it as a must-have"]);
   });
 });

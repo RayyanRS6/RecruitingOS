@@ -8,7 +8,8 @@ import { EMPTY_FACTS, draftFailures, draftSkillsNote, type IntakeCase } from "./
  * One case of the job builder's suites (intake.*), driven as the runner drives it (runner.ts, which runs on import). Kept
  * here so a test can drive it with a scripted stand-in and pin the steps the run on the real models rests on: the check
  * on the draft as the model wrote it, each draft written afresh, and a case set from its answers asking no turn (review
- * of the intake evals fix, 13 Nov 2026).
+ * of the intake evals fix, 13 Nov 2026); and the check of every finished draft's skills, with the notes the result file
+ * keeps of them (`intakeCaseResult`).
  */
 
 /** One model call, as the runner makes and records it (`runPrompt`); `meta` says what the call is for. */
@@ -112,4 +113,18 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
     }
   }
   return { failures, notes };
+}
+
+/** A case's entry in the result file: whether it passed, its failures, and its notes when it has any. */
+export type IntakeCaseResult = { id: string; pass: boolean; failures: string[]; notes?: string[] };
+
+/**
+ * A case run and written as the runner writes it into the result file (`runIntakeSuite`), so a test can pin what the
+ * signed file holds: a draft with a skill named the same as one of its must-haves fails its case, and the entry keeps
+ * each draft's must-haves and skills by name (review of the fix for the second review's #14: no test failed if the
+ * runner stopped doing either).
+ */
+export async function intakeCaseResult(call: IntakeModelCall, c: IntakeCase, compile: boolean): Promise<IntakeCaseResult> {
+  const { failures, notes } = await runIntakeCase(call, c, compile);
+  return { id: c.id, pass: failures.length === 0, failures, ...(notes.length ? { notes } : {}) };
 }

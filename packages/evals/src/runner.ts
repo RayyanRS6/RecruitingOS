@@ -10,7 +10,7 @@ import { importanceOf, type EvidenceAssessment, type ResumeExtraction, type Role
 import { createDb, migrate } from "@ros/db";
 import { runChatSuite } from "./chat-suite";
 import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
-import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
+import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intake-run";
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
 import { chosenBy, unmatchedSuites } from "./summary";
@@ -58,10 +58,7 @@ async function main() {
   async function runIntakeSuite(name: string, cases: IntakeCase[], compile: boolean) {
     if (!runs(name)) return;
     const out: (typeof results)[string]["cases"] = [];
-    for (const c of cases) {
-      const { failures, notes } = await runIntakeCase(intakeCall, c, compile);
-      out.push({ id: c.id, pass: failures.length === 0, failures, ...(notes.length ? { notes } : {}) });
-    }
+    for (const c of cases) out.push(await intakeCaseResult(intakeCall, c, compile));
     results[name] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
   }
 

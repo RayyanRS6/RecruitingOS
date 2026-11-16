@@ -610,6 +610,23 @@ export function mustHaveAskedAsSkill(base: Pick<RolePacket, "requirements">): Ro
   return musts.find((m) => !/\blicen[cs]e\b|\bcertif/i.test(m.text)) ?? musts[0];
 }
 
+/**
+ * Whether a reply says the job already has the must-have asked for, read as the person reads a reply that changes
+ * nothing (the job builder's `replyWords`): the question back, or else the summary, then each part not done ("Not done:
+ * <request>. <reason>"). So it may say so in the summary or under Not done, which the owner reads alike (review of the
+ * fix for the second review's #12: any Not done line passed, whatever its reason, and the right answer in the summary
+ * failed). The assistant's own words call it a must-have, and what is read names it by one of its words at least, the
+ * request written back included ("Not done: Add perio charting as an essential skill. The job already has it as a
+ * must-have, which counts the most.").
+ */
+function saysItIsAMustHave(revision: PacketRevision, merged: MergedRevision<RolePacket>, asked: Pick<RolePacket["requirements"]["mustHaves"][number], "text">): string[] {
+  const said = [revision.question?.trim() || merged.summary, ...merged.notChanged.map((n) => n.reason)].join(" ");
+  if (!/\bmust[\s-]?haves?\b/i.test(said)) return ["did not say that the job already has it as a must-have"];
+  const read = subjectWords([said, ...merged.notChanged.map((n) => n.request)].join(" "));
+  const need = [...subjectWords(asked.text)];
+  return !need.length || need.some((w) => read.has(w)) ? [] : [`did not name the must-have the job already has: "${asked.text}"`];
+}
+
 export const reviseCases: ReviseCase[] = [
   {
     id: "proxy_must_have_refused",
@@ -694,7 +711,8 @@ export const reviseCases: ReviseCase[] = [
     // Second review of the live-test fixes, #12: a skill the same as a must-have only repeats it, so a change by chat
     // never adds one (nor renames a skill to a must-have's words) and says the job already has it as a must-have. The
     // request names one of the golden job's own must-haves in its words. Only a skill the change adds or renames is
-    // judged, in any words, since the golden job is the model's own draft.
+    // judged, in any words, since the golden job is the model's own draft. What the reply says is judged by its words,
+    // in the summary or under Not done (`saysItIsAMustHave`).
     id: "skill_named_as_a_must_have",
     provenance: "synthetic",
     target: "role",
@@ -709,7 +727,7 @@ export const reviseCases: ReviseCase[] = [
         ...skillsRepeatingMustHaves({ requirements: merged.packet.requirements, competencies: addedOrRenamed }),
         ...(merged.packet.requirements.mustHaves.some((m) => m.key === asked.key) ? [] : [`the must-have "${asked.text}" is no longer on the job`]),
         ...(merged.sections.length ? [`changed ${merged.sections.join(", ")} although the job already has it as a must-have`] : []),
-        ...(merged.notChanged.length ? [] : ["did not say that the job already has it as a must-have"]),
+        ...saysItIsAMustHave(revision, merged, asked),
       ];
     },
   },

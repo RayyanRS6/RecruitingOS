@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt } from "@ros/ai";
 import { registerFakeHandlers } from "@ros/agents";
 import type { DraftRolePacket, IntakeMessage } from "@ros/contracts";
-import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
+import { intakeCaseResult, intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
 import { DA_RDA_QUESTION, EMPTY_FACTS, intakeGolden, type IntakeCase } from "./suites";
 
 /**
@@ -41,6 +41,7 @@ const byId = (id: string): IntakeCase => {
   if (!c) throw new Error(`no case ${id}`);
   return c;
 };
+const skill = (name: string, definition = "Shown in recent work."): DraftRolePacket["competencies"][number] => ({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, weight: 5, evaluatedIn: "both", indicators: ["An example from recent work"] });
 
 describe("a job-builder case as the runner drives it", () => {
   it("writes a case set from its answers straight from them, asking no turn, as many drafts as it says, each noted", async () => {
@@ -94,5 +95,42 @@ describe("a job-builder case as the runner drives it", () => {
     const out = await runIntakeCase(call, { ...byId("dental_assistant_quick_start_deal_breaker_counted_openly"), expectTurn: () => [] }, true);
     expect(out.failures).toEqual(["a case with its answers set has no turn of the conversation to check"]);
     expect(tasks()).toEqual([]);
+  });
+
+  // Every compiled case fails on a skill named the same as one of its must-haves, though its own checks never look at
+  // skills, and its entry in the result file keeps the draft's skills by name (review of the fix for the second review's
+  // #14). No stand-in draft has such a skill, so only a scripted one can tell.
+  it("fails a draft with a skill named the same as one of its must-haves, and the case's entry keeps its skills by name", async () => {
+    const counted = byId("dental_assistant_quick_start_deal_breaker_counted_openly");
+    const { fake, call, draftOf } = standIn();
+    const twin: DraftRolePacket = structuredClone(await draftOf(counted));
+    expect(twin.requirements.mustHaves[0]?.text).toBe("Four-handed dentistry");
+    twin.competencies.push(skill("FOUR-HANDED DENTISTRY"));
+    fake.scriptNext("intake.compile", twin);
+    const entry = await intakeCaseResult(call, counted, true);
+    expect(entry.id).toBe(counted.id);
+    expect(entry.pass).toBe(false);
+    expect(entry.failures).toEqual(['the skill "FOUR-HANDED DENTISTRY" (Shown in recent work.) repeats the must-have "Four-handed dentistry"']);
+    expect(entry.notes).toHaveLength(1);
+    expect(entry.notes?.[0]).toMatch(/^must-haves: "Four-handed dentistry", [^;]*; skills: [^;]*"FOUR-HANDED DENTISTRY"/);
+    // the stand-in's own draft passes, and keeps its note
+    const own = await intakeCaseResult(call, counted, true);
+    expect(own.pass).toBe(true);
+    expect(own.failures).toEqual([]);
+    expect(own.notes?.[0]).toMatch(/^must-haves: "Four-handed dentistry", /);
+  });
+
+  it("fails the Dental Office Manager's draft that keeps the playbook's 'Team leadership' beside that must-have", async () => {
+    const om = byId("dental_office_manager_just_draft_it");
+    const { fake, call, draftOf, tasks } = standIn();
+    const kept: DraftRolePacket = structuredClone(await draftOf(om));
+    expect(kept.requirements.mustHaves.map((m) => m.text)).toContain("Team leadership");
+    kept.competencies.unshift(skill("Team leadership", "Hires, trains, holds accountable, keeps morale."));
+    fake.scriptNext("intake.compile", kept);
+    const entry = await intakeCaseResult(call, om, true);
+    expect(tasks()).toEqual(["intake.turn", "intake.compile"]);
+    expect(entry.pass).toBe(false);
+    expect(entry.failures).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"']);
+    expect(entry.notes?.[0]).toMatch(/; skills: "Team leadership", /);
   });
 });
