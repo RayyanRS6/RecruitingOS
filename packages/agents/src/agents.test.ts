@@ -393,6 +393,11 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
     const twins = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA license", "Without an RDA license", "Cannot work Saturdays"] });
     expect(twins[0].prompt).toBe("From your deal-breakers: which should count openly as must-haves?");
     expect(twins[0].options.map((o) => o.value)).toEqual(["RDA license", "Able to work Saturdays"]);
+    // what the employer does after "Cannot" is never offered as "Able to …": it is named for the owner to write (lead's
+    // decision, 17 Nov 2026)
+    const ban = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["Can't accept applicants without a license", "Cannot work Saturdays"] });
+    expect(ban[0].prompt).toBe(`From your deal-breakers: which should count openly as must-haves? To count "Can't accept applicants without a license", write it as what they need.`);
+    expect(ban[0].options).toEqual([{ label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" }]);
   });
 
   it("words a team card by what its answer sets, so a card that asks two things never leaves the final say unasked (live test, 12 Nov 2026)", () => {

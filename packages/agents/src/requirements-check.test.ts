@@ -107,6 +107,34 @@ describe("the requirements check", () => {
     expect(checkRequirements(deal, "v7", 7).suggestions.find((s) => s.id === "rules_out:niceToHaves:nh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
   });
 
+  // Left out by the repair of the must-haves (lead's decision, 17 Nov 2026): a deal-breaker about what the employer does, in
+  // its very words, was offered "Able to accept applicants without a license" in one tap.
+  it("offers no tap for a deal-breaker's very words about what the employer does, and asks for what they need", () => {
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(
+        { key: "mh_accept", text: "Can't accept applicants without a license", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+      );
+      x.preferences.dealBreakersInTheirWords = ["Can't accept applicants without a license", "Cannot work Saturdays"];
+    });
+    const check = checkRequirements(p, "v8", 8);
+    expect(check.suggestions.filter((s) => s.text === "Can't accept applicants without a license")).toEqual([
+      {
+        id: "rules_out:mustHaves:mh_accept",
+        kind: "rules_out",
+        title: "Reads as what rules someone out",
+        path: "requirements.mustHaves[mh_accept]",
+        text: "Can't accept applicants without a license",
+        why: "It says who is ruled out, but the job page lists it as what you are looking for, and applications are reviewed against it. Write it as what they need.",
+        fixes: [],
+        flagId: null,
+      },
+    ]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_accept:replace_text"])).toThrow(RequirementFixError);
+    // what the candidate cannot do, in a deal-breaker's very words, keeps its tap
+    expect(check.suggestions.find((s) => s.id === "rules_out:mustHaves:mh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+  });
+
   it("points at the packet guard's flag on the same words, so one fix clears both", () => {
     const p = samplePacket((x) => x.requirements.mustHaves.push({ key: "mh_english", text: "Native English speaker", rationale: "Patients", evidencedBy: ["screen"] }));
     const guarded = guardPacket(p, { companyName: "Harbor Dental", companyLocations: [] }).packet;

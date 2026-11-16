@@ -108,6 +108,18 @@ const LINKED = /(?:^|\s)(?:of|on|in|at|against|with|from|for|by|that|which|who|w
 const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
 
 /**
+ * What the employer does to the people applying, after "Cannot …", "Unable to …" and the like ("Can't accept applicants
+ * without a license", "Unable to sponsor visas", a word such as "currently" before the verb too): the owner's rule, not
+ * what the candidate cannot do, so "Able to …" would be nonsense the AI interview then asks about. "Take" and "use" count
+ * here, unlike after "Won't …", so "Can't take x-rays" is asked of the owner as what they need (lead's decision, 17 Nov
+ * 2026, on what the repair of the must-haves left out).
+ */
+const EMPLOYER_DOES = /^(?:[a-z]+ly\s+)?(?:accept|hire|take|consider|employ|interview|on[-\s]?board|sponsor|bring\s+on(?:[-\s]?board)?|use|allow|offer|pay)\b/i;
+
+/** Words naming the people applying ("anyone who smokes", "new hires"): after "Cannot …" the words are then a rule about them. */
+const NAMES_APPLICANTS = /\b(?:applicants?|candidates?|anyone|anybody|someone|somebody|people|those|hires?)\b/i;
+
+/**
  * What only the employer does, after "Won't …" ("Won't hire smokers", "Will not accept applicants without a CDL"): the
  * words are the owner's rule, not something the candidate will not do, so "Willing to …" would be its opposite (review of
  * the must-haves fix, 12 Nov 2026). Never "take", which a candidate does too ("Won't take weekend shifts").
@@ -120,7 +132,9 @@ const EMPLOYER_VERB = /^(?:hire|accept|consider|tolerate|allow|employ|interview|
  * clear shapes are turned round: "No …", "Without …", "Lacks …", "Missing …" or "Does not have …" a licence, certificate,
  * permit, registration or credential named last (`lacksCredential`), with no word saying it is not in force or naming the
  * problem itself (`NOT_IN_FORCE`) and none joining something to it (`LINKED`); "Cannot …" or "Unable to …" ("Able to
- * …"), never "Cannot be …" or "Cannot have …"; "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
+ * …") about what the candidate does, never "Cannot be …" or "Cannot have …", nor what the employer does to the people
+ * applying (`EMPLOYER_DOES`, "Can't accept applicants without a license") or words naming them (`NAMES_APPLICANTS`,
+ * "Cannot let anyone without a license start"); "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
  * …"), never "Won't hire …", "Won't accept …" or another verb only the employer does (`EMPLOYER_VERB`). Anything else
  * comes back as typed (never its opposite: review of the live test, 12 Nov 2026, and of its fix), so "No recent grads"
  * is still refused by the fairness check, and words that still rule someone out (`rulesOut`) are asked of the owner as
@@ -132,7 +146,7 @@ export function mustHaveOf(dealBreaker: string): string {
   const lacks = t.match(LACKS);
   if (lacks) return lacksCredential(t) ? up(lacks[1]) : t;
   const cannot = t.match(/^(?:cannot|can\s+not|can['’]t|unable\s+to|not\s+able\s+to)\s+(.+)$/i);
-  if (cannot) return CANNOT_BE.test(t) ? t : `Able to ${cannot[1]}`;
+  if (cannot) return CANNOT_BE.test(t) || EMPLOYER_DOES.test(cannot[1]) || NAMES_APPLICANTS.test(cannot[1]) ? t : `Able to ${cannot[1]}`;
   const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
   if (not) return up(not[1]);
   const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);

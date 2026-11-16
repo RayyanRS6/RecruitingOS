@@ -499,6 +499,9 @@ describe("hire again: the facts a new draft starts from (plan C14, review of the
     expect(facts.dealBreakers).toEqual(["No active California RDA license", "Cannot work Saturdays"]);
     // words that cannot be turned round stay as they are (the requirements check asks for what they need)
     expect(packetToFacts(approved((p) => { p.requirements.mustHaves[1].text = "No RDA"; p.preferences.dealBreakersInTheirWords = ["No RDA"]; })).mustHaves).toEqual(["Four-handed dentistry", "No RDA", "Must work Saturdays", "Active California RDA license"]);
+    // and so does what the employer does after "Cannot", never "Able to accept …" (lead's decision, 17 Nov 2026)
+    const ban = "Can't accept applicants without a license";
+    expect(packetToFacts(approved((p) => { p.requirements.mustHaves[1].text = ban; p.preferences.dealBreakersInTheirWords = [ban]; })).mustHaves).toEqual(["Four-handed dentistry", ban, "Must work Saturdays", "Active California RDA license"]);
   });
 
   it("carries the old form's questions as the owner's choice, so the new draft's form asks them too", () => {

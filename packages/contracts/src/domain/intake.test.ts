@@ -84,6 +84,36 @@ describe("a deal-breaker as the must-have it counts as", () => {
     expect(mustHaveOf("No up-to-date BLS certification")).toBe("Up-to-date BLS certification");
   });
 
+  // left out by the repair of the must-haves (lead's decision, 17 Nov 2026): "Can't accept applicants without a license"
+  // became "Able to accept applicants without a license", and "Cannot hire anyone who smokes" "Able to hire anyone who
+  // smokes", which the AI interview then asked about
+  it("never turns round what the employer does to the people applying, or words naming them, and still turns round what the candidate cannot do", () => {
+    const asTyped = [
+      "Can't accept applicants without a license", "Cannot hire anyone who smokes",
+      // a verb an employer does to applicants, after each way of saying cannot, a word such as "currently" before it too
+      "Cannot accept walk-in applications", "Can't hire smokers", "Can’t take walk-ins", "Can not take on new grads", "Unable to consider résumés without a license",
+      "Not able to employ minors", "Cannot interview on weekends", "Can't onboard before the license arrives", "Unable to sponsor visas", "Cannot bring on staff without a license",
+      "Can't use temps", "Cannot allow phones on the floor", "Unable to offer relocation", "Can't pay more than $25 an hour", "Cannot currently sponsor visas",
+      // words naming the people applying, whatever the verb
+      "Cannot let applicants start without a license", "Cannot let an applicant start without a license", "Can't work with candidates who smoke", "Unable to start anyone without a license",
+      "Cannot train anybody on the job", "Can't keep someone without experience", "Cannot work with somebody who smokes", "Unable to work with people who smoke",
+      "Cannot keep those without a license", "Can't train new hires", "Can't train a new hire",
+    ];
+    for (const t of asTyped) {
+      expect(mustHaveOf(t), t).toBe(t);
+      // still worded as what rules someone out: asked of the owner as what they need, as "No RDA" is
+      expect(rulesOut(mustHaveOf(t)), t).toBe(true);
+      expect(restatementsOf(t), t).toEqual([t]);
+      expect(lacksCredential(t), t).toBe(false);
+    }
+    // what the candidate does is still turned round
+    expect(mustHaveOf("Cannot work Saturdays")).toBe("Able to work Saturdays");
+    expect(mustHaveOf("Unable to lift 50 lbs")).toBe("Able to lift 50 lbs");
+    expect(mustHaveOf("Can't work with children")).toBe("Able to work with children");
+    expect(mustHaveOf("Not able to drive a stick shift")).toBe("Able to drive a stick shift");
+    expect(mustHaveOf("Can't reliably lift 50 lbs")).toBe("Able to reliably lift 50 lbs");
+  });
+
   it("knows the must-haves a deal-breaker can come back as, its opposite too, so a refused one is refused in each", () => {
     expect(restatementsOf("No felonies or license suspensions")).toEqual(["No felonies or license suspensions", "Felonies or license suspensions"]);
     expect(restatementsOf("No gaps in license")).toEqual(["No gaps in license", "Gaps in license"]);
