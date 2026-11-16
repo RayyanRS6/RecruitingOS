@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { NOTE_VERSION_SITTING_MINUTES, type HireFollowUp, type InterviewDraft, type NoteView, type NotesView, type OfferMadeResult } from "@ros/contracts";
-import { addCalendarDays, anonymizeCandidate, buildEscalationContext, companyToday, entitlements, exportCandidateData } from "@ros/core";
+import { addCalendarDays, anonymizeCandidate, buildEscalationContext, companyToday, correctOutcome, entitlements, exportCandidateData } from "@ros/core";
 import { composeInterviewerBrief, loadApplicationBundle, prepareScreenOpening } from "@ros/agents";
 import type { FakeProvider, StructuredRequest } from "@ros/ai";
 import { applicationNotes, applications, approvalRequests, auditRecords, candidates, documents, events, hiringOutcomes, interviewParticipants, interviews, offers, randomToken, rolePackets, users, withTenant } from "@ros/db";
@@ -148,6 +148,40 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect(row.status).toBe("declined");
       expect(row.respondedAt).toBeTruthy();
       expect((await container.db.select().from(events).where(and(eq(events.subjectId, ana.applications.id), eq(events.type, "offer.declined")))).length).toBe(1);
+    });
+
+    // The second look at the review's #58 fix (12 November 2026): an outcome recorded at Offer and then taken back before
+    // they were told, or voided by an ITS administrator, puts them back at Offer with the offer's row settled (withdrawn,
+    // declined). Their row still says the day the panel's card says, the one recorded with the offer, never the day of the
+    // undo or the void ("Offer made today").
+    it("someone back at Offer after a decision taken back or an outcome voided keeps the offer's own day on their row", async () => {
+      const madeOn = addCalendarDays(today(), -3);
+      const rowOf = async (id: string) => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; group: string; offerMadeOn?: string | null }>).find((a) => a.id === id);
+      const offerTo = async (first: string) => {
+        const a = await seed(first, "finalist");
+        expect((await json(owner, "POST", `/api/v1/applications/${a.id}/offer`, { confirm: true, madeOn })).status).toBe(201);
+        return a.id;
+      };
+      // "No hire for this candidate" recorded by mistake, then taken back before they were told
+      const lia = await offerTo("Lia");
+      const noHire = await json(owner, "POST", `/api/v1/applications/${lia}/outcome`, { outcome: "no_hire", confirm: true });
+      expect(noHire.status).toBe(201);
+      expect(((await noHire.json()) as { offer?: string }).offer).toBe("withdrawn");
+      const undone = await json(owner, "POST", `/api/v1/applications/${lia}/actions`, { action: "undo_decision" });
+      expect(undone.status, await undone.clone().text()).toBe(200);
+      expect(await stageOf(lia)).toBe("offer_sent");
+      expect(await rowOf(lia)).toMatchObject({ group: "waiting_on_candidate", offerMadeOn: madeOn });
+      // "They declined the offer" recorded in error, and voided by an ITS administrator
+      const mae = await offerTo("Mae");
+      const declined = await json(owner, "POST", `/api/v1/applications/${mae}/outcome`, { outcome: "offer_declined_externally", confirm: true });
+      expect(declined.status).toBe(201);
+      const { outcomeId } = (await declined.json()) as { outcomeId: string };
+      await withTenant(container.db, companyId, (tx) => correctOutcome(tx, { outcomeId, actor: { kind: "user", id: ownerId, name: "ITS admin" }, reason: "Recorded in error" }));
+      expect(await stageOf(mae)).toBe("offer_sent");
+      expect(await rowOf(mae)).toMatchObject({ group: "waiting_on_candidate", offerMadeOn: madeOn });
+      // the offers rows keep the answer that was recorded: the row reads the offer whatever its state
+      const settled = await container.db.select({ applicationId: offers.applicationId, status: offers.status }).from(offers).where(inArray(offers.applicationId, [lia, mae]));
+      expect(Object.fromEntries(settled.map((o) => [o.applicationId, o.status]))).toEqual({ [lia]: "withdrawn", [mae]: "declined" });
     });
   });
 

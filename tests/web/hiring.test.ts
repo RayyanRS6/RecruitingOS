@@ -82,13 +82,21 @@ describe("Offer made (Q29)", () => {
       // a day recorded as earlier than the click: that day, in both
       expect(waitingOnCandidateText(card("2026-11-09") as never, morning, LA)).toContain(" (4 days ago). ");
       expect(waitingOnCandidateRow(row("2026-11-09"), morning, LA)).toBe("Offer made 4 days ago: waiting on their answer");
-      // an older answer without the offer's day: the day they moved to Offer, as the card without the offer's fact
-      expect(waitingOnCandidateText({ ...card("2026-11-12"), timeline: [] } as never, morning, LA)).toContain(" (today). ");
-      expect(waitingOnCandidateRow(row(), morning, LA)).toBe("Offer made today: waiting on their answer");
+      // an older answer without the offer's day: the day they moved to Offer, as the card without the offer's fact, also on
+      // the company's calendar (the second look at this fix: both read the UTC date, the 13th, and said "today" all day)
+      const moved = { ...card("2026-11-12"), timeline: [] };
+      expect(offerMadeOn(moved, LA)).toBe("2026-11-12");
+      expect(waitingOnCandidateText(moved as never, morning, LA)).toContain(" made on Thursday, November 12 (yesterday). ");
+      expect(waitingOnCandidateRow(row(), morning, LA)).toBe("Offer made yesterday: waiting on their answer");
+      // until the company's zone has loaded, both on the reader's own calendar: already the 13th in New York
+      expect(offerMadeOn(moved)).toBe("2026-11-13");
+      expect(waitingOnCandidateRow(row(), morning)).toBe("Offer made today: waiting on their answer");
     });
-    // the row reads the company's zone, as the card does
+    // the row reads the company's zone, as the card does, and so does the panel's "Where things stand" line
     const list = readFileSync(new URL("../../apps/web/src/pages/People.tsx", import.meta.url), "utf8");
     expect(list).toContain("waitingOnCandidateRow(a, undefined, timeZone)");
+    const where = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/sections.tsx", import.meta.url), "utf8");
+    expect(where).toContain("plainDayWords(offerMadeOn(a, timeZone))");
   });
 });
 

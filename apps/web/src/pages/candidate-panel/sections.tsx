@@ -9,6 +9,7 @@ import { toast } from "../../toast";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { InlineUndo } from "../../components/InlineUndo";
 import { useCompanyCheck } from "../../components/use-company-check";
+import { useCompanyTimeZone } from "../../components/use-company-time-zone";
 import { interviewLine } from "../../interview-time";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
@@ -99,6 +100,7 @@ function AiInterviewCard({ a, roleId, onDecline }: { a: ApplicationDetail; roleI
  */
 function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   const check = useCompanyCheck();
+  const timeZone = useCompanyTimeZone();
   const outcomes = useQuery({ queryKey: ["outcomes", a.id], queryFn: () => api.get<{ statement: string; outcomes: OutcomeRecord[] }>(`/api/v1/applications/${a.id}/outcomes`), enabled: ["hired", "withdrawn", "rejected", "talent_pool", "declined"].includes(a.stage) });
   const recorded = outcomes.data?.outcomes.find((o) => !o.correctedAt);
   const lines: string[] = [];
@@ -110,8 +112,9 @@ function WhereTheyAre({ a }: { a: ApplicationDetail }) {
   if (a.toldState === "sent") lines.push(`Told the decision by message${a.candidateToldAt ? ` on ${new Date(a.candidateToldAt).toLocaleDateString()}` : ""}.`);
   if (a.toldState === "told_in_person") lines.push(`Told the decision in person${a.candidateToldAt ? ` (recorded ${new Date(a.candidateToldAt).toLocaleDateString()})` : ""}.`);
   if (a.toldState === "before_tracking") lines.push("Decided before decisions became private: their status page already showed it, so nothing more is sent.");
-  // An offer made outside the app (plan H2): the next move is the candidate's.
-  if (a.stage === "offer_sent") lines.push(`Offer made on ${plainDayWords(offerMadeOn(a))}, outside the app: waiting on their answer.`);
+  // An offer made outside the app (plan H2): the next move is the candidate's. Its day is the one the waiting card and the
+  // list's row say, on the company's calendar.
+  if (a.stage === "offer_sent") lines.push(`Offer made on ${plainDayWords(offerMadeOn(a, timeZone))}, outside the app: waiting on their answer.`);
   const interviews = a.interviews;
   if (!lines.length && !interviews.length && !recorded) return null;
   return (

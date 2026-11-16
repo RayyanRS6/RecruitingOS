@@ -23,6 +23,15 @@ function todayOf(now: Date, timeZone: string | null | undefined): string {
   return timeZone ? todayIn(timeZone, now) : dayKey(now);
 }
 
+/**
+ * The day a moment (an ISO time) fell on, as YYYY-MM-DD, on the same calendar as `todayOf`: the company's once its time
+ * zone is known, the reader's own until then, never the UTC date (11 PM in Los Angeles is already the next day in UTC).
+ */
+function dayOf(at: string, timeZone: string | null | undefined): string {
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? at.slice(0, 10) : todayOf(d, timeZone);
+}
+
 /** "Monday, November 3": a plain day (YYYY-MM-DD) as people say it, read as that day wherever the reader is. */
 export function plainDayWords(day: string): string {
   const d = new Date(`${day.slice(0, 10)}T12:00:00`);
@@ -52,11 +61,14 @@ export function offerMadeToast(firstName: string): ToastParts {
   return { title: "Offer recorded.", detail: `Nothing was sent to ${firstName}. When they answer, record it on their page: they accepted, or they declined.` };
 }
 
-/** When the offer was made: the day recorded with it (the `offer.created` fact), else the day they moved to Offer. */
-export function offerMadeOn(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt">): string {
+/**
+ * When the offer was made: the day recorded with it (the newest `offer.created` fact), else the day they moved to Offer,
+ * on the company's calendar (`timeZone`; the reader's own until it has loaded), as the list's row counts it.
+ */
+export function offerMadeOn(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt">, timeZone: string | null = null): string {
   const e = [...a.timeline].filter((x) => x.type === "offer.created").sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt))[0];
   const made = typeof e?.payload.madeOn === "string" ? e.payload.madeOn : null;
-  return made ?? a.stageChangedAt.slice(0, 10);
+  return made ?? dayOf(a.stageChangedAt, timeZone);
 }
 
 /** The private note recorded with the offer, if any. */
@@ -80,7 +92,7 @@ export function daysAgoWords(day: string, now: Date = new Date(), timeZone: stri
 
 /** The card while an offer waits on the candidate's answer (the "waiting on the candidate" group, plan H2). */
 export function waitingOnCandidateText(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt" | "candidate">, now: Date = new Date(), timeZone: string | null = null): string {
-  const made = offerMadeOn(a);
+  const made = offerMadeOn(a, timeZone);
   const first = a.candidate.firstName || "the candidate";
   return `You recorded an offer made on ${plainDayWords(made)} (${daysAgoWords(made, now, timeZone)}). The next move is ${first}'s. When they answer, record it here; nothing is sent to them either way.`;
 }
@@ -90,11 +102,12 @@ export function waitingOnCandidateText(a: Pick<ApplicationDetail, "timeline" | "
  * day as the card on their panel (`waitingOnCandidateText`): the offer's own day, counted on the company's calendar
  * (review of the live-test fixes, 12 November 2026: the row counted whole 24 hours since the stage changed, so it read
  * "today" all the next morning, and never knew a day recorded as earlier). Without the offer's day (an older answer), the
- * day they moved to Offer, as the card does without the offer's fact.
+ * day they moved to Offer on the company's calendar, as the card does without the offer's fact (the second look at that
+ * fix: both read the UTC date, so a move at 11 PM in Los Angeles said "today" all the next day).
  */
 export function waitingOnCandidateRow(a: Pick<ApplicationSummary, "group" | "stageChangedAt" | "offerMadeOn">, now: Date = new Date(), timeZone: string | null = null): string | null {
   if (a.group !== "waiting_on_candidate") return null;
-  const ago = daysAgoWords(a.offerMadeOn ?? a.stageChangedAt.slice(0, 10), now, timeZone);
+  const ago = daysAgoWords(a.offerMadeOn ?? dayOf(a.stageChangedAt, timeZone), now, timeZone);
   return ago ? `Offer made ${ago}: waiting on their answer` : "Offer made: waiting on their answer";
 }
 

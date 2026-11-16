@@ -425,8 +425,8 @@ async function companyTimeZone(tx: Tx, companyId: string): Promise<string> {
  * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
  * (`ownerStage`, `ownerStageLabel`: under Cancelled, why they are there), with `cancelled` (why, and where their new
  * times stand; null for everyone not under Cancelled), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
- * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the day an offer
- * waiting on its answer was made (`offerMadeOn`, the offers row's `made_on`; null for everyone not at Offer), the told state
+ * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the day the offer
+ * someone at Offer waits on was made (`offerMadeOn`, the newest offers row's `made_on`; null for everyone else), the told state
  * of a decision (`toldState`: null for someone whose details were deleted, who cannot be told; `candidateToldAt`,
  * `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
  * score (founder decision B2), worked out on read from the stored findings: `score`, `band`, `bandLabel`, `coverage`,
@@ -480,7 +480,7 @@ roleRoutes.get("/:id/applications", requireTenant, async (c) => {
     const preparing = await interviewsBeingPrepared(tx, appIds);
     // Whose AI interview never came because the month's allowance stayed used up (Q17): their score's label says so.
     const lapsed = await interviewsLapsedOnAllowance(tx, appIds.filter((id) => !scr.some((s) => s.applicationId === id)));
-    // The day each offer waiting on its answer was made, so the row says the day the panel says (`offerMadeOn`).
+    // The day the offer each person at Offer waits on was made, so the row says the day the panel says (`offerMadeOn`).
     const offerDays = await openOfferDays(tx, apps.filter((a) => a.stage === "offer_sent").map((a) => a.id));
     const rows = apps.map((loaded) => {
       const cand = cands.find((x) => x.id === loaded.candidateId);

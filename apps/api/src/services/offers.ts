@@ -49,16 +49,24 @@ export async function recordOfferMade(tx: Tx, input: { app: App; by: MembershipR
 }
 
 /**
- * The day each offer still waiting on its answer was made (`made_on`), by application, for the Talent list's row: it says
- * the same day as the candidate panel's card, which reads the `offer.created` fact recorded with it (review of the
- * live-test fixes, 12 November 2026: the row counted 24 hours since the stage changed, and said "today" the next morning).
- * The newest one when there are several; one query for the whole list.
+ * The day the offer each person at Offer waits on was made (`made_on`), by application, for the Talent list's row: it says
+ * the same day as the candidate panel's card, which reads the newest `offer.created` fact, written with the newest offer
+ * (review of the live-test fixes, 12 November 2026: the row counted 24 hours since the stage changed, and said "today" the
+ * next morning). The newest offer whatever its state: an answer recorded at Offer and then taken back before they were
+ * told, or voided by an administrator, puts them back at Offer with that offer settled (withdrawn, declined, accepted),
+ * and no newer one can be recorded while they are there (the second look at that fix). None when the newest has no day,
+ * as the card then says the day they moved to Offer. Only people at Offer are passed in; one query for the whole list.
  */
 export async function openOfferDays(tx: Tx, applicationIds: readonly string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!applicationIds.length) return out;
-  const rows = await tx.select({ applicationId: offers.applicationId, madeOn: offers.madeOn }).from(offers).where(and(inArray(offers.applicationId, [...applicationIds]), eq(offers.status, "made"))).orderBy(desc(offers.createdAt));
-  for (const r of rows) if (r.madeOn && !out.has(r.applicationId)) out.set(r.applicationId, r.madeOn);
+  const rows = await tx.select({ applicationId: offers.applicationId, madeOn: offers.madeOn }).from(offers).where(inArray(offers.applicationId, [...applicationIds])).orderBy(desc(offers.createdAt));
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (seen.has(r.applicationId)) continue;
+    seen.add(r.applicationId);
+    if (r.madeOn) out.set(r.applicationId, r.madeOn);
+  }
   return out;
 }
 
