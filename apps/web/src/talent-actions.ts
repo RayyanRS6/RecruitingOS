@@ -1,7 +1,7 @@
 import { OWNER_STAGE_LABEL, lockedClosingLine, titleMidSentence, type MarkKind, type OwnerStage } from "@ros/contracts";
 import type { ActionResult, CandidateNotice, DecisionMessagesResponse, DeclineMessagePolicy, SendNewTimesBatchResult, SendNewTimesResult, StageMove } from "./api/client";
 import { shortWhen } from "./interview-time";
-import { namedDay, safetyNetDate, safetyNetShort } from "./telling";
+import { lockedSafetyNetDay, namedDay, safetyNetDate, safetyNetShort } from "./telling";
 
 /**
  * What the Candidates page and the candidate panel say after a choice, word for word from what the API reports (plan
@@ -23,15 +23,19 @@ export const PRIVATE_DECISION = "Private: the candidate was not told.";
  */
 type DecisionMessageHint = { decisionMessage?: { policy: DeclineMessagePolicy; to: string | null } | null; untoldFallbackOn?: string | null };
 
+/** Who a decision before the click is about, as far as the safety net's day goes: someone locked was promised a date. */
+type LockedPerson = { lockedAt?: string | null; createdAt?: string | null };
+
 /**
  * The safety net said when a decision is filed (founder decision D-03 A), in the way the company's settings run it when
  * the answer says: after the decision, the day the answer names, so the toast and the card agree (live test, 12 November
  * 2026); before it, or in an older answer, the day counted from `now` as the daily check counts it, on the company's
- * calendar when its `timeZone` is known and on its contact days (`workDays`).
+ * calendar when its `timeZone` is known and on its contact days (`workDays`), and for someone locked (`person`) by the
+ * date they were promised if that comes first (`lockedSafetyNetDay`).
  */
-export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string, timeZone?: string | null, workDays?: readonly number[] | null): string {
+export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string, timeZone?: string | null, workDays?: readonly number[] | null, person: LockedPerson = {}): string {
   const m = r.decisionMessage ?? null;
-  const on = r.untoldFallbackOn ? namedDay(r.untoldFallbackOn) : safetyNetDate(now.toISOString(), undefined, timeZone, workDays);
+  const on = r.untoldFallbackOn ? namedDay(r.untoldFallbackOn) : lockedSafetyNetDay(safetyNetDate(now.toISOString(), undefined, timeZone, workDays), person, now, timeZone);
   return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on, what });
 }
 /** A message saved in the outbox of a company ITS has not confirmed yet (founder decision B7): it is not on its way yet. */
@@ -279,13 +283,15 @@ export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEma
  * The short lines a decline step shows before the click (founder decisions B6 and D-03 A): private now, any interview it
  * calls off, and the day the standard message goes by itself if nobody tells them first (or the day an ITS recruiter is
  * brought in, under the company's settings), counted on the company's calendar when its `timeZone` is known, on its
- * contact days (`workDays`). The whole of `declineConfirmText` sits one click away under it.
+ * contact days (`workDays`), and for someone locked (`person`) by the date they were promised if that comes first. The
+ * whole of `declineConfirmText` sits one click away under it.
  */
-export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date; timeZone?: string | null; workDays?: readonly number[] | null }): string[] {
+export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date; timeZone?: string | null; workDays?: readonly number[] | null; person?: LockedPerson }): string[] {
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
   const lead = !known.length ? "Private: nothing is sent to them now."
     : `Private: the decision is not sent now. ${known.length === 1 ? "Their interview is" : `Their ${known.length} interviews are`} called off, and they get a short note saying so.`;
-  const on = safetyNetDate((input.now ?? new Date()).toISOString(), undefined, input.timeZone, input.workDays);
+  const now = input.now ?? new Date();
+  const on = lockedSafetyNetDay(safetyNetDate(now.toISOString(), undefined, input.timeZone, input.workDays), input.person ?? {}, now, input.timeZone);
   return [lead, safetyNetShort({ policy, hasEmail: input.hasEmail, on })];
 }
 

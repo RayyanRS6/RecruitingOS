@@ -4,7 +4,7 @@ import { ADVERSE_DECISION_LINE, adverseDecisionLineApplies, regionFromLocationTe
 import { decisionTemplateKey, dispositionMessage, freeformFooter } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { invitationNoteText } from "./interview-messages";
-import { untoldFallbackAt, untoldFallbackDue, workingDaysSince } from "./orchestrator";
+import { untoldFallbackAt, untoldFallbackDay, untoldFallbackDue, workingDaysSince } from "./orchestrator";
 import { checkPersonalLine } from "./personal-line";
 import { samplePacket } from "./fixtures/sample-packet";
 
@@ -144,6 +144,33 @@ describe("the working days the untold safety net counts (Q27)", () => {
     expect(untoldFallbackDue(early, new Date("2026-11-02T18:00:00Z"), la)).toBe(true);
     // and on any day after it, if a check was missed
     expect(untoldFallbackDue(fri, new Date("2026-11-23T18:00:00Z"), la)).toBe(true);
+  });
+
+  // The second look at the safety-net day fix (12 November 2026, finding #13): someone locked was due from the very minute 29
+  // days after applying, so the message went up to a week before the day named, or the day after it when the check ran
+  // earlier in the day than they had applied
+  it("for someone locked, names and acts on the day before the date they were promised when that comes first, or today once it has passed", () => {
+    const la = { timeZone: "America/Los_Angeles", holidays: new Set(["2026-11-11", "2026-11-26"]) };
+    // applied at 10 AM on Monday, November 2 in Los Angeles, past the plan's limit: promised an email by Wednesday, December 2
+    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
+    // ITS declines her at 3 PM on Wednesday, November 25: with Thanksgiving left out, the fifth working day is Thursday, December 3
+    const wed = new Date("2026-11-25T23:00:00Z");
+    expect(untoldFallbackAt(wed, la).day).toBe("2026-12-03");
+    // the day before her date comes first, and its check sends at any hour, earlier in the day than she applied too
+    expect(untoldFallbackDay(wed, wed, la, pia)).toBe("2026-12-01");
+    expect(untoldFallbackDue(wed, new Date("2026-12-01T07:00:00Z"), la, pia)).toBe(false); // 11 PM on Monday, November 30
+    expect(untoldFallbackDue(wed, new Date("2026-12-01T15:00:00Z"), la, pia)).toBe(true); // 7 AM on Tuesday, December 1
+    // anyone else keeps the fifth working day, and so does someone locked whose date comes after it
+    expect(untoldFallbackDay(wed, wed, la)).toBe("2026-12-03");
+    expect(untoldFallbackDay(wed, wed, la, { lockedAt: null, createdAt: pia.createdAt })).toBe("2026-12-03");
+    expect(untoldFallbackDue(wed, new Date("2026-12-01T15:00:00Z"), la, { lockedAt: null, createdAt: pia.createdAt })).toBe(false);
+    expect(untoldFallbackDay(wed, wed, la, { lockedAt: "2026-11-20T18:00:00.000Z", createdAt: "2026-11-20T18:00:00.000Z" })).toBe("2026-12-03");
+    // declined at 3 PM on Wednesday, December 9, after that day: the company's today, so the next check sends
+    const late = new Date("2026-12-09T23:00:00Z");
+    expect(untoldFallbackAt(late, la).day).toBe("2026-12-16");
+    expect(untoldFallbackDay(late, late, la, pia)).toBe("2026-12-09");
+    expect(untoldFallbackDue(late, late, la, pia)).toBe(true);
+    expect(untoldFallbackDay(late, new Date("2026-12-10T15:00:00Z"), la, pia)).toBe("2026-12-10");
   });
 });
 

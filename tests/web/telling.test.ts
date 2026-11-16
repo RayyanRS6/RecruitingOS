@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
-  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
+  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, lockedSafetyNetDay, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
   safetyNetLine, safetyNetPromise, safetyNetShort, safetyNetWorkDays, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
   HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
@@ -185,6 +185,30 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
     // the card reads the company's zone
     const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/telling.tsx", import.meta.url), "utf8");
     expect(card).toContain("safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting, timeZone })");
+  });
+
+  // The second look at the safety-net day fix (12 November 2026, finding #13): for someone locked the day the API names can be
+  // the day before the date they were promised when they applied, before five working days have passed
+  it("for someone locked, says once the day has come that the message goes with the next daily check, never that five working days have passed", () => {
+    const LA = "America/Los_Angeles";
+    const decided = "2026-11-25T23:00:00.000Z"; // 3 PM on Wednesday, November 25 in Los Angeles
+    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" }; // promised Wednesday, December 2
+    const a = { ...base, rejectedAt: decided, stageChangedAt: decided, untoldFallbackOn: "2026-12-01", lockedAt: pia.lockedAt };
+    asReaderIn("Asia/Karachi", () => {
+      // noon on Tuesday, December 1 in Karachi, 11 PM on Monday the 30th in Los Angeles: the day is still ahead
+      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-12-01T07:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Tuesday, December 1.");
+      // midnight there: the day has come, three working days after the decision
+      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-12-01T08:00:00.000Z"), timeZone: LA })).toBe("The standard message goes to Luis with the next daily check, unless you act now.");
+      // the page's own count before the click: the day before her date, before the fifth working day (Wednesday, December 2)
+      expect(dayWords(safetyNetDate(decided, 5, LA)!)).toBe("Wednesday, December 2");
+      expect(dayWords(lockedSafetyNetDay(safetyNetDate(decided, 5, LA), pia, new Date(decided), LA)!)).toBe("Tuesday, December 1");
+    });
+    // before the company's zone has loaded, the reader's own calendar
+    asReaderIn(LA, () => expect(dayWords(lockedSafetyNetDay(safetyNetDate(decided), pia, new Date(decided))!)).toBe("Tuesday, December 1"));
+    // nobody else's day moves, and no day stays no day
+    const on = safetyNetDate(decided, 5, LA);
+    expect(lockedSafetyNetDay(on, { lockedAt: null, createdAt: pia.createdAt }, new Date(decided), LA)).toBe(on);
+    expect(lockedSafetyNetDay(null, pia, new Date(decided), LA)).toBeNull();
   });
 
   it("says, in one short line, on which day the standard message goes by itself if nobody tells them first (D-03 A)", () => {

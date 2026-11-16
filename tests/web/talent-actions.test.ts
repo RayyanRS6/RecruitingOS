@@ -252,6 +252,26 @@ describe("the private decline step", () => {
     expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: hint, untoldFallbackOn: "2026-11-23" }, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
   });
 
+  // The second look at the safety-net day fix (12 November 2026, finding #13): for someone locked whose promised date comes
+  // first, the line before the click named the fifth working day and the toast after it the day before that date
+  it("before the click, someone locked is told by the day before the date they were promised when that comes first, the day the toast after it names", () => {
+    const LA = "America/Los_Angeles";
+    const hint = { policy: "sends" as const, to: "pia@example.com" };
+    // applied at 10 AM on Monday, November 2 in Los Angeles: promised an email by Wednesday, December 2
+    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
+    // ITS declines her at 3 PM on Wednesday, November 25, already Thursday morning for a reader in Karachi
+    const wed = new Date("2026-11-25T23:00:00.000Z");
+    const net = "If nobody tells them first, the standard message goes by itself on Tuesday, December 1.";
+    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: pia })[1]).toBe(net);
+    expect(safetyNetAfterDecision({ decisionMessage: hint }, wed, undefined, LA, undefined, pia)).toBe(net);
+    expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: hint, untoldFallbackOn: "2026-12-01" }, wed).detail).toBe(`${PRIVATE_DECISION} ${net}`);
+    // anyone else: five working days (the page knows no holidays, so Wednesday, December 2)
+    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: { lockedAt: null, createdAt: pia.createdAt } })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 2.");
+    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 2.");
+    // once that day has passed, today: 3 PM on Wednesday, December 9
+    expect(declineSummary("sends", { hasEmail: true, now: new Date("2026-12-09T23:00:00.000Z"), timeZone: LA, person: pia })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 9.");
+  });
+
   // Second review of the live-test fixes, 12 November 2026 (#18): a toast built from part of the answer would fall back to the
   // reader's own count and bring the live test's two days back, and no browser run would see it
   it("every toast after a decision gets the whole answer, and every line before the click reads the company's calendar", () => {
@@ -261,8 +281,9 @@ describe("the private decline step", () => {
     const panel = src("pages/candidate-panel/needs-you.tsx");
     expect(panel).toContain("outcomeToast(form.outcome, { ...r, ");
     expect(panel).toContain("decisionToast(body.decision, { ...r, ");
-    expect(panel).toContain("declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays })");
-    expect(panel).toContain("safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays)");
+    // and, for someone locked, the date they were promised (the second look at the safety-net day fix, #13)
+    expect(panel).toContain("declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays, person: a })");
+    expect(panel).toContain("safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays, a)");
     const close = src("components/ClosingMessage.tsx");
     expect(close).toContain("closeRoleToast(res, ");
     expect(close).toContain("safetyNetDate(new Date().toISOString(), undefined, timeZone, workDays)");

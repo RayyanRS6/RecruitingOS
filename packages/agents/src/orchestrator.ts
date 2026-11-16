@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, interviewsInMotionFor, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, interviewsInMotionFor, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -53,8 +53,8 @@ export function workingDaysSince(from: Date, now: Date, cap = 60, rules: Working
 /**
  * The day the untold safety net acts on a decision made at `from` (Q27): the moment it is `days` working days old,
  * counted as `workingDaysSince` counts them, and that day in the company's calendar (YYYY-MM-DD). The daily check acts on
- * that day, at whatever hour it runs (`untoldFallbackDue`). The candidate panel, the toast and every decision's answer
- * name the day (`untoldFallbackOn`).
+ * that day, at whatever hour it runs, or sooner for someone locked whose promised date comes first (`untoldFallbackDay`,
+ * `untoldFallbackDue`). The candidate panel, the toast and every decision's answer name the day (`untoldFallbackOn`).
  */
 export function untoldFallbackAt(from: Date, rules: WorkingDayRules = {}, days = UNTOLD_SEND_WORKING_DAYS): { at: Date; day: string } {
   const zone = rules.timeZone || "UTC";
@@ -69,14 +69,41 @@ export function untoldFallbackAt(from: Date, rules: WorkingDayRules = {}, days =
 }
 
 /**
- * Whether the untold safety net acts today on a decision made at `from` (Q27): once the company's calendar day of `now` is
- * the day `untoldFallbackAt` names, or after it. The daily check runs once a day, at the hour the company was created, so
- * on the named day it sends at whatever hour it runs, never the day after because it ran earlier in the day than the
- * decision was made, and a Friday's decision goes on the named Friday, not the Saturday (the second review of the
- * live-test fixes, 12 November 2026). The same day as the toast and the "not told yet" card name (`untoldFallbackDayOf`).
+ * For someone locked (the plans of 5 November 2026, Rule 2), when they applied: the date they were promised then counts
+ * for the safety net too (`untoldFallbackDay`). Nothing for anyone else (`lockedAt` empty).
  */
-export function untoldFallbackDue(from: Date, now: Date, rules: WorkingDayRules = {}): boolean {
-  return zonedParts(now, rules.timeZone || "UTC").dayKey >= untoldFallbackAt(from, rules).day;
+export type SafetyNetPromise = { lockedAt?: string | null; createdAt?: string | null };
+
+/**
+ * The day the untold safety net acts on a decision made at `from` (Q27), YYYY-MM-DD in the company's calendar: the fifth
+ * working day (`untoldFallbackAt`). Someone locked was promised a date when they applied, and a decision does not move it,
+ * so theirs is the earlier of that and the day before the promised date (`CLOSE_OUT_SENDS_FROM_DAYS` after they applied,
+ * as the close-out note goes), or the company's today once that day has passed, because the next daily check sends. One
+ * rule for the daily check (`untoldFallbackDue`) and for the day the answer, the toast and the "not told yet" card name
+ * (`untoldFallbackDayOf`; the second review of the live-test fixes, 12 November 2026: the promised date sent the message
+ * up to a week before the day named).
+ */
+export function untoldFallbackDay(from: Date, now: Date, rules: WorkingDayRules = {}, promise: SafetyNetPromise = {}): string {
+  const day = untoldFallbackAt(from, rules).day;
+  const applied = promise.lockedAt && promise.createdAt ? Date.parse(promise.createdAt) : Number.NaN;
+  if (Number.isNaN(applied)) return day;
+  const zone = rules.timeZone || "UTC";
+  const promised = zonedParts(new Date(applied + CLOSE_OUT_SENDS_FROM_DAYS * DAYS), zone).dayKey;
+  const today = zonedParts(now, zone).dayKey;
+  const by = promised > today ? promised : today;
+  return by < day ? by : day;
+}
+
+/**
+ * Whether the untold safety net acts today on a decision made at `from` (Q27): once the company's calendar day of `now` is
+ * the day `untoldFallbackDay` names, or after it. The daily check runs once a day, at the hour the company was created, so
+ * on the named day it sends at whatever hour it runs, never the day after because it ran earlier in the day than the
+ * decision was made (or than someone locked applied), and a Friday's decision goes on the named Friday, not the Saturday
+ * (the second review of the live-test fixes, 12 November 2026). The same day as the toast and the "not told yet" card name
+ * (`untoldFallbackDayOf`).
+ */
+export function untoldFallbackDue(from: Date, now: Date, rules: WorkingDayRules = {}, promise: SafetyNetPromise = {}): boolean {
+  return zonedParts(now, rules.timeZone || "UTC").dayKey >= untoldFallbackDay(from, now, rules, promise);
 }
 
 /**

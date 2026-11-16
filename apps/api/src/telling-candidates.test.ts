@@ -440,7 +440,7 @@ describe("telling candidates", () => {
 
     it("the day is the company's: five working days in its time zone, without the ITS holidays", async () => {
       const id = await seed("Wes");
-      const dayOf = (decidedAt: string) => withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: decidedAt, stageChangedAt: decidedAt }, new Date(decidedAt)));
+      const dayOf = (decidedAt: string) => withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: decidedAt, stageChangedAt: decidedAt, lockedAt: null, createdAt: decidedAt }, new Date(decidedAt)));
       // the live test's decline: 8 PM on Wednesday, November 11 in Los Angeles (the company's zone), Thursday morning in Pakistan
       expect(await dayOf("2026-11-12T04:00:00.000Z")).toBe("2026-11-18");
       // a Friday decline before Thanksgiving (an ITS holiday): the Monday after, not the Friday
@@ -457,7 +457,7 @@ describe("telling candidates", () => {
         const id = await seed(first);
         await decline(id);
         await container.db.update(applications).set({ rejectedAt: at, stageChangedAt: at }).where(eq(applications.id, id));
-        const day = await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: at, stageChangedAt: at }, new Date(at)));
+        const day = await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: at, stageChangedAt: at, lockedAt: null, createdAt: at }, new Date(at)));
         return { id, day };
       };
       // declined at 8 PM on Wednesday, October 21 in Los Angeles (the company's zone): the card names Wednesday the 28th
@@ -487,7 +487,7 @@ describe("telling candidates", () => {
       const id = await seed("Zed");
       await container.db.update(companies).set({ timezone: "Pacific" }).where(eq(companies.id, companyId));
       try {
-        expect(await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: "2026-11-12T04:00:00.000Z", stageChangedAt: "2026-11-12T04:00:00.000Z" }, new Date("2026-11-12T04:00:00.000Z")))).toBeNull();
+        expect(await withTenant(container.db, companyId, (tx) => untoldFallbackDayOf(tx, { id, companyId, rejectedAt: "2026-11-12T04:00:00.000Z", stageChangedAt: "2026-11-12T04:00:00.000Z", lockedAt: null, createdAt: "2026-11-12T04:00:00.000Z" }, new Date("2026-11-12T04:00:00.000Z")))).toBeNull();
         const r = await act(owner, id, { action: "reject", reason: "not_a_match_experience" });
         expect(r.status, await r.clone().text()).toBe(200);
         const answer = (await r.json()) as { stage: string; candidateNotice: string; untoldFallbackOn?: string | null };

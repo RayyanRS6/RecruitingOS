@@ -163,6 +163,32 @@ export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS,
   return companyDay ? namedDay(companyDay(new Date(t))) : new Date(t);
 }
 
+/** Days after applying from which someone locked hears by the date they were promised (packages/core `CLOSE_OUT_SENDS_FROM_DAYS`). */
+export const LOCKED_HEARS_FROM_DAYS = 29;
+
+/** The calendar day (YYYY-MM-DD) of a moment on the reader's own clock. */
+function readerDay(at: Date): string {
+  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * The safety net's day for someone locked (the plans of 5 November 2026, Rule 2), who was promised a date when they
+ * applied: the earlier of `on` (five working days, `safetyNetDate`) and the day before that date, or today once that day has
+ * passed, as the daily check counts it (packages/agents `untoldFallbackDay`); on the company's calendar when its `timeZone`
+ * is known, else the reader's. `on` itself for anyone else (the second look at the safety-net day fix, 12 November 2026:
+ * the message went up to a week before the day named).
+ */
+export function lockedSafetyNetDay(on: Date | null, person: { lockedAt?: string | null; createdAt?: string | null }, now: Date = new Date(), timeZone?: string | null): Date | null {
+  const applied = person.lockedAt && person.createdAt ? Date.parse(person.createdAt) : Number.NaN;
+  if (!on || Number.isNaN(on.getTime()) || Number.isNaN(applied)) return on;
+  const dayOf = (timeZone ? dayIn(timeZone) : null) ?? readerDay;
+  const promised = dayOf(new Date(applied + LOCKED_HEARS_FROM_DAYS * DAY));
+  const today = dayOf(now);
+  const by = promised > today ? promised : today;
+  // `on` reads as its day on the reader's clock: noon of the company's day (`namedDay`), or the reader's own count
+  return by < readerDay(on) ? namedDay(by) : on;
+}
+
 /**
  * The note under a message or an invitation that uses the line the assistant suggested (Q28). Once kept, the assistant
  * helped, however the line was changed afterwards: the email says so until the person takes the line out (while it is
@@ -223,10 +249,12 @@ export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "s
  * on it (told already, or a message waits for an approver). With the company's `timeZone`, the day the API names has
  * come when the company's today reaches it, as the daily check counts it, and the day a recruiter was brought in is the
  * company's; without it, the reader's own calendar (the second review of the live-test fixes, 12 November 2026: a reader
- * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles).
+ * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles). For
+ * someone locked the day can come sooner, by the date they were promised (`untoldFallbackDay`), so the line says only
+ * that the message goes with the next daily check.
  */
 export function safetyNetLine(input: {
-  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null };
+  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null; lockedAt?: string | null };
   waitingApproval: boolean;
   now?: Date;
   timeZone?: string | null;
@@ -244,6 +272,7 @@ export function safetyNetLine(input: {
   const now = input.now ?? new Date();
   const come = a.untoldFallbackOn && companyDay ? companyDay(now) >= a.untoldFallbackOn.slice(0, 10) : on.getTime() <= now.getTime();
   if (come) {
+    if (sends && a.lockedAt) return `The standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`;
     return sends
       ? `${SAFETY_NET_WORKING_DAYS} working days have passed: the standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`
       : `${SAFETY_NET_WORKING_DAYS} working days have passed: an ITS recruiter is brought in with the next daily check. Nothing is sent by itself.`;

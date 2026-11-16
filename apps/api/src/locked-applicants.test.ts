@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes } from "@ros/agents";
+import { detectStuckRoles, runUntoldSafetyNet, sendCloseOutNotes, sendStillReviewingNotes, untoldFallbackAt, workingDayRulesFor } from "@ros/agents";
 import { NO_WORK_WHILE_LOCKED, type ClosingMessagePreview } from "@ros/contracts";
-import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine } from "@ros/core";
+import { CANDIDATE_WROTE_BACK, CLOSED_OUT_STATUS_LINE, CLOSE_OUT_DAYS, CLOSE_OUT_SENDS_FROM_DAYS, ON_FILE_LAST_STEP, ON_FILE_NOTICE, anonymizeCandidate, closeOutDayWords, closeOutDueAt, closeOutNoteLine, decideLock, exportCandidateData, onFileFormLine, onFileNoDateLine, onFileReceiptLine, onFileStatusLine, zonedParts, zonedToUtc } from "@ros/core";
 import { adminAlerts, aiRuns, applications, approvalRequests, auditRecords, candidates, communications, dataRequests, documents, entitlements, events, hiringOutcomes, inboundEmails, interviewParticipants, interviews, jobs, lowercaseToken, notifications, plans, policies, postings, randomToken, recruiterEscalations, roles, rowsOf, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider, type MemoryStorageAdapter } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND, UNLOCK_INTERVIEW_DAYS, discardUnusedObject, startInterviewAgain, unlockApplicants } from "@ros/workflows";
@@ -1249,6 +1249,58 @@ describe("locked candidates", () => {
         expect(raised.filter((e) => /not been told/.test(e.question))).toEqual([]);
       }
     }, 240_000);
+
+    // The second look at the safety-net day fix (12 November 2026, finding #13): someone whose date came before the fifth working
+    // day was told by then, up to a week before the day the answer, the toast and the card named, and only from the very minute
+    // 29 days after applying, so a check earlier in the day than they had applied sent it the day after that day
+    it("someone ITS declines a few days before the date they were promised hears by itself the day before it, the day the answer and the card name, at whatever hour the check runs", async () => {
+      const { job, p, row, recruiter } = await underGrant("Pia");
+      const zone = job.timezone;
+      const at = (day: { year: number; month: number; day: number }, hour: number, plusDays = 0) => zonedToUtc(day.year, day.month, day.day + plusDays, hour, 0, zone);
+      // She applied at 3 PM in the company's zone, 29 days before the fourth day from now: her date is the day after that.
+      const soon = zonedParts(new Date(Date.now() + 4 * DAY), zone);
+      const applied = new Date(at(soon, 15).getTime() - CLOSE_OUT_SENDS_FROM_DAYS * DAY).toISOString();
+      await container.db.update(applications).set({ createdAt: applied, lockedAt: applied }).where(eq(applications.id, row.id));
+      await container.drain();
+      const before = mailsTo(p.email).length;
+      const decided = await json(recruiter, "POST", `/api/v1/applications/${row.id}/actions`, { action: "reject", reason: "position_filled" });
+      expect(decided.status, await decided.clone().text()).toBe(200);
+      // The day before her date, which comes before the fifth working day, in the answer and on her card.
+      expect((await read<{ untoldFallbackOn: string }>(decided)).untoldFallbackOn).toBe(soon.dayKey);
+      const rules = await withTenant(container.db, job.id, (tx) => workingDayRulesFor(tx, job.id, new Date()));
+      expect(untoldFallbackAt(new Date((await applicationOf(row.id)).rejectedAt!), rules).day > soon.dayKey).toBe(true);
+      expect((await read<{ untoldFallbackOn: string | null }>(await json(recruiter, "GET", `/api/v1/applications/${row.id}`))).untoldFallbackOn).toBe(soon.dayKey);
+      await container.drain();
+      expect(mailsTo(p.email).length).toBe(before);
+      // 11 PM the evening before, nothing; 7 AM that day, earlier than the hour she applied, it goes; the next day's check finds
+      // nobody to tell.
+      expect((await safetyNet(job.id, at(soon, 23, -1))).filter((x) => x.applicationId === row.id)).toEqual([]);
+      expect((await safetyNet(job.id, at(soon, 7))).filter((x) => x.applicationId === row.id)).toEqual([{ applicationId: row.id, action: "sent" }]);
+      await container.drain();
+      const sent = mailsTo(p.email).slice(before);
+      expect(sent.map((m) => m.subject)).toEqual([`Your application to ${job.name}`]);
+      expect(sent[0].text).toContain("After reviewing your background against what this role needs, the team has decided not to move forward at this time.");
+      expect(await applicationOf(row.id)).toMatchObject({ toldState: "sent" });
+      expect((await eventsOf(row.id, "application.untold_fallback")).map((e) => e.payload)).toEqual([expect.objectContaining({ action: "sent", wording: "v1", locked: true })]);
+      expect((await safetyNet(job.id, at(soon, 7, 1))).filter((x) => x.applicationId === row.id)).toEqual([]);
+      await noTeamNoticeNames(job.id);
+
+      // Declined once that day has passed (she applied 31 days ago): the company's today, and the next check sends.
+      const { job: other, p: q, row: late, recruiter: its } = await underGrant("Rue");
+      const longAgo = new Date(Date.now() - 31 * DAY).toISOString();
+      await container.db.update(applications).set({ createdAt: longAgo, lockedAt: longAgo }).where(eq(applications.id, late.id));
+      const declined = await json(its, "POST", `/api/v1/applications/${late.id}/actions`, { action: "reject", reason: "position_filled" });
+      expect(declined.status, await declined.clone().text()).toBe(200);
+      const today = zonedParts(new Date(), other.timezone).dayKey;
+      expect((await read<{ untoldFallbackOn: string }>(declined)).untoldFallbackOn).toBe(today);
+      expect((await read<{ untoldFallbackOn: string | null }>(await json(its, "GET", `/api/v1/applications/${late.id}`))).untoldFallbackOn).toBe(today);
+      await container.drain();
+      const mails = mailsTo(q.email).length;
+      expect((await safetyNet(other.id, new Date())).filter((x) => x.applicationId === late.id)).toEqual([{ applicationId: late.id, action: "sent" }]);
+      await container.drain();
+      expect(mailsTo(q.email).length).toBe(mails + 1);
+      await noTeamNoticeNames(other.id);
+    }, 240_000);
   });
 
   describe("the close-out note", () => {
@@ -1480,13 +1532,17 @@ describe("locked candidates", () => {
       const nearlyRow = await apply(job, nearly);
       const fresh = person("Lem");
       const freshRow = await apply(job, fresh);
-      // Applied 28 days and a half ago: the promise falls due in a day and a half.
-      await container.db.update(applications).set({ createdAt: new Date(Date.now() - 28.5 * DAY).toISOString() }).where(eq(applications.id, nearlyRow.id));
+      // Applied 29 days before 3 PM tomorrow in the company's zone: the date she was promised is the day after tomorrow. Set
+      // hours, as the daily check reads the company's calendar day, whatever hour it runs.
+      const tomorrow = zonedParts(new Date(Date.now() + DAY), job.timezone);
+      const at = (hour: number, plusDays = 0) => zonedToUtc(tomorrow.year, tomorrow.month, tomorrow.day + plusDays, hour, 0, job.timezone);
+      await container.db.update(applications).set({ createdAt: new Date(at(15).getTime() - CLOSE_OUT_SENDS_FROM_DAYS * DAY).toISOString() }).where(eq(applications.id, nearlyRow.id));
       await close(job);
       const of = (results: Array<{ applicationId: string }>, id: string) => results.filter((r) => r.applicationId === id);
-      expect(await safetyNet(job.id, new Date())).toEqual([]);
-      // The last day before it, as the close-out note goes: the daily check looks once a day, and the promise says "at the latest".
-      const net = await safetyNet(job.id, new Date(Date.now() + 13 * 3_600_000));
+      expect(await safetyNet(job.id, at(23, -1))).toEqual([]);
+      // The last day before it, as the close-out note goes, earlier in the day than she applied: the daily check looks once a
+      // day, and the promise says "at the latest".
+      const net = await safetyNet(job.id, at(7));
       expect(of(net, nearlyRow.id)).toEqual([{ applicationId: nearlyRow.id, action: "sent" }]);
       expect(of(net, freshRow.id)).toEqual([]);
       await container.drain();

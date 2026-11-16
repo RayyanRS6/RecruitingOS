@@ -113,11 +113,12 @@ function decisionHint(a: ApplicationDetail): { policy: ApplicationDetail["declin
  * What a decline says before the click (founder decisions B6 and D-03 A): private now, any interview it calls off, and
  * the day the standard message goes by itself if nobody tells them first, in short lines; the whole of it (how the
  * candidate will hear under the company's settings, each interview by name and time) one click away. The day is counted
- * on the company's calendar and its contact days, as the daily check counts it (live test, 12 November 2026).
+ * on the company's calendar and its contact days, as the daily check counts it (live test, 12 November 2026), and for
+ * someone locked by the date they were promised if that comes first.
  */
 export function DeclineNotice({ a, interviews, eligibility = false }: { a: ApplicationDetail; interviews?: readonly InterviewRef[]; eligibility?: boolean }) {
   const { timeZone, workDays } = useCompanyCalendar();
-  const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays });
+  const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays, person: a });
   return (
     <Alert tone="caution">
       <div className="grid gap-2">
@@ -456,7 +457,7 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
             <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
           </> : null}
           {/* "No hire" is a private decision too (they move to the talent pool untold): the safety net is said (D-03 A). */}
-          {form.outcome === "no_hire" ? <p className="small muted">Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays)}</p> : null}
+          {form.outcome === "no_hire" ? <p className="small muted">Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays, a)}</p> : null}
           <Field label="Note (kept internally, optional)" htmlFor="oc-note"><input id="oc-note" className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           {form.confirming ? (
             <Alert tone="caution"><div className="row justify-between"><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setForm({ ...form, confirming: false })}>No</Button></span></div></Alert>

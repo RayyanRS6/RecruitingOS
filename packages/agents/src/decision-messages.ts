@@ -300,8 +300,9 @@ export type SafetyNetResult = { applicationId: string; action: "sent" | "recruit
  * tell them, with no name to the team and no recruiter: the closing message when their job closed and left them in its talent
  * pool, and the standard wording of the decision when ITS decided about them under a grant, on a job still open or not
  * (known bug 141: nothing ever told them). They were promised a date when they applied, and a decision or a job closing does
- * not move it, so they are due by then too: from the last day before it, as the close-out note would have gone, or on the
- * fifth working day if that comes first.
+ * not move it, so they are due by then too: from the day before it by the company's calendar (29 days after they applied, as
+ * the close-out note goes), whatever hour the daily check runs, or on the fifth working day if that comes first. The day the
+ * answer, the toast and the card name is that day (`untoldFallbackDay`).
  */
 export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, companyId: string): Promise<SafetyNetResult[]> {
   const untold = (await q.select({ app: applications }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.companyId, companyId), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt)))).map((r) => r.app);
@@ -309,8 +310,8 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
   const rules = await workingDayRulesFor(q, companyId, deps.now);
   const decidedAt = (a: App) => new Date(a.rejectedAt ?? a.stageChangedAt).toISOString();
   const unlocks = await unlockedAtFor(q, untold.map((a) => a.id));
-  const promiseFallsDue = (a: App) => !!a.lockedAt && deps.now.getTime() - Date.parse(a.createdAt) >= CLOSE_OUT_SENDS_FROM_DAYS * 86_400_000;
-  const due = untold.filter((a) => promiseFallsDue(a) || untoldFallbackDue(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, rules));
+  // Someone locked by the date they were promised too, on the company's calendar like the fifth working day.
+  const due = untold.filter((a) => untoldFallbackDue(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, rules, a));
   if (!due.length) return [];
   const waiting = await decisionsWaitingApproval(q, due.map((a) => a.id));
   const handled = new Set((await q.select({ subjectId: events.subjectId, at: sql<string>`${events.payload}->>'decisionAt'` }).from(events).where(and(eq(events.type, "application.untold_fallback"), inArray(events.subjectId, due.map((a) => a.id))))).map((e) => `${e.subjectId}|${e.at}`));
