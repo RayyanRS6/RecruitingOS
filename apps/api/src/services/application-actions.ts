@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackAt, workingDayRulesFor, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
@@ -538,8 +538,20 @@ type ActionBody = ApplicationAction;
  * /applications/:id/messages/:communicationId/undo), and the `wording` used. A decision (decline, talent pool) answers
  * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4); and with
  * `untoldFallbackOn`: the day the untold safety net acts on it, the day the "not told yet" card names (`untoldFallbackDayOf`).
+ * `holdersToTell` is never in the answer: the recruiters holding the request a decided hold raised, whom the caller takes
+ * off and emails once its transaction has committed (`emailHolderAboutDecision`).
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null };
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null; holdersToTell?: HoldDecidedNote[] };
+
+/**
+ * ITS's request about someone held on an eligibility answer, once a person kept them in or declined them
+ * (`settleHoldRequests`): the recruiters holding one are told after the commit, never the person who decided.
+ */
+async function settleHold(tx: Tx, input: { companyId: string; applicationId: string; actor: Actor; now: Date }): Promise<Pick<ActionResult, "holdersToTell">> {
+  const { holders } = await settleHoldRequests(tx, input);
+  const toTell = holders.filter((n) => n.holderId !== input.actor.id);
+  return toTell.length ? { holdersToTell: toTell } : {};
+}
 
 /**
  * The day the untold safety net acts on this decision (Q27), YYYY-MM-DD in the company's calendar: five working days
@@ -620,13 +632,13 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false, ...provenance } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason, ...provenance } });
       // Someone held on an eligibility answer for so long that ITS was asked to review it: a person has decided now.
-      await settleHoldRequests(tx, { companyId: t.companyId, applicationId: app.id, now });
+      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
       // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
       const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
-      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after };
+      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after, ...held };
     }
     case "override_eligibility": {
       assertCan(t.role, "application.act");
@@ -643,8 +655,8 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
       // ITS's request about the hold, when it waited that long, needs nothing more.
-      await settleHoldRequests(tx, { companyId: t.companyId, applicationId: app.id, now });
-      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId };
+      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
+      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId, ...held };
     }
     case "review_anyway": {
       // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.

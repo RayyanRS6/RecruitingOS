@@ -643,10 +643,12 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "Asked an ITS recruiter for help" };
     case "recruiter.claimed":
       return { ...base, what: "An ITS recruiter picked up the request" };
+    // The system closes a request nobody needs any more, or notes it on one a recruiter holds (a hold a person decided, a
+    // stopped step that finished once ITS tried it again): no recruiter answered or wrote.
     case "recruiter.resolved":
-      return { ...base, what: "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
+      return { ...base, what: e.actor.kind === "system" ? "The request to ITS was closed" : "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
     case "recruiter.replied":
-      return { ...base, what: "The ITS recruiter wrote about the request" };
+      return { ...base, what: e.actor.kind === "system" ? "A note was added to the request for the recruiter" : "The ITS recruiter wrote about the request" };
     case "customer.replied":
       return { ...base, what: "A note was added to the request for the recruiter" };
     case "recruiter.reopened":

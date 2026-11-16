@@ -173,6 +173,21 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(items[0]).toMatchObject({ who: "Paula (ITS recruiter)", why: "Worth a working interview." });
   });
 
+  // The second look at the review of the live-test fixes: a hold a person decided closes ITS's request, or notes it on one a
+  // recruiter took, as the system; the History said a recruiter answered when nobody at ITS had done anything.
+  it("says the system closed a request ITS no longer needed, never that a recruiter answered it", () => {
+    const intake = { kind: "system", id: "workflow:application_intake", name: "Recruiting OS" };
+    const decided = "Someone has now decided about this application, so nothing more is needed.";
+    const closed = historyItem(ev("recruiter.resolved", { resolution: decided, holdDecided: true }, intake));
+    expect(closed).toMatchObject({ what: "The request to ITS was closed", who: "The system", why: decided });
+    expect(closed?.what).not.toBe("The ITS recruiter answered");
+    // a stopped step that finished once ITS tried it again closes its request the same way
+    expect(historyItem(ev("recruiter.resolved", { resolution: "ITS ran the stopped step again and it finished. Nothing more is needed from you.", retriedRun: true }, { kind: "system", id: "workflow:retry", name: "Recruiting OS" }))?.what).toBe("The request to ITS was closed");
+    expect(historyItem(ev("recruiter.replied", { messageId: "m1" }, intake))).toMatchObject({ what: "A note was added to the request for the recruiter", who: "The system" });
+    // a recruiter's own note keeps its words
+    expect(historyItem(ev("recruiter.replied", { messageId: "m2" }, { kind: "recruiter", id: "r1", name: "Paula" }))).toMatchObject({ what: "The ITS recruiter wrote about the request", who: "Paula (ITS recruiter)" });
+  });
+
   it("tells what became of the assistant's suggestions: asked, approved by whom, 'Not now', closed, run out of time", () => {
     const agent = { kind: "agent", id: "triage" };
     expect(historyItem(ev("approval.requested", { actionType: "application.invite_screen" }, agent))).toMatchObject({ what: "The assistant suggested an AI interview", who: "The assistant" });

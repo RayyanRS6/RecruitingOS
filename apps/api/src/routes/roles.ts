@@ -10,7 +10,7 @@ import { lockedCardsOf, withoutLockedApprovals } from "../services/locked-visibi
 import { boardView, concernsAsRead, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
 import { readingWontCome } from "../services/application-record";
 import { applyBatch, previewBatch } from "../services/review-apply";
-import { emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
+import { emailHolderAboutDecision, emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
 import { COMPARE_MAX, compareCandidates } from "./compare";
 import { armClosingDate, interviewsBeingPrepared, interviewsLapsedOnAllowance } from "@ros/workflows";
 import { interviewHasNoHours, readingRunIds } from "@ros/agents";
@@ -891,13 +891,15 @@ applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const body = ApplicationAction.parse(await c.req.json());
   const container = c.get("container");
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
+  const { holdersToTell, ...result } = await withTenant(container.db, t.companyId, async (tx) => {
     // The row is locked for the decision, so two people acting on the same candidate at once take turns: the second
     // sees what the first did (a mark already replaced, a decision already told) instead of colliding with it.
     const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1).for("update");
     if (!app) throw new HttpError(404, "not_found", "Application not found.");
     return performApplicationAction(tx, container, { app, body, tenant: t, actor: actorOf(c) });
   });
+  // A held application's request a recruiter took: they are told it was decided, now that the decision has committed.
+  for (const n of holdersToTell ?? []) await emailHolderAboutDecision(container, n);
   await container.kick();
   return c.json(result);
 });

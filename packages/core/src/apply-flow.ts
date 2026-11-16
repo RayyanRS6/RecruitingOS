@@ -149,13 +149,15 @@ export const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 const YES_NO = /^(do|does|are|is|can|could|will|would|have|has|did)\b/i;
 const OPEN_ENDED = /\b(what|which|when|how|why|where|who|whose|whether|tell (?:me|us)|describe|walk (?:me|us)|explain|list|share)\b/i;
 /**
- * A relative clause after a noun ("in the state where this office is located", "the office where you would work"): it
- * says which state or office is meant and asks nothing open. A determiner, one or two words of the noun (never "and",
- * "or" or a preposition: "a preference for which days" asks which), then where, when, which, who, whom or whose. It runs
- * to a comma, a semicolon, the question mark or an "and", "or" or "but", so a second question after it ("…, and which
- * number is it?") is still read.
+ * A relative clause that only places a noun, after in, at, on, to, near or within ("in the state where this office is
+ * located", "to the office where you would work"): it says which state or office is meant and asks nothing open. The
+ * preposition, a determiner, one or two words of the noun (never "and", "or" or a preposition: "a preference for which
+ * days" asks which), then where, when, which, who, whom or whose. Without the preposition the clause is what the question
+ * asks ("Can you confirm the state where you are licensed?", "Are there any days when you cannot work?"), so it stays and
+ * the question is typed. It runs to a comma, a semicolon, the question mark or an "and", "or" or "but", so a second
+ * question after it ("…, and which number is it?") is still read.
  */
-const RELATIVE_CLAUSE = /\b(?:the|a|an|any|this|that|these|those|your|our|their|its|each|every)\s+(?:(?!(?:and|or|but|nor|of|in|on|at|to|for|from|with|by|about|as|than|if|whether)\b)[\w-]+\s+){1,2}(?:where|when|which|who|whom|whose)\b.*?(?=[,;?]|\s(?:and|or|but)\b|$)/gi;
+const RELATIVE_CLAUSE = /\b(?:in|at|on|to|near|within)\s+(?:the|a|an|any|this|that|these|those|your|our|their|its|each|every)\s+(?:(?!(?:and|or|but|nor|of|in|on|at|to|for|from|with|by|about|as|than|if|whether)\b)[\w-]+\s+){1,2}(?:where|when|which|who|whom|whose)\b.*?(?=[,;?]|\s(?:and|or|but)\b|$)/gi;
 const START = /\b(start|begin|starting|earliest)\b/i;
 const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
 
@@ -166,9 +168,10 @@ const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
  * "Can you"… and asks nothing open, two buttons. Its kind alone never makes it one: "Which certifications do you hold…?"
  * asks them to list, so it is typed (live test, 12 November 2026), and so is one that asks "whether" beside something
  * else ("Can you confirm your RDH license state and whether it is currently active?"), which a bare Yes does not answer.
- * A relative clause after a noun asks nothing open (`RELATIVE_CLAUSE`): "Do you hold an active RDA license in the state
- * where this office is located?" keeps its buttons (the review of the live-test fixes). Skills, examples and motivation
- * are always typed: they need the candidate's own words.
+ * A relative clause that only places a noun after in, at, on, to, near or within asks nothing open (`RELATIVE_CLAUSE`):
+ * "Do you hold an active RDA license in the state where this office is located?" keeps its buttons, while "Can you
+ * confirm the state where you are licensed?" asks which state and is typed (the review of the live-test fixes). Skills,
+ * examples and motivation are always typed: they need the candidate's own words.
  */
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();

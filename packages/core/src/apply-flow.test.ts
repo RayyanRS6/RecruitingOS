@@ -179,6 +179,22 @@ describe("tap answers (plan E12)", () => {
     for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
   });
 
+  // The second look at that fix: a clause with no in, at, on, to, near or within before it is what the question asks
+  // (which state, which date, which days), and for these kinds a tap is the whole answer, which nothing asks again.
+  it("a relative clause the question asks for keeps the text box", () => {
+    const typed = [
+      "Can you confirm the state where you are licensed?",
+      "Could you name the state where you hold your RDH license?",
+      "Can you confirm the date when your license expires?",
+      "Can you confirm the state where you hold your license and the date when it expires?",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+    expect(tapFormatFor({ kind: "availability", question: "Are there any days when you cannot work?" }, comp)).toBeNull();
+    expect(tapFormatFor({ kind: "logistics", question: "Is there a time when you would need to leave early?" }, comp)).toBeNull();
+    // one that only places the noun still asks nothing open
+    expect(tapFormatFor({ kind: "availability", question: "Can you work on the days when the office is busiest?" }, comp)).toEqual({ kind: "yes_no" });
+  });
+
   it("records a tap as fixed words, and refuses one that does not fit the question", () => {
     const now = new Date("2026-10-08T12:00:00Z");
     expect(tapAnswerText({ kind: "yes_no" }, { kind: "yes_no", choice: "yes" })).toBe("Yes");

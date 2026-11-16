@@ -180,7 +180,7 @@ A small dot on a tab means something new arrived there since you last opened it.
 
 ## 7. Held on an eligibility answer
 
-When a candidate answers no to a required eligibility question, the card reads **Held on an eligibility answer** with the question and the answer. Nothing is sent to the candidate. You are reminded daily, and an ITS recruiter is brought in after three days if nobody decides; once you decide, that request is closed.
+When a candidate answers no to a required eligibility question, the card reads **Held on an eligibility answer** with the question and the answer. Nothing is sent to the candidate. You are reminded daily, and an ITS recruiter is brought in after three days if nobody decides; once you decide, that request is closed, or, if an ITS recruiter has already taken it, they are told you decided.
 
 - If the answer was a mistake or you want to keep them anyway, type why under **Why keep them in?** and press **Keep them in**. Your reason is recorded.
 - If you agree they do not meet the requirement, press **Decline now**, read what follows, and press **Confirm decline**. Nothing happens on the first press. The decision is private: nothing is sent to the candidate until someone sends the decision message (section 13), which then explains it was their eligibility answer.

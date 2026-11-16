@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
-import { HOLD_DECIDED, entitlements as plans } from "@ros/core";
-import { applications, approvalRequests, assessments, candidates, communications, entitlements, escalationMessages, events, notifications, policies, postings, recruiterEscalations, screens, unconfirmedScreens, withTenant, workflowRuns } from "@ros/db";
+import { HOLD_DECIDED, grantPlatformRole, entitlements as plans } from "@ros/core";
+import { applications, approvalRequests, assessments, candidates, communications, entitlements, escalationMessages, events, notifications, policies, postings, recruiterEscalations, screens, unconfirmedScreens, users, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { READING_WAIT_MINUTES, readingSettledSignal } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { runHourlyChecks } from "./maintenance";
 import { RECEIPT_COOKIE } from "./pages/candidate";
 import { conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation } from "./services/apply-conversation";
 
@@ -801,7 +802,7 @@ describe("every applicant's AI interview, in one email", () => {
       expect(thread.map((m) => [m.side, m.kind, m.body])).toEqual([["recruiter", "answer", HOLD_DECIDED]]);
     });
 
-    it("declining someone whose hold went to ITS closes ITS's request too; one a recruiter took stays theirs, with the line as a note", async () => {
+    it("declining someone whose hold went to ITS closes ITS's request too; one a recruiter took stays theirs, with the line as a note, and they are told", async () => {
       const declined = "pat.declined@example.com";
       const taken = "rae.taken@example.com";
       await applyAs({ first: "Pat", email: declined, no: true });
@@ -810,12 +811,18 @@ describe("every applicant's AI interview, in one email", () => {
       const pat = await appOf(declined);
       const rae = await appOf(taken);
       await later(80 * HOUR);
-      expect((await requestsOf(pat.id)).map((e) => e.status)).toEqual(["open"]);
+      const [patAsk] = await requestsOf(pat.id);
+      expect(patAsk.status).toBe("open");
       const [raeAsk] = await requestsOf(rae.id);
       // as if an ITS recruiter had accepted Rae's
-      await container.db.update(recruiterEscalations).set({ status: "claimed" }).where(eq(recruiterEscalations.id, raeAsk.id));
+      const holderEmail = "ria.holder@identifiedtalent.com";
+      const [holder] = await container.db.insert(users).values({ email: holderEmail, name: "Ria Holder", authProvider: "azure", authSubject: "seed-ria-holder" }).returning({ id: users.id });
+      await grantPlatformRole(container.db, { userId: holder.id, role: "its_recruiter", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
+      await container.db.update(recruiterEscalations).set({ status: "claimed", assignedToUserId: holder.id }).where(eq(recruiterEscalations.id, raeAsk.id));
       expect((await act(pat.id, { action: "reject", reason: "eligibility" })).status).toBe(200);
-      expect((await act(rae.id, { action: "override_eligibility", note: "She has her licence." })).status).toBe(200);
+      const kept = await act(rae.id, { action: "override_eligibility", note: "She has her licence." });
+      expect(kept.status).toBe(200);
+      expect(await kept.json()).not.toHaveProperty("holdersToTell");
       await later(0);
       expect((await requestsOf(pat.id)).map((e) => [e.status, e.resolution])).toEqual([["resolved", HOLD_DECIDED]]);
       expect(await triageOf(pat.id)).toHaveLength(0);
@@ -824,6 +831,14 @@ describe("every applicant's AI interview, in one email", () => {
       expect((await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, raeAsk.id))).map((m) => [m.side, m.kind, m.body])).toEqual([["recruiter", "reply", HOLD_DECIDED]]);
       expect((await appOf(taken)).stage).toBe("screen_invited");
       expect(await triageOf(rae.id)).toHaveLength(1);
+      // the recruiter holding Rae's is told once that it needs nothing more, with neither name; nobody is told about Pat's,
+      // which nobody had taken
+      const told = outbox().filter((m) => m.tags?.template === "escalation_hold_decided");
+      expect(told.map((m) => m.to)).toEqual([holderEmail]);
+      expect(told[0].subject).toBe("[review] A request you hold needs nothing more");
+      expect(told[0].text).toContain(`/recruiter/queue/${raeAsk.id}`);
+      expect(`${told[0].subject} ${told[0].text}`).not.toMatch(/Rae|Pat|Tester/);
+      expect(outbox().filter((m) => m.text.includes(`/recruiter/queue/${patAsk.id}`))).toEqual([]);
     });
 
     it("'Keep them in' under an 'Only a person' hold, whose reading ended at once: the résumé is read, then the link goes", async () => {
@@ -851,6 +866,47 @@ describe("every applicant's AI interview, in one email", () => {
       } finally {
         await onlyAPerson(false);
       }
+    });
+
+    /**
+     * The second look at that fix: a decision made before a decision closed the hold's request (or while the request was
+     * being raised) left it open in ITS's queue for good. The hourly check closes it; the rest stay as they are, and so
+     * does one the team reopened.
+     */
+    it("the hourly check closes a hold's request nobody took once the application was decided, and only that one", async () => {
+      const people = [["Uma", "uma.before@example.com"], ["Vic", "vic.held@example.com"], ["Wes", "wes.gone@example.com"], ["Xia", "xia.taken@example.com"]] as const;
+      for (const [first, email] of people) await applyAs({ first, email, no: true });
+      await later(0);
+      const [uma, vic, wes, xia] = await Promise.all(people.map(([, email]) => appOf(email)));
+      await later(80 * HOUR);
+      for (const a of [uma, vic, wes, xia]) expect((await requestsOf(a.id)).map((e) => e.status)).toEqual(["open"]);
+      // as a keep-in or decline before this release left them: decided, with the request still open; Wes withdrew, and an
+      // ITS recruiter had taken Xia's
+      await container.db.update(applications).set({ stage: "rejected" }).where(inArray(applications.id, [uma.id, xia.id]));
+      await container.db.update(applications).set({ stage: "withdrawn" }).where(eq(applications.id, wes.id));
+      const [xiaAsk] = await requestsOf(xia.id);
+      await container.db.update(recruiterEscalations).set({ status: "claimed" }).where(eq(recruiterEscalations.id, xiaAsk.id));
+      const swept = await runHourlyChecks(container.db, new Date(BASE + offset), { workerInline: true });
+      expect(swept.holdRequestsClosed).toBe(1);
+      const [umaAsk] = await requestsOf(uma.id);
+      expect([umaAsk.status, umaAsk.resolution]).toEqual(["resolved", HOLD_DECIDED]);
+      expect((await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, umaAsk.id))).map((m) => [m.side, m.kind, m.body])).toEqual([["recruiter", "answer", HOLD_DECIDED]]);
+      // still held, withdrawn, or a recruiter's: as they were, with nothing added to the recruiter's thread
+      expect((await requestsOf(vic.id)).map((e) => e.status)).toEqual(["open"]);
+      expect((await requestsOf(wes.id)).map((e) => e.status)).toEqual(["open"]);
+      expect((await requestsOf(xia.id)).map((e) => e.status)).toEqual(["claimed"]);
+      expect(await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, xiaAsk.id))).toEqual([]);
+      // the next hour closes nothing more, and the held one still closes when a person decides
+      expect((await runHourlyChecks(container.db, new Date(BASE + offset + HOUR), { workerInline: true })).holdRequestsClosed).toBe(0);
+      expect((await act(vic.id, { action: "reject", reason: "eligibility" })).status).toBe(200);
+      const [vicAsk] = await requestsOf(vic.id);
+      expect([vicAsk.status, vicAsk.resolution]).toEqual(["resolved", HOLD_DECIDED]);
+      // "This didn't solve it": the team asks ITS again about someone decided, and the next hour leaves that to ITS
+      const reopened = await json("POST", `/api/v1/escalations/mine/${vicAsk.id}/reopen`, { note: "Please call them about their licence anyway." });
+      expect(reopened.status, await reopened.clone().text()).toBe(200);
+      expect((await requestsOf(vic.id)).map((e) => e.status)).toEqual(["open"]);
+      expect((await runHourlyChecks(container.db, new Date(BASE + offset + 2 * HOUR), { workerInline: true })).holdRequestsClosed).toBe(0);
+      expect((await requestsOf(vic.id)).map((e) => e.status)).toEqual(["open"]);
     });
   });
 });
