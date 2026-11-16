@@ -202,9 +202,9 @@ describe("deal-breakers count openly as must-haves (founder decision Q19)", () =
   it("puts the ticked ones on the draft as must-haves, through the fairness check, and leaves the unticked ones out", () => {
     const a = filled({ dealBreakers: ["Cannot work Saturdays", "No recent grads", "Smokers"], dealBreakersPrivate: ["Smokers"] });
     const patch = quickStartPatch(a, "dental", { mustHaves: [] });
-    // as the must-have each counts as; the deal-breakers keep the person's words
+    // as the must-have each counts as; the deal-breakers keep the person's words, and say the must-have each counts as
     expect(patch.add).toContainEqual({ field: "mustHaves", value: "Able to work Saturdays" });
-    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Cannot work Saturdays" });
+    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Cannot work Saturdays", countsAs: "Able to work Saturdays" });
     expect(patch.add).not.toContainEqual({ field: "mustHaves", value: "Cannot work Saturdays" });
     expect(patch.add).not.toContainEqual({ field: "mustHaves", value: "Smokers" });
     expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Smokers" });
@@ -224,7 +224,7 @@ describe("a deal-breaker counts as the requirement it rules people out on (live 
     expect(allMustHaves(a).some((m) => /^no\b/i.test(m))).toBe(false);
     const patch = quickStartPatch(a, "dental", { mustHaves: [] });
     expect(patch.add).toContainEqual({ field: "mustHaves", value: "Active California RDA license" });
-    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "No active California RDA license" });
+    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "No active California RDA license", countsAs: "Active California RDA license" });
     expect(patch.add?.filter((x) => x.field === "mustHaves").map((x) => x.value)).not.toContain("No active California RDA license");
     const rows = reviewRows(a, "dental");
     expect(rows.find((r) => r.label === "Must-have skills")?.value).toBe("Four-handed dentistry; Digital radiography; At least 3 years of relevant experience; Active California RDA license");
@@ -264,6 +264,11 @@ describe("a deal-breaker counts as the requirement it rules people out on (live 
     expect(firstUnfinished(rda, TODAY)).toBe(QUICK_STEPS.indexOf("dealbreakers"));
     expect(allMustHaves(rda)).toEqual(["Four-handed dentistry", "Digital radiography", "At least 3 years of relevant experience"]);
     for (const d of ["No x-ray cert", "Cant work weekends", "No experience", "No expired RDH license", "No felonies or license suspensions"]) expect(stepProblem("dealbreakers", assistant({ dealBreakers: [d] }), TODAY), d).toBe(line);
+    // nor a problem joined to the licence, nor an employer's ban (review of the must-haves fix, 12 Nov 2026)
+    for (const d of ["No points on driver's license", "No lapse in BLS certification", "No restrictions on license", "Won't hire smokers", "Will not accept applicants without a CDL"]) {
+      expect(dealBreakerWording(assistant({ dealBreakers: [d] }), d), d).toBe("");
+      expect(stepProblem("dealbreakers", assistant({ dealBreakers: [d] }), TODAY), d).toBe(line);
+    }
     // the person's own wording as what they need goes on; one that still rules someone out does not
     const own = assistant({ dealBreakers: ["No RDA"], dealBreakerMusts: { "no rda": "Active RDA license" } });
     expect(stepProblem("dealbreakers", own, TODAY)).toBeNull();
@@ -311,13 +316,44 @@ describe("the fairness check covers the must-have a deal-breaker counts as (revi
     expect(typed.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience"]);
     expect(typed.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felonies or license suspensions"], ["dealBreakers", "No felonies or license suspensions"]]);
     expect(new Set(typed.refused.map((r) => r.reason)).size).toBe(1);
-    // a requirement in the person's own words is theirs, and is checked on its own words
-    const fair = applyFactsPatch(normalizeFacts({}), quickStartPatch({ ...a, dealBreakerMusts: { "no felonies or license suspensions": "Active license with no suspensions" } }, "dental", { mustHaves: [] }), []);
-    expect(fair.facts.mustHaves).toContain("Active license with no suspensions");
+    // words of the person's own written under it are the must-have it counts as, so they are refused with it (review of
+    // the must-haves fix, 12 Nov 2026); added as a must-have of its own, with the deal-breaker unticked, the same words are
+    // theirs, and are checked on their own words
+    const fair = applyFactsPatch(normalizeFacts({}), IntakeFactsPatch.parse(quickStartPatch({ ...a, dealBreakerMusts: { "no felonies or license suspensions": "Active license with no suspensions" } }, "dental", { mustHaves: [] })), []);
+    expect(fair.facts.mustHaves).not.toContain("Active license with no suspensions");
+    expect(fair.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Active license with no suspensions"], ["dealBreakers", "No felonies or license suspensions"]]);
+    const own = applyFactsPatch(normalizeFacts({}), IntakeFactsPatch.parse(quickStartPatch({ ...a, mustHaves: [...a.mustHaves, "Active license with no suspensions"], dealBreakersPrivate: ["No felonies or license suspensions"] }, "dental", { mustHaves: [] })), []);
+    expect(own.facts.mustHaves).toContain("Active license with no suspensions");
+    expect(own.refused.map((r) => r.field)).toEqual(["dealBreakers"]);
     // a proxy written as the must-have is refused in its own words too
     const grads = applyFactsPatch(normalizeFacts({}), quickStartPatch(filled({ dealBreakers: ["No recent grads"], dealBreakerMusts: { "no recent grads": "Recent grads" } }), "dental", { mustHaves: [] }), []);
     expect(grads.facts.mustHaves).not.toContain("Recent grads");
     expect(grads.refused.map((r) => r.text)).toEqual(["Recent grads", "No recent grads"]);
+  });
+
+  // review of the must-haves fix, 12 Nov 2026: "No felons" asks for what they need, and "Felony-free" was then kept as the
+  // must-have while the deal-breaker was refused
+  it("refuses whatever the person wrote as the must-have a refused deal-breaker counts as, through the request's own schema", () => {
+    for (const [deal, wording] of [["No felons", "Felony-free"], ["No visas", "US citizen"]]) {
+      const a = filled({ dealBreakers: [deal], dealBreakerMusts: { [deal.toLowerCase()]: wording } });
+      expect(stepProblem("dealbreakers", a, TODAY), deal).toBeNull();
+      const patch = IntakeFactsPatch.parse(quickStartPatch(a, "dental", { mustHaves: [] }));
+      expect(patch.add, deal).toContainEqual({ field: "dealBreakers", value: deal, countsAs: wording });
+      const edit = applyFactsPatch(normalizeFacts({}), patch, []);
+      expect(edit.facts.mustHaves, deal).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience"]);
+      expect(edit.refused.map((r) => [r.field, r.text]), deal).toEqual([["mustHaves", wording], ["dealBreakers", deal]]);
+      expect(new Set(edit.refused.map((r) => r.reason)).size, deal).toBe(1);
+      expect(edit.facts.declinedCriteria.map((d) => d.requested), deal).toEqual([wording, deal]);
+    }
+    // a lawful one keeps the must-have it counts as: the person's wording, or the requirement it rules people out on
+    for (const [deal, wording, must] of [["No RDA", "Active RDA license", "Active RDA license"], ["Cannot work Saturdays", "", "Able to work Saturdays"]]) {
+      const a = filled({ dealBreakers: [deal], ...(wording ? { dealBreakerMusts: { [deal.toLowerCase()]: wording } } : {}) });
+      const edit = applyFactsPatch(normalizeFacts({}), IntakeFactsPatch.parse(quickStartPatch(a, "dental", { mustHaves: [] })), []);
+      expect(edit.facts.mustHaves, deal).toContain(must);
+      expect(edit.refused, deal).toEqual([]);
+    }
+    // unticked, it counts as no must-have, and says none
+    expect(quickStartPatch(filled({ dealBreakers: ["No felons"], dealBreakersPrivate: ["No felons"] }), "dental", { mustHaves: [] }).add).toContainEqual({ field: "dealBreakers", value: "No felons" });
   });
 });
 
@@ -509,7 +545,10 @@ describe("handing over to the job builder", () => {
     const deal = q("q1_2", "must_haves", "From your deal-breakers: which should count openly as must-haves?");
     expect(isDealBreakerCard(deal)).toBe(true);
     expect(isDealBreakerCard(q("q1_3", "must_haves", "You named these as deal-breakers. Which should count openly as must-haves?"))).toBe(true);
-    expect(skippedAnswers([q("q1_1", "compensation"), deal]).map((x) => x.questionId)).toEqual(["q1_1"]);
+    // and when it names the deal-breakers it has no ready-made answer for (review of the must-haves fix, 12 Nov 2026)
+    const named = q("q1_4", "must_haves", 'From your deal-breakers: which should count openly as must-haves? To count "No RDA", write it as what they need.');
+    expect(isDealBreakerCard(named)).toBe(true);
+    expect(skippedAnswers([q("q1_1", "compensation"), deal, named]).map((x) => x.questionId)).toEqual(["q1_1"]);
   });
 
   it("marks the new draft for the builder in the page only, never in the address", () => {

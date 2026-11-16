@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, OWNERS_CALL_MARK, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
-import { DraftRolePacket, IntakeExtraction, IntakeTurn, repeatsMustHave, type IntakeFacts, type IntakeQuestion } from "@ros/contracts";
+import { DraftRolePacket, IntakeExtraction, IntakeQuestion, IntakeTurn, repeatsMustHave, type IntakeFacts } from "@ros/contracts";
 import { applyAnswers, normalizeFacts } from "@ros/core";
 import { consumerPlaybook, dentalPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
@@ -359,16 +359,40 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
   });
 
   it("offers no ready-made must-have for a deal-breaker whose words still rule someone out, only the owner's own words (review of the live test, 12 Nov 2026)", () => {
-    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA", "No expired RDH license", "Smokers"] });
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA", "No expired RDH license", "Smokers", "No restrictions on license", "Won't hire smokers"] });
     expect(out).toHaveLength(1);
-    // "No RDA" never becomes "RDA", and "No expired RDH license" never "Expired RDH license"; the owner's own words unchanged are theirs
+    // "No RDA" never becomes "RDA", "No expired RDH license" never "Expired RDH license", "No restrictions on license"
+    // never "Restrictions on license" and "Won't hire smokers" never "Willing to hire smokers" (review of the must-haves
+    // fix, 12 Nov 2026); the owner's own words unchanged are theirs
     expect(out[0].options).toEqual([{ label: "Smokers", value: "Smokers", origin: "owner" }]);
     expect(out[0].allowOwn).toBe(true);
-    // with none ready-made, the card is still asked, for the owner to write what they need
+    expect(out[0].prompt).toBe('From your deal-breakers: which should count openly as must-haves? To count "No RDA", "No expired RDH license" and 2 more, write them as what they need.');
+    // with none ready-made, the card is still asked, and names it, for the owner to write what they need
     const none = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA"] });
-    expect(none).toEqual([expect.objectContaining({ field: "must_haves", prompt: "From your deal-breakers: which should count openly as must-haves?", options: [], allowOwn: true })]);
+    expect(none).toEqual([expect.objectContaining({ field: "must_haves", prompt: 'From your deal-breakers: which should count openly as must-haves? To count "No RDA", write it as what they need.', options: [], allowOwn: true })]);
     // a card stored before 12 Nov 2026, in the old words, is still the deal-breaker card: it is never remembered as a must-haves card
     expect(rememberPrompts([], [...none, { ...none[0], prompt: "You named these as deal-breakers. Which should count openly as must-haves?" }])).toEqual([]);
+  });
+
+  // review of the must-haves fix, 12 Nov 2026: "No RDA" beside "Cannot work Saturdays" was never on the card, and was still
+  // marked as asked
+  it("names on the card each deal-breaker it has no ready-made answer for, within the length a card may hold", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["Cannot work Saturdays", "No RDA"] });
+    expect(out).toHaveLength(1);
+    expect(out[0].prompt).toBe('From your deal-breakers: which should count openly as must-haves? To count "No RDA", write it as what they need.');
+    expect(out[0].options).toEqual([{ label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" }]);
+    // still the deal-breaker card: never remembered as a must-haves card
+    expect(rememberPrompts([], out)).toEqual([]);
+    // two by name, each cut to 60 characters, then how many more: always within a card's 300 characters
+    const long = Array.from({ length: 10 }, (_, i) => `No ${"very ".repeat(20)}long deal-breaker number ${i + 1}`);
+    const many = prepareQuestions([], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: long });
+    expect(many[0].prompt.length).toBeLessThanOrEqual(300);
+    expect(many[0].prompt).toMatch(/^From your deal-breakers: which should count openly as must-haves\? To count "No very .{50,}…", "No very .{50,}…" and 8 more, write them as what they need\.$/);
+    expect(IntakeQuestion.parse(many[0])).toEqual(many[0]);
+    // one whose requirement is on the card is not named, two worded as one requirement included
+    const twins = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA license", "Without an RDA license", "Cannot work Saturdays"] });
+    expect(twins[0].prompt).toBe("From your deal-breakers: which should count openly as must-haves?");
+    expect(twins[0].options.map((o) => o.value)).toEqual(["RDA license", "Able to work Saturdays"]);
   });
 
   it("words a team card by what its answer sets, so a card that asks two things never leaves the final say unasked (live test, 12 Nov 2026)", () => {

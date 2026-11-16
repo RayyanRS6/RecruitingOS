@@ -408,6 +408,31 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     expect(own.facts.mustHaves).toEqual(["Active license with no suspensions"]);
     expect(own.refused.map((r) => r.field)).toEqual(["dealBreakers"]);
   });
+
+  // review of the must-haves fix, 12 Nov 2026: "No felons" written as "Felony-free" on the quick start kept the must-have
+  it("refuses the must-have a refused deal-breaker says it counts as, whatever its words, and only that one", () => {
+    const edit = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Felony-free" }, { field: "mustHaves", value: "Active RDH license" }, { field: "dealBreakers", value: "No felons", countsAs: "Felony-free" }] }, []);
+    // no must-have is stored for it, and both are refused, for the criminal-record reason
+    expect(edit.facts.mustHaves).toEqual(["Active RDH license"]);
+    expect(edit.facts.dealBreakers).toEqual([]);
+    expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felony-free"], ["dealBreakers", "No felons"]]);
+    expect([...new Set(edit.refused.map((r) => r.reason))]).toEqual([expect.stringMatching(/fair-chance/)]);
+    // recorded as declined, so a draft that writes it out is caught too
+    expect(edit.facts.declinedCriteria.map((d) => d.requested)).toEqual(["Felony-free", "No felons"]);
+    // the same for "No visas" written as "US citizen", which the phrase list alone lets through
+    const visas = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "US citizen" }, { field: "dealBreakers", value: "No visas", countsAs: "US citizen" }] }, []);
+    expect([visas.facts.mustHaves, visas.refused.map((r) => [r.field, r.text])]).toEqual([[], [["mustHaves", "US citizen"], ["dealBreakers", "No visas"]]]);
+    expect(new Set(visas.refused.map((r) => r.reason)).size).toBe(1);
+    // and for words of the owner's own written for a refused one: added as a must-have of its own, its words are read (above)
+    const lawful = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Active license with no suspensions" }, { field: "dealBreakers", value: "No felonies or license suspensions", countsAs: "Active license with no suspensions" }] }, []);
+    expect([lawful.facts.mustHaves, lawful.refused.map((r) => r.field)]).toEqual([[], ["mustHaves", "dealBreakers"]]);
+    // a lawful deal-breaker keeps the must-have it counts as
+    const saturdays = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Able to work Saturdays" }, { field: "dealBreakers", value: "Cannot work Saturdays", countsAs: "Able to work Saturdays" }] }, []);
+    expect([saturdays.facts.mustHaves, saturdays.facts.dealBreakers, saturdays.refused]).toEqual([["Able to work Saturdays"], ["Cannot work Saturdays"], []]);
+    // with no word of what it counts as, a must-have is read on its own words (the panel adds one at a time)
+    const unlinked = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Felony-free" }, { field: "dealBreakers", value: "No felons" }] }, []);
+    expect([unlinked.facts.mustHaves, unlinked.refused.map((r) => r.field)]).toEqual([["Felony-free"], ["dealBreakers"]]);
+  });
 });
 
 describe("hire again: the facts a new draft starts from (plan C14, review of the live-test fixes, 12 Nov 2026)", () => {

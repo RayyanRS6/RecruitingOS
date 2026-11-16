@@ -57,6 +57,33 @@ describe("a deal-breaker as the must-have it counts as", () => {
     expect(mustHaveOf("No expired BLS certification")).not.toBe("Expired BLS certification");
   });
 
+  // review of the must-haves fix, 12 Nov 2026: a problem joined to the licence ("points on", "a lapse in"), a noun form of
+  // a word that says it is not in force, and a ban with a verb only the employer does were each turned into their opposite
+  it("never turns round a problem joined to the licence, any form of a word that says it is not in force, or an employer's ban", () => {
+    const asTyped = [
+      // a problem joined to the licence, or a kind of licence that is not in force, in any form of the word
+      "No points on driver's license", "No DUIs on license", "No restrictions on license", "No lapse in BLS certification", "No revocation of license", "No probation on license",
+      "No sanctions on license", "No tickets on driver's license", "No board action against license", "No encumbered license", "No hardship license", "No conditional license",
+      "No suspension of license", "No expiration on CPR certification", "No proof of license", "No felony convictions or license",
+      // a verb only the employer does: the owner's rule, never what the candidate is willing to do
+      "Won't hire smokers", "Won’t hire smokers", "Will not hire smokers", "Won't consider anyone without a license", "Will not accept applicants without a CDL",
+      "Won't tolerate tardiness", "Not willing to hire anyone with a DUI", "Unwilling to sponsor visas",
+    ];
+    for (const t of asTyped) {
+      expect(mustHaveOf(t), t).toBe(t);
+      // still worded as what rules someone out: asked of the owner as what they need
+      expect(rulesOut(mustHaveOf(t)), t).toBe(true);
+      expect(lacksCredential(t), t).toBe(false);
+    }
+    // the shapes that are a credential someone lacks, or what the candidate will not do, are still turned round
+    expect(mustHaveOf("Won't work weekends")).toBe("Willing to work weekends");
+    expect(mustHaveOf("Unwilling to travel")).toBe("Willing to travel");
+    expect(mustHaveOf("Will not relocate")).toBe("Willing to relocate");
+    expect(mustHaveOf("No in-state license")).toBe("In-state license");
+    expect(mustHaveOf("No CPR or BLS certification")).toBe("CPR or BLS certification");
+    expect(mustHaveOf("No up-to-date BLS certification")).toBe("Up-to-date BLS certification");
+  });
+
   it("knows the must-haves a deal-breaker can come back as, its opposite too, so a refused one is refused in each", () => {
     expect(restatementsOf("No felonies or license suspensions")).toEqual(["No felonies or license suspensions", "Felonies or license suspensions"]);
     expect(restatementsOf("No gaps in license")).toEqual(["No gaps in license", "Gaps in license"]);

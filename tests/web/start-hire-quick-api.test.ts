@@ -151,6 +151,27 @@ describe("the quick start hands its answers to the job builder", () => {
     expect(asked?.options.map((o) => o.label)).toEqual(["Smokers"]);
   });
 
+  // review of the must-haves fix, 12 Nov 2026: "No felons" written as "Felony-free" on step 8 kept the must-have while the
+  // deal-breaker itself was refused
+  it("a deal-breaker the fairness check refuses is refused in the must-have it counts as, however the owner wrote it", async () => {
+    const a = assistant({ dealBreakers: ["No felons", "Cannot work Saturdays"], dealBreakerMusts: { "no felons": "Felony-free" } });
+    const { session } = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: firstMessage(a) })).json()) as { session: IntakeSessionView };
+    const edited = await json("POST", `/api/v1/intake/sessions/${session.id}/answers`, { answers: skippedAnswers(session.questions), patch: quickStartPatch(a, "dental", session.facts), reply: false, dealBreakersOffered: true });
+    expect(edited.status).toBe(200);
+    const body = (await edited.json()) as { session: IntakeSessionView; refused: Array<{ field: string; text: string; reason: string }> };
+    expect(body.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felony-free"], ["dealBreakers", "No felons"]]);
+    expect(new Set(body.refused.map((r) => r.reason)).size).toBe(1);
+    const f = body.session.facts;
+    expect(f.mustHaves).toEqual(["Four-handed dentistry", "Digital radiography", "Able to work Saturdays"]);
+    expect(f.dealBreakers).toEqual(["Cannot work Saturdays"]);
+    // recorded as declined, so a draft that writes it out is caught; the conversation says it was not used
+    expect(f.declinedCriteria.map((d) => d.requested)).toEqual(expect.arrayContaining(["Felony-free", "No felons"]));
+    const echo = body.session.messages.filter((m) => m.kind === "answers").map((m) => m.content).join("\n");
+    expect(echo).toMatch(/Not used: "Felony-free"/);
+    expect(echo).not.toMatch(/Must-haves, added: [^\n]*Felony-free/);
+    await json("POST", `/api/v1/intake/sessions/${session.id}/abandon`);
+  });
+
   it("a licence question the owner unticked never goes on the form, even when a must-have names the licence (live test, 12 Nov 2026)", async () => {
     const named = assistant({ mustHaves: ["Four-handed dentistry", "RDA license"], noDealBreakers: true });
     const a = { ...named, ...toggleQuestion(named, RDA, "dental") };

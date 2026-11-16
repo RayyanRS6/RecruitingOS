@@ -241,8 +241,9 @@ describe("the job builder API", () => {
   it("a must-have picked on a deal-breaker card shown before 12 Nov 2026 is stored as the requirement it rules people out on (review of the live test, 12 Nov 2026)", async () => {
     const started = await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, CA, $24 to $28 an hour." }));
     const id = started.session.id;
-    // the card as it was stored then: each deal-breaker offered in its own words, and no box for other words
-    const deals = ["No active California RDA license", "No RDA"];
+    // the card as it was stored then: each deal-breaker offered in its own words, and no box for other words; an employer's
+    // ban and a problem joined to the licence are never turned into their opposite (review of the must-haves fix, 12 Nov 2026)
+    const deals = ["No active California RDA license", "No RDA", "Won't hire smokers", "No lapse in BLS certification"];
     const old: IntakeQuestion = { id: "q1_3", field: "must_haves", prompt: "You named these as deal-breakers. Which should count openly as must-haves?", mode: "multi", options: deals.map((d) => ({ label: d, value: d, origin: "owner" as const })), allowOwn: false, why: "Every application is reviewed against the must-haves." };
     const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, id));
     await container.db.update(intakeSessions).set({ facts: { ...row.facts, dealBreakers: deals }, serverState: { ...row.serverState, openQuestions: [old], dealBreakersOffered: deals } }).where(eq(intakeSessions.id, id));
@@ -250,11 +251,13 @@ describe("the job builder API", () => {
     const r = await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { answers: [{ questionId: old.id, selected: deals }], reply: false });
     expect(r.status).toBe(200);
     const body = await read<{ session: IntakeSessionView; summary: string[] }>(r);
-    // the licence goes in as the requirement; "No RDA", which cannot be turned round, as it is
-    expect(body.session.facts.mustHaves).toEqual(expect.arrayContaining(["Active California RDA license", "No RDA"]));
+    // the licence goes in as the requirement; "No RDA" and the others, which cannot be turned round, as they are
+    expect(body.session.facts.mustHaves).toEqual(expect.arrayContaining(["Active California RDA license", "No RDA", "Won't hire smokers", "No lapse in BLS certification"]));
     expect(body.session.facts.mustHaves).not.toContain("No active California RDA license");
-    expect(body.summary).toEqual(["Must-haves: Active California RDA license; No RDA"]);
-    expect(body.session.messages.filter((m) => m.kind === "answers").at(-1)?.content).toBe("Must-haves: Active California RDA license; No RDA");
+    for (const opposite of ["Willing to hire smokers", "Lapse in BLS certification"]) expect(body.session.facts.mustHaves).not.toContain(opposite);
+    const line = "Must-haves: Active California RDA license; No RDA; Won't hire smokers; No lapse in BLS certification";
+    expect(body.summary).toEqual([line]);
+    expect(body.session.messages.filter((m) => m.kind === "answers").at(-1)?.content).toBe(line);
     await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
   });
 

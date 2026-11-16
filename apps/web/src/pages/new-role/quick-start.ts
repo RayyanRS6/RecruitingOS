@@ -523,7 +523,8 @@ const EXPERIENCE_LINE = /\b\d{1,2}\s*\+?\s*(?:years?|yrs?)\b.*\bexperience\b|\be
  * person's choice, all of them: anything the assistant read as a must-have from the first message or a pasted ad that
  * the person did not tick is taken out (they were offered the ad's on the must-haves step), and so is an experience line
  * it read as a nice-to-have that differs from the person's answer. Deal-breakers left ticked count openly as must-haves
- * (Q19), as the must-have each counts as; the deal-breakers themselves keep the person's words. Suggested yes/no
+ * (Q19), as the must-have each counts as; the deal-breakers themselves keep the person's words, and each says that
+ * must-have (`countsAs`), so one the fairness check refuses is refused in it too, however it is worded. Suggested yes/no
  * questions ticked go with the eligibility, and the ones left unticked as suggestions the draft never uses (`unticked`),
  * so a question nobody chose never holds anyone; the edit says the person went through them (`formQuestionsChosen`), so
  * the draft's form has exactly the ones ticked, and any eligibility note the assistant read from the first message or
@@ -535,10 +536,17 @@ export function quickStartPatch(a: QuickAnswers, vertical: string | null | undef
   const musts = allMustHaves(a).slice(0, MUST_HAVES_MAX);
   const nice = experienceNiceToHave(a);
   const chosen = chosenQuestions(a, vertical);
+  // A ticked deal-breaker says the must-have it counts as, in the person's words, so the server refuses that must-have
+  // with it when the fairness check refuses the deal-breaker ("No felons" written as "Felony-free": review of the
+  // must-haves fix, 12 Nov 2026).
+  const countsAs = (d: string) => {
+    const m = a.dealBreakersPrivate.some((p) => same(p, d)) ? "" : dealBreakerMustHave(a, d);
+    return m ? { countsAs: m.slice(0, 500) } : {};
+  };
   const add: NonNullable<IntakeFactsPatch["add"]> = [
     ...musts.map((value) => ({ field: "mustHaves" as const, value })),
     ...(nice ? [{ field: "niceToHaves" as const, value: nice }] : []),
-    ...(a.noDealBreakers ? [] : a.dealBreakers.slice(0, DEAL_BREAKERS_MAX).map((value) => ({ field: "dealBreakers" as const, value }))),
+    ...(a.noDealBreakers ? [] : a.dealBreakers.slice(0, DEAL_BREAKERS_MAX).map((value) => ({ field: "dealBreakers" as const, value, ...countsAs(value) }))),
     ...chosen.map((value) => ({ field: "eligibilityNotes" as const, value })),
     ...a.ownQuestions.slice(0, OWN_QUESTIONS_MAX).map((value) => ({ field: "screeningQuestions" as const, value })),
   ].slice(0, 20);

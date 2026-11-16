@@ -149,7 +149,13 @@ export const IntakeFactsPatch = z.object({
     /** Pay set from the panel counts as a person setting it, like the pay card. */
     pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }),
   }).partial().strict().optional(),
-  add: z.array(z.object({ field: IntakeListFact, value: FactText })).max(20).optional(),
+  /**
+   * One list item each. `countsAs`, on a deal-breaker: the must-have it counts openly as in this edit, in the person's own
+   * words (the quick start's "As a must-have"), so when the fairness check refuses the deal-breaker that must-have is
+   * refused with it, for the same reason, whatever its own words pass (review of the must-haves fix, 12 Nov 2026: "No
+   * felons" written as "Felony-free" kept the must-have).
+   */
+  add: z.array(z.object({ field: IntakeListFact, value: FactText, countsAs: FactText.optional() })).max(20).optional(),
   remove: z.array(z.object({ field: IntakeListFact, value: z.string().max(500) })).max(20).optional(),
   clear: z.array(IntakeTextFact).max(20).optional(),
   /**

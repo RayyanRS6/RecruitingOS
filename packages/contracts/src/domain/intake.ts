@@ -88,25 +88,43 @@ const CREDENTIAL_LAST = /\b(?:licen[cs]es?|licensure|certificates?|certification
 
 /**
  * Words that say the credential is not in force, or that name the problem itself ("expired", "unlicensed", "license
- * issues", "registered sex offenders", "one without a licence"): after "No" they are what rules someone out, so dropping
- * the "No" would ask for it (review of the live test, 12 Nov 2026: "No expired RDH license" became "Expired RDH
- * license"). Words that only begin with the letters (under, unit, union, uniform, unique, universal) are not un- words.
+ * issues", "registered sex offenders", "one without a licence", "points", "a DUI"): after "No" they are what rules
+ * someone out, so dropping the "No" would ask for it (review of the live test, 12 Nov 2026: "No expired RDH license"
+ * became "Expired RDH license"). A word family counts in any of its forms ("suspended", "suspension"; "revoked",
+ * "revocation"; "lapsed", "a lapse"), as the review of that fix found the noun forms turned round. Words that only begin
+ * with the letters (under, unit, union, uniform, unique, universal) are not un- words.
  */
-const NOT_IN_FORCE = /\b(?!under|unit|union|uniform|unique|univers)un[a-z]|\bnon[-\s]?[a-z]|\b(?:expired|expiring|lapsed|suspended|revoked|pending|inactive|invalid|restricted|provisional|probationary|temporary|foreign|learner(?:['’]?s)?|out[-\s]of[-\s]state|issues?|problems?|gaps?|violations?|suspensions?|disciplin\w*|complaints?|offenders?|records?|without|lacking|missing|no|not|never)\b/i;
+const NOT_IN_FORCE = /\b(?!under|unit|union|uniform|unique|univers)un[a-z]|\bnon[-\s]?[a-z]|\b(?:expir\w*|laps\w*|suspen\w*|revo[ck]\w*|restrict\w*|probation\w*|pending|inactive|invalid|provisional|temporary|conditional|hardship|encumb\w*|foreign|learner(?:['’]?s)?|out[-\s]of[-\s]state|issues?|problems?|gaps?|violations?|sanction\w*|disciplin\w*|complaints?|points?|tickets?|citations?|accidents?|DUIs?|DWIs?|denials?|denied|offen[cs]\w*|felon\w*|convict\w*|criminal|arrest\w*|records?|without|lacking|missing|no|not|never)\b/i;
+
+/**
+ * A word that joins something to the credential named last ("points on driver's license", "a lapse in BLS
+ * certification", "board action against license", "a license that has expired"): what it joins is what rules someone
+ * out, so the words are no credential to turn round (review of the must-haves fix, 12 Nov 2026: "No points on driver's
+ * license" became "Points on driver's license"). A whole word only, never inside one with a hyphen ("in-state").
+ */
+const LINKED = /(?:^|\s)(?:of|on|in|at|against|with|from|for|by|that|which|who|whose)(?=[\s,.;:!?]|$)/i;
 
 /** "Cannot be …" and "Cannot have …" are rules ("Cannot be late"), not what someone is unable to do: never turned round. */
 const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
 
 /**
+ * What only the employer does, after "Won't …" ("Won't hire smokers", "Will not accept applicants without a CDL"): the
+ * words are the owner's rule, not something the candidate will not do, so "Willing to …" would be its opposite (review of
+ * the must-haves fix, 12 Nov 2026). Never "take", which a candidate does too ("Won't take weekend shifts").
+ */
+const EMPLOYER_VERB = /^(?:hire|accept|consider|tolerate|allow|employ|interview|permit|sponsor|train|pay|offer|provide)\b/i;
+
+/**
  * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
  * license" became a must-have in those very words, so the job page asked for the opposite and nobody was held). Only
  * clear shapes are turned round: "No …", "Without …", "Lacks …", "Missing …" or "Does not have …" a licence, certificate,
- * permit, registration or credential named last, with no word saying it is not in force or naming the problem itself
- * (`NOT_IN_FORCE`); "Cannot …" or "Unable to …" ("Able to …"), never "Cannot be …" or "Cannot have …"; "Not licensed
- * …", "Not available …" and the like; "Won't …" ("Willing to …"). Anything else comes back as typed (never its
- * opposite: review of the live test, 12 Nov 2026), so "No recent grads" is still refused by the fairness check, and words
- * that still rule someone out (`rulesOut`) are asked of the owner as what they need (the quick start's "As a must-have",
- * the own words on the job builder's card).
+ * permit, registration or credential named last (`lacksCredential`), with no word saying it is not in force or naming the
+ * problem itself (`NOT_IN_FORCE`) and none joining something to it (`LINKED`); "Cannot …" or "Unable to …" ("Able to
+ * …"), never "Cannot be …" or "Cannot have …"; "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
+ * …"), never "Won't hire …", "Won't accept …" or another verb only the employer does (`EMPLOYER_VERB`). Anything else
+ * comes back as typed (never its opposite: review of the live test, 12 Nov 2026, and of its fix), so "No recent grads"
+ * is still refused by the fairness check, and words that still rule someone out (`rulesOut`) are asked of the owner as
+ * what they need (the quick start's "As a must-have", and the job builder's card, which names them).
  */
 export function mustHaveOf(dealBreaker: string): string {
   const t = dealBreaker.trim().replace(/\s+/g, " ");
@@ -118,21 +136,22 @@ export function mustHaveOf(dealBreaker: string): string {
   const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
   if (not) return up(not[1]);
   const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);
-  if (wont) return `Willing to ${wont[1]}`;
+  if (wont) return EMPLOYER_VERB.test(wont[1]) ? t : `Willing to ${wont[1]}`;
   return t;
 }
 
 /**
  * Whether words name a credential someone lacks ("No x-ray permit", "Without a current BLS certification"): the shape
  * `mustHaveOf` turns round by its first branch, a licence, certificate, permit, registration or credential named last
- * with nothing saying it is not in force. It is the one shape safe to turn round whoever wrote the words: "Cannot …",
- * "Won't …" and "Not registered …" can be a rule worded in the negative ("Will not share patient information", "Not
- * registered as a sex offender"), which the requirements check turns round only when they are a deal-breaker's own words
- * (review of the hire-again fix, 12 Nov 2026).
+ * with nothing saying it is not in force (`NOT_IN_FORCE`) and nothing joined to it ("No points on driver's license",
+ * `LINKED`). It is the one shape safe to turn round whoever wrote the words: "Cannot …", "Won't …" and "Not registered
+ * …" can be a rule worded in the negative ("Will not share patient information", "Not registered as a sex offender"),
+ * which the requirements check turns round only when they are a deal-breaker's own words (review of the hire-again fix,
+ * 12 Nov 2026).
  */
 export function lacksCredential(text: string): boolean {
   const lacks = text.trim().replace(/\s+/g, " ").match(LACKS);
-  return !!lacks && CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]);
+  return !!lacks && CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]) && !LINKED.test(lacks[1]);
 }
 
 /**
@@ -152,9 +171,11 @@ export function restatementsOf(dealBreaker: string): string[] {
 const RULES_OUT = /^(?:no|not|never|without|lacks?|lacking|missing|cannot|can\s+not|can['’]?t|won['’]?t|will\s+not|unable|unwilling|(?:does|do)(?:\s+not|n['’]?t)|must\s+not|mustn['’]?t)\b/i;
 
 /**
- * Whether words rule someone out ("No RDA", "Cant work weekends", "Must not smoke"). A must-have never reads so: a
- * deal-breaker still worded so is asked of the owner as what they need, never used as it is (review of the live test,
- * 12 Nov 2026).
+ * Whether words rule someone out ("No RDA", "Cant work weekends", "Must not smoke"). A deal-breaker still worded so is
+ * never offered or filled in as a must-have: the quick start asks the owner for what they need, and the job builder's
+ * card gives it no ready-made option and names it for the owner to write (review of the live test, 12 Nov 2026, and of
+ * its fix). A stored must-have can still read so (a pick on a deal-breaker card stored before 12 Nov 2026, kept as it is,
+ * or words the owner typed on a card or the panel): the requirements check flags it (`rules_out`).
  */
 export function rulesOut(text: string): boolean {
   return RULES_OUT.test(text.trim());

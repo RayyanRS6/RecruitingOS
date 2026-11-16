@@ -662,12 +662,14 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
   for (const a of patch.add ?? []) { const e = byField.get(a.field) ?? { add: [], remove: [] }; e.add.push(a.value); byField.set(a.field, e); }
   for (const r of patch.remove ?? []) { const e = byField.get(r.field) ?? { add: [], remove: [] }; e.remove.push(r.value); byField.set(r.field, e); }
   // A deal-breaker the fairness check refuses (in its words, or as the requirement it reads as) is refused as a must-have
-  // that restates it in the same edit too, for the same reason, whatever that must-have's own words pass: the quick start
-  // sends both (review of the live test, 12 Nov 2026: "No felonies or license suspensions" was refused while "Felonies or
-  // license suspensions" was stored). Worked out first: the edit lists its must-haves before its deal-breakers.
+  // that restates it in the same edit too, for the same reason, whatever that must-have's own words pass: the must-have
+  // the edit says it counts as (`countsAs`, the quick start's "As a must-have", in the person's words: "No felons" as
+  // "Felony-free"), its requirement, or its words without the "No" (review of the live test, 12 Nov 2026: "No felonies or
+  // license suspensions" was refused while "Felonies or license suspensions" was stored; and of its fix: a wording the
+  // person typed was read on its own words only). Worked out first: the edit lists its must-haves before its deal-breakers.
   const refusedDeals = (patch.add ?? []).filter((a) => a.field === "dealBreakers").flatMap((a) => {
     const hit = screenCriterion(a.value) ?? screenCriterion(mustHaveOf(a.value));
-    return hit ? [{ as: restatementsOf(a.value), hit }] : [];
+    return hit ? [{ as: [...restatementsOf(a.value), ...(a.countsAs ? [a.countsAs] : [])], hit }] : [];
   });
   const restatesRefused = (v: string) => refusedDeals.find((r) => r.as.some((m) => same(m, v)))?.hit ?? null;
   for (const [field, e] of byField) {
@@ -745,9 +747,11 @@ function plainFact(k: string, v: string): string {
 
 /**
  * Deal-breakers offered back as visible must-haves (C17, founder decision Q19): each one that passes the fairness check
- * becomes an option on a card, worded as the requirement it rules people out on (`mustHaveOf`); one that fails, in the
- * owner's words or as that requirement, is declined with the reason, never offered and never used. One already a
- * must-have, either way it is worded, is not offered again.
+ * is asked about on the deal-breaker card (`prepareQuestions`), as an option worded as the requirement it rules people
+ * out on (`mustHaveOf`), or, when that requirement still rules someone out (`rulesOut`, "No RDA"), named on the card for
+ * the owner to write what they need in their own words; one that fails, in the owner's words or as that requirement, is
+ * declined with the reason, never offered and never used. One already a must-have, either way it is worded, is not
+ * offered again.
  */
 export function dealBreakerOffer(facts: IntakeFacts, alreadyOffered: string[]): { offer: string[]; declined: DeclinedCriterion[] } {
   const offer: string[] = [];

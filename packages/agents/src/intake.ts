@@ -184,8 +184,25 @@ function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionFie
 const DEAL_PROMPT = "From your deal-breakers: which should count openly as must-haves?";
 /** The same card's words before 12 Nov 2026, still on cards stored before then. */
 const DEAL_PROMPT_BEFORE = "You named these as deal-breakers. Which should count openly as must-haves?";
+/** The deal-breaker card, by its question: with or without the deal-breakers it names (`dealPrompt`), or in the words before. */
 function isDealCard(q: Pick<IntakeQuestion, "field" | "prompt">): boolean {
-  return q.field === "must_haves" && (q.prompt === DEAL_PROMPT || q.prompt === DEAL_PROMPT_BEFORE);
+  return q.field === "must_haves" && (q.prompt === DEAL_PROMPT || q.prompt.startsWith(`${DEAL_PROMPT} `) || q.prompt === DEAL_PROMPT_BEFORE);
+}
+
+/**
+ * The deal-breaker card's question. It names the deal-breakers it offers no ready-made answer for (words that still rule
+ * someone out, "No RDA"), so the owner sees each one and can write what they need in the box for their own words, and
+ * none is marked as asked without a word on the card (review of the must-haves fix, 12 Nov 2026: "No RDA" beside
+ * "Cannot work Saturdays" was never named). Two by name at most, each cut to 60 characters, then how many more: within a
+ * card's 300 characters.
+ */
+function dealPrompt(toWrite: readonly string[]): string {
+  if (!toWrite.length) return DEAL_PROMPT;
+  const cut = (d: string) => { const t = d.trim().replace(/\s+/g, " ").replace(/"/g, "'"); return t.length > 60 ? `${t.slice(0, 59).trimEnd()}…` : t; };
+  const named = toWrite.slice(0, 2).map((d) => `"${cut(d)}"`);
+  const more = toWrite.length - named.length;
+  const list = more ? `${named.join(", ")} and ${more} more` : named.join(" and ");
+  return `${DEAL_PROMPT} To count ${list}, write ${toWrite.length === 1 ? "it" : "them"} as what they need.`.slice(0, 300);
 }
 
 /**
@@ -425,8 +442,8 @@ const TEAM_CARD = {
  * first when nobody knows; offers stated deal-breakers back as must-haves, each worded as the requirement it rules people
  * out on ("No active California RDA license" is offered as "Active California RDA license", `mustHaveOf`), which the
  * owner can reword: "Your words" only when the words are the deal-breaker's unchanged, else the assistant's, and none
- * ready-made for one whose words still rule someone out ("No RDA"), which the owner writes in their own words (review of
- * the live test, 12 Nov 2026). Three cards at most.
+ * ready-made for one whose words still rule someone out ("No RDA"), which the card's question names for the owner to
+ * write in their own words (review of the live test, 12 Nov 2026, and of its fix). Three cards at most.
  */
 export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; team: TeamMember[]; basisKnown: boolean; payConfirmed: boolean; dealBreakers: string[]; settled?: readonly IntakeQuestionField[]; ownerWords?: ReadonlySet<string>; askedPrompts?: readonly string[] }): IntakeQuestion[] {
   const settled = new Set(input.settled ?? []);
@@ -464,14 +481,19 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
   const payAsked = settled.has("compensation_basis") || settled.has("compensation");
   if (!input.basisKnown && !input.payConfirmed && !payAsked && !out.some((q) => q.field === "compensation_basis" || q.mode === "pay")) cards.push(BASIS_CARD("basis"));
   // The requirement each deal-breaker rules people out on, once each: never its negative words as a must-have (live test,
-  // 12 Nov 2026). One whose words still rule someone out gets no option, only the box for the owner's own words; an
-  // option is "Your words" only when it is the deal-breaker's words unchanged (review of the live test, 12 Nov 2026).
+  // 12 Nov 2026). One whose words still rule someone out gets no option, only the box for the owner's own words, and the
+  // card's question names it (`dealPrompt`); an option is "Your words" only when it is the deal-breaker's words unchanged
+  // (review of the live test, 12 Nov 2026, and of its fix).
   const needs = input.dealBreakers
     .map((d): IntakeQuestion["options"][number] => { const m = mustHaveOf(d); return { label: m.slice(0, 200), value: m.slice(0, 500), origin: m === d.trim().replace(/\s+/g, " ") ? "owner" : "assistant" }; })
     .filter((o, i, all) => o.value && !rulesOut(o.value) && all.findIndex((x) => x.value.toLowerCase() === o.value.toLowerCase()) === i)
     .slice(0, 6);
+  const toWrite = input.dealBreakers.filter((d, i, all) => {
+    const m = mustHaveOf(d).slice(0, 500).toLowerCase();
+    return !needs.some((o) => o.value.toLowerCase() === m) && all.findIndex((x) => x.trim().toLowerCase() === d.trim().toLowerCase()) === i;
+  });
   const deal: IntakeQuestion | null = input.dealBreakers.length
-    ? { id: "deal", field: "must_haves", prompt: DEAL_PROMPT, mode: "multi", options: needs, allowOwn: true, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
+    ? { id: "deal", field: "must_haves", prompt: dealPrompt(toWrite), mode: "multi", options: needs, allowOwn: true, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
     : null;
   const room = 3 - cards.length - (deal ? 1 : 0);
   // The deal-breaker card takes the place of a must-haves card of the model's own on this turn (one list card at a time);
