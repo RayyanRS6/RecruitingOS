@@ -49,6 +49,109 @@ function findExperienceFloor(text: string): string | null {
   return null;
 }
 
+/**
+ * A criminal record as a requirement or a question names it: a felony or a felon, a conviction, an arrest, a misdemeanor,
+ * criminals, a criminal record, history, background, conviction, charge, offense or past, a police, arrest, conviction,
+ * prison or jail record, and pending charges, in any number. Never a driving record: "Clean driving record", "No DUI
+ * convictions" and "No moving violations" pass, as a driving job may ask for one.
+ */
+const RECORD_WORDS = String.raw`felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminals|criminal[\s-]+(?:records?|history|histories|backgrounds?|convictions?|charges?|offen[cs]es?|past)|(?:police|arrest|conviction|prison|jail)[\s-]+records?|pending[\s-]+(?:criminal[\s-]+)?charges?`;
+const RECORD = `(?:${RECORD_WORDS})`;
+/**
+ * What a ban may put before it, as few words as will do: "any", "a history of", a list ("No DUIs or felonies") and the
+ * kind ("prior", "violent", "felony"). Matching as little as it can keeps the words of a flag found before, and so its keep.
+ */
+const RECORD_LEAD_IN = String.raw`(?:(?:a|an|any)\s+)?(?:(?:history|record)\s+of\s+(?:(?:a|an|any)\s+)?)?(?:[\w'’-]+(?:\s+[\w'’-]+)??(?:\s+or|\s+and|\s*,|\s*/)\s+){0,2}?(?:(?:prior|past|previous|recent|pending|open|outstanding|serious|violent|drug|theft|domestic|criminal|convicted|felony|misdemeanou?r)[\s-]+){0,2}?`;
+/** A check, a search or questions about it come next, which is no ban ("No criminal background check until after an offer"). */
+const NOT_A_CHECK = String.raw`(?!(?:[\s-]+(?:felon\w*|convictions?|criminal|arrests?|history|histories|records?|backgrounds?)){0,2}[\s-]+(?:checks?|checking|screenings?|search(?:es)?|reports?|questions?|inquir\w*|box(?:es)?)\b)`;
+const NOT = String.raw`(?:\s+not|n['’]?t)`;
+const SOMEONE = String.raw`(?:anyone|anybody|someone|people|persons?|applicants?|candidates?|individuals?|those|workers?|employees?)`;
+const IF_YOU_HAVE = String.raw`(?:please\s+)?do${NOT}\s+apply\s+if\s+you(?:\s+(?:have|had)|['’]ve)(?:\s+(?:got|gotten))?`;
+const DONE_TO = String.raw`(?:arrested|convicted|charged\s+with|incarcerated|imprisoned|jailed|found\s+guilty|in\s+(?:jail|prison)|to\s+(?:jail|prison))`;
+
+/**
+ * A blanket ban on a criminal record, in any common wording (review of the live-test fixes, 17 Nov 2026: "No felony
+ * convictions" and "Felony-free" were stored): what names one after no, without, never, must not have, cannot have or
+ * free of ("No felony", "Without a criminal record", "Must not have any convictions"); "never convicted" and the like; its
+ * "-free" forms; someone ruled out for one ("No one with a criminal record", "Won't hire felons", "Do not apply if you have
+ * a felony", "Felons need not apply", "A felony conviction will disqualify you"); and a "clean record". A background check
+ * after an offer is no ban, nor is "Must pass a background check", which waits for counsel.
+ */
+const CRIMINAL_RECORD_BAN = new RegExp(
+  [
+    String.raw`\b(?:no|without|free\s+(?:of|from)|never\s+(?:had|having|been|committed|received)|(?:must|may|should|shall|will|do|does|did)${NOT}\s+(?:have|hold|carry)|won['’]?t\s+have|(?:cannot|can\s+not|can['’]?t)\s+(?:have|hold|carry))\s+${RECORD_LEAD_IN}${RECORD}\b${NOT_A_CHECK}`,
+    String.raw`\b(?:no(?:body|\s+one|\s+${SOMEONE})|(?:won['’]?t|will\s+not|do${NOT}|does${NOT}|cannot|can\s+not|can['’]?t|never|not|refuse\s+to)\s+(?:hire|hiring|accept|accepting|employ|employing|take|taking)(?:\s+${SOMEONE})?|${IF_YOU_HAVE})\s+(?:(?:with|who\s+(?:have|has|had))\s+)?${RECORD_LEAD_IN}(?:${RECORD_WORDS}|records?(?![\s-]+of\b))\b${NOT_A_CHECK}`,
+    String.raw`\b(?:never|(?:has|have|had)${NOT}|(?:must|may|should|shall|will|do|does|did)${NOT}\s+have|won['’]?t\s+have|(?:cannot|can\s+not|can['’]?t)\s+have|${IF_YOU_HAVE})\s+(?:(?:ever|once)\s+)?(?:been\s+)?${DONE_TO}\b`,
+    String.raw`\b(?:not|never|cannot|can\s+not|can['’]?t)\s+(?:be\s+|been\s+)?(?:an?\s+(?:convicted\s+)?(?:felon|criminal)|(?:convicted\s+)?felons?)\b`,
+    String.raw`\b(?:felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminal[\s-]+records?)[\s-]+free\b`,
+    String.raw`\b(?:${RECORD_WORDS}|records?)\s+(?:need\s+not|needn['’]?t)\s+apply\b`,
+    String.raw`\b${RECORD}\s+(?:will|would|shall|is|are)\s+(?:be\s+)?(?:an?\s+)?(?:automatic(?:ally)?\s+)?disqualif\w*`,
+    String.raw`\bclean\s+(?:criminal\s+(?:records?|history|backgrounds?)|record|background)\b`,
+  ].join("|"),
+  "gi",
+);
+
+/**
+ * A question about the candidate's own record, in the same words ("Are you a convicted felon?", "Any felony
+ * convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?"). A background check after
+ * an offer is not asked about this way, and a question about the people the work is with passes (below).
+ */
+const ASKS_ABOUT_RECORD = new RegExp(
+  [
+    String.raw`\b(?:have\s+you\s+(?:ever\s+)?|ever\s+)been\s+${DONE_TO}\b`,
+    String.raw`\bwere\s+you\s+(?:ever\s+)?(?:arrested|convicted|charged|incarcerated|imprisoned|jailed|found\s+guilty)\b`,
+    String.raw`\b(?:have|had)\s+you\s+(?:ever\s+)?(?:committed|had|got|gotten|received)\s+(?:(?:a|an|any)\s+)?(?:(?:prior|past|previous)\s+)?(?:crimes?|${RECORD_WORDS})\b`,
+    String.raw`\bdo\s+you\s+have\s+(?:(?:a|an|any)\s+)?(?:(?:prior|past|previous|pending)\s+)?${RECORD}\b`,
+    String.raw`\b(?:your|any)\s+(?:(?:prior|past|previous|pending)\s+)?${RECORD}\b`,
+    String.raw`\bcriminal[\s-]+(?:records?|history|histories|backgrounds?|convictions?|charges?|offen[cs]es?|past)\b`,
+    String.raw`\bare\s+you\s+(?:an?\s+)?(?:convicted\s+)?(?:felon|criminal)\b`,
+    String.raw`\bare\s+you\s+(?:currently\s+|now\s+)?on\s+(?:probation|parole)\b(?![\s-]+(?:at|in|with|from|during|for)\b)`,
+    String.raw`\bprobation\s+(?:or|and|/)\s+parole\b|\bparole\s+(?:or|and|/)\s+probation\b|\bon\s+parole\b`,
+    String.raw`\bconvicted\s+(?:of|for)\s+(?:(?:a|an|any)\s+)?(?:crimes?|felon(?:y|ies)|misdemeanou?rs?|(?:criminal\s+)?offen[cs]es?)\b`,
+    String.raw`\b(?:felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminal[\s-]+records?)[\s-]+free\b`,
+    String.raw`\b(?:pleaded|pled)\s+(?:guilty|no\s+contest|nolo\s+contendere)\b`,
+  ].join("|"),
+  "gi",
+);
+
+/**
+ * Words just before a match that make it no ban and no question about the candidate: the people the work is with
+ * ("Experience supporting clients with a criminal record", "people who have been arrested", "clients on probation or
+ * parole"), a record welcomed either way ("with or without a criminal record"), and an arrest that is not one ("Arrests
+ * without a conviction are never considered").
+ */
+const PEOPLE = String.raw`(?:clients?|patients?|people|persons?|individuals?|residents?|youths?|teens?|adults?|students?|families|members?|participants?|customers?|those|others|populations?)\s+`;
+const NOT_THEIR_OWN = new RegExp(String.raw`\b${PEOPLE}(?:(?:with|who\s+(?:have|has|had))\s+(?:(?:an?|any|prior|past|previous)\s+)*|(?:who\s+are\s+)?(?:currently\s+)?(?:on|under)\s+)$|\bwith\s+or\s+(?:without\s+(?:(?:an?|any)\s+)?)?$|\b(?:arrests?|charges?)\s+$`, "i");
+/** The same people just before a match that starts with "on" ("clients on parole"). */
+const PEOPLE_JUST_BEFORE = new RegExp(String.raw`\b${PEOPLE}(?:who\s+are\s+)?(?:currently\s+)?$`, "i");
+/**
+ * A check right after a match, put after an offer in the same sentence ("…a criminal background check after a
+ * conditional offer?", "Offer contingent on a criminal background check"): in a question, no asking about the record.
+ */
+const A_CHECK = /^(?:[\s-]+(?:felon\w*|convictions?|criminal|arrests?|history|histories|records?|backgrounds?)){0,2}[\s-]+(?:checks?|screenings?)\b/i;
+const OFFER_AFTER = /^[^.?!;]*\b(?:after|following|once|upon|until)\b[^.?!;]*\boffers?\b/i;
+const OFFER_BEFORE = /\b(?:(?:after|following|once|upon)\b[^.?!;]*\boffers?|offers?\b[^.?!;]*\b(?:contingent|conditional|subject|dependent))\b[^.?!;]*$/i;
+
+/**
+ * The first match of `pattern` (a global regex) about the candidate's own record, or null. `checkAfterAnOffer` passes a
+ * check put after an offer (a question's words; a ban's own words, "clean" or "-free", are no check).
+ */
+function firstOwnRecord(pattern: RegExp, checkAfterAnOffer = false): (text: string) => string | null {
+  return (text) => {
+    for (const m of text.matchAll(pattern)) {
+      const before = text.slice(0, m.index ?? 0);
+      if (NOT_THEIR_OWN.test(before) || (/^on\s/i.test(m[0]) && PEOPLE_JUST_BEFORE.test(before))) continue;
+      if (checkAfterAnOffer) {
+        const after = text.slice((m.index ?? 0) + m[0].length);
+        const check = after.match(A_CHECK);
+        if (check && (OFFER_AFTER.test(after.slice(check[0].length)) || OFFER_BEFORE.test(before))) continue;
+      }
+      return m[0];
+    }
+    return null;
+  };
+}
+
 /** The deterministic phrase list (C1). Each rule says why in plain words and offers the lawful way to get at the real need. */
 export const PROXY_RULES: readonly ProxyRule[] = [
   { rule: "age", reason: "Age, and wording that stands in for age, cannot be a hiring requirement.", alternative: "Describe the skill or the availability the job needs; every candidate is asked about that.", find: findAge },
@@ -110,7 +213,7 @@ export const PROXY_RULES: readonly ProxyRule[] = [
     rule: "criminal_record",
     reason: "A blanket ban on criminal records breaks fair-chance hiring laws in many places.",
     alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
-    find: first(/\bno (?:felons?|felonies|criminal (?:records?|history|backgrounds?)|convictions?|arrests?)\b|\bclean (?:criminal )?(?:record|background)\b|\bnever (?:been )?(?:arrested|convicted)\b/i),
+    find: firstOwnRecord(CRIMINAL_RECORD_BAN),
   },
   {
     rule: "experience_cap",
@@ -147,8 +250,8 @@ export function screenCriterion(text: string): CriterionCheck | null {
  * requirements ("male only", "no kids"); these read questions ("What is your gender?", "Do you have children?"). A
  * question that breaks one is refused when it is set, never kept with a reason: there is no lawful reason to ask it on an
  * application. Each says why in plain words and offers the lawful way to the real need. The patterns ask about the
- * candidate ("your age", "are you married"), so "Experience caring for patients with disabilities" or "Are you at least
- * 18?" (a legal minimum age) pass.
+ * candidate ("your age", "are you married"), so "Experience caring for patients with disabilities", "Experience
+ * supporting clients with a criminal record" or "Are you at least 18?" (a legal minimum age) pass.
  */
 export const PROTECTED_QUESTION_RULES: readonly ProxyRule[] = [
   {
@@ -203,7 +306,7 @@ export const PROTECTED_QUESTION_RULES: readonly ProxyRule[] = [
     rule: "asks_record",
     reason: "Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places.",
     alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
-    find: first(/\bhave you (?:ever )?been (?:arrested|convicted|charged|in (?:jail|prison))\b|\b(?:your|any)\s+(?:criminal (?:record|history|background|convictions?)|arrests?|convictions?|felon(?:y|ies))\b|\bcriminal (?:record|history|background)\b|\bare you a felon\b/i),
+    find: firstOwnRecord(ASKS_ABOUT_RECORD, true),
   },
   {
     rule: "asks_pay_history",

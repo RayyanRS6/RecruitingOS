@@ -324,3 +324,79 @@ describe("the questions every applicant answers pass the fairness check (Wave S7
     expect(guardPacket(packet(), ctx).flags).toEqual([]);
   });
 });
+
+// Review of the live-test fixes, 17 Nov 2026: "No felony convictions", "Felony-free" or "Must not have a felony" as a
+// deal-breaker or a must-have, and "Are you a convicted felon?" as a question, got past the fairness check, so the AI
+// interview could screen people on their record.
+describe("a ban on a criminal record is refused in any common wording, and a background check after an offer never is", () => {
+  it("refuses a requirement that rules people out for a record, with the rule's own reason and alternative", () => {
+    expect(screenCriterion("No felony convictions")).toEqual({
+      rule: "criminal_record",
+      text: "No felony",
+      reason: "A blanket ban on criminal records breaks fair-chance hiring laws in many places.",
+      alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
+    });
+    const refused = [
+      // refused before, and still
+      "No felons", "No felonies", "No criminal record", "Clean record", "Never convicted",
+      // the wordings that got past
+      "No felony convictions", "No felony", "No criminal convictions", "Felony-free", "Without a criminal record", "Must not have any convictions", "Must not have a felony",
+      // each word for a record, after each word that rules someone out
+      "No felon", "No conviction", "No criminal history", "No criminal background", "No criminal charges", "No criminal offenses", "No arrests", "No misdemeanors",
+      "Without felony convictions", "Never had a felony", "Never been arrested", "Must not have a criminal history", "Cannot have a criminal record", "Can't have any misdemeanors", "Free of criminal convictions",
+      // the "-free" forms
+      "Felon-free", "Conviction-free", "Arrest-free",
+      // the same ban in other common words
+      "No prior felony convictions", "No DUIs or felonies", "No one with a criminal record", "Won't hire felons", "Do not apply if you have a felony", "Felons need not apply", "Must not be a convicted felon", "Has not been convicted of a felony",
+    ];
+    for (const text of refused) expect(screenCriterion(text)?.rule, text).toBe("criminal_record");
+  });
+
+  it("refuses a question about the candidate's own record, wherever a question is set", () => {
+    for (const question of ["Are you a convicted felon?", "Any felony convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?", "Do you have a felony?", "Ever been arrested?", "Are you felony-free?"]) {
+      expect(questionCheck(question)?.rule, question).toBe("asks_record");
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
+    }
+  });
+
+  it("never refuses a background check after an offer, work with people who have a record, or a driving record", () => {
+    const fine = [
+      "Background check after a conditional offer", "Offer contingent on a background check", "No background check until after an offer",
+      "Criminal background check after a conditional offer", "No criminal background check until after an offer",
+      "Experience supporting clients with a criminal record", "With or without a criminal record, you are welcome to apply",
+      "Clean driving record", "Valid driver's license", "Valid driver's licence and a clean driving record", "No DUI convictions",
+      // waits for counsel: neither refused nor flagged for now
+      "Must pass a background check",
+    ];
+    for (const text of fine) {
+      expect(screenCriterion(text), text).toBeNull();
+      expect(questionCheck(text), text).toBeNull();
+    }
+    for (const question of ["Do you have experience supporting clients with a criminal record?", "Are you willing to complete a criminal background check after a conditional offer?", "Do you have a clean driving record?", "Do you hold a valid driver's license?", "Are you OK with a 90-day probation period?"]) {
+      expect(questionCheck(question), question).toBeNull();
+    }
+  });
+
+  it("flags the wider wordings on a job saved before at its next save, keeps their words, and a keep made before still holds", () => {
+    const reason = "A blanket ban on criminal records breaks fair-chance hiring laws in many places.";
+    const alternative = "Leave any background check to the end of the process, after an offer, where the law allows it.";
+    // as it was saved: the description's ban was flagged under the words the rule found then, and a person kept it
+    const keep = { id: "criminal_record:description.publicJobDescription:no_felonies", path: "description.publicJobDescription", rule: "criminal_record", text: "No felonies", reason, alternative, kept: { reason: "State law bars anyone with a felony from this licensed role.", by: dana, at: "2026-11-01T10:00:00.000Z" } };
+    const saved = packet((x) => {
+      x.requirements.mustHaves.push({ key: "record", text: "No felony convictions", rationale: "r", evidencedBy: ["resume"] });
+      x.description.publicJobDescription += " No felonies or misdemeanors.";
+      x.provenance.flags = [keep];
+    });
+    const next = guardPacket(saved, { ...ctx, previousFlags: [keep] });
+    // nothing is taken out or reworded: the job reads as it did
+    expect(next.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "No felony convictions"]);
+    expect(next.packet.description.publicJobDescription).toBe(saved.description.publicJobDescription);
+    expect(next.changes).toEqual([]);
+    // the keep holds, and the must-have the old rule let through waits for a person
+    expect(next.flags.map((f) => [f.path, f.rule, f.text, !!f.kept])).toEqual([
+      ["description.publicJobDescription", "criminal_record", "No felonies", true],
+      ["requirements.mustHaves[1].text", "criminal_record", "No felony", false],
+    ]);
+    expect(unresolvedFlags(next.packet)).toHaveLength(1);
+  });
+});

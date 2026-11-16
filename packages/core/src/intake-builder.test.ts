@@ -429,9 +429,31 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     // a lawful deal-breaker keeps the must-have it counts as
     const saturdays = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Able to work Saturdays" }, { field: "dealBreakers", value: "Cannot work Saturdays", countsAs: "Able to work Saturdays" }] }, []);
     expect([saturdays.facts.mustHaves, saturdays.facts.dealBreakers, saturdays.refused]).toEqual([["Able to work Saturdays"], ["Cannot work Saturdays"], []]);
-    // with no word of what it counts as, a must-have is read on its own words (the panel adds one at a time)
+    // with no word of what it counts as, a must-have is read on its own words (the panel adds one at a time): "Felony-free"
+    // is a ban in its own words since the wider rule (17 Nov 2026), and lawful words of the owner's own are kept
     const unlinked = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Felony-free" }, { field: "dealBreakers", value: "No felons" }] }, []);
-    expect([unlinked.facts.mustHaves, unlinked.refused.map((r) => r.field)]).toEqual([["Felony-free"], ["dealBreakers"]]);
+    expect([unlinked.facts.mustHaves, unlinked.refused.map((r) => [r.field, r.text])]).toEqual([[], [["mustHaves", "Felony-free"], ["dealBreakers", "No felons"]]]);
+    const ownWords = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Active license with no suspensions" }, { field: "dealBreakers", value: "No felons" }] }, []);
+    expect([ownWords.facts.mustHaves, ownWords.refused.map((r) => r.field)]).toEqual([["Active license with no suspensions"], ["dealBreakers"]]);
+  });
+
+  // review of the live-test fixes, 17 Nov 2026: "No felony convictions" passed the fairness check, so it was stored as a
+  // deal-breaker and what the owner wrote under it as a must-have
+  it("refuses a criminal-record ban in its common words, with the must-have the quick start says it counts as", () => {
+    const edit = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }, { field: "mustHaves", value: "Active RDH license" }, { field: "dealBreakers", value: "No felony convictions", countsAs: "Passes a background check" }] }, []);
+    expect(edit.facts.mustHaves).toEqual(["Active RDH license"]);
+    expect(edit.facts.dealBreakers).toEqual([]);
+    expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Passes a background check"], ["dealBreakers", "No felony convictions"]]);
+    expect([...new Set(edit.refused.map((r) => r.reason))]).toEqual([expect.stringMatching(/fair-chance/)]);
+    expect(edit.facts.declinedCriteria.map((d) => d.requested)).toEqual(["Passes a background check", "No felony convictions"]);
+    expect(edit.summary).toEqual(["Must-haves, added: Active RDH license"]);
+    // and in its words without the "No", or a wording of its own that is a ban too
+    for (const must of ["Felony convictions", "Felony-free"]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: must }, { field: "dealBreakers", value: "No felony convictions", countsAs: must }] }, []);
+      expect([e.facts.mustHaves, e.refused.map((r) => [r.field, r.text])], must).toEqual([[], [["mustHaves", must], ["dealBreakers", "No felony convictions"]]]);
+    }
+    // the same must-have with no deal-breaker it counts as is read on its own words, which wait for counsel
+    expect(applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }] }, []).facts.mustHaves).toEqual(["Passes a background check"]);
   });
 });
 
