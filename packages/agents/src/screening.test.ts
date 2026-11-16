@@ -650,9 +650,10 @@ describe("the scorecard leaves out a concern that is only the chat's silence abo
     expect(withoutResumeShownConcerns(card([chairside, licence]), resume("yes", "Take full-mouth and bitewing X-rays with digital sensors", "evidenced"), packet, NEVER_ASKED).concerns).toEqual([licence]);
     // shown only in part, it stays
     expect(withoutResumeShownConcerns(card([chairside]), resume("yes", "digital sensors", "partially_evidenced"), packet, NEVER_ASKED).concerns).toEqual([chairside]);
-    // "RDA license" alone is not all of "Active California RDA license", even when the résumé shows that one
+    // "RDA license" alone is not all of "Active California RDA license", even when the résumé shows that one (and with no
+    // chat at all: the live chat's certs question also names the licence, by "RDA")
     const rda: Resume = { requirementFindings: [{ requirementKey: "mh_rda", met: "yes", evidence: { source: "resume", quote: "RDA license CA #12345, active" } }], competencyFindings: [] };
-    expect(withoutResumeShownConcerns(card([licence]), rda, packet, NEVER_ASKED).concerns).toEqual([licence]);
+    for (const chat of [NEVER_ASKED, []]) expect(withoutResumeShownConcerns(card([licence]), rda, packet, chat).concerns).toEqual([licence]);
   });
 
   it("returns the same scorecard when nothing goes, or with no résumé reading", () => {
@@ -729,6 +730,67 @@ describe("the scorecard leaves out a concern that is only the chat's silence abo
     // concern about the part of one word it asked stays
     const steri = [...NEVER_ASKED, asked("Describe your sterilization routine between patients.")];
     expect(withoutResumeShownConcerns(card([unquoted("OSHA compliance was not discussed"), unquoted("Sterilization steps were vague")]), all, named, steri).concerns.map((c) => c.claim)).toEqual(["Sterilization steps were vague"]);
+  });
+
+  /**
+   * The second look at that fix (skeptic issue S1 on #1): the Dental Assistant's certs question names the licence by one
+   * word only ("RDA"), and the evidence rules take a "None" off the concern and off the scorecard's own finding alike (too
+   * short to quote, and the question asks which), so nothing quoted was left to show the chat had asked.
+   */
+  it("keeps a concern about a licence a question names by one of its own words, though the None it rests on is too short to quote", () => {
+    const rda: Resume = { requirementFindings: [{ requirementKey: "mh_rda", met: "yes", evidence: { source: "resume", quote: "Registered Dental Assistant (RDA), Dental Board of California, active since 2020" } }], competencyFindings: [] };
+    const none = [asked(packet.screening.questions[0]!.question, "certs"), said("None")];
+    const doesNotHold = unquoted("Does not hold an active California RDA license");
+    const reading: ScreenAssessment = { ...card([{ claim: doesNotHold.claim, evidence: { source: "screen", quote: "None" } }]), requirementFindings: [{ requirementKey: "mh_rda", met: "no", evidence: { source: "screen", quote: "None" } }] };
+    const out = scorecardReadings([1, 2, 3].map((i) => ({ ok: true as const, output: reading, runId: `r${i}`, model: "m" })), { restore: (s: string) => s }, { transcript: none, answers: {}, progress: EMPTY_SCREEN_PROGRESS }, packet);
+    if (!out.ok) throw new Error("expected a scorecard");
+    // the evidence rules take "None" off both
+    expect(out.output.concerns).toEqual([doesNotHold]);
+    const finding = out.output.requirementFindings.find((f) => f.requirementKey === "mh_rda");
+    expect(finding?.met).toBe("unknown");
+    expect(finding?.evidence?.quote).toBeUndefined();
+    // "RDA" in the certs question names the licence: the chat asked about it, so the concern stays
+    expect(withoutResumeShownConcerns(out.output, rda, packet, none).concerns).toEqual([doesNotHold]);
+    // a chat that never named it: the same concern is its silence
+    expect(withoutResumeShownConcerns(out.output, rda, packet, [asked(packet.screening.questions[2]!.question, "availability"), said("Weekdays")]).concerns).toEqual([]);
+  });
+
+  /** The second look at #32 (skeptic issues S2 to S4): the parts of a name, and a note in brackets at its end. */
+  it("reads a part of two words only together and in order, a part of one word only with another word of its name the chat never held, and a name without its bracketed note", () => {
+    const one = (key: string, text: string) => ({ requirements: { mustHaves: [{ key, text, rationale: "r", evidencedBy: ["resume", "screen"] }], niceToHaves: [], eligibility: [] }, competencies: [] }) as unknown as RolePacket;
+    const shownOn = (key: string, quote: string): Resume => ({ requirementFindings: [{ requirementKey: key, met: "yes", evidence: { source: "resume", quote } }], competencyFindings: [] });
+    // S2: "Open Dental" is a part of the name, so its words count only side by side and in that order
+    const days = unquoted("Availability for the days this dental office is open was not confirmed");
+    const openDental = unquoted("Open Dental use was not described");
+    for (const name of ["Dentrix / Eaglesoft / Open Dental", "Experience with Dentrix, Eaglesoft, or Open Dental"]) {
+      expect(withoutResumeShownConcerns(card([days, openDental]), shownOn("mh_pms", "Chart treatment in Dentrix"), one("mh_pms", name), NEVER_ASKED).concerns, name).toEqual([days]);
+    }
+    // S3: #32's own sentence goes, "Impressions" with "crown" beside it, when no line of the chat held either word
+    const crowns = one("mh_crowns", "Impressions and provisional crowns");
+    const temporaries = shownOn("mh_crowns", "Alginate impressions and temporary crowns");
+    const impressionAndCrown = unquoted("Impression and crown work was not discussed");
+    expect(withoutResumeShownConcerns(card([impressionAndCrown]), temporaries, crowns, NEVER_ASKED).concerns).toEqual([]);
+    expect(withoutResumeShownConcerns(card([impressionAndCrown]), temporaries, crowns, [...NEVER_ASKED, asked("Do you make temporary crowns chairside?")]).concerns).toEqual([impressionAndCrown]);
+    // one word of the name alone is never enough
+    expect(withoutResumeShownConcerns(card([unquoted("Overall impression: answers were brief")]), temporaries, crowns, NEVER_ASKED).concerns).toEqual([unquoted("Overall impression: answers were brief")]);
+    // a concern about the part of one word the chat asked stays, with the other part's word beside it too
+    const steri = one("mh_steri", "Sterilization and OSHA compliance");
+    const osha = shownOn("mh_steri", "Run the sterilization room to OSHA standards");
+    const vague = unquoted("Sterilization and OSHA steps were vague");
+    expect(withoutResumeShownConcerns(card([vague]), osha, steri, [...NEVER_ASKED, asked("Describe your sterilization routine between patients.")]).concerns).toEqual([vague]);
+    expect(withoutResumeShownConcerns(card([vague]), osha, steri, NEVER_ASKED).concerns).toEqual([]);
+    // S3: the hiring guide's "(state-dependent)" is a note, not words a concern names; asked about, the concern stays
+    const anesthesia = one("mh_la", "Local anesthesia certification (state-dependent)");
+    const certified = shownOn("mh_la", "Local anesthesia certification, Dental Board of California, 2019");
+    const notDiscussed = unquoted("Local anesthesia certification was not discussed");
+    expect(withoutResumeShownConcerns(card([notDiscussed]), certified, anesthesia, NEVER_ASKED).concerns).toEqual([]);
+    expect(withoutResumeShownConcerns(card([notDiscussed]), certified, anesthesia, [...NEVER_ASKED, asked("Do you hold a local anesthesia permit in this state?")]).concerns).toEqual([notDiscussed]);
+    // S4: "&" splits a name as "and" does
+    for (const name of ["Scaling & root planing", "Scaling and root planing"]) {
+      const srp = shownOn("mh_srp", "Scaling and root planing, 4 quadrants a day");
+      expect(withoutResumeShownConcerns(card([unquoted("Root planing was not described")]), srp, one("mh_srp", name), NEVER_ASKED).concerns, name).toEqual([]);
+      expect(withoutResumeShownConcerns(card([unquoted("Scaling was not described")]), srp, one("mh_srp", name), NEVER_ASKED).concerns, name).toEqual([unquoted("Scaling was not described")]);
+    }
   });
 });
 

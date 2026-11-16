@@ -2035,6 +2035,8 @@ const singular = (w: string): string => (w.length > 4 && w.endsWith("ies") ? `${
 const concernWords = (s: string): string[] => findingWords(s.replace(/\bx[\s-]?rays?\b/gi, " radiography ").replace(/\bradiograph(?:s|y|ic)?\b/gi, " radiography ")).map(singular).filter((w) => !PLAIN_WORDS.has(w));
 /** The parts of a requirement's name: "Digital radiography and intraoral scanning" is "Digital radiography" and "intraoral scanning" (split on "and", "&", "/" and ","). */
 const nameParts = (name: string): string[] => name.split(/\s*(?:\band\b|&|\/|,)\s*/i).filter((p) => p.trim());
+/** A requirement's name without the note in brackets at its end: "Local anesthesia certification (state-dependent)" is "Local anesthesia certification". */
+const bareName = (name: string): string => name.replace(/\s*\([^()]*\)\s*$/, "").trim() || name;
 
 /**
  * The scorecard as the team reads it: without the concerns that are only the AI interview's silence about what the résumé
@@ -2042,14 +2044,21 @@ const nameParts = (name: string): string[] => name.split(/\s*(?:\band\b|&|\/|,)\
  * the breakdown's "Shown, from the AI review of the résumé"; the chat asks no gap question about what the résumé shows,
  * `chatGaps`). A concern goes only when all of these hold:
  * - it has nothing checked quoted (one quoting the chat or a recruiter's note always stays);
- * - its words hold every topic word of a must-have the résumé reading shows met, or of a skill it shows evidenced, each on
- *   a checked quote, or every topic word of one part of its name that has two or more (`nameParts`), read with
- *   `concernWords` (a plural, x-ray and radiography as one word); a concern sharing one word with it stays;
+ * - it names a must-have the résumé reading shows met, or a skill it shows evidenced, each on a checked quote, read with
+ *   `concernWords` (a plural, x-ray and radiography as one word) and without a note in brackets at the end of the name
+ *   (`bareName`): every topic word of the name, anywhere in it; or every topic word of one part of the name
+ *   (`nameParts`) of two words or more, side by side and in that order ("Open Dental", never "this dental office is
+ *   open"); or the one word of a part with another word of the same name, when no line of the chat holds a word the
+ *   concern shares with the name ("Impression and crown work" for "Impressions and provisional crowns"). A concern
+ *   sharing one word with it stays;
  * - the conversation the scorecard read (`chat`: the lines the team may see, `teamScreenView`) never asked about that
- *   must-have or skill: no assistant line or recruiter's note is about its name by the topic-word rule the chat's gaps
- *   use (`sharesTopic`), and no question asked is that must-have's gap or a question about that skill (its
- *   `competencyKey`). "Is your RDH license active in the state this office is in?" asked the hygienist's licence, so
- *   "RDH license is not active in this state" stays, though the tapped "No" it rests on is too short to quote;
+ *   must-have or skill: no assistant line or recruiter's note is about its whole name by the topic-word rule the chat's
+ *   gaps use (`sharesTopic`) or, for a licence, certificate or permit (`credentialMustHaves`), names it by a word that
+ *   says which it is ("RDA" in the Dental Assistant's "Which certifications do you hold (x-ray, coronal polishing, RDA,
+ *   BLS)?" for "Active California RDA license"); and no question asked is that must-have's gap or a question about that
+ *   skill (its `competencyKey`). "Is your RDH license active in the state this office is in?" asked the hygienist's
+ *   licence, so "RDH license is not active in this state" stays, though the tapped "No" it rests on is too short to quote,
+ *   and so does the Dental Assistant's concern resting on a "None" the evidence rules took off the finding too;
  * - the scorecard's own finding for it quotes nothing.
  * Read where a scorecard's concerns are shown (the candidate's page, the interviewer's brief, the board card's gap line),
  * with the newest scorecard and the newest résumé reading, never when it is stored: the stored scorecard keeps every
@@ -2076,18 +2085,34 @@ export function withoutResumeShownConcerns<T extends Pick<ScreenAssessment, "con
     const skill = skillOf.get(t.questionKey);
     if (skill) askedSkills.add(skill);
   }
-  const named = (name: string) => ({ whole: concernWords(name), parts: nameParts(name).map(concernWords) });
-  const asked = (s: ReturnType<typeof named>) => lines.some((line) => sharesTopic(new Set(s.whole), line));
+  // A subject's words: its whole name, for what the chat asked (`all`), with the words that say which credential it is
+  // (`which`: "california" and "rda" of "Active California RDA license"); its name without a note in brackets, whole and
+  // in its parts, for what a concern names.
+  const credentials = credentialMustHaves(packet);
+  const named = (name: string, credential = false) => {
+    const all = concernWords(name);
+    const bare = bareName(name);
+    return { all: new Set(all), which: credential ? all.filter((w) => !CREDENTIAL_GENERIC.has(w)) : [], whole: concernWords(bare), parts: nameParts(bare).map(concernWords) };
+  };
+  const asked = (s: ReturnType<typeof named>) => lines.some((line) => sharesTopic(s.all, line) || s.which.some((w) => line.has(w)));
   const subjects = [
-    ...packet.requirements.mustHaves.filter((m) => met.has(m.key) && !quotesMust.has(m.key) && !askedKeys.has(m.key)).map((m) => named(m.text)),
+    ...packet.requirements.mustHaves.filter((m) => met.has(m.key) && !quotesMust.has(m.key) && !askedKeys.has(m.key)).map((m) => named(m.text, credentials.has(m.key))),
     ...packet.competencies.filter((c) => evidenced.has(c.key) && !quotesSkill.has(c.key) && !askedSkills.has(c.key)).map((c) => named(c.name)),
   ].filter((s) => s.whole.length > 0 && !asked(s));
   if (!subjects.length) return card;
+  const inChat = (w: string) => lines.some((line) => line.has(w));
   const silence = (c: ScreenAssessment["concerns"][number]) => {
     if (checked(c.evidence)) return false;
-    const said = new Set(concernWords(c.claim));
-    const holds = (words: string[]) => words.every((w) => said.has(w));
-    return subjects.some((s) => holds(s.whole) || s.parts.some((p) => p.length >= 2 && holds(p)));
+    const words = concernWords(c.claim);
+    const said = new Set(words);
+    // a part of two words or more: its words side by side and in that order ("Open Dental", never "dental office is open")
+    const together = (part: string[]) => words.some((_, i) => part.every((w, j) => words[i + j] === w));
+    // a part of one word: with another word of the same name beside it, and no word it shares with the name in any line of the chat
+    const alone = (s: ReturnType<typeof named>, word: string) => {
+      const shared = s.whole.filter((w) => said.has(w));
+      return shared.includes(word) && shared.some((w) => w !== word) && !shared.some(inChat);
+    };
+    return subjects.some((s) => s.whole.every((w) => said.has(w)) || s.parts.some((p) => (p.length > 1 ? together(p) : p.length === 1 && alone(s, p[0]!))));
   };
   const concerns = card.concerns.filter((c) => !silence(c));
   return concerns.length === card.concerns.length ? card : { ...card, concerns };
