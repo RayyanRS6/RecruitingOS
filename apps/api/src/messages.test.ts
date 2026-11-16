@@ -634,15 +634,33 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const must = pv.packet.requirements.mustHaves[0]!;
     expect(must.evidencedBy).toContain("screen");
     const twin = { key: "licence_skill", name: `${must.text.toUpperCase()}.`, definition: "Holds the licence.", weight: 5, evaluatedIn: "both" as const, indicators: ["Names the licence"] };
-    const compared = async () => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id}`)).json()) as { competencies: Array<{ key: string; asMustHave?: boolean }> }).competencies;
+    type Compared = { competencies: Array<{ key: string; asMustHave?: boolean }>; candidates: Array<{ mustHaves: Record<string, { met: string }>; competencies: Record<string, { finding: string; note: string | null }>; unknownCount: number; score: { breakdown: Array<{ key: string; mustHave: boolean }>; unknown: Array<{ key: string; mustHave: boolean }> } }> };
+    const compared = async () => (await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id}`)).json()) as Compared;
+    const stillUnknown = (await compared()).candidates[0]!.unknownCount;
     try {
       await container.db.update(rolePackets).set({ packet: { ...pv.packet, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
       const out = await compared();
-      expect(out.filter((c) => c.asMustHave).map((c) => c.key)).toEqual([twin.key]);
-      // with the AI interview's tick taken off that must-have, the skill counts on its own and is not marked
+      expect(out.competencies.filter((c) => c.asMustHave).map((c) => c.key)).toEqual([twin.key]);
+      // The second look at the twin rule: it has no cell of its own, as the score counts none of its findings (the
+      // must-have's row holds what counts), so it is never "still unknown" either
+      expect(out.candidates[0]!.unknownCount).toBe(stillUnknown);
+      // a résumé reading that knows nothing of the licence as the must-have but shows it as the skill: the skill's finding
+      // is not sent, and the must-have's cell says what the score counts
+      const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+      const resumeReading = { overall: "potential", confidence: "medium", summary: "Shows the licence as a skill.", strengths: [], concerns: [], unknowns: [], competencyFindings: [{ competencyKey: twin.key, finding: "evidenced", evidence: { source: "resume", quote: "Active CA RDH license #55321" } }], requirementFindings: [{ requirementKey: must.key, met: "unknown" }], anomalies: [], recommendation: "screen", rationale: "x" };
+      await container.db.insert(assessments).values({ companyId, applicationId: a.id, kind: "triage", packetVersion: a.row.packetVersion, result: resumeReading as never, overall: "potential", confidence: "medium", createdAt: later(1) });
+      const read = (await compared()).candidates[0]!;
+      expect(read.competencies[twin.key]).toBeUndefined();
+      expect(read.mustHaves[must.key]).toEqual({ met: "unknown", quote: null });
+      expect([...read.score.breakdown, ...read.score.unknown].filter((c) => c.key === twin.key && !c.mustHave)).toEqual([]);
+      // with the AI interview's tick taken off that must-have, the skill counts on its own, is not marked, and its cell is
+      // the finding the score counts
       const unticked = pv.packet.requirements.mustHaves.map((m, i) => (i === 0 ? { ...m, evidencedBy: ["resume" as const] } : m));
       await container.db.update(rolePackets).set({ packet: { ...pv.packet, requirements: { ...pv.packet.requirements, mustHaves: unticked }, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
-      expect((await compared()).some((c) => "asMustHave" in c)).toBe(false);
+      const own = await compared();
+      expect(own.competencies.some((c) => "asMustHave" in c)).toBe(false);
+      expect(own.candidates[0]!.competencies[twin.key]).toEqual({ finding: "evidenced", note: null });
+      expect(own.candidates[0]!.score.breakdown.find((c) => c.key === twin.key && !c.mustHave)).toBeTruthy();
     } finally {
       await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
     }

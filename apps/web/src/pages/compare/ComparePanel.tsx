@@ -56,9 +56,12 @@ export function ComparePanel({ roleId, candidates, initial }: { roleId: string; 
   );
 }
 
-/** One requirement for one person: the finding, a small bar, % met and the points it cost, and their words behind a click. */
-function Cell({ c, keyName, mustHave }: { c: CompareCandidateView; keyName: string; mustHave: boolean }) {
-  const cell = criterionCell(c, keyName, mustHave);
+/**
+ * One requirement for one person: the finding, a small bar, % met and the points it cost, and their words behind a click.
+ * `asMustHave`: a skill the score counts as the must-have of the same name, which has no finding of its own.
+ */
+function Cell({ c, keyName, mustHave, asMustHave = false }: { c: CompareCandidateView; keyName: string; mustHave: boolean; asMustHave?: boolean }) {
+  const cell = criterionCell(c, keyName, mustHave, asMustHave);
   if (cell.state !== "judged") return <span className="small muted">{cell.words}{cell.state === "raw" && cell.quote ? ` ("${cell.quote}")` : ""}</span>;
   return (
     <div className={CELL}>
@@ -129,7 +132,7 @@ export function CompareTable({ data }: { data: CompareView }) {
         {data.mustHaves.map((m) => <tr key={`mh:${m.key}`}><th scope="row" className="small"><span className="sbar-tag must">Must-have</span> {m.text}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={m.key} mustHave /></td>)}</tr>)}
         {data.competencies.map((x) => {
           const tag = skillTag(cands, x.key, !!x.asMustHave);
-          return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} /></td>)}</tr>;
+          return <tr key={`sk:${x.key}`}><th scope="row" className="small" title={x.definition}>{tag ? <><span className="sbar-tag">{tag}</span> </> : null}{x.name}</th>{cands.map((c) => <td key={c.applicationId}><Cell c={c} keyName={x.key} mustHave={false} asMustHave={!!x.asMustHave} /></td>)}</tr>;
         })}
         <tr><th scope="row" className="small muted">AI interview</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.screen ? recChip(c.screen.recommendation, c.score?.fit) ?? "Done" : <span className="muted">no AI interview yet</span>}</td>)}</tr>
         <tr><th scope="row" className="small muted">Still unknown</th>{cands.map((c) => <td key={c.applicationId} className="small">{c.unknownCount}</td>)}</tr>

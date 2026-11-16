@@ -106,7 +106,10 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
     // page (the live test, 12 November 2026: an AI interview that never asked about a must-have hid the résumé's "yes").
     // Where the score counts nothing, a reading's entry still shows that it looked: a must-have reads "unknown", a skill
     // "not_evidenced", never "contradicted" (`shownSkillFinding`: a "goes against it" with nothing checked quoted is not
-    // known to the score). With no entry at all the cell stays blank.
+    // known to the score). With no entry at all the cell stays blank. A skill the score counts as the must-have of the same
+    // name (`asMustHave`) has no cell of its own, as the score counts none of its findings: the must-have's row holds what
+    // counts, so it is never "still unknown" either (the second look at the twin rule, the second review of the live-test
+    // fixes).
     const pair = { resume, screen };
     const mh: CompareCandidate["mustHaves"] = {};
     for (const m of mustHaves) {
@@ -116,10 +119,11 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
     }
     const comp: CompareCandidate["competencies"] = {};
     for (const x of competencies) {
+      if (x.asMustHave) continue;
       const shown = shownSkillFinding(pair, x.key);
       if (shown) comp[x.key] = shown;
     }
-    const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
+    const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !x.asMustHave && !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
     await audit(tx, { companyId: t.companyId, actor: input.actor, action: "candidate.viewed", target: { type: "application", id: a.id }, reason: "comparison view" });
     const mark = marks.get(a.id) ?? null;
     const followUp = followUps.get(a.id) ?? null;

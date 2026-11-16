@@ -210,6 +210,18 @@ describe("tables elsewhere on a role", () => {
     expect(html).not.toContain('role="status"');
   });
 
+  // The second look at the twin rule (second review of the live-test fixes): the row tagged "Counted as the must-have" read
+  // the skill's own "Shown", a finding the score never counts
+  it("gives a skill row counted as the must-have of the same name its tag on Compare and no finding of its own", () => {
+    const person = { applicationId: "a1", name: "Maria Reyes", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: { mh_dr: { met: "unknown", quote: null } }, competencies: { dr: { finding: "evidenced", note: null }, c1: { finding: "evidenced", note: null } }, screen: null, resume: null, unknownCount: 1, open: "/roles/r1/talent?open=a1", score: null, notes: [] };
+    const data = { role: { id: "r1", title: "Dental Assistant" }, mustHaves: [{ key: "mh_dr", text: "Digital radiography" }], competencies: [{ key: "dr", name: "Digital Radiography.", definition: "Takes digital X-rays", asMustHave: true }, { key: "c1", name: "Patient care", definition: "Calm with patients" }], max: 5, reminder: "People decide.", candidates: [person] };
+    const html = render(client(), createElement(CompareTable, { data: data as never }));
+    expect(html).toContain('<th scope="row" class="small" title="Takes digital X-rays"><span class="sbar-tag">Counted as the must-have</span> Digital Radiography.</th><td><span class="small muted">—</span></td></tr>');
+    // a skill of its own keeps its words
+    expect(html).toContain('<th scope="row" class="small" title="Calm with patients">Patient care</th><td><span class="small muted">Shown</span></td></tr>');
+    expect(html.split(">Shown<")).toHaveLength(2);
+  });
+
   it("gives each person one verdict word on Compare: the word beside their number, never a reading's stored word lower down (6 November 2026)", () => {
     const score = { score: 62, band: "medium", bandLabel: "Medium", fit: "potential", openPoints: 0, coverage: { known: 2, total: 2, words: "Based on all 2 requirements" }, breakdown: [], unknown: [], fullMarks: 0, missingMustHave: [], capped: false, confidence: "high", basedOn: "resume_and_screen", interview: "done", basis: "From the résumé and the AI interview", packetVersion: 1 };
     const person = { applicationId: "a1", name: "Maria Reyes", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: {}, competencies: {}, screen: null, resume: { overall: "strong", confidence: "high", summary: "s" }, unknownCount: 0, open: "/roles/r1/talent?open=a1", score, notes: [] };

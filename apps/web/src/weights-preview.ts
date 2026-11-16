@@ -1,4 +1,4 @@
-import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, skillsInScore, type Importance, type WeighableRequirement } from "@ros/contracts";
+import { MATCH_WEIGHT, importanceOf, matchWeightOf, previewMatch, skillsCountedAsMustHaves, skillsInScore, type Importance, type WeighableRequirement } from "@ros/contracts";
 import type { BoardCard, BoardView, RolePacket } from "./api/client";
 import { READ_FROM_NOW_ON, type EditorFocus } from "./skills-form";
 
@@ -24,8 +24,12 @@ export const AS_MUST_HAVE_LINE = "A skill named like a must-have counts once, as
 export const USE_WEIGHTS_LINE = `"Use these weights" opens the job's editor; saving there makes a new version of the job. ${READ_FROM_NOW_ON}`;
 export const NOBODY_SCORED = { title: "Nobody has a match score yet", body: "Scores come once applications are read. Come back when someone has one." } as const;
 
-/** One must-have or scored skill to weigh. `id` is `m:<key>` or `s:<key>`, so a must-have and a skill with the same key never clash. */
-export type WeightRow = { id: string; key: string; label: string; mustHave: boolean; level: WeightLevel; choices: WeightLevel[] };
+/**
+ * One must-have or scored skill to weigh. `id` is `m:<key>` or `s:<key>`, so a must-have and a skill with the same key never
+ * clash. `twins`, on a must-have only: the names of the skills the score counts as it (`skillsCountedAsMustHaves` in the
+ * contracts), which have no row of their own, so leaving it out leaves them out too and its change line names them.
+ */
+export type WeightRow = { id: string; key: string; label: string; mustHave: boolean; level: WeightLevel; choices: WeightLevel[]; twins?: string[] };
 /** The level picked for each row, by row id. */
 export type WeightLevels = Record<string, WeightLevel>;
 
@@ -38,10 +42,14 @@ const SKILL_CHOICES: WeightLevel[] = ["essential", "important", "helpful", "off"
  * your own interviews is not in the score, so it is not here (INTERVIEW_ONLY_LINE says so); nor is a skill named as a
  * must-have the AI interview confirms, which the score counts once, as that must-have, so its row would change nothing (the
  * live test, 12 November 2026; AS_MUST_HAVE_LINE says so). Leaving that must-have out leaves both out, as the score does
- * whatever its weight here (the second review of the live-test fixes).
+ * whatever its weight here (the second review of the live-test fixes), and its row's `twins` name the skill for the line
+ * that says so (`changeWords`).
  */
 export function weightRows(packet: Pick<RolePacket, "requirements" | "competencies">): WeightRow[] {
-  const must = packet.requirements.mustHaves.map((m): WeightRow => ({ id: `m:${m.key}`, key: m.key, label: m.text, mustHave: true, level: "must_have", choices: MUST_HAVE_CHOICES }));
+  const must = packet.requirements.mustHaves.map((m): WeightRow => {
+    const twins = skillsCountedAsMustHaves({ requirements: { mustHaves: [m] }, competencies: packet.competencies }).map((c) => c.name);
+    return { id: `m:${m.key}`, key: m.key, label: m.text, mustHave: true, level: "must_have", choices: MUST_HAVE_CHOICES, ...(twins.length ? { twins } : {}) };
+  });
   const skills = skillsInScore(packet).map((c): WeightRow => ({ id: `s:${c.key}`, key: c.key, label: c.name, mustHave: false, level: importanceOf(c), choices: SKILL_CHOICES }));
   return [...must, ...skills];
 }
@@ -126,11 +134,18 @@ export function previewStatus(changed: number, order: Pick<PreviewOrder, "moved"
   return order.moved === 1 ? "With these weights, 1 person changes place." : `With these weights, ${order.moved} people change place.`;
 }
 
-/** Each change in words: "Chairside skill: from Essential to Helpful", or "…: from Must-have to left out of the score". */
+/**
+ * Each change in words: "Chairside skill: from Essential to Helpful", or "…: from Must-have to left out of the score". A
+ * must-have left out takes the skill the score counts as it (`twins`) out with it, and the job saved without the must-have
+ * alone would count that skill again at its own importance, so the line names it, for the editor: "…: from Must-have to
+ * left out of the score, with the skill of the same name" (the second look at the twin rule, the second review of the
+ * live-test fixes).
+ */
 export function changeWords(rows: readonly WeightRow[], levels: WeightLevels): string[] {
   return changedRows(rows, levels).map((r) => {
     const to = levelOf(r, levels);
-    return `${r.label}: from ${WEIGHT_LEVEL_LABEL[r.level]} to ${to === "off" ? "left out of the score" : WEIGHT_LEVEL_LABEL[to]}`;
+    const twins = to === "off" && r.twins?.length ? `, with the ${r.twins.length === 1 ? "skill" : "skills"} of the same name` : "";
+    return `${r.label}: from ${WEIGHT_LEVEL_LABEL[r.level]} to ${to === "off" ? "left out of the score" : WEIGHT_LEVEL_LABEL[to]}${twins}`;
   });
 }
 

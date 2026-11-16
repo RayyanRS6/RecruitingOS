@@ -48,8 +48,8 @@ export function scoreSummary(c: CompareCandidateView): { score: number | null; v
 /**
  * One cell: what the score counted for this requirement (`judged`, with % met and the points it cost), a requirement
  * the evidence says nothing about (`unknown`, no points so far), a finding the score could not use because the
- * reading was made against an earlier version of the role, or because the score counts that skill as the must-have of the
- * same name (`raw`, the words only; its row says "Counted as the must-have"), or nothing at all (`none`).
+ * reading was made against an earlier version of the role (`raw`, the words only), or nothing at all (`none`): no evidence
+ * yet, or a skill the score counts as the must-have of the same name, which has no finding of its own (`NO_CELL_OF_ITS_OWN`).
  */
 export type CompareCell =
   | { state: "judged"; words: string; pctMet: number; pointsLost: number; mustHave: boolean; quote: string | null }
@@ -59,10 +59,24 @@ export type CompareCell =
 
 const RAW_WORDS: Record<string, string> = { yes: "Shown", partially: "Partly shown", no: "Not met", unknown: "Not known yet", evidenced: "Shown", partially_evidenced: "Partly shown", not_evidenced: "Not shown yet", contradicted: "Goes against it" };
 
-export function criterionCell(c: CompareCandidateView, key: string, mustHave: boolean): CompareCell {
+/**
+ * A cell of a skill the score counts as the must-have of the same name (`asMustHave`), under its row's "Counted as the
+ * must-have": the score counts none of that skill's own findings, so none of them shows there ("Shown" or "Goes against
+ * it" read as counted for the must-have, beside the must-have's own "Not known yet"); the must-have's row holds what counts
+ * (the second look at the twin rule, the second review of the live-test fixes).
+ */
+export const NO_CELL_OF_ITS_OWN = "—";
+
+/**
+ * `asMustHave`: the row is a skill the score counts as the must-have of the same name. A column whose own score still
+ * counted that skill (a reading made against an earlier version, where it was a requirement of its own) shows what it
+ * counted; any other column has no cell of its own there.
+ */
+export function criterionCell(c: CompareCandidateView, key: string, mustHave: boolean, asMustHave = false): CompareCell {
   const judged = c.score?.breakdown.find((b) => b.key === key && b.mustHave === mustHave);
   if (judged) return { state: "judged", words: judged.finding, pctMet: judged.pctMet, pointsLost: judged.pointsLost, mustHave, quote: judged.quote };
   if (c.score?.unknown.some((u) => u.key === key && u.mustHave === mustHave)) return { state: "unknown", words: "Not known yet, no points so far" };
+  if (asMustHave && !mustHave) return { state: "none", words: NO_CELL_OF_ITS_OWN };
   const raw = mustHave ? c.mustHaves[key]?.met : c.competencies[key]?.finding;
   if (raw) return { state: "raw", words: RAW_WORDS[raw] ?? raw.replace(/_/g, " "), quote: mustHave ? (c.mustHaves[key]?.quote ?? null) : null };
   return { state: "none", words: "No evidence yet" };
@@ -74,7 +88,8 @@ export const COUNTED_AS_MUST_HAVE = "Counted as the must-have";
 /**
  * A skill row's tag (Essential, Important, Helpful), from whichever column's score knows it; null when none does. A skill
  * the score counts as the must-have of the same name (`asMustHave`) is tagged so instead (the second review of the
- * live-test fixes, 12 November 2026), so its row never reads like a reading made against an earlier version.
+ * live-test fixes, 12 November 2026), so its row never reads like a reading made against an earlier version; its cells
+ * show no finding of its own (`NO_CELL_OF_ITS_OWN`).
  */
 export function skillTag(cands: readonly CompareCandidateView[], key: string, asMustHave = false): string | null {
   if (asMustHave) return COUNTED_AS_MUST_HAVE;

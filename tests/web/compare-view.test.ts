@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, MatchScore, RolePacket } from "@ros/contracts";
-import { COMPARE_MAX, COUNTED_AS_MUST_HAVE, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
+import { COMPARE_MAX, COUNTED_AS_MUST_HAVE, NO_CELL_OF_ITS_OWN, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -137,9 +137,27 @@ describe("the comparison view", () => {
     expect(skillTag([cy, ana], "chairside", true)).toBe(COUNTED_AS_MUST_HAVE);
     expect(skillTag([cy], "radiography", true)).toBe(COUNTED_AS_MUST_HAVE);
     expect(skillTag([cy, ana], "chairside", false)).toBe("Essential");
-    // its cells keep that skill's own finding, in words only, under the tag
-    const twin = person("t", "Tia", reading([must("rdh", "yes", "RDH")]), { competencies: { radiography: { finding: "evidenced", note: null } } });
-    expect(criterionCell(twin, "radiography", false)).toEqual({ state: "raw", words: "Shown", quote: null });
+  });
+
+  // The second look at the twin rule (second review of the live-test fixes): under "Counted as the must-have" its cells kept
+  // the skill's own finding ("Shown", "Goes against it"), which the score never counts, beside the must-have's "Not known yet"
+  it("shows no finding of its own in the cells of a skill the score counts as the must-have of the same name", () => {
+    expect(NO_CELL_OF_ITS_OWN).toBe("—");
+    for (const finding of ["evidenced", "partially_evidenced", "contradicted", "not_evidenced"]) {
+      // an older answer still sending the skill's own finding: never shown
+      const twin = person("t", "Tia", reading([must("rdh", "unknown")]), { competencies: { radiography: { finding, note: null } } });
+      expect(criterionCell(twin, "radiography", false, true), finding).toEqual({ state: "none", words: NO_CELL_OF_ITS_OWN });
+      // the must-have's row keeps what the score counts
+      expect(criterionCell(twin, "rdh", true, true)).toEqual({ state: "unknown", words: "Not known yet, no points so far" });
+      // a skill of its own keeps its words
+      expect(criterionCell(twin, "radiography", false)).toMatchObject({ state: "raw" });
+    }
+    // and none with no entry at all, never "No evidence yet": the must-have's row says what is known
+    expect(criterionCell(cy, "radiography", false, true)).toEqual({ state: "none", words: NO_CELL_OF_ITS_OWN });
+    // a column whose own score counted the skill (read against an earlier version, where it was its own requirement) shows
+    // what it counted
+    expect(criterionCell(ana, "chairside", false, true)).toMatchObject({ state: "judged", words: "Shown", pctMet: 100 });
+    expect(criterionCell(ana, "patients", false, true)).toEqual({ state: "unknown", words: "Not known yet, no points so far" });
   });
 
   it("names the people read against an earlier version of the role (plan F4)", () => {
