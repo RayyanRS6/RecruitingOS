@@ -126,7 +126,7 @@ and needs a look.
 - Meeting links pasted by owners must be `http(s)` addresses (contract and rendering), so no `javascript:` link ever
   reaches a candidate page.
 
-## Dated record (gates 3.7 and 5.1 of `docs/readiness/16`)
+## Dated record (gates 3.7 and 5.1)
 
 | Step | Date | By | Evidence |
 |---|---|---|---|

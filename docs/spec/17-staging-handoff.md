@@ -1,6 +1,6 @@
 # 17. Staging handoff package
 
-A founder-facing guide for the day the accounts exist. Written 18 September 2026. Nadine or Paul creates every account and enters every secret value (`docs/spec/12` §I); Claude receives only the non-secret references listed here, in a message or in `docs/spec/13` appendix D. **Never paste a secret into chat, a file, a screenshot, or an issue.** A service is called "connected" only when its evidence line is satisfied and recorded in the readiness register (`docs/readiness/01`).
+A founder-facing guide for the day the accounts exist. Written 18 September 2026. Nadine or Paul creates every account and enters every secret value; Claude receives only the non-secret references listed here, in a message or in the account-creation worksheet's appendix D. **Never paste a secret into chat, a file, a screenshot, or an issue.** A service is called "connected" only when its evidence line is satisfied and recorded in the readiness register.
 
 Variable names are exactly those in `.env.example`. "Where entered" is always Vercel → Project → Settings → Environment Variables (server scope) and, for the worker, the Railway `worker` service's Variables tab (`docs/runbooks/railway-worker.md`; Trigger.dev is deferred by decision 1 of 22 September), unless stated.
 
@@ -99,4 +99,4 @@ Variable names are exactly those in `.env.example`. "Where entered" is always Ve
 
 ## What Claude does with the references
 
-Updates `docs/spec/13` appendix D, records each service's status in `docs/readiness/01`, and runs the staging verification checklist (`docs/readiness/03`) with Nadine or Paul entering anything that needs a secret.
+Updates the account-creation worksheet's appendix D, records each service's status in the readiness register, and runs the staging verification checklist with Nadine or Paul entering anything that needs a secret.

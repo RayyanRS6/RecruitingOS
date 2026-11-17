@@ -100,7 +100,7 @@ the next merge to `main`, or Deployments, **Create Deployment**, branch `main`.
 | `EMAIL_PROVIDER` | `fake` | constant until Postmark is set up (messages are recorded, not sent; never described as connected) | no |
 | `EMAIL_FROM_DOMAIN` | `hire.identifiedtalent.com` | constant | no |
 | `EMAIL_FROM_ADDRESS` | `updates@hire.identifiedtalent.com` | constant | no |
-| `EMAIL_REPLY_TO` | the ITS queue mailbox you chose in gate 1.5 (`docs/readiness/16`) | your choice | no |
+| `EMAIL_REPLY_TO` | the ITS queue mailbox you chose in gate 1.5 | your choice | no |
 | `ITS_QUEUE_EMAIL` | the same mailbox | your choice | no |
 | `EMAIL_INTAKE_DOMAIN` | `apply.identifiedtalent.com` | constant (display only until Postmark inbound exists) | no |
 | `PRIVACY_EMAIL` | `privacy@identifiedtalent.com` | constant | no |

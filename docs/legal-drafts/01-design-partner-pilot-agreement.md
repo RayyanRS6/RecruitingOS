@@ -42,4 +42,4 @@ Governing law [California]; entire agreement; amendments in writing; notices to 
 
 Signatures: ITS [Nadine Motaweh, title] · Partner [name, title]
 
-Exhibits: A Service description · B Security controls (`docs/readiness/10`) · C Subprocessors (`09`) · D Privacy-request process (`08`) and D-2 Recruiter-access summary (`07`) · E Retention (`10`) · F Candidate privacy notice (`02`) · G AI-use disclosure (`03`) · H SMS consent (`04`)
+Exhibits: A Service description · B Security controls · C Subprocessors (`09`) · D Privacy-request process (`08`) and D-2 Recruiter-access summary · E Retention (`10`) · F Candidate privacy notice (`02`) · G AI-use disclosure (`03`) · H SMS consent

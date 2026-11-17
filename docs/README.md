@@ -2,7 +2,7 @@
 
 What is in this folder, one line per file. Start with [PRODUCT.md](PRODUCT.md): it wins over every other document. How to run the app is in the [root README](../README.md), and the guide for developers and AI agents is [AGENTS.md](../AGENTS.md).
 
-A document here may still name an older one that is no longer in the folder (`workflow-decisions.md`, `spec/00`, `readiness/03` and others). Those are in git history, at commit `199c94f` and before.
+A document here may still cite a decision id or a document from the earlier, larger design (HF-8, known-bugs row 159, the staging verification checklist). Those are in git history, at commit `199c94f` and before: `git show 199c94f:docs/README.md` lists what was there.
 
 ## The product
 

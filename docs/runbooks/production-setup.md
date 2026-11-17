@@ -3,8 +3,7 @@
 Status: written 29 October 2026 for the first production launch, from the code on branch `production-readiness`
 (strict production start-up checks, sign-up by invitation, the worker's stall exit, the Windows database tools). It is
 written for the assistant who guides the founder on her Windows laptop, one screen at a time. Staging is unchanged
-(`docs/runbooks/staging-environment-variables.md`, `docs/runbooks/railway-worker.md`,
-`docs/runbooks/staging-database-setup.md`).
+(`docs/runbooks/staging-environment-variables.md`, `docs/runbooks/railway-worker.md`).
 
 **Where production stands (4 November 2026).** It exists, so do not start again from step 1. Read the dashboards before
 changing anything: some plans and settings differ from step 1, to stay inside the plans already paid.
@@ -135,7 +134,7 @@ Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen sho
 
 **Microsoft** (since 10 November 2026; the decision is in `docs/DECISIONS.md`, "Sign-in"): one app
 registration in the ITS tenant (Entra admin center, **App registrations**) serves both Supabase projects, staging and
-production. Background in `docs/spec/13` section 4a.
+production.
 
 - Name: `Recruiting OS`, the product name the sign-in page uses (`PRODUCT` in `apps/web/src/pages/Login.tsx`), since IT
   sees it on Microsoft's consent screen (renamed so on 10 November 2026).

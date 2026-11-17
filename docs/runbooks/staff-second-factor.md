@@ -75,7 +75,7 @@ organization owner (Nadine) does it in the dashboard:
 | That code is not right. | wrong code, or the app's clock is off | enter the code showing now |
 | Please try again in N minutes | more than forty code posts from one address in fifteen minutes | wait; if this is not you, tell the platform owner |
 
-## Staging verification (Phase 3, `docs/readiness/03` section 3)
+## Staging verification (Phase 3)
 
 Enrol Nadine's account on staging, add the backup, sign out and in with each authenticator, fail five times and recover,
 run one dashboard reset and re-enrol, and confirm `/api/v1/auth/me` shows `aal2` with `mfaVerifiedAt` after each

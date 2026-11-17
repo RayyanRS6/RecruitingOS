@@ -1,6 +1,6 @@
 # Data-retention matrix (proposed; counsel decision pending)
 
-Status: **Blocked (counsel)**. These are the proposed conservative defaults from `docs/spec/05` §6 and register items 6 and 9. No automatic deletion is implemented or will be enabled until counsel approves this matrix; anonymization runs only per request after a recorded counsel decision (`docs/runbooks/privacy-requests.md`).
+Status: **Blocked (counsel)**. These are the proposed conservative defaults from the release-1 database schema specification (§6) and register items 6 and 9. No automatic deletion is implemented or will be enabled until counsel approves this matrix; anonymization runs only per request after a recorded counsel decision (`docs/runbooks/privacy-requests.md`).
 
 | # | Category | Examples | Proposed retention | Proposed action at end | Exceptions and holds |
 |---|---|---|---|---|---|

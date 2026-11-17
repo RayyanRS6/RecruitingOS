@@ -175,8 +175,7 @@ worker runs the work. Work waits like this for up to a day from the first time i
 taken to know it (a step renamed or removed in a later release) and it fails like any other job, under the alert "A
 background job gave up", whose text names the step; so roll a worker forward within the day.
 
-If the logs show `password authentication failed for user "ros_worker"` (28P01), see "When a host refuses an
-application string" in `docs/runbooks/staging-database-setup.md`: test the 1Password value with
+If the logs show `password authentication failed for user "ros_worker"` (28P01), test the 1Password value with
 `bash scripts/staging-db-check-role.sh` (a Mac) before rotating anything.
 
 Then, on your machine, the status report shows `sessions of the application roles: … ros_worker 1 idle` (the worker's

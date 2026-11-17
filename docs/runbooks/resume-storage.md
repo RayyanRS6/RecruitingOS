@@ -1,7 +1,7 @@
 # Résumé storage: private bucket, direct uploads, quarantine, audited reads
 
-Status: built and tested against the in-memory store and the fake scanner on 22 September 2026 under founder decision 2
-(`docs/spec/19` §G). Not yet exercised against the staging bucket. A ClamAV adapter exists since 30 September
+Status: built and tested against the in-memory store and the fake scanner on 22 September 2026 under founder decision 2.
+Not yet exercised against the staging bucket. A ClamAV adapter exists since 30 September
 (`SCAN_PROVIDER=clamav`, tested against a stand-in clamd); the engine itself is a service the founder starts on Railway
 ("Running ClamAV on Railway" below). Until it runs, the fake stands in and a production worker raises a standing
 `scanner.fake` alert: that is a real-data blocker (`docs/readiness/20` blocker 8), not a staging blocker.
@@ -97,7 +97,7 @@ Vercel app keeps `SCAN_PROVIDER=fake` because it never opens a quarantined file.
    host or port is wrong, or clamd is still loading signatures; the worker runs anyway and quarantined files wait,
    retried by the intake workflow, until the engine answers). Then apply on staging with the EICAR test file: the
    document is refused with `infected`, and the `document.rejected` event names the engine `clamav` and the signature.
-5. Spend: about $15 to $25 a month of compute for the always-on engine (`docs/spec/21`). The workspace carries no
+5. Spend: about $15 to $25 a month of compute for the always-on engine. The workspace carries no
    hard limit, which would stop production too; an email alert instead (`docs/runbooks/railway-worker.md`, screen 5).
 
 What a scan outage looks like: the scanner returns `error` (a refused connection, a closed socket, or no reply within
@@ -120,7 +120,7 @@ inbound stream can also be told to drop attachments over a size, which turns the
 résumé and the message text kept; that setting is the founder's call once the intake domain exists. Lifted only by
 moving the inbound webhook off the platform's function limits, recorded as a follow-up in the register.
 
-## Staging verification (`docs/readiness/03` §1a)
+## Staging verification
 
 Apply with a PDF through a real browser and confirm: the file appears under `quarantine/` and then under the company's
 prefix in the bucket (Storage, Explorer), the document row goes `quarantined` → `clean`, the owner can open it from the
