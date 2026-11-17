@@ -100,6 +100,12 @@ describe("a deal-breaker as the must-have it counts as", () => {
       "Cannot keep those without a license", "Can't train new hires", "Can't train a new hire",
       // a hire, or a new hire, after a word that picks one out, is a person too
       "Can't keep a hire who is late", "Cannot train the new hire", "Can't let any new hire work alone",
+      // the verb after "afford to", "just", "even", "ever" or "by law", "re-hire" and "rehire", and "hire" after another
+      // verb and "or", "and" or "to" (final check of the employer-verbs repair, 17 Nov 2026: "Can't afford to hire
+      // inexperienced staff" became "Able to afford to hire inexperienced staff")
+      "Can't afford to hire inexperienced staff", "Can't just hire temps", "Can't even hire part-timers", "Can't ever hire smokers", "Cannot by law hire minors",
+      "Unable to afford to hire part-timers", "Cannot afford to pay overtime", "Can't re-hire former employees", "Cannot rehire former employees",
+      "Can't recruit or hire minors", "Cannot train and hire new graduates", "Can't continue to hire temps",
     ];
     for (const t of asTyped) {
       expect(mustHaveOf(t), t).toBe(t);
@@ -114,6 +120,9 @@ describe("a deal-breaker as the must-have it counts as", () => {
     expect(mustHaveOf("Can't work with children")).toBe("Able to work with children");
     expect(mustHaveOf("Not able to drive a stick shift")).toBe("Able to drive a stick shift");
     expect(mustHaveOf("Can't reliably lift 50 lbs")).toBe("Able to reliably lift 50 lbs");
+    // after a word such as "even" too, and a verb other than "hire" after "or" is still read as the candidate's
+    expect(mustHaveOf("Can't even lift 25 lbs")).toBe("Able to even lift 25 lbs");
+    expect(mustHaveOf("Can't drive or take the bus")).toBe("Able to drive or take the bus");
     // and so is what the candidate does around the hiring itself, which names nobody (review of the employer-verbs fix,
     // 17 Nov 2026: "Unable to get BLS certified within 30 days of hire" stayed as typed)
     const aroundTheHiring: Array<[string, string]> = [
@@ -125,6 +134,7 @@ describe("a deal-breaker as the must-have it counts as", () => {
       ["Unable to start on the hire date", "Able to start on the hire date"],
       ["Unable to pass a pre-hire skills test", "Able to pass a pre-hire skills test"],
       ["Can't complete new hire paperwork", "Able to complete new hire paperwork"],
+      ["Unable to pass a drug test at offer or hire", "Able to pass a drug test at offer or hire"],
     ];
     for (const [t, need] of aroundTheHiring) {
       expect(mustHaveOf(t), t).toBe(need);

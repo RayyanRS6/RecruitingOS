@@ -109,19 +109,24 @@ const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
 
 /**
  * What the employer does to the people applying, after "Cannot …", "Unable to …" and the like ("Can't accept applicants
- * without a license", "Unable to sponsor visas", a word such as "currently" before the verb too): the owner's rule, not
- * what the candidate cannot do, so "Able to …" would be nonsense the AI interview then asks about. "Take" and "use" count
- * here, unlike after "Won't …", so "Can't take x-rays" is asked of the owner as what they need (lead's decision, 17 Nov
- * 2026, on what the repair of the must-haves left out).
+ * without a license", "Unable to sponsor visas"): the owner's rule, not what the candidate cannot do, so "Able to …" would
+ * be nonsense the AI interview then asks about. The verb may come after a word ending in -ly ("currently"), "just",
+ * "even", "ever", "also", "still", "then", "afford to" or "by law" ("Can't afford to hire inexperienced staff"), and
+ * "hire" may be "re-hire" or "rehire" or come after another verb and "or", "and" or "to" ("Can't recruit or hire
+ * minors"): a candidate never hires, and "hire" in `NAMES_APPLICANTS` names a person only (final check of the
+ * employer-verbs repair, 17 Nov 2026: "Can't afford to hire inexperienced staff" became "Able to afford to hire …").
+ * "Take" and "use" count here, unlike after "Won't …", so "Can't take x-rays" and "Can't even use a computer" are asked of
+ * the owner as what they need (lead's decision, 17 Nov 2026, on what the repair of the must-haves left out).
  */
-const EMPLOYER_DOES = /^(?:[a-z]+ly\s+)?(?:accept|hire|take|consider|employ|interview|on[-\s]?board|sponsor|bring\s+on(?:[-\s]?board)?|use|allow|offer|pay)\b/i;
+const EMPLOYER_DOES = /^(?:(?:[a-z]+ly|just|even|ever|also|still|then|afford\s+to|by\s+law)\s+)*(?:(?:[a-z]+\s+(?:or|and|to)\s+)?(?:re[-\s]?)?hire|accept|take|consider|employ|interview|on[-\s]?board|sponsor|bring\s+on(?:[-\s]?board)?|use|allow|offer|pay)\b/i;
 
 /**
  * Words naming the people applying ("anyone who smokes", "new hires"): after "Cannot …" the words are then a rule about
  * them. "Hire" in the singular names a person only after a word that picks one out ("a hire", "a new hire", "any new
- * hire", "the new hire"); otherwise it is the hiring itself ("within 30 days of hire", "before hire", "the hire date",
- * "contract-to-hire", "new hire orientation"), so the words are still what the candidate does and are turned round
- * (review of the employer-verbs fix, 17 Nov 2026: "Unable to get BLS certified within 30 days of hire" stayed as typed).
+ * hire", "the new hire"); otherwise, unless it is the employer's verb (`EMPLOYER_DOES`), it is the hiring itself ("within
+ * 30 days of hire", "before hire", "the hire date", "contract-to-hire", "new hire orientation"), so the words are still
+ * what the candidate does and are turned round (review of the employer-verbs fix, 17 Nov 2026: "Unable to get BLS
+ * certified within 30 days of hire" stayed as typed).
  */
 const NAMES_APPLICANTS = /\b(?:applicants?|candidates?|anyone|anybody|someone|somebody|people|those|hires|(?:an?|another|any|each|every)\s+(?:new\s+)?hire|(?:the|our|your)\s+new\s+hire)\b/i;
 

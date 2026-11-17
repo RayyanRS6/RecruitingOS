@@ -265,8 +265,8 @@ describe("a deal-breaker counts as the requirement it rules people out on (live 
     expect(allMustHaves(rda)).toEqual(["Four-handed dentistry", "Digital radiography", "At least 3 years of relevant experience"]);
     for (const d of ["No x-ray cert", "Cant work weekends", "No experience", "No expired RDH license", "No felonies or license suspensions"]) expect(stepProblem("dealbreakers", assistant({ dealBreakers: [d] }), TODAY), d).toBe(line);
     // nor a problem joined to the licence, nor an employer's ban (review of the must-haves fix, 12 Nov 2026), after "Cannot"
-    // too (lead's decision, 17 Nov 2026)
-    for (const d of ["No points on driver's license", "No lapse in BLS certification", "No restrictions on license", "Won't hire smokers", "Will not accept applicants without a CDL", "Can't accept applicants without a license", "Cannot hire anyone who smokes"]) {
+    // too (lead's decision, 17 Nov 2026), "afford to" or "or" before its verb too (final check, 17 Nov 2026)
+    for (const d of ["No points on driver's license", "No lapse in BLS certification", "No restrictions on license", "Won't hire smokers", "Will not accept applicants without a CDL", "Can't accept applicants without a license", "Cannot hire anyone who smokes", "Can't afford to hire inexperienced staff", "Can't recruit or hire minors"]) {
       expect(dealBreakerWording(assistant({ dealBreakers: [d] }), d), d).toBe("");
       expect(stepProblem("dealbreakers", assistant({ dealBreakers: [d] }), TODAY), d).toBe(line);
     }
