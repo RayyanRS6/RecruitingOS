@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
-import { applications, approvalRequests, entitlements, hiringOutcomes, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { applications, approvalRequests, entitlements, events, hiringOutcomes, offers, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { lockApplicants } from "./candidate-lock";
 import { ACTIVE_ROLES, roleRoom } from "./entitlements";
@@ -16,7 +16,8 @@ const ACTIVE_STAGES = new Set<ApplicationStage>(["applied", "received", "ineligi
  * happened, usually outside the platform: a hire, a withdrawal, a decline, a role cancelled or filled elsewhere. The
  * platform never generates, approves or transmits an offer, and this module holds no payroll, tax, identity, banking or
  * onboarding data. Every record names the person who recorded it and can only be corrected by an audited administrator
- * action that leaves the original row in place.
+ * action that leaves the original row in place, or taken back with its decision before the candidate was told
+ * (`takeBackOutcome`), which keeps the row too.
  */
 export type ApplicationOutcome = "hired_externally" | "candidate_withdrew" | "employer_declined" | "offer_declined_externally" | "no_hire";
 export type RoleOutcome = "filled" | "filled_outside_platform" | "role_cancelled" | "no_hire";
@@ -149,6 +150,8 @@ export async function recordRoleOutcome(
  * the team to move. Someone locked it moved and nobody has told has nobody who could (Rule 2): they go back to waiting, so the
  * date they were promised, the close-out note and an upgrade all work as if the job had not closed. A voided role takes a
  * place on the plan again, so it needs one free, read as a new role's is, behind the same row: the plan's limit holds for ITS too.
+ * A voided answer that settled an offer made outside the app puts that offer back to waiting on them (`reopenOfferSettledBy`),
+ * so the answer recorded next settles it (17 November 2026).
  */
 export async function correctOutcome(
   q: Queryable,
@@ -177,6 +180,7 @@ export async function correctOutcome(
     details: { ...original.details, ...(input.declineReason ? { reason: input.declineReason } : {}), correctionReason: input.reason }, correctionOf: original.id, recordedBy: input.actor, recordedAt: now.toISOString(),
   }).returning();
   let stageTo: ApplicationStage | null = null;
+  let reopenedOfferId: string | null = null;
   if (original.applicationId) {
     const from = (original.details as { stageFrom?: ApplicationStage }).stageFrom;
     stageTo = Object.hasOwn(OUTCOME_STAGE, newOutcome) ? OUTCOME_STAGE[newOutcome as ApplicationOutcome] : from ?? "talent_pool";
@@ -194,7 +198,9 @@ export async function correctOutcome(
       withdrawnAt: stageTo === "withdrawn" ? stamp : null, withdrawReason: stageTo === "withdrawn" ? "candidate_withdrew" : null,
       ...(newDecision ? { toldState: "not_told" as const, candidateToldAt: null } : {}),
     }).where(eq(applications.id, original.applicationId));
-    await emit(q, { type: "human.override", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: original.applicationId }, payload: { action: "outcome_corrected", outcome: newOutcome, stageTo } });
+    // Voided, an answer recorded at Offer leaves them waiting on the offer it settled again.
+    if (newOutcome === "voided") reopenedOfferId = await reopenOfferSettledBy(q, original);
+    await emit(q, { type: "human.override", companyId: original.companyId, actor: input.actor, subject: { type: "application", id: original.applicationId }, payload: { action: "outcome_corrected", outcome: newOutcome, stageTo, ...(reopenedOfferId ? { reopenedOfferId } : {}) } });
   } else if (original.roleId) {
     if (newOutcome === "voided") {
       // Closing a role withdrew the approval it was waiting for, so one reopened from there goes back to a draft: its team
@@ -220,8 +226,77 @@ export async function correctOutcome(
     }
   }
   await emit(q, { type: "outcome.corrected", companyId: original.companyId, actor: input.actor, subject: original.applicationId ? { type: "application", id: original.applicationId } : { type: "role", id: original.roleId ?? original.id }, payload: { outcome: newOutcome, previous: original.outcome, level: original.applicationId ? "application" : "role", outcomeId: correction.id, originalId: original.id } });
-  await audit(q, { companyId: original.companyId, actor: input.actor, action: "outcome.corrected", target: original.applicationId ? { type: "application", id: original.applicationId } : { type: "role", id: original.roleId ?? original.id }, reason: input.reason, details: { originalId: original.id, correctionId: correction.id, from: original.outcome, to: newOutcome, stageTo } });
+  await audit(q, { companyId: original.companyId, actor: input.actor, action: "outcome.corrected", target: original.applicationId ? { type: "application", id: original.applicationId } : { type: "role", id: original.roleId ?? original.id }, reason: input.reason, details: { originalId: original.id, correctionId: correction.id, from: original.outcome, to: newOutcome, stageTo, ...(reopenedOfferId ? { reopenedOfferId } : {}) } });
   return { original, correction };
+}
+
+/** The facts an answer recorded at Offer writes about the offer it settled (`settleOutsideOffer` in apps/api). */
+const OFFER_SETTLED = ["offer.accepted", "offer.declined", "offer.rescinded"];
+
+/** Beside a record the team took back with its decision before the candidate was told, where ITS reads why it no longer counts. */
+export const TAKEN_BACK_REASON = "Taken back by the team before they were told";
+
+/**
+ * The offer an answer settled (`settleOutsideOffer` in apps/api, in the answer's own transaction), back to waiting on the
+ * candidate ("made", with no response time) once that answer no longer stands: taken back before they were told
+ * (`takeBackOutcome`), or voided by an administrator (`correctOutcome`). They are back at Offer, so the answer recorded
+ * next settles it again and carries its day (17 November 2026). The offer is the one named by the offer fact the answer
+ * wrote (offer.accepted, offer.declined or offer.rescinded, after its outcome.recorded fact and before the person's next
+ * move), and only while no later answer settled it again: an answer that settled none, and an offer an earlier answer
+ * settled, are left as they are. A correction stands for the answer it corrected, which wrote the facts. Returns the offer
+ * put back, or null.
+ */
+export async function reopenOfferSettledBy(q: Queryable, answer: Pick<OutcomeRow, "id" | "applicationId" | "correctionOf">): Promise<string | null> {
+  let root = answer;
+  const seen = new Set([root.id]);
+  while (root.correctionOf && !seen.has(root.correctionOf)) {
+    seen.add(root.correctionOf);
+    const [earlier] = await q.select({ id: hiringOutcomes.id, applicationId: hiringOutcomes.applicationId, correctionOf: hiringOutcomes.correctionOf }).from(hiringOutcomes).where(eq(hiringOutcomes.id, root.correctionOf)).limit(1);
+    if (!earlier) break;
+    root = earlier;
+  }
+  const applicationId = root.applicationId;
+  if (!applicationId) return null;
+  const about = and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId));
+  const [recorded] = await q.select({ id: events.id }).from(events).where(and(about, eq(events.type, "outcome.recorded"), sql`${events.payload}->>'outcomeId' = ${root.id}`)).orderBy(asc(events.id)).limit(1);
+  if (!recorded) return null;
+  const later = await q.select({ id: events.id, type: events.type, payload: events.payload }).from(events).where(and(about, gt(events.id, recorded.id), inArray(events.type, ["application.stage_changed", ...OFFER_SETTLED]))).orderBy(asc(events.id));
+  const nextMove = later.find((e) => e.type === "application.stage_changed")?.id ?? Number.POSITIVE_INFINITY;
+  const own = later.find((e) => e.type !== "application.stage_changed" && e.id < nextMove && typeof e.payload.offerId === "string");
+  if (!own) return null;
+  const offerId = String(own.payload.offerId);
+  if (later.some((e) => e.id > own.id && e.type !== "application.stage_changed" && e.payload.offerId === offerId)) return null;
+  const [row] = await q.update(offers).set({ status: "made", respondedAt: null }).where(and(eq(offers.id, offerId), eq(offers.applicationId, applicationId), eq(offers.madeOutside, true), ne(offers.status, "made"))).returning({ id: offers.id });
+  return row?.id ?? null;
+}
+
+/**
+ * A decision recorded as an outcome ("No hire", "We declined") and taken back before the candidate was told (plan G1,
+ * `undo_decision` in apps/api), called before the take back moves them. Its record is kept, marked taken back by the person
+ * (`correctedAt`, `correctedBy`, `TAKEN_BACK_REASON`) with no correction after it, so the role report and its applicant list
+ * no longer count it, the same answer can be recorded again, and ITS has nothing left to correct; and the offer it settled
+ * at Offer waits on them again (`reopenOfferSettledBy`), so the next answer settles it (17 November 2026). The answer is the
+ * one recorded with their last move, as an administrator's correction may have changed it since; a decision made with the
+ * decline button records none, and then nothing changes.
+ */
+export async function takeBackOutcome(q: Queryable, input: { applicationId: string; actor: Actor; now: Date }): Promise<{ outcomeId: string | null; offerId: string | null }> {
+  const none = { outcomeId: null, offerId: null };
+  const about = and(eq(events.subjectType, "application"), eq(events.subjectId, input.applicationId));
+  const [lastMove] = await q.select({ id: events.id }).from(events).where(and(about, eq(events.type, "application.stage_changed"))).orderBy(desc(events.id)).limit(1);
+  if (!lastMove) return none;
+  const [recorded] = await q.select({ payload: events.payload }).from(events).where(and(about, eq(events.type, "outcome.recorded"), gt(events.id, lastMove.id))).orderBy(asc(events.id)).limit(1);
+  const outcomeId = recorded?.payload.outcomeId;
+  if (typeof outcomeId !== "string") return none;
+  // The record as it stands now: each correction an administrator made marks the one before it.
+  let [answer] = await q.select().from(hiringOutcomes).where(eq(hiringOutcomes.id, outcomeId)).limit(1);
+  const seen = new Set<string>();
+  while (answer?.correctedAt && !seen.has(answer.id)) {
+    seen.add(answer.id);
+    [answer] = await q.select().from(hiringOutcomes).where(eq(hiringOutcomes.correctionOf, answer.id)).limit(1);
+  }
+  if (!answer || answer.correctedAt || answer.applicationId !== input.applicationId || !DECISION_STAGES.includes(OUTCOME_STAGE[answer.outcome as ApplicationOutcome])) return none;
+  await q.update(hiringOutcomes).set({ correctedAt: input.now.toISOString(), correctedBy: input.actor, correctionReason: TAKEN_BACK_REASON }).where(and(eq(hiringOutcomes.id, answer.id), isNull(hiringOutcomes.correctedAt)));
+  return { outcomeId: answer.id, offerId: await reopenOfferSettledBy(q, answer) };
 }
 
 export async function listOutcomes(q: Queryable, where: { companyId: string; applicationId?: string; roleId?: string }, limit = 50): Promise<OutcomeRow[]> {

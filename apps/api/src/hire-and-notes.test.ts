@@ -13,6 +13,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { composeBrief } from "./services/brief";
 import { backupsWarmCards, hireFollowUp } from "./services/hire-sheet";
+import { APPLICANT_COLUMNS } from "./services/role-report";
 import { signInAs, signInStaff } from "./test-helpers";
 
 const DAY = 86_400_000;
@@ -151,9 +152,9 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
     });
 
     // The second look at the review's #58 fix (12 November 2026): an outcome recorded at Offer and then taken back before
-    // they were told, or voided by an ITS administrator, puts them back at Offer with the offer's row settled (withdrawn,
-    // declined). Their row still says the day the panel's card says, the one recorded with the offer, never the day of the
-    // undo or the void ("Offer made today").
+    // they were told, or voided by an ITS administrator, puts them back at Offer, waiting on that offer again (its row was
+    // left settled, withdrawn or declined, until 17 November 2026). Their row still says the day the panel's card says, the
+    // one recorded with the offer, never the day of the undo or the void ("Offer made today").
     it("someone back at Offer after a decision taken back or an outcome voided keeps the offer's own day on their row", async () => {
       const madeOn = addCalendarDays(today(), -3);
       const rowOf = async (id: string) => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string; group: string; offerMadeOn?: string | null }>).find((a) => a.id === id);
@@ -179,9 +180,78 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       await withTenant(container.db, companyId, (tx) => correctOutcome(tx, { outcomeId, actor: { kind: "user", id: ownerId, name: "ITS admin" }, reason: "Recorded in error" }));
       expect(await stageOf(mae)).toBe("offer_sent");
       expect(await rowOf(mae)).toMatchObject({ group: "waiting_on_candidate", offerMadeOn: madeOn });
-      // the offers rows keep the answer that was recorded: the row reads the offer whatever its state
-      const settled = await container.db.select({ applicationId: offers.applicationId, status: offers.status }).from(offers).where(inArray(offers.applicationId, [lia, mae]));
-      expect(Object.fromEntries(settled.map((o) => [o.applicationId, o.status]))).toEqual({ [lia]: "withdrawn", [mae]: "declined" });
+      // the offers rows wait on their answer again (the last round of the live-test fixes, 17 November 2026), and the row
+      // reads the offer whatever its state, as for an answer taken back or voided before then
+      const reopened = await container.db.select({ applicationId: offers.applicationId, status: offers.status, respondedAt: offers.respondedAt }).from(offers).where(inArray(offers.applicationId, [lia, mae]));
+      expect(Object.fromEntries(reopened.map((o) => [o.applicationId, [o.status, o.respondedAt]]))).toEqual({ [lia]: ["made", null], [mae]: ["made", null] });
+    });
+
+    // The last round of the live-test fixes (17 November 2026): an answer recorded at Offer that no longer stands, taken back
+    // before they were told or voided by an ITS administrator, leaves them waiting on the offer it settled, so the answer
+    // recorded next settles that offer and names its day, and the role report and its applicant list count that answer alone.
+    const reportOutcomes = async () => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/report`)).json()) as { outcomes: Record<string, unknown> & { hired: number; declinedByEmployer: number; declinedOffer: number } }).outcomes;
+    const listedOutcome = async (name: string) => {
+      const lines = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/report.csv`)).text()).replace(/^﻿/, "").split("\r\n").filter(Boolean);
+      return lines.find((l) => l.includes(name))?.split(",")[APPLICANT_COLUMNS.indexOf("Outcome")];
+    };
+    const offerRows = (id: string) => container.db.select().from(offers).where(eq(offers.applicationId, id)).orderBy(offers.createdAt);
+    const answered = async (r: Response) => ({ status: r.status, ...((await r.json()) as { outcomeId?: string; stage?: string; offer?: string; offerMadeOn?: string }) });
+
+    it("\"We declined\" at Offer taken back before they were told leaves them waiting on that offer, and \"They accepted\" settles it with its day", async () => {
+      const madeOn = addCalendarDays(today(), -4);
+      const noa = await seed("Noa", "finalist");
+      expect((await json(owner, "POST", `/api/v1/applications/${noa.id}/offer`, { confirm: true, madeOn })).status).toBe(201);
+      const before = await reportOutcomes();
+      // recorded by mistake and taken back twice: each time the record stays, marked taken back, so the same answer can be
+      // recorded again, and the offer that answer settled waits on them again with its own day
+      for (const time of [1, 2]) {
+        const declined = await answered(await json(owner, "POST", `/api/v1/applications/${noa.id}/outcome`, { outcome: "employer_declined", reason: "position_filled", confirm: true }));
+        expect(declined, `"We declined", time ${time}`).toMatchObject({ status: 201, stage: "rejected", offer: "withdrawn", offerMadeOn: madeOn });
+        const undone = await json(owner, "POST", `/api/v1/applications/${noa.id}/actions`, { action: "undo_decision" });
+        expect(undone.status, await undone.clone().text()).toBe(200);
+        expect(await stageOf(noa.id)).toBe("offer_sent");
+        const [taken] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.id, declined.outcomeId!));
+        expect(taken).toMatchObject({ outcome: "employer_declined", correctionReason: "Taken back by the team before they were told", correctedBy: { id: ownerId }, correctionOf: null });
+        expect(taken.correctedAt).toBeTruthy();
+        expect(await offerRows(noa.id)).toMatchObject([{ status: "made", respondedAt: null, madeOn }]);
+      }
+      expect(await reportOutcomes()).toEqual(before);
+      expect(await listedOutcome("Noa Example")).toBe("");
+      const detail = (await (await json(owner, "GET", `/api/v1/applications/${noa.id}`)).json()) as { group: string; ownerStage: string };
+      expect(detail).toMatchObject({ group: "waiting_on_candidate", ownerStage: "offer" });
+      // they accepted: the answer settles that offer and names its day, and the report counts the hire alone
+      const hired = await answered(await json(owner, "POST", `/api/v1/applications/${noa.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: addCalendarDays(today(), 21) }));
+      expect(hired).toMatchObject({ status: 201, stage: "hired", offer: "accepted", offerMadeOn: madeOn });
+      const [accepted] = await offerRows(noa.id);
+      expect(accepted).toMatchObject({ status: "accepted", madeOn });
+      expect(accepted.respondedAt).toBeTruthy();
+      expect((await container.db.select().from(events).where(and(eq(events.subjectId, noa.id), eq(events.type, "offer.accepted")))).length).toBe(1);
+      expect(await reportOutcomes()).toEqual({ ...before, hired: before.hired + 1 });
+      expect(await listedOutcome("Noa Example")).toBe("Hired");
+    });
+
+    it("\"They declined\" at Offer voided by ITS leaves them waiting on that offer, never one an earlier answer settled, and \"They accepted\" settles it", async () => {
+      const madeOn = addCalendarDays(today(), -2);
+      const ora = await seed("Ora", "finalist");
+      // an older offer of theirs that an earlier answer settled stays as that answer left it
+      const [earlier] = await withTenant(container.db, companyId, (tx) => tx.insert(offers).values({ companyId, applicationId: ora.id, status: "declined", terms: {}, madeOutside: true, madeOn: addCalendarDays(today(), -40), respondedAt: new Date(Date.now() - 35 * DAY).toISOString(), createdBy: { kind: "user", id: ownerId }, createdAt: new Date(Date.now() - 40 * DAY).toISOString() }).returning());
+      expect((await json(owner, "POST", `/api/v1/applications/${ora.id}/offer`, { confirm: true, madeOn })).status).toBe(201);
+      const before = await reportOutcomes();
+      const declined = await answered(await json(owner, "POST", `/api/v1/applications/${ora.id}/outcome`, { outcome: "offer_declined_externally", confirm: true }));
+      expect(declined).toMatchObject({ status: 201, stage: "declined", offer: "declined", offerMadeOn: madeOn });
+      // their own answer is not the team's to take back: an ITS administrator voids it
+      expect((await json(owner, "POST", `/api/v1/applications/${ora.id}/actions`, { action: "undo_decision" })).status).toBe(409);
+      const admin = await signInStaff(app, container, "admin@its.test");
+      const voided = await app.request(`/api/v1/admin/outcomes/${declined.outcomeId}/correct`, { method: "POST", headers: { "content-type": "application/json", cookie: admin }, body: JSON.stringify({ confirm: true, reason: "Recorded in error, the owner says." }) });
+      expect(voided.status, await voided.clone().text()).toBe(200);
+      expect(await stageOf(ora.id)).toBe("offer_sent");
+      expect(await offerRows(ora.id)).toMatchObject([{ id: earlier.id, status: "declined", respondedAt: earlier.respondedAt }, { status: "made", respondedAt: null, madeOn }]);
+      // they accepted after all
+      const hired = await answered(await json(owner, "POST", `/api/v1/applications/${ora.id}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: addCalendarDays(today(), 14) }));
+      expect(hired).toMatchObject({ status: 201, stage: "hired", offer: "accepted", offerMadeOn: madeOn });
+      expect((await offerRows(ora.id)).map((o) => [o.id === earlier.id, o.status])).toEqual([[true, "declined"], [false, "accepted"]]);
+      expect(await reportOutcomes()).toMatchObject({ hired: before.hired + 1, declinedOffer: before.declinedOffer });
+      expect(await listedOutcome("Ora Example")).toBe("Hired");
     });
   });
 

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, isTimeZone, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, takeBackOutcome, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackDay, workingDayRulesFor, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
@@ -765,9 +765,13 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       assertCan(t.role, "application.reject");
       const to = reopensAt(facts);
       if (!to) throw new HttpError(409, "not_allowed", stateReason("undo_decision", facts));
+      // A decision recorded as an outcome ("No hire", "We declined") is taken back with it: its record no longer counts, and
+      // the offer it settled at Offer waits on them again, so their next answer settles it (17 November 2026). Before the
+      // move below, which would be their last.
+      const taken = await takeBackOutcome(tx, { applicationId: app.id, actor, now });
       // On the engine's clock: it decides whether a promised set's day is still ahead (`restoreFollowUpAfterUndo`).
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null }, now });
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null } });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null, ...(taken.outcomeId ? { outcomeId: taken.outcomeId } : {}), ...(taken.offerId ? { reopenedOfferId: taken.offerId } : {}) } });
       // A decision that stopped their AI interview before it was made (waiting for the reading, more interviews or "Keep
       // them in"): it starts again, and the link follows by itself.
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now, cutShort: true });
