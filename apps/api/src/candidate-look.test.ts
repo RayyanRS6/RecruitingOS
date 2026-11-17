@@ -10,6 +10,7 @@ import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
+import { zoneLabel } from "./pages/schedule";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -238,6 +239,17 @@ describe("candidate pages: the look, page by page", () => {
     expect(pick).toMatch(/Times are shown in <strong>[^<]+<\/strong>\.<\/p><details class="more"><summary>Change the time zone<\/summary>/);
     expect(pick).toMatch(/<details class="more"><summary>Change the time zone<\/summary><form method="get" action="\/c\/schedule\/[^"]+" class="card"><label for="tz" class="flush">Show times in<\/label><select id="tz" name="tz">/);
     expect(pick.indexOf("<summary>Change the time zone</summary>")).toBeLessThan(pick.indexOf("<legend>Available times</legend>"));
+    // in the times email's words, never the id (LT-15): the line names the zone shown, and the picker names each zone the
+    // same way, its value still the id
+    expect(pick).toContain("Times are shown in <strong>Pacific time</strong>.");
+    expect(pick).toContain('<select id="tz" name="tz"><option value="America/Los_Angeles" selected="">Pacific time</option><option value="America/Denver">Mountain time</option><option value="America/Phoenix">Arizona time</option><option value="America/Chicago">Central time</option><option value="America/New_York">Eastern time</option><option value="America/Anchorage">Alaska time</option><option value="Pacific/Honolulu">Hawaii time</option></select>');
+    expect(pick).not.toMatch(/>(America|Pacific)\//);
+    // a zone outside the list reads as it is named, first and chosen; one nothing can name keeps its city words
+    const detroit = await looksRight(`/c/schedule/${iv.scheduleToken}?tz=America/Detroit`);
+    expect(detroit).toContain("Times are shown in <strong>Eastern Time</strong>.");
+    expect(detroit).toContain('<select id="tz" name="tz"><option value="America/Detroit" selected="">Eastern Time</option><option value="America/Los_Angeles">Pacific time</option>');
+    expect(detroit).not.toMatch(/>(America|Pacific)\//);
+    expect(zoneLabel("Nowhere/Lost_City")).toBe("Nowhere/Lost City");
     const form =(fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
     expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
     await container.drain();

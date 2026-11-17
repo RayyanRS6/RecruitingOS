@@ -1465,6 +1465,9 @@ describe("a person sets the date and time", () => {
       const page = await confirmedPage(token);
       expect(page).toMatch(/E[DS]T/);
       expect(page).toContain("<span>For the team</span>");
+      // the picker names each zone in the times email's words, the saved one chosen; its values stay the ids (LT-15)
+      expect(page).toContain('<select id="tz" name="timezone"><option value="America/New_York" selected="">Eastern time</option><option value="America/Los_Angeles">Pacific time</option>');
+      expect(page).not.toMatch(/>(America|Pacific)\//);
       setClock(instant(chosen.date, chosen.time) - 23 * H);
       await container.drain();
       setClock(BASE);

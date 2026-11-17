@@ -281,6 +281,9 @@ describe("the recruiter loop", () => {
     const told = mail().slice(before).filter((m) => m.to === "kai@its.test");
     expect(told).toHaveLength(1);
     expect(told[0].text).not.toContain("March");
+    // with the new reply-by time and ITS's zone in words, never its id (LT-15)
+    expect(told[0].subject).toMatch(/^\[ask\] A customer reopened a request you answered: respond by .+ \(Pacific time\)$/);
+    expect(told[0].subject).not.toContain("America/");
     // the thread keeps why, and a second answer joins the first
     const view = (await mine(owner)).find((r) => r.id === urgentId)!;
     expect(view.reopenedCount).toBe(1);
@@ -310,6 +313,8 @@ describe("the recruiter loop", () => {
     const queued = mail().slice(before).filter((m) => m.to === container.env.ITS_QUEUE_EMAIL);
     expect(queued).toHaveLength(1);
     expect(queued[0].subject).toMatch(/reopened/);
+    expect(queued[0].subject).toMatch(/^\[ask\] normal urgency, reopened: respond by .+ \(Pacific time\)$/);
+    expect(queued[0].subject).not.toContain("America/");
     expect(queued[0].text).not.toContain("Two dollars");
     // and Kai cannot take it back from the queue either
     expect((await json(kai, "POST", `/api/v1/escalations/${asked.id}/claim`)).status).toBe(403);

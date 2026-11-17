@@ -141,6 +141,9 @@ describe("recruiter queue preview carries no candidate-sensitive data before acc
     }
     expect(mail!.text).toContain("Urgency: high");
     expect(mail!.text).toContain("Summary: The customer wants a recruiter to review one candidate for this role.");
+    // ITS's zone named in words after the reply-by time, never by its id (LT-15)
+    expect(mail!.subject).toMatch(/^\[review\] high urgency: respond by .+ \(Pacific time\)$/);
+    expect(mail!.subject).not.toContain("America/");
   });
 
   it("the customer keeps their own words; acceptance opens them and the context under a grant whose purpose is generic", async () => {

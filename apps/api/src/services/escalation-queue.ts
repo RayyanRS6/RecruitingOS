@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, queueCommunication, sendQueuedCommunication } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { errorForLog, loadBusinessCalendar, raiseAlert, servedSummary } from "@ros/core";
+import { errorForLog, loadBusinessCalendar, raiseAlert, servedSummary, zoneShortName } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
@@ -41,10 +41,13 @@ const OPENING: Record<QueueNoticeOrigin, string> = {
   system: "The product raised a request for a recruiter on its own.",
 };
 
-/** The queue email's words: pre-acceptance context only (correction 11), never the request's own words. */
+/**
+ * The queue email's words: pre-acceptance context only (correction 11), never the request's own words. ITS's zone is
+ * named in words after the time, "(Pacific time)", never by its id (LT-15).
+ */
 export function queueNoticeEmail(n: QueueNotice, appBaseUrl: string): { subject: string; text: string } {
   return {
-    subject: `[${n.kind}] ${n.urgency} urgency: respond by ${new Date(n.slaDueAt).toLocaleString("en-US", { timeZone: n.timeZone })} (${n.timeZone})`,
+    subject: `[${n.kind}] ${n.urgency} urgency: respond by ${new Date(n.slaDueAt).toLocaleString("en-US", { timeZone: n.timeZone })} (${zoneShortName(n.timeZone)})`,
     text: `${OPENING[n.origin ?? "customer"]}\n\nCategory: ${n.kind}\nUrgency: ${n.urgency}\nNeeds: ${n.requiredExpertise}\nSummary: ${n.summary}\n\nAccept it in the queue to open the full request: ${appBaseUrl}/recruiter/queue/${n.id}`,
   };
 }

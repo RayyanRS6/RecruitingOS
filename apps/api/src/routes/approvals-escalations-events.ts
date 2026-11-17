@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, LOCKED_REQUEST_LINE, NO_WORK_WHILE_LOCKED, PLAN_REQUEST_EXPERTISE, PLAN_REQUEST_OPEN_LINE, PLAN_REQUEST_SUMMARY, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, zoneShortName, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
@@ -409,11 +409,12 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   });
   const calendar = await loadBusinessCalendar(container.db, now);
   const due = deadlineWords(new Date(done.slaDueAt), calendar);
+  // Both subjects name ITS's zone in words after the time, as the queue email does, never by its id (LT-15).
   if (done.recruiter && done.grant) {
     const sent = await container.integrations.email.send({
       to: done.recruiter.email,
       from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
-      subject: `[${e.kind}] A customer reopened a request you answered: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
+      subject: `[${e.kind}] A customer reopened a request you answered: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${zoneShortName(calendar.timeZone)})`,
       text: `The customer says your answer did not solve it, and the request is yours again. Your access is back until ${new Date(done.grant.expiresAt).toLocaleDateString("en-US")}. Read why in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
       idempotencyKey: `escalation-reopen:${done.messageId}`,
       tags: { template: "escalation_reopened" },
@@ -425,7 +426,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
   await sendToIts(container, {
     companyId: t.companyId,
-    subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
+    subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${zoneShortName(calendar.timeZone)})`,
     text: `A customer reopened a request: the answer did not solve it.\n\nCategory: ${e.kind}\nUrgency: ${e.urgency}\nNeeds: ${e.requiredExpertise}\nSummary: ${servedSummary(e)}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
     idempotencyKey: `escalation-reopen:${done.messageId}`,
     template: "escalation",
