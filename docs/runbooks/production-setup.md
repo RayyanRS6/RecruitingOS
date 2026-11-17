@@ -133,7 +133,7 @@ Report back: `<prod-ref>`, the region, the endpoint and region the S3 screen sho
 
 ### Microsoft and Google sign-in
 
-**Microsoft** (since 10 November 2026; the decision is in `docs/workflow-decisions.md`, "10 November 2026"): one app
+**Microsoft** (since 10 November 2026; the decision is in `docs/DECISIONS.md`, "Sign-in"): one app
 registration in the ITS tenant (Entra admin center, **App registrations**) serves both Supabase projects, staging and
 production. Background in `docs/spec/13` section 4a.
 
@@ -539,7 +539,7 @@ raises "The background worker has stopped polling" only when its `/healthz` is c
 
 Real people's data enters production only after:
 
-- the founder's dated sign-off in `docs/spec/00` section O (gate 4.13), which settles the legal route for the AI
+- the founder's dated sign-off in `docs/DECISIONS.md` (gate 4.13), which settles the legal route for the AI
   interview and the score;
 - evidence for every blocker in `docs/readiness/20` section B, among them point-in-time recovery (it needs Small
   compute) with one restore drill, the partner's signed pilot agreement, the vendors' data-processing terms and a named
@@ -585,13 +585,13 @@ Existing test accounts keep working; a new tester is added in the dashboard firs
 ## The plans
 
 Status: written 6 November 2026 from the code on branch `plans`, not yet run on production. Decisions:
-`docs/workflow-decisions.md`, "5 November 2026" and "6 November 2026". A new company starts on Free. Every number is one edit in
+`docs/DECISIONS.md`, "Plans and locked applicants", and `docs/PRODUCT.md`, D2. A new company starts on Free. Every number is one edit in
 `packages/db/src/seed.ts`, written by the first boot after a deploy; a company takes a new number only the next time its
 plan is applied. The repository is public, so what a real tester or customer is called goes in the private launch
 to-do document, never here.
 
 **Before a real company or a real applicant.** Made-up applicants only until risk R-LEGAL-1 is accepted again in writing,
-or the lawyer has answered (`docs/workflow-decisions.md`, PQ-3; `docs/spec/00` section Q), and email is live (PQ-18). Step
+or the lawyer has answered (`docs/DECISIONS.md`, PQ-3 and R-LEGAL-1), and email is live (PQ-18). Step
 10's list still holds for any real data. Under `SIGNUP_MODE=approval` anyone with a Google or Microsoft account can ask, and
 nothing in the code holds any of this: it rests on whoever presses Accept.
 
@@ -653,7 +653,7 @@ already leaves out. Order, as in "Every later release":
 ### Letting a tester in
 
 Since 6 November 2026 a tester asks and an administrator accepts (`SIGNUP_MODE=approval`; decisions:
-`docs/workflow-decisions.md`, "6 November 2026"). There is no list to change and no redeploy for each person. A new company costs
+`docs/PRODUCT.md`, D2). There is no list to change and no redeploy for each person. A new company costs
 real AI money up to its credit, and only a person's press lets one in.
 
 1. The tester signs in at `https://<host>/login` with Google or Microsoft. Check first which sign-in works for someone outside
@@ -668,7 +668,7 @@ real AI money up to its credit, and only a person's press lets one in.
    access", which opens **Customers**, **Waiting for the ITS check**. While email is not live this row is the only thing that
    tells you ("While testers are on").
 4. Look before you press. Accept is also the one-time ITS check: it opens their public side, and there is no second look. Nothing
-   in the code refuses a job in NYC, Illinois, California or Colorado, or a remote one (`docs/workflow-decisions.md`, PQ-16), asks for
+   in the code refuses a job in NYC, Illinois, California or Colorado, or a remote one (`docs/DECISIONS.md`, PQ-16), asks for
    signed terms (PQ-14) or checks that applicants are made up (PQ-3). Ask them from your own mailbox, at the address on the row.
 5. **Accept**, then **Yes**. A screen still open goes to Home by itself within 30 seconds, on Free, with no clock, and they can draft
    and approve at once. Their careers page, job pages and candidate emails work from now on, with no **Confirm the company** after it.

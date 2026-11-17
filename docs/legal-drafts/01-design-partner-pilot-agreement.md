@@ -11,7 +11,7 @@ ITS provides Partner with access to its recruiting software and recruiter suppor
 The pilot runs for [90] days from the effective date and may be extended by written agreement. Either party may end it on [14] days' written notice. Sections 5 to 9 survive.
 
 ## 3. Fees
-No fee is charged during the pilot (the "Design Partner" plan: up to three active roles, unlimited seats, and no limit on how many of a role's applicants Partner can read). ITS may propose paid plans at the end of the pilot; nothing obliges Partner to buy. [Note, 5 November 2026: public plans now exist (Free, Basic, Pro, Ultra), some of which hide applicants past a number. A move onto one needs this section, Section 5 and Section 9 read again: see `docs/spec/11` items 27, 31 and 32.]
+No fee is charged during the pilot (the "Design Partner" plan: up to three active roles, unlimited seats, and no limit on how many of a role's applicants Partner can read). ITS may propose paid plans at the end of the pilot; nothing obliges Partner to buy. [Note, 5 November 2026: public plans now exist (Free, Basic, Pro, Ultra), some of which hide applicants past a number. A move onto one needs this section, Section 5 and Section 9 read again: see `docs/legal-drafts/counsel-register.md` items 27, 31 and 32.]
 
 ## 4. What Partner agrees to do
 Provide honest feedback at agreed intervals; ensure its users hold accounts in their own names; make hiring decisions itself (Section 6); post jobs on external boards only through its own accounts where the Service cannot post on its behalf.

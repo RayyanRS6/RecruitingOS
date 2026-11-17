@@ -2,7 +2,7 @@
 
 Written 22 September 2026 from the founder's instruction of the same day. This plan governs the first controlled
 real-candidate pilot. It replaces the synthetic design-partner testing phase, which the founder decided to skip, and it
-sits under founder-accepted risk **R-LEGAL-1** (`docs/spec/00` section Q): counsel has not reviewed the legal drafts,
+sits under founder-accepted risk **R-LEGAL-1** (`docs/DECISIONS.md`): counsel has not reviewed the legal drafts,
 that review is deferred, and its absence does not block this first unpaid pilot. Nothing in this plan reduces ITS's
 legal or privacy obligations; it records how the pilot is run without counsel's sign-off and when the risk is raised
 again. Technical staging verification is **not** skipped.
@@ -16,7 +16,7 @@ again. Technical staging verification is **not** skipped.
 3. **Production setup** (founder and team): the production Supabase project with point-in-time recovery, the production
    worker on Railway, production settings in Vercel, the production sign-in redirect, the administrator bootstrap on
    production, Sentry and Upstash production only after their staging passes.
-4. **Real-data approval** (founder): the dated sign-off in `docs/spec/00` section O, given only when every blocker in
+4. **Real-data approval** (founder): the dated sign-off in `docs/DECISIONS.md`, given only when every blocker in
    section B carries evidence.
 
 ## B. Real-data technical blockers (founder's list, verbatim in substance) with the track that proves each
@@ -50,12 +50,12 @@ None of it is staging evidence: every row still needs its proof on staging.
 | 19 | The customer pilot agreement and data-processing terms are accepted, even though not counsel-approved | founder and partner | signed copy in the vault, labelled unreviewed | not started |
 | 20 | The incident-response process and responsible person are documented | founder | `docs/readiness/04` with the incident lead named | plan written; lead to be named |
 | 21 | The complete real-candidate rehearsal passes in staging | staging verification | the Phase 7 rehearsal record, rerun after fixes | not started |
-| 22 | An independent security review is completed, or the founder explicitly accepts its deferral separately | founder | report in the vault, or a dated deferral in `docs/spec/00` section O | not started |
+| 22 | An independent security review is completed, or the founder explicitly accepts its deferral separately | founder | report in the vault, or a dated deferral in `docs/DECISIONS.md` | not started |
 
 ## C. Pilot scope (founder's configuration)
 
 One design partner · one role · US candidates only · one customer administrator · one hiring manager · Nadine as
-platform owner and ITS escalation contact · the role's full applicant volume may be accepted (founder amendment of 22 September, `docs/spec/20`; volume monitoring and a stop-accepting switch were built on 30 September: the "Applications by source" card and the daily `volume.high` alert above 100 a day, and "Stop accepting applications" on the role page; on Design Partner, which has no limit of candidates: since 5 November 2026 a plan with one locks people past it, `docs/workflow-decisions.md`, so this pilot stays on Design Partner) · 60 to 90 days · no software charge initially ·
+platform owner and ITS escalation contact · the role's full applicant volume may be accepted (founder amendment of 22 September, `docs/spec/20`; volume monitoring and a stop-accepting switch were built on 30 September: the "Applications by source" card and the daily `volume.high` alert above 100 a day, and "Stop accepting applications" on the role page; on Design Partner, which has no limit of candidates: since 5 November 2026 a plan with one locks people past it, `docs/DECISIONS.md`, so this pilot stays on Design Partner) · 60 to 90 days · no software charge initially ·
 daily oversight by Nadine during the first week · weekly design-partner meeting · human approval before consequential
 candidate actions · a human decision for every decline · no automatic rejection · no SMS · no interview recording · no
 automated offers · no background-check data · no onboarding · no passive sourcing · no job-board automation · manual
@@ -113,9 +113,9 @@ rejection; a second design partner; broader release. Each is a stop point that n
 
 **Raised again on 5 November 2026 (plans for testers).** The plans let more than one invited company use the product, put
 a price on all but one plan, and hide some applicants from the employer by a plan limit. That is past this plan's scope
-(section C) and has its own open questions (`docs/spec/11` items 27 to 34; `docs/workflow-decisions.md`, PQ-1 to PQ-18).
+(section C) and has its own open questions (`docs/legal-drafts/counsel-register.md` items 27 to 34; `docs/DECISIONS.md`, PQ-1 to PQ-18).
 Testers use made-up applicants only. No real company goes on one of these plans, and no real candidate applies to one,
-until the founder accepts the risk again in writing, dated in `docs/spec/00` section Q, or counsel has answered, and
+until the founder accepts the risk again in writing, dated in `docs/DECISIONS.md`, or counsel has answered, and
 every blocker in section B still holds for them. Email must also be live: "we email you either way" depends on it. Since
 6 November 2026 (`SIGNUP_MODE=approval`) anyone with a Google or Microsoft account can ask, and the code checks none of this: it
 is held at the administrator's Accept.

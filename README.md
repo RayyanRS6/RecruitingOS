@@ -2,7 +2,7 @@
 
 A recruiting department for companies too small to have one. The software does the repetitive work, the AI analyzes, coordinates, communicates, and recommends, the customer makes the important decisions, and a real recruiter is one click away.
 
-Documentation starts at [docs/README.md](docs/README.md). Implementation status is in [docs/STATUS.md](docs/STATUS.md). The governing strategic context is [docs/FOUNDER-CONTEXT.md](docs/FOUNDER-CONTEXT.md), reconciled in [docs/17](docs/17-founder-context-reconciliation.md).
+Documentation starts at [docs/README.md](docs/README.md). What the product is, and what wins when documents disagree, is in [docs/PRODUCT.md](docs/PRODUCT.md).
 
 ## Run it
 

@@ -28,11 +28,11 @@ Status: built with synthetic data on 18 September 2026 (admin console → Privac
 
 ## Someone who asked for access (6 November 2026)
 
-A person who signed in and sent the company form under `SIGNUP_MODE=approval`, waiting or declined, is not a candidate. The public form answers as if their company did not exist, so the privacy mailbox is how they reach us. **Record a request from the privacy mailbox** can record it against their company, but access, correction and deletion all need a candidate, which they are not, so the console cannot carry it out. What we keep about them and for how long is not decided (register item 35; `docs/workflow-decisions.md`, AQ-1). Until it is, delete nothing by hand: tell the founder the same day, treat the 45 days as running, and say from `privacy@` what we hold.
+A person who signed in and sent the company form under `SIGNUP_MODE=approval`, waiting or declined, is not a candidate. The public form answers as if their company did not exist, so the privacy mailbox is how they reach us. **Record a request from the privacy mailbox** can record it against their company, but access, correction and deletion all need a candidate, which they are not, so the console cannot carry it out. What we keep about them and for how long is not decided (register item 35; `docs/DECISIONS.md`, AQ-1). Until it is, delete nothing by hand: tell the founder the same day, treat the 45 days as running, and say from `privacy@` what we hold.
 
 ## Someone locked (the plans of 5 November 2026)
 
-An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them, from the same console. Decided defaults, for counsel to confirm (register items 30, 31 and 33; `docs/workflow-decisions.md`, PQ-6, PQ-13, PQ-15):
+An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them, from the same console. Decided defaults, for counsel to confirm (register items 30, 31 and 33; `docs/DECISIONS.md`, PQ-6, PQ-13, PQ-15):
 
 - **Nothing goes to the team while they are locked.** No notice names them, and their request does not show on the company's pages. Do not write to the company about them.
 - **Access.** The export runs on the platform side, so it holds everything they gave. Each application that was ever locked carries `hiringTeamCanSeeThis` (`false`, or `true` with `hiringTeamCanSeeThisSince`), in no plan's words.
@@ -44,7 +44,7 @@ An application past a plan's candidates per job is locked: the hiring team canno
 
 ## What we cannot reach (11 November 2026)
 
-- **The hosting provider's request logs.** Vercel records the full address of every request before our code runs. When someone's sign-in is refused (an outside Microsoft account with an unverified address), the address can carry their email address in `error_description`; our own logs cut it, but Vercel's copy stays for as long as the plan keeps request logs (`docs/readiness/09-data-retention-matrix.md`, row 16; known-bugs row 159). We cannot delete one person's lines there. If an access or deletion request comes from someone who was refused at sign-in, say so plainly in the answer from `privacy@`, with how long the provider keeps those logs, and tell the founder.
+- **The hosting provider's request logs.** Vercel records the full address of every request before our code runs. When someone's sign-in is refused (an outside Microsoft account with an unverified address), the address can carry their email address in `error_description`; our own logs cut it, but Vercel's copy stays for as long as the plan keeps request logs (`docs/legal-drafts/data-retention-matrix.md`, row 16; known-bugs row 159). We cannot delete one person's lines there. If an access or deletion request comes from someone who was refused at sign-in, say so plainly in the answer from `privacy@`, with how long the provider keeps those logs, and tell the founder.
 
 ## Restrictions
 

@@ -1,6 +1,6 @@
 # Working on Recruiting OS
 
-Recruiting OS is a hiring app for small businesses: the owner says who they need, the software runs the process (job post, applications, AI review with evidence, screening chat, scheduling), a person makes every hiring decision, and a real recruiter is one click away. This guide is for AI agents and developers who change the code. Start with [README.md](README.md) (how to run it) and [docs/README.md](docs/README.md) (the product documents). Product decisions, with who made them and when, are in [docs/workflow-decisions.md](docs/workflow-decisions.md): read it before asking a question that may already be settled.
+Recruiting OS is a hiring app for small businesses: the owner says who they need, the software runs the process (job post, applications, AI review with evidence, screening chat, scheduling), a person makes every hiring decision, and a real recruiter is one click away. This guide is for AI agents and developers who change the code. Start with [README.md](README.md) (how to run it) and [docs/README.md](docs/README.md) (the product documents). Product decisions, with who made them and when, are in [docs/PRODUCT.md](docs/PRODUCT.md) and [docs/DECISIONS.md](docs/DECISIONS.md): read them before asking a question that may already be settled.
 
 ## Workspace map
 
@@ -13,7 +13,7 @@ Recruiting OS is a hiring app for small businesses: the owner says who they need
 | `packages/core` | Policy engine, state machine, auth, permissions, and the compliance layer (notices candidates must see). |
 | `packages/contracts`, `db`, `workflows`, `ai`, `agents`, `integrations`, `playbooks`, `evals` | Schemas; Drizzle schema, migrations and RLS; the durable workflow engine; the AI provider layer and prompts; the agents; email, SMS and job boards; vertical playbooks; evaluation suites. |
 | `tests/` | `scenario` (the end-to-end hiring scenario on PGlite), `web` (tests of the signed-in pages in `apps/web`), `policy` (repository-wide guards), `e2e` (Playwright). |
-| `docs/` | `07-ux-and-design-system.md` is the design system; `STATUS.md` is where the build stands. |
+| `docs/` | `07-ux-and-design-system.md` is the design system. |
 
 ## Checks
 
@@ -24,6 +24,14 @@ Recruiting OS is a hiring app for small businesses: the owner says who they need
 - `pnpm e2e`: the Playwright specs.
 
 Run the tests for what you touched, the typecheck of each package you changed, and `pnpm css` after any change to `styles.css` or to class names.
+
+On a Windows machine where an application-control policy blocks pnpm, call the shims in `node_modules\.bin` from the repository root. PowerShell 5.1 has no `&&`: chain with `;`.
+
+- Tests, with the stand-in providers CI sets (the `env` block at the top of `.github/workflows/ci.yml`): `$env:NODE_ENV='test'; $env:CI='1'; $env:AI_PROVIDER='fake'; $env:EMAIL_PROVIDER='fake'; $env:SMS_PROVIDER='fake'; $env:AUTH_PROVIDER='fake'; $env:CALENDAR_PROVIDER='fake'; $env:ANALYTICS_PROVIDER='fake'; $env:SECRET_STORE='memory'; $env:STORAGE_PROVIDER='memory'; $env:PGLITE_DIR='memory://'; $env:WORKER_INLINE='true'; $env:COMP_BLS_ENABLED='false'; $env:MAGIC_LINK_ENABLED='true'; $env:RATE_LIMIT_STORE='fake'; $env:CSP_MODE='report-only'; & node_modules\.bin\vitest.cmd run <files>`
+- Typecheck: `& node_modules\.bin\tsc.cmd -p <package>\tsconfig.json` for each package under `apps`, `packages` and `tests`.
+- Migration validator: `Set-Location packages\db; & ..\..\node_modules\.bin\tsx.cmd src/cli/validate.ts; Set-Location ..\..`
+- Stylesheet: `node apps/shell/scripts/build-css.mjs`
+- Biome lint and the Playwright specs cannot run there (Biome's binary is blocked too): they need a CI run.
 
 ## UI rules
 
@@ -57,4 +65,4 @@ The founder's rule (23 October 2026): "Cut taglines, helper text and secondary l
 
 ## Candidate pages
 
-The candidate pages (job page, apply form, screening chat, status, scheduling, privacy) live in `apps/api/src/pages`. The server renders them as HTML, and most of them run no script. No plan or upgrade word ever appears on a candidate page or in a candidate's email: someone past a plan's limit reads the words in `packages/core/src/candidate-lock.ts`, beside the required notices. Their CSS is plain strings (`CSS` in `layout.tsx`, plus `SCREEN_CSS` and `STATUS_CSS`) that carry a copy of the token values. `apps/api/src/candidate-look.test.ts` fails if that copy drifts from `styles.css`, so a colour change goes in both places. Their legal notices are never cut. Two more rules there: a block marked DRAFT WORDING PENDING COUNSEL (see `docs/spec/11-counsel-register.md`) keeps every word, eyebrows included, until counsel signs off; and a company or job eyebrow stays only where nothing else near the top of the page names the employer or the job (candidate pages have no sidebar to say it).
+The candidate pages (job page, apply form, screening chat, status, scheduling, privacy) live in `apps/api/src/pages`. The server renders them as HTML, and most of them run no script. No plan or upgrade word ever appears on a candidate page or in a candidate's email: someone past a plan's limit reads the words in `packages/core/src/candidate-lock.ts`, beside the required notices. Their CSS is plain strings (`CSS` in `layout.tsx`, plus `SCREEN_CSS` and `STATUS_CSS`) that carry a copy of the token values. `apps/api/src/candidate-look.test.ts` fails if that copy drifts from `styles.css`, so a colour change goes in both places. Their legal notices are never cut. Two more rules there: a block marked DRAFT WORDING PENDING COUNSEL (see `docs/legal-drafts/counsel-register.md`) keeps every word, eyebrows included, until counsel signs off; and a company or job eyebrow stays only where nothing else near the top of the page names the employer or the job (candidate pages have no sidebar to say it).

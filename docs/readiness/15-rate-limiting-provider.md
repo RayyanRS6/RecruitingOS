@@ -57,7 +57,7 @@ production now run `upstash`, and production refuses `memory` at boot.
 
 ## Record (22 and 23 September 2026)
 
-- 22 Sep: the founder approved Upstash (decision 4, `docs/spec/00` section Q; requirements: staging first, United States
+- 22 Sep: the founder approved Upstash (decision 4, `docs/DECISIONS.md`; requirements: staging first, United States
   region, HMAC subjects only, an expiry on every key, the fail-safe documented, webhook retries safe).
 - 23 Sep: the founder created the staging database `recruiting-os-staging-rate-limit` (AWS Oregon, us-west-2, Free plan,
   REST endpoint `https://complete-narwhal-292092.upstash.io`); the token stays with the founder. Eviction was created On
