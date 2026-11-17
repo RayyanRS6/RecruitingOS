@@ -1,5 +1,5 @@
 import { desc, eq } from "drizzle-orm";
-import { quoteWithSource, type EvidenceAssessment, type MembershipRole, type RolePacket, type ScreenAssessment } from "@ros/contracts";
+import { answerKeyWords, quoteWithSource, type EvidenceAssessment, type MembershipRole, type RolePacket, type ScreenAssessment } from "@ros/contracts";
 import { can, countedFinding, screenAnswersSent, shownSkillFinding, teamScreenView, unsentScreenReadings } from "@ros/core";
 import { assessments, screens, type Queryable } from "@ros/db";
 import { scoringView } from "./scoring-view";
@@ -25,6 +25,7 @@ export type CompetencyFinding = "evidenced" | "partially_evidenced" | "not_evide
  * the quote: a practice's own "$90k" of collections is not their pay.
  */
 export type BriefFinding = { claim: string; quote: string | null; source: string | null; aboutPay: boolean };
+/** `question`: the words the answer was asked in, or a plain name for it, never its key (`answerKeyWords`). */
 export type BriefScreenAnswer = { question: string; answer: string; aboutPay: boolean };
 /**
  * A must-have and what the evidence says about it. `source` is where its quote is from: "resume", "application",
@@ -159,8 +160,10 @@ export async function composeInterviewerBrief(q: Queryable, input: { application
   const resumeAsmt = (rows.find((r) => r.kind !== "screen") as (AssessmentRow & { result: EvidenceAssessment }) | undefined) ?? null;
   const answered = screenRows.filter(screenAnswersSent).map((s) => ({ ...s, all: answersOf(s) })).find((s) => Object.keys(s.all).length > 0) ?? null;
   // A chat that asked the company's written questions (Wave S7 in the visit; S8 by text or from an emailed link) keeps
-  // their answers under the written questions' keys: the brief names them in the company's words, never by key.
-  const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? input.packet.companyQuestions?.written?.find((w) => w.key === key)?.question ?? key.replace(/_/g, " ");
+  // their answers under the written questions' keys: the brief names them in the company's words, never by key. A
+  // must-have's gap answer, kept under the must-have's key, reads as the must-have's words, the closing answer as the
+  // closing question, and any other key in plain words (`answerKeyWords`); the pay rules read the key (`answerAboutPay`).
+  const questionText = (key: string) => answered?.progress.focusQuestions?.find((f) => f.key === key)?.question ?? input.packet.screening.questions.find((x) => x.key === key)?.question ?? input.packet.companyQuestions?.written?.find((w) => w.key === key)?.question ?? answerKeyWords(key, input.packet.requirements.mustHaves);
 
   const pair = { resume: resumeAsmt, screen: screenAsmt };
   const readingOf = (source: "resume" | "screen") => (source === "screen" ? screenAsmt : resumeAsmt);

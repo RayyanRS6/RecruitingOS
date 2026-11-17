@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
+import { CHAT_WRAP_KEY } from "@ros/core";
 import { assessments, createDb, migrate, screens, withTenant, type DbHandle } from "@ros/db";
 import { samplePacket } from "./fixtures/sample-packet";
 import { briefForReader, composeInterviewerBrief, redactBriefPay, renderInterviewerBriefText, type InterviewerBrief } from "./interviewer-brief";
+import { CHAT_WRAP_QUESTION } from "./screening";
 
 /**
  * The interviewer's brief in the confirmation email (docs/spec/21 F7). The live test of 12 November 2026 read "Practice
@@ -276,5 +278,33 @@ describe("the brief from the stored readings", () => {
     // its quote repeats the number they gave for pay
     expect(theirs.concerns).toEqual([]);
     expect((theirs.screen?.answers ?? []).map((a) => a.answer)).toEqual(["Chairside since 2019, and 2025 was my busiest year"]);
+  });
+
+  // Left out by the repair of the brief (9ef60ca): a must-have's gap answer is kept under the must-have's key and the
+  // closing answer under the closing question's, so the sheet and the email read "mh 1 active ca rdh license" and "wrap up".
+  it("names an AI interview answer by the words it was asked in: a must-have's gap answer by the must-have, the closing answer by the closing question, any other key in plain words, in the brief and the email, for every reader", async () => {
+    const licensed = samplePacket((p) => {
+      p.interviews.plan[0]!.competencyKeys = ["chairside", "patients", "infection"];
+      p.requirements.mustHaves.unshift({ key: "mh_1_active_ca_rdh_license", text: "Active California RDH license", rationale: "Required by the state", evidencedBy: ["resume", "screen"] });
+    });
+    const said = {
+      gap: "Yes, I hold an active California RDH license and renewed it this spring.",
+      closing: "I can start two weeks after an offer.",
+      xrays: "I took digital X-rays every day at my last office.",
+      swaps: "Happy to swap shifts with the team.",
+    };
+    // the last two: a must-have and a written question the job no longer has, which nothing names
+    const brief = await briefOf({}, {}, { answers: { mh_1_active_ca_rdh_license: said.gap, [CHAT_WRAP_KEY]: said.closing, mh_3_digital_xrays: said.xrays, wq_shift_swaps: said.swaps }, packet: licensed });
+    const named = [["Active California RDH license", said.gap], [CHAT_WRAP_QUESTION, said.closing], ["Digital xrays", said.xrays], ["Shift swaps", said.swaps]].sort();
+    for (const reader of ["owner", "interviewer"] as const) {
+      const theirs = briefForReader(brief, reader);
+      expect((theirs.screen?.answers ?? []).map((a) => [a.question, a.answer]).sort(), reader).toEqual(named);
+      const text = renderInterviewerBriefText(theirs);
+      expect(text, reader).toContain(`- Active California RDH license\n  ${said.gap}\n`);
+      expect(text, reader).toContain(`- ${CHAT_WRAP_QUESTION}\n  ${said.closing}\n`);
+      expect(text, reader).toContain(`- Digital xrays\n  ${said.xrays}\n`);
+      expect(text, reader).toContain(`- Shift swaps\n  ${said.swaps}\n`);
+      expect(text, reader).not.toMatch(/_|\bmh\b|\bwq\b|wrap up/i);
+    }
   });
 });

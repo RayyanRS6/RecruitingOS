@@ -1,4 +1,4 @@
-import { MARK_LABEL, TERMINAL_STAGES, sureBeside, type ApplicationStage, type MarkKind, type MatchFit } from "@ros/contracts";
+import { MARK_LABEL, TERMINAL_STAGES, answerKeyWords, sureBeside, type ApplicationStage, type MarkKind, type MatchFit } from "@ros/contracts";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
 import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
@@ -258,12 +258,6 @@ export type WriteupLine = {
   chat: TranscriptBubble[];
 };
 
-/** "wq_why_this_job" → "Why this job": a question the labels no longer name (an older version of the job). */
-function keyWords(key: string): string {
-  const words = key.replace(/^(wq|q|sq)_/, "").replace(/_/g, " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : key;
-}
-
 /**
  * The write-up of a sent chat, one line per company question in the write-up's order. Empty while the answers are
  * hidden ("hide them until they send": the API sends no write-up then either) and for a chat without one.
@@ -280,7 +274,8 @@ export function writeupLines(s: Pick<Screen, "progress" | "transcript" | "answer
     const byCandidate = a.by === "candidate";
     return {
       key: a.questionKey,
-      question: q?.question ?? keyWords(a.questionKey),
+      // a question the labels no longer name (an older version of the job): "wq_why_this_job" reads "Why this job"
+      question: q?.question ?? answerKeyWords(a.questionKey),
       required: q?.required ?? true,
       answer,
       status: a.status,

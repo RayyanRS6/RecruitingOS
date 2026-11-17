@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket, ScreenWriteup } from "@ros/contracts";
 import { CHAT_WRAP_QUESTION, WRITEUP_NOT_GIVEN_NOTE } from "@ros/agents";
-import { CHAT_WRAP_KEY, applicationAnswerSentences } from "@ros/core";
+import { CHAT_WRAP_KEY, applicationAnswerSentences, entitlements } from "@ros/core";
 import { aiRuns, applications, candidates, companies, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -332,5 +332,28 @@ describe("Review & send", () => {
     // the application row is untouched by any of it
     const [appRow] = await container.db.select().from(applications).where(eq(applications.id, scr.applicationId));
     expect(JSON.stringify(appRow.answers)).not.toContain("Monday to Thursday suits me");
+  });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): a written-up answer whose question the page no longer
+  // names read as its key.
+  it("names a written-up answer to a question taken off the job since in plain words, never by its key", async () => {
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const why = { key: "wq_why", question: "Why would you like to work at a small practice?", required: true };
+    const swaps = { key: "wq_shift_swaps", question: "Are you happy to swap a shift now and then?", required: true };
+    await container.db.update(rolePackets).set({ packet: { ...pv.packet, companyQuestions: { quick: [], written: [why, swaps] } } }).where(eq(rolePackets.id, pv.id));
+    // a sixth applicant, past the Free plan's five a job
+    await entitlements.applyPlan(container.db, role.companyId, "basic");
+    const t = await apply({ first: "Ines", last: "Vale", email: "ines.vale@example.com" });
+    await answerAll(t);
+    await post(`/c/screen/${t}/review`);
+    expect(((await screenOf(t)).progress.writeup as ScreenWriteup).answers.map((a) => a.questionKey)).toEqual(["wq_why", "wq_shift_swaps"]);
+    // the job loses that question while they check what they are sending
+    await container.db.update(rolePackets).set({ packet: { ...pv.packet, companyQuestions: { quick: [], written: [why] } } }).where(eq(rolePackets.id, pv.id));
+    const base = `/c/screen/${t}`;
+    const html = await page(base);
+    expect(html).toContain('<li class="answer" id="w-wq_shift_swaps"><div class="answer-head"><p class="answer-q">2. Shift swaps</p>');
+    expect(html).not.toMatch(/<p class="answer-q">[^<]*_/);
+    expect(await page(`${base}/answers/wq_shift_swaps`)).toContain('<h1 class="question" id="question">Shift swaps</h1>');
   });
 });

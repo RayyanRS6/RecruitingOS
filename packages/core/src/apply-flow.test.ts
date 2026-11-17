@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ScreenProgress } from "@ros/contracts";
+import { CHAT_WRAP_QUESTION, type ScreenProgress } from "@ros/contracts";
 import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, type FunnelScreen } from "./apply-flow";
 import { chatCounter } from "./apply-questions";
 import { canTransition } from "./stages";
@@ -263,5 +263,20 @@ describe("how the conversation goes for a role (plan E13)", () => {
     // finished on a recruiter's call: the candidate never sent anything, so it is not timed
     const byCall = screeningFunnel([...rows, { status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(50), progress: progress({ completedBy: "recruiter_call" }), transcript: said(0) }], questions);
     expect(byCall).toMatchObject({ finished: 3, medianMinutes: 9 });
+  });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): a skip is kept under the key the chat asked it by, so a
+  // must-have's gap question and the closing question read as their keys in the role's figures.
+  it("names each skipped question as the chat asked it: a must-have's by its words, the closing one by the closing question, one nothing names in plain words", () => {
+    const sent = (declined: string[]): FunnelScreen => ({ status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(8), progress: progress({ submittedAt: at(8), declined }), transcript: said(0) });
+    const f = screeningFunnel([sent(["mh_1_active_ca_rdh_license", CHAT_WRAP_KEY]), sent(["mh_1_active_ca_rdh_license", "wq_shift_swaps", "pay"])], questions, [{ key: "mh_1_active_ca_rdh_license", text: "Active California RDH license" }]);
+    expect(f.skipped).toEqual([
+      { key: "mh_1_active_ca_rdh_license", question: "Active California RDH license", count: 2 },
+      { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, count: 1 },
+      { key: "wq_shift_swaps", question: "Shift swaps", count: 1 },
+      { key: "pay", question: "What range?", count: 1 },
+    ]);
+    // without the job's must-haves, a must-have's key reads in plain words too
+    expect(screeningFunnel([sent(["mh_1_active_ca_rdh_license"])], questions).skipped).toEqual([{ key: "mh_1_active_ca_rdh_license", question: "Active ca rdh license", count: 1 }]);
   });
 });

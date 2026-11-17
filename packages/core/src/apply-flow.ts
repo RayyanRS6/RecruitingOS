@@ -1,4 +1,4 @@
-import type { ApplyMode, ChatItem, ChatPlan, ChatReading, ChatSection, RolePacket, ScreeningFunnel, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, TapAnswer, TapFormat } from "@ros/contracts";
+import { CHAT_WRAP_KEY, answerKeyWords, type ApplyMode, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningFunnel, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { screenAnswersSent } from "./screen-answers";
 
 /**
@@ -43,10 +43,10 @@ export function isOneVisitFlow(progress: Pick<ScreenProgress, "flow"> | null | u
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * The chat's closing question ("Wrapping up"): asked after every item, in code's words, and never an item of the plan
- * (it is not counted). Its answer is the candidate's own words like any other.
+ * The chat's closing question's key ("Wrapping up"): it lives in @ros/contracts beside the closing question's words, so
+ * every reader names the closing answer by that question (`answerKeyWords`).
  */
-export const CHAT_WRAP_KEY = "wrap_up";
+export { CHAT_WRAP_KEY } from "@ros/contracts";
 /** At most this many "About your experience" items (the résumé reading's open questions first, then the gaps). */
 export const CHAT_GAP_LIMIT = 4;
 
@@ -260,8 +260,9 @@ export type FunnelScreen = { status: string; invitedVia?: string | null; started
  * worked out from a conversation nobody sent (founder decision of 9 October 2026): no skip, no time taken, and no
  * question where someone stopped. Every conversation that stopped was, by definition, never sent, so where people stop
  * is not counted at all; even a count could point at the one person the team sees "Didn't finish the conversation" on.
+ * A skipped question is named by `questions`, else by the job's `mustHaves` or the closing question (`answerKeyWords`).
  */
-export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: string; question: string }>): ScreeningFunnel {
+export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: string; question: string }>, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): ScreeningFunnel {
   const started = rows.filter((r) => r.startedAt);
   const finished = rows.filter((r) => r.status === "completed");
   // The time to finish, from conversations the candidates sent: one finished on a recruiter's call is timed from words
@@ -280,7 +281,9 @@ export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: st
   // theirs (founder decision of 9 October 2026), even in a count.
   const skippedCount = new Map<string, number>();
   for (const r of rows) if (screenAnswersSent(r)) for (const k of r.progress.declined ?? []) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
-  const label = (key: string) => questions.find((q) => q.key === key)?.question ?? key;
+  // A skip is kept under the key the chat asked it by: a must-have's gap question and the closing question are named in
+  // words too, and a key nothing names in plain words, never as the key (`answerKeyWords`).
+  const label = (key: string) => questions.find((q) => q.key === key)?.question ?? answerKeyWords(key, mustHaves);
   return {
     offered: rows.length,
     started: started.length,

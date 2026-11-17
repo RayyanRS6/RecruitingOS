@@ -163,6 +163,24 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(old).not.toContain("Must-haves the résumé did not show");
     expect(old).toContain("Their answers When could you start? Monday");
   });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): the AI review's answers to a must-have's gap question and
+  // to the closing question are kept under keys no question names, and read "mh 1 license" and "wrap up".
+  it("names the AI review's answers by the words they were asked in: a gap question by its must-have, the closing one by the closing question", () => {
+    const finding = (questionKey: string, said: string) => ({ questionKey, answered: true, finding: `Answered: "${said}"`, evidence: { source: "screen", quote: said }, meetsModelAnswer: "unknown" });
+    const scorecard = {
+      id: "sc1", kind: "screen", overall: "potential", confidence: "medium", createdAt: at,
+      result: { summary: "Read from the chat.", recommendation: "interview", rationale: "Read from the chat.", strengths: [], concerns: [], unknowns: [], questionFindings: [finding("mh_1_license", "I have held it since 2021."), finding("wrap_up", "I can start in two weeks."), finding("q_start", "Monday")] },
+    };
+    const html = panel(detail({ assessments: [scorecard] }), "overview");
+    const from = html.indexOf('<h3 class="eyebrow">Answers</h3>');
+    expect(from).toBeGreaterThan(-1);
+    const answers = html.slice(from, html.indexOf("</ul>", from));
+    expect(answers).toContain('<span class="muted small">An active CA RDH license</span>');
+    expect(answers).toContain('<span class="muted small">Is there anything else you would like the hiring team to know before we finish?</span>');
+    expect(answers).toContain('<span class="muted small">When could you start?</span>');
+    expect(text(answers)).not.toMatch(/_|\bmh\b|wrap up/i);
+  });
 });
 
 describe("a recruiter's notes from a call on the AI interview tab (plan E3)", () => {

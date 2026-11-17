@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_SECTION_LABEL, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
@@ -385,8 +385,11 @@ export function chatFactsOf(packet: RolePacket, app: Pick<ApplicationRow, "extra
   return chatFactsWithKept(facts, Array.isArray(answers.kept) ? answers.kept : []);
 }
 
-/** The closing question, in code's words (the model may say it its own way, with the first name). */
-export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hiring team to know before we finish?";
+/**
+ * The closing question, in code's words (the model may say it its own way, with the first name). Its words live in
+ * @ros/contracts beside its key, so every reader names the closing answer by them (`answerKeyWords`).
+ */
+export { CHAT_WRAP_QUESTION } from "@ros/contracts";
 /** Said when "No" settles an item as not known: calm, and never a guess about what they can do. */
 export const CHAT_CALM_LINE = "Understood, thanks for saying so.";
 /** The question the code asks when the model's follow-up has none: one push, the analog, the smaller version. */

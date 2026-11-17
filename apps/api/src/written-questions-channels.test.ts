@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
 import type { LearnedFact, ScreenTurn, WrittenQuestion } from "@ros/contracts";
-import { composeInterviewerBrief } from "@ros/agents";
-import { entitlements } from "@ros/core";
+import { CHAT_WRAP_QUESTION, composeInterviewerBrief } from "@ros/agents";
+import { CHAT_WRAP_KEY, entitlements } from "@ros/core";
 import { aiRuns, applications, candidates, rolePackets, roles, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -242,5 +242,19 @@ describe("the company's written questions in chats by text and from an emailed l
     await container.db.update(screens).set({ progress: { ...scr.progress, declined: ["wq_late"] } }).where(eq(screens.id, scr.id));
     const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
     expect(funnel.skipped).toContainEqual({ key: "wq_late", question: written[1].question, count: 1 });
+  });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): a skip is kept under the key the chat asked it by, so a
+  // must-have's gap question and the closing question read as their keys in the role's figures.
+  it("the role's figures name a skipped gap question by its must-have, the closing question by its words, and a key nothing names in plain words", async () => {
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const must = pv.packet.requirements.mustHaves[0];
+    expect(must.key).toMatch(/^mh_\d+_/);
+    const scr = await screenOf(sentOnWeb);
+    await container.db.update(screens).set({ progress: { ...scr.progress, declined: [must.key, CHAT_WRAP_KEY, "wq_shift_swaps"] } }).where(eq(screens.id, scr.id));
+    const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
+    expect(funnel.skipped).toEqual(expect.arrayContaining([{ key: must.key, question: must.text.trim(), count: 1 }, { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, count: 1 }, { key: "wq_shift_swaps", question: "Shift swaps", count: 1 }]));
+    for (const s of funnel.skipped) expect(s.question, s.key).not.toContain("_");
   });
 });
