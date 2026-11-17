@@ -116,8 +116,14 @@ const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
  */
 const EMPLOYER_DOES = /^(?:[a-z]+ly\s+)?(?:accept|hire|take|consider|employ|interview|on[-\s]?board|sponsor|bring\s+on(?:[-\s]?board)?|use|allow|offer|pay)\b/i;
 
-/** Words naming the people applying ("anyone who smokes", "new hires"): after "Cannot …" the words are then a rule about them. */
-const NAMES_APPLICANTS = /\b(?:applicants?|candidates?|anyone|anybody|someone|somebody|people|those|hires?)\b/i;
+/**
+ * Words naming the people applying ("anyone who smokes", "new hires"): after "Cannot …" the words are then a rule about
+ * them. "Hire" in the singular names a person only after a word that picks one out ("a hire", "a new hire", "any new
+ * hire", "the new hire"); otherwise it is the hiring itself ("within 30 days of hire", "before hire", "the hire date",
+ * "contract-to-hire", "new hire orientation"), so the words are still what the candidate does and are turned round
+ * (review of the employer-verbs fix, 17 Nov 2026: "Unable to get BLS certified within 30 days of hire" stayed as typed).
+ */
+const NAMES_APPLICANTS = /\b(?:applicants?|candidates?|anyone|anybody|someone|somebody|people|those|hires|(?:an?|another|any|each|every)\s+(?:new\s+)?hire|(?:the|our|your)\s+new\s+hire)\b/i;
 
 /**
  * What only the employer does, after "Won't …" ("Won't hire smokers", "Will not accept applicants without a CDL"): the

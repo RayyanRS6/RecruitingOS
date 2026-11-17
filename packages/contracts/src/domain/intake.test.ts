@@ -98,6 +98,8 @@ describe("a deal-breaker as the must-have it counts as", () => {
       "Cannot let applicants start without a license", "Cannot let an applicant start without a license", "Can't work with candidates who smoke", "Unable to start anyone without a license",
       "Cannot train anybody on the job", "Can't keep someone without experience", "Cannot work with somebody who smokes", "Unable to work with people who smoke",
       "Cannot keep those without a license", "Can't train new hires", "Can't train a new hire",
+      // a hire, or a new hire, after a word that picks one out, is a person too
+      "Can't keep a hire who is late", "Cannot train the new hire", "Can't let any new hire work alone",
     ];
     for (const t of asTyped) {
       expect(mustHaveOf(t), t).toBe(t);
@@ -112,6 +114,22 @@ describe("a deal-breaker as the must-have it counts as", () => {
     expect(mustHaveOf("Can't work with children")).toBe("Able to work with children");
     expect(mustHaveOf("Not able to drive a stick shift")).toBe("Able to drive a stick shift");
     expect(mustHaveOf("Can't reliably lift 50 lbs")).toBe("Able to reliably lift 50 lbs");
+    // and so is what the candidate does around the hiring itself, which names nobody (review of the employer-verbs fix,
+    // 17 Nov 2026: "Unable to get BLS certified within 30 days of hire" stayed as typed)
+    const aroundTheHiring: Array<[string, string]> = [
+      ["Unable to get BLS certified within 30 days of hire", "Able to get BLS certified within 30 days of hire"],
+      ["Can't pass a drug screen before hire", "Able to pass a drug screen before hire"],
+      ["Cannot work in a contract-to-hire role", "Able to work in a contract-to-hire role"],
+      ["Unable to attend new hire orientation", "Able to attend new hire orientation"],
+      ["Cannot get licensed upon hire", "Able to get licensed upon hire"],
+      ["Unable to start on the hire date", "Able to start on the hire date"],
+      ["Unable to pass a pre-hire skills test", "Able to pass a pre-hire skills test"],
+      ["Can't complete new hire paperwork", "Able to complete new hire paperwork"],
+    ];
+    for (const [t, need] of aroundTheHiring) {
+      expect(mustHaveOf(t), t).toBe(need);
+      expect(restatementsOf(t), t).toEqual([need]);
+    }
   });
 
   it("knows the must-haves a deal-breaker can come back as, its opposite too, so a refused one is refused in each", () => {

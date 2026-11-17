@@ -114,8 +114,10 @@ describe("the requirements check", () => {
       x.requirements.mustHaves.push(
         { key: "mh_accept", text: "Can't accept applicants without a license", rationale: "Required", evidencedBy: ["resume"] },
         { key: "mh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+        { key: "mh_xrays", text: "Can't take x-rays", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_bls", text: "Unable to get BLS certified within 30 days of hire", rationale: "Required", evidencedBy: ["resume"] },
       );
-      x.preferences.dealBreakersInTheirWords = ["Can't accept applicants without a license", "Cannot work Saturdays"];
+      x.preferences.dealBreakersInTheirWords = ["Can't accept applicants without a license", "Cannot work Saturdays", "Can't take x-rays", "Unable to get BLS certified within 30 days of hire"];
     });
     const check = checkRequirements(p, "v8", 8);
     expect(check.suggestions.filter((s) => s.text === "Can't accept applicants without a license")).toEqual([
@@ -131,8 +133,18 @@ describe("the requirements check", () => {
       },
     ]);
     expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_accept:replace_text"])).toThrow(RequirementFixError);
-    // what the candidate cannot do, in a deal-breaker's very words, keeps its tap
+    // a verb an employer does counts here whoever does it, "take" and "use" too (LT-32), so "Can't take x-rays" gets no tap
+    // either, as docs/12 says (review of the employer-verbs fix, 17 Nov 2026)
+    expect(check.suggestions.filter((s) => s.text === "Can't take x-rays")).toEqual([
+      expect.objectContaining({ id: "rules_out:mustHaves:mh_xrays", kind: "rules_out", fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) }),
+    ]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_xrays:replace_text"])).toThrow(RequirementFixError);
+    // what the candidate cannot do, in a deal-breaker's very words, keeps its tap, also around the hiring itself, which
+    // names nobody (review of the employer-verbs fix, 17 Nov 2026)
     expect(check.suggestions.find((s) => s.id === "rules_out:mustHaves:mh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+    expect(check.suggestions.find((s) => s.id === "rules_out:mustHaves:mh_bls")?.fixes).toEqual([
+      expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to get BLS certified within 30 days of hire"', after: "Able to get BLS certified within 30 days of hire" }),
+    ]);
   });
 
   it("points at the packet guard's flag on the same words, so one fix clears both", () => {

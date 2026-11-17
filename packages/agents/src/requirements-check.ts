@@ -191,8 +191,10 @@ function find(p: DraftRolePacket): Found[] {
     // unfairly, or to cap experience, have their own suggestion instead (review of the live-test fixes, 12 Nov 2026).
     // Turned round only where that cannot give a rule its opposite: a credential someone lacks ("No x-ray permit"), or a
     // deal-breaker's very words ("Cannot work Saturdays"); "Will not share patient information" is a rule, so the person
-    // writes it as what they need (review of the hire-again fix, 12 Nov 2026), and so is a deal-breaker about what the
-    // employer does ("Can't accept applicants without a license"), which `mustHaveOf` leaves as typed.
+    // writes it as what they need (review of the hire-again fix, 12 Nov 2026), and so do they for a deal-breaker whose
+    // words `mustHaveOf` leaves as typed: after "Cannot", "Unable to" and the like, a verb an employer does to applicants,
+    // "take" and "use" among them ("Can't accept applicants without a license", "Can't take x-rays"), or words naming the
+    // people applying (LT-32).
     if (!proxied && !capped && rulesOut(item.text)) {
       const words = item.text.trim().replace(/\s+/g, " ");
       const need = mustHaveOf(words);

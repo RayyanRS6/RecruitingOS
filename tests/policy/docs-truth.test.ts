@@ -123,4 +123,16 @@ describe("the API contracts", () => {
     expect(row(doc, "POST", "/roles/:id/batch")).toContain("Its results name no safety-net day (no `untoldFallbackOn`");
     expect(row(doc, "GET", "/applications/:id")).toContain("not Review and apply, `POST /roles/:id/batch`, whose results name none, and a job close only when someone the team can see moved");
   });
+
+  /**
+   * The review of the employer-verbs fix (17 November 2026): the requirements check's row said only a deal-breaker about
+   * what the employer does to the people applying loses its one tap, but every deal-breaker whose words `mustHaveOf` leaves
+   * as typed does, "Can't take x-rays" among them, since "take" and "use" count (LT-32).
+   */
+  it("say the requirements check gives no one tap for a deal-breaker's very words that mustHaveOf leaves as typed, take and use among its verbs", () => {
+    const check = row(read("docs/12-api-contracts.md"), "GET", "/roles/:id/requirements-check");
+    expect(check).not.toBe("");
+    for (const said of ["a deal-breaker whose words `mustHaveOf` leaves as typed (LT-32", '"take" and "use" among them', "\"Can't take x-rays\""]) expect(check, said).toContain(said);
+    expect(check).not.toContain("a deal-breaker about what the employer does to the people applying");
+  });
 });
