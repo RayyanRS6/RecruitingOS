@@ -274,7 +274,8 @@ export function writeupLines(s: Pick<Screen, "progress" | "transcript" | "answer
     const byCandidate = a.by === "candidate";
     return {
       key: a.questionKey,
-      // a question the labels no longer name (an older version of the job): "wq_why_this_job" reads "Why this job"
+      // a question the application's version of the job does not name (answers given on a newer version when they applied
+      // again and confirmed them by email): "wq_why_this_job" reads "Why this job"
       question: q?.question ?? answerKeyWords(a.questionKey),
       required: q?.required ?? true,
       answer,

@@ -163,7 +163,9 @@ function SendPage(props: { view: ConversationView; writeup: NonNullable<Conversa
       <section class="send-part" aria-labelledby="send-chat">
         <h2 id="send-chat">From your chat</h2>
         <p>Written up from your own replies. Change anything that came out wrong.</p>
-        {/* a question taken off the job since it was written up reads in plain words, never as its key (`answerKeyWords`) */}
+        {/* Only a guard: the page and the write-up read the conversation's own version of the job (`view.written`, which a
+            change to the job never alters), so `asked` names every written-up answer. Should one ever not be named, it
+            reads in plain words, never as its key (`answerKeyWords`). */}
         <ol class="answers">{writeup.answers.map((a, i) => <WrittenItem answer={a} question={asked.get(a.questionKey) ?? review.find((r) => r.key === a.questionKey)?.question ?? answerKeyWords(a.questionKey)} n={i + 1} base={base} />)}</ol>
         {others.length ? (
           <>

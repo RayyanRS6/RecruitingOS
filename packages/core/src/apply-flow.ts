@@ -1,4 +1,4 @@
-import { CHAT_WRAP_KEY, answerKeyWords, type ApplyMode, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningFunnel, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_WRAP_KEY, FOCUS_KEY_PREFIX, answerKeyWords, type ApplyMode, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningFunnel, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { screenAnswersSent } from "./screen-answers";
 
 /**
@@ -260,7 +260,8 @@ export type FunnelScreen = { status: string; invitedVia?: string | null; started
  * worked out from a conversation nobody sent (founder decision of 9 October 2026): no skip, no time taken, and no
  * question where someone stopped. Every conversation that stopped was, by definition, never sent, so where people stop
  * is not counted at all; even a count could point at the one person the team sees "Didn't finish the conversation" on.
- * A skipped question is named by `questions`, else by the job's `mustHaves` or the closing question (`answerKeyWords`).
+ * A skipped question is named by `questions`, else by the job's `mustHaves` or the closing question (`answerKeyWords`);
+ * the résumé reading's open questions a screen started with are one row, under their plain name.
  */
 export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: string; question: string }>, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): ScreeningFunnel {
   const started = rows.filter((r) => r.startedAt);
@@ -278,9 +279,12 @@ export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: st
     .sort((a, b) => a - b);
   const median = minutes.length ? (minutes.length % 2 ? minutes[(minutes.length - 1) / 2] : (minutes[minutes.length / 2 - 1] + minutes[minutes.length / 2]) / 2) : null;
   // Skips are counted from conversations the candidates sent: what someone did with a question they never sent stays
-  // theirs (founder decision of 9 October 2026), even in a count.
+  // theirs (founder decision of 9 October 2026), even in a count. The résumé reading's open questions a screen started
+  // with ("Ask about this in a screen") are each candidate's own, so `unknown_1` is another question on every screen:
+  // their skips are one row, under a plain name, never their words, and a person counts once in it however many they skipped.
+  const skipKey = (k: string) => (k.startsWith(FOCUS_KEY_PREFIX) && !questions.some((q) => q.key === k) ? FOCUS_KEY_PREFIX : k);
   const skippedCount = new Map<string, number>();
-  for (const r of rows) if (screenAnswersSent(r)) for (const k of r.progress.declined ?? []) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
+  for (const r of rows) if (screenAnswersSent(r)) for (const k of new Set((r.progress.declined ?? []).map(skipKey))) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
   // A skip is kept under the key the chat asked it by: a must-have's gap question and the closing question are named in
   // words too, and a key nothing names in plain words, never as the key (`answerKeyWords`).
   const label = (key: string) => questions.find((q) => q.key === key)?.question ?? answerKeyWords(key, mustHaves);

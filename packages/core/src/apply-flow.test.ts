@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_WRAP_QUESTION, type ScreenProgress } from "@ros/contracts";
+import { CHAT_WRAP_QUESTION, FOCUS_KEY_PREFIX, FOCUS_QUESTION_WORDS, type ScreenProgress } from "@ros/contracts";
 import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, type FunnelScreen } from "./apply-flow";
 import { chatCounter } from "./apply-questions";
 import { canTransition } from "./stages";
@@ -278,5 +278,21 @@ describe("how the conversation goes for a role (plan E13)", () => {
     ]);
     // without the job's must-haves, a must-have's key reads in plain words too
     expect(screeningFunnel([sent(["mh_1_active_ca_rdh_license"])], questions).skipped).toEqual([{ key: "mh_1_active_ca_rdh_license", question: "Active ca rdh license", count: 1 }]);
+  });
+
+  // Left out by "Answers named in words" (b80608a): the résumé reading's open questions a screen starts with ("Ask about
+  // this in a screen") are keyed unknown_1, unknown_2… on every screen, each candidate's own, and the figures read
+  // "Unknown 1": one row for different people's different questions, named by the key.
+  it("counts the résumé reading's open questions people skipped as one row, under a plain name, once a person", () => {
+    const sent = (declined: string[]): FunnelScreen => ({ status: "completed", invitedVia: null, startedAt: at(0), completedAt: at(8), progress: progress({ submittedAt: at(8), declined }), transcript: said(0) });
+    // two people each skipped their own first open question; the second also skipped another one, and the pay question
+    const notSent: FunnelScreen = { status: "unfinished", invitedVia: null, startedAt: at(0), completedAt: null, progress: progress({ declined: ["unknown_1"] }), transcript: said(0) };
+    const f = screeningFunnel([sent(["unknown_1"]), sent(["unknown_1", "unknown_2", "pay"]), notSent], questions);
+    expect(f.skipped).toEqual([
+      { key: FOCUS_KEY_PREFIX, question: FOCUS_QUESTION_WORDS, count: 2 },
+      { key: "pay", question: "What range?", count: 1 },
+    ]);
+    expect(f.skipped.map((s) => s.question).join(" ")).not.toMatch(/unknown|_|\d/i);
+    expect(FOCUS_QUESTION_WORDS).toBe("An open question from the AI review of the résumé");
   });
 });

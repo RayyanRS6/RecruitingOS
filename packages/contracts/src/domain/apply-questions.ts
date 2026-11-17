@@ -151,16 +151,30 @@ export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hir
 const KEY_PREFIX = /^(?:mh_\d+_|wq_|q_|sq_)/;
 
 /**
+ * The keys of the résumé reading's open questions a screen starts with ("Ask about this in a screen":
+ * `progress.focusQuestions`, keyed `unknown_1`, `unknown_2`, …). Each screen's are its own candidate's, so the same key
+ * is another question on another screen, and the key says nothing of the words.
+ */
+export const FOCUS_KEY_PREFIX = "unknown_";
+/**
+ * The plain name of such an open question where its own words are not at hand: in the role's figures, where everyone's
+ * open questions are one row (`screeningFunnel`), and wherever a reader no longer holds the question.
+ */
+export const FOCUS_QUESTION_WORDS = "An open question from the AI review of the résumé";
+
+/**
  * What an AI interview answer is named by where the reader's own questions do not name its key (the interviewer's brief
  * and its email, the AI review on the candidate panel, the role's figures, Review & send): the closing answer by the
- * closing question; a must-have's gap answer, kept under the must-have's key, by the must-have's own words; any other
- * key in plain words without its machine prefix ("wq_shift_swaps": "Shift swaps"). Never a key, never an underscore
- * (the last round of the live-test fixes, 17 November 2026).
+ * closing question; a must-have's gap answer, kept under the must-have's key, by the must-have's own words; an open
+ * question from the résumé reading by its plain name (`FOCUS_QUESTION_WORDS`); any other key in plain words without its
+ * machine prefix ("wq_shift_swaps": "Shift swaps"). Never a key, never an underscore (the last round of the live-test
+ * fixes, 17 November 2026).
  */
 export function answerKeyWords(key: string, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): string {
   if (key === CHAT_WRAP_KEY) return CHAT_WRAP_QUESTION;
   const must = mustHaves.find((m) => m.key === key)?.text.trim();
   if (must) return must;
+  if (key.startsWith(FOCUS_KEY_PREFIX)) return FOCUS_QUESTION_WORDS;
   const words = (key.replace(KEY_PREFIX, "") || key).replace(/_+/g, " ").trim();
   return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "";
 }

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import type { FakeHandler, StructuredRequest } from "@ros/ai";
-import type { LearnedFact, ScreenTurn, WrittenQuestion } from "@ros/contracts";
+import { FOCUS_KEY_PREFIX, FOCUS_QUESTION_WORDS, type LearnedFact, type ScreenTurn, type WrittenQuestion } from "@ros/contracts";
 import { CHAT_WRAP_QUESTION, composeInterviewerBrief } from "@ros/agents";
 import { CHAT_WRAP_KEY, entitlements } from "@ros/core";
 import { aiRuns, applications, candidates, rolePackets, roles, screens, withTenant } from "@ros/db";
@@ -256,5 +256,21 @@ describe("the company's written questions in chats by text and from an emailed l
     const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
     expect(funnel.skipped).toEqual(expect.arrayContaining([{ key: must.key, question: must.text.trim(), count: 1 }, { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, count: 1 }, { key: "wq_shift_swaps", question: "Shift swaps", count: 1 }]));
     for (const s of funnel.skipped) expect(s.question, s.key).not.toContain("_");
+  });
+
+  // Left out by "Answers named in words" (b80608a): the résumé reading's open questions a screen starts with are keyed
+  // unknown_1, unknown_2… on every screen, each candidate's own, and the role's figures read "Unknown 1" for all of them.
+  it("the role's figures count the résumé reading's open questions people skipped as one row, under a plain name, once a person", async () => {
+    // both sent chats as if each had started with its own open questions ("Ask about this in a screen") and skipped some
+    const opened = async (applicationId: string, questions: string[], declined: string[]) => {
+      const scr = await screenOf(applicationId);
+      await container.db.update(screens).set({ progress: { ...scr.progress, focusQuestions: questions.map((question, i) => ({ key: `${FOCUS_KEY_PREFIX}${i + 1}`, question })), declined } }).where(eq(screens.id, scr.id));
+    };
+    await opened(sentByText, ["Is your California RDH license active?"], ["unknown_1"]);
+    await opened(sentOnWeb, ["How long have you charted in Dentrix?", "Have you placed sealants?"], ["unknown_1", "unknown_2"]);
+    const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
+    // one row for both people, never the key nor one person's own open question
+    expect(funnel.skipped.filter((s) => s.key.startsWith(FOCUS_KEY_PREFIX))).toEqual([{ key: FOCUS_KEY_PREFIX, question: FOCUS_QUESTION_WORDS, count: 2 }]);
+    for (const s of funnel.skipped) expect(s.question, s.key).not.toMatch(/^Unknown|_/);
   });
 });
