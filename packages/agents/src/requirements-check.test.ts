@@ -43,6 +43,110 @@ describe("the requirements check", () => {
     expect(check.summary).toMatch(/Nothing changes unless you apply a fix/);
   });
 
+  // Review of the live-test fixes, 12 Nov 2026: drafts and jobs saved before the fix can keep a deal-breaker's own words as
+  // a must-have, which the job page lists as wanted; nothing found them.
+  it("finds a must-have or nice-to-have worded as what rules someone out, with the requirement it reads as when there is one", () => {
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(
+        { key: "mh_rda", text: "No active California RDA license", rationale: "Required", evidencedBy: ["resume", "screen"] },
+        { key: "mh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+        { key: "mh_short", text: "No RDA", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_must", text: "Must work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+      );
+      x.requirements.niceToHaves.push({ key: "nh_permit", text: "No x-ray permit", rationale: "Helpful", evidencedBy: ["resume"] });
+      x.requirements.niceToHaves.push({ key: "nh_grads", text: "No recent grads", rationale: "Experience", evidencedBy: ["resume"] });
+      x.preferences.dealBreakersInTheirWords = ["No active California RDA license", "Cannot work Saturdays"];
+    });
+    const check = checkRequirements(p, "v4", 4);
+    const by = (id: string) => check.suggestions.find((s) => s.id === id);
+    expect(by("rules_out:mustHaves:mh_rda")).toMatchObject({
+      kind: "rules_out",
+      title: "Reads as what rules someone out",
+      path: "requirements.mustHaves[mh_rda]",
+      text: "No active California RDA license",
+      why: expect.stringMatching(/says who is ruled out.*Write it as what they need\.$/),
+      fixes: [{ id: "rules_out:mustHaves:mh_rda:replace_text", op: "replace_text", label: 'Change it to "Active California RDA license"', after: "Active California RDA license" }],
+    });
+    expect(by("rules_out:mustHaves:mh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+    // a short form cannot be turned round: the person writes what they need
+    expect(by("rules_out:mustHaves:mh_short")).toMatchObject({ fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) });
+    expect(by("rules_out:niceToHaves:nh_permit")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", after: "X-ray permit" })]);
+    // a requirement already worded as what they need is left alone, and a proxy keeps its own suggestion only
+    expect(check.suggestions.filter((s) => s.text === "Must work Saturdays")).toEqual([]);
+    expect(check.suggestions.filter((s) => s.text === "No recent grads").map((s) => s.kind)).toEqual(["proxy"]);
+    // a suggestion, never a block: nothing changes until a fix is tapped, and then only its words
+    const before = structuredClone(p);
+    const out = applyRequirementFixes(p, ["rules_out:mustHaves:mh_rda:replace_text", "rules_out:mustHaves:mh_saturdays:replace_text"]);
+    expect(p).toEqual(before);
+    expect(out.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Radiography certificate", "Chairside experience in a dental office", "Active California RDA license", "Able to work Saturdays", "No RDA", "Must work Saturdays"]);
+    expect(out.packet.preferences.dealBreakersInTheirWords).toEqual(["No active California RDA license", "Cannot work Saturdays"]);
+    expect(out.applied).toEqual(['Changed "No active California RDA license" to "Active California RDA license".', 'Changed "Cannot work Saturdays" to "Able to work Saturdays".']);
+    expect(checkRequirements(out.packet, "v5", 5).suggestions.filter((s) => s.kind === "rules_out").map((s) => s.id)).toEqual(["rules_out:mustHaves:mh_short", "rules_out:niceToHaves:nh_permit"]);
+    expect(RolePacketSchema.safeParse(out.packet).success).toBe(true);
+  });
+
+  // Review of the hire-again fix, 12 Nov 2026: the one tap turned a rule worded in the negative into its opposite ("Will
+  // not share patient information" offered "Willing to share patient information").
+  it("turns words round in one tap only for a credential someone lacks or a deal-breaker's own words, never a rule worded in the negative", () => {
+    const rules = ["Will not share patient information", "Won't call out last minute", "Can't use a phone with patients", "Not registered as a sex offender"];
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(...rules.map((text, i) => ({ key: `mh_rule${i}`, text, rationale: "An office rule", evidencedBy: ["interview" as const] })));
+      x.requirements.niceToHaves.push({ key: "nh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] });
+      x.requirements.niceToHaves.push({ key: "nh_bls", text: "Without a current BLS certification", rationale: "Helpful", evidencedBy: ["resume"] });
+    });
+    const check = checkRequirements(p, "v6", 6);
+    const on = (text: string) => check.suggestions.filter((s) => s.text === text);
+    // still found, with the line asking for what they need, and no tap to its opposite
+    for (const text of [...rules, "Cannot work Saturdays"]) expect(on(text), text).toEqual([expect.objectContaining({ kind: "rules_out", fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) })]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_rule0:replace_text"])).toThrow(RequirementFixError);
+    // a credential someone lacks is turned round whoever wrote it
+    expect(on("Without a current BLS certification")[0]?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Current BLS certification"', after: "Current BLS certification" })]);
+    // the very words of one of the deal-breakers (case and punctuation aside) are turned round
+    const deal = structuredClone(p);
+    deal.preferences.dealBreakersInTheirWords = ["cannot work Saturdays."];
+    expect(checkRequirements(deal, "v7", 7).suggestions.find((s) => s.id === "rules_out:niceToHaves:nh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+  });
+
+  // Left out by the repair of the must-haves (lead's decision, 17 Nov 2026): a deal-breaker about what the employer does, in
+  // its very words, was offered "Able to accept applicants without a license" in one tap.
+  it("offers no tap for a deal-breaker's very words about what the employer does, and asks for what they need", () => {
+    const p = samplePacket((x) => {
+      x.requirements.mustHaves.push(
+        { key: "mh_accept", text: "Can't accept applicants without a license", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_saturdays", text: "Cannot work Saturdays", rationale: "Saturday clinic", evidencedBy: ["screen"] },
+        { key: "mh_xrays", text: "Can't take x-rays", rationale: "Required", evidencedBy: ["resume"] },
+        { key: "mh_bls", text: "Unable to get BLS certified within 30 days of hire", rationale: "Required", evidencedBy: ["resume"] },
+      );
+      x.preferences.dealBreakersInTheirWords = ["Can't accept applicants without a license", "Cannot work Saturdays", "Can't take x-rays", "Unable to get BLS certified within 30 days of hire"];
+    });
+    const check = checkRequirements(p, "v8", 8);
+    expect(check.suggestions.filter((s) => s.text === "Can't accept applicants without a license")).toEqual([
+      {
+        id: "rules_out:mustHaves:mh_accept",
+        kind: "rules_out",
+        title: "Reads as what rules someone out",
+        path: "requirements.mustHaves[mh_accept]",
+        text: "Can't accept applicants without a license",
+        why: "It says who is ruled out, but the job page lists it as what you are looking for, and applications are reviewed against it. Write it as what they need.",
+        fixes: [],
+        flagId: null,
+      },
+    ]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_accept:replace_text"])).toThrow(RequirementFixError);
+    // a verb an employer does counts here whoever does it, "take" and "use" too (LT-32), so "Can't take x-rays" gets no tap
+    // either, as docs/12 says (review of the employer-verbs fix, 17 Nov 2026)
+    expect(check.suggestions.filter((s) => s.text === "Can't take x-rays")).toEqual([
+      expect.objectContaining({ id: "rules_out:mustHaves:mh_xrays", kind: "rules_out", fixes: [], why: expect.stringMatching(/Write it as what they need\.$/) }),
+    ]);
+    expect(() => applyRequirementFixes(p, ["rules_out:mustHaves:mh_xrays:replace_text"])).toThrow(RequirementFixError);
+    // what the candidate cannot do, in a deal-breaker's very words, keeps its tap, also around the hiring itself, which
+    // names nobody (review of the employer-verbs fix, 17 Nov 2026)
+    expect(check.suggestions.find((s) => s.id === "rules_out:mustHaves:mh_saturdays")?.fixes).toEqual([expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to work Saturdays"', after: "Able to work Saturdays" })]);
+    expect(check.suggestions.find((s) => s.id === "rules_out:mustHaves:mh_bls")?.fixes).toEqual([
+      expect.objectContaining({ op: "replace_text", label: 'Change it to "Able to get BLS certified within 30 days of hire"', after: "Able to get BLS certified within 30 days of hire" }),
+    ]);
+  });
+
   it("points at the packet guard's flag on the same words, so one fix clears both", () => {
     const p = samplePacket((x) => x.requirements.mustHaves.push({ key: "mh_english", text: "Native English speaker", rationale: "Patients", evidencedBy: ["screen"] }));
     const guarded = guardPacket(p, { companyName: "Harbor Dental", companyLocations: [] }).packet;

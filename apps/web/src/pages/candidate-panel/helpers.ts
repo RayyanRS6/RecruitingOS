@@ -1,4 +1,4 @@
-import { MARK_LABEL, sureBeside, type MarkKind, type MatchFit } from "@ros/contracts";
+import { MARK_LABEL, TERMINAL_STAGES, answerKeyWords, sureBeside, type ApplicationStage, type MarkKind, type MatchFit } from "@ros/contracts";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../api/client";
 import { notSentReasonText } from "../../cancelled";
 import { DECLINED_WORDS, isRecruiterNote, transcriptBubble, type TranscriptBubble } from "../../screen-view";
@@ -169,9 +169,11 @@ export function eligibilityAnswerWords(f: { question: string; reason: string }):
 
 /**
  * Why there is no reading yet. Someone held on an eligibility answer is read only once a person keeps them in, so
- * "a minute or two" would never come true for them.
+ * "a minute or two" would never come true for them; nor for someone decided before any reading (declined, moved to the
+ * talent pool, withdrawn or hired: live test, 12 November 2026), who is never read.
  */
 export function notReadYetWords(stage: string): string {
+  if (TERMINAL_STAGES.has(stage as ApplicationStage)) return "The assistant did not read this application before the decision.";
   return stage === "ineligible" ? "The assistant reads this application once someone keeps them in." : "The assistant has not read this application yet. It usually takes a minute or two after they apply.";
 }
 
@@ -256,12 +258,6 @@ export type WriteupLine = {
   chat: TranscriptBubble[];
 };
 
-/** "wq_why_this_job" → "Why this job": a question the labels no longer name (an older version of the job). */
-function keyWords(key: string): string {
-  const words = key.replace(/^(wq|q|sq)_/, "").replace(/_/g, " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : key;
-}
-
 /**
  * The write-up of a sent chat, one line per company question in the write-up's order. Empty while the answers are
  * hidden ("hide them until they send": the API sends no write-up then either) and for a chat without one.
@@ -278,7 +274,9 @@ export function writeupLines(s: Pick<Screen, "progress" | "transcript" | "answer
     const byCandidate = a.by === "candidate";
     return {
       key: a.questionKey,
-      question: q?.question ?? keyWords(a.questionKey),
+      // a question the application's version of the job does not name (answers given on a newer version when they applied
+      // again and confirmed them by email): "wq_why_this_job" reads "Why this job"
+      question: q?.question ?? answerKeyWords(a.questionKey),
       required: q?.required ?? true,
       answer,
       status: a.status,
@@ -641,10 +639,12 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return { ...base, what: "Asked an ITS recruiter for help" };
     case "recruiter.claimed":
       return { ...base, what: "An ITS recruiter picked up the request" };
+    // The system closes a request nobody needs any more, or notes it on one a recruiter holds (a hold a person decided, a
+    // stopped step that finished once ITS tried it again): no recruiter answered or wrote.
     case "recruiter.resolved":
-      return { ...base, what: "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
+      return { ...base, what: e.actor.kind === "system" ? "The request to ITS was closed" : "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
     case "recruiter.replied":
-      return { ...base, what: "The ITS recruiter wrote about the request" };
+      return { ...base, what: e.actor.kind === "system" ? "A note was added to the request for the recruiter" : "The ITS recruiter wrote about the request" };
     case "customer.replied":
       return { ...base, what: "A note was added to the request for the recruiter" };
     case "recruiter.reopened":

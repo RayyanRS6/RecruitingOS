@@ -2,6 +2,7 @@ import type { SetInterviewTime } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
 import type { CandidateEmailState } from "./api/client";
 import type { CompanyCheck } from "./company-check";
+import { zoneName } from "./company-setup";
 
 /**
  * Setting an interview's date and time (the owner's words, 6 November 2026: "nadine sets date and time from the shortlisted
@@ -94,8 +95,9 @@ export function todayIn(timeZone: string | null | undefined, now: Date = new Dat
 }
 
 /**
- * The time said back, as the person typed it, with the company's zone by name: "Tuesday, November 10 at 2:00 PM,
- * America/Chicago". The year only when it is not this year's. Null until both a real date and a time are chosen.
+ * The time said back, as the person typed it, with the company's zone by name (never its id: live test, 12 November
+ * 2026): "Tuesday, November 10 at 2:00 PM, Central time". The year only when it is not this year's. Null until both a
+ * real date and a time are chosen.
  */
 export function whenLine(date: string, time: string, timeZone: string | null | undefined, now: Date = new Date()): string | null {
   const at = wallClock(date, time);
@@ -103,12 +105,12 @@ export function whenLine(date: string, time: string, timeZone: string | null | u
   const sameYear = date.slice(0, 4) === todayIn(timeZone, now).slice(0, 4);
   const day = at.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "long", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
   const clock = at.toLocaleTimeString("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" });
-  return plain(`${day} at ${clock}${timeZone ? `, ${timeZone}` : ""}`);
+  return plain(`${day} at ${clock}${timeZone ? `, ${zoneName(timeZone, "short")}` : ""}`);
 }
 
-/** The time field's label: the zone it is read in, by name. */
+/** The time field's label: the zone it is read in, by name ("Time (Central time)"). */
 export function timeLabel(timeZone: string | null | undefined): string {
-  return timeZone ? `Time (${timeZone})` : "Time (your company's time zone)";
+  return timeZone ? `Time (${zoneName(timeZone, "short")})` : "Time (your company's time zone)";
 }
 
 /** A meeting link the API takes: http or https, with a host. */

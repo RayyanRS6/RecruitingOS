@@ -140,6 +140,8 @@ export type ApplicationSummary = ApplicationCore & {
   appliedAt: string;
   stageChangedAt: string;
   daysInStage: number;
+  /** The day (YYYY-MM-DD) an offer waiting on their answer was made, null for anyone not at Offer; older answers leave it out. */
+  offerMadeOn?: string | null;
   candidateToldAt: string | null;
   /** The decision message waits for someone to approve it. */
   decisionMessageWaiting: boolean;
@@ -224,7 +226,7 @@ export type DeclineMessagePolicy = "sends" | "needs_approval" | "not_sent";
  * decision, hold and mark); `ownerStage` and `mark` are where the person now sits on the stage strip; `next` is the API's
  * own sentence about what follows.
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; /** A move to the talent pool for someone who asked not to be kept for future roles: they stay out of it. */ talentPoolOptOut?: boolean; /** Interviews a private decision called off. */ interviewsCancelled?: number; /** How many of them the candidate was told about at once, in a short note with no reason (they had a booked time or times to pick from); the decision itself stays private. */ interviewOffNotes?: number; /** send_decision: the message and until when Undo can take it back (plan G9); null when it went at once. */ communicationId?: string | null; undoUntil?: string | null; /** The approved wording the message used (Q28). */ wording?: DecisionWording | null; /** A decision: the message one Send would now write (plan G4). */ decisionMessage?: DecisionMessagePreview | null };
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; /** A move to the talent pool for someone who asked not to be kept for future roles: they stay out of it. */ talentPoolOptOut?: boolean; /** Interviews a private decision called off. */ interviewsCancelled?: number; /** How many of them the candidate was told about at once, in a short note with no reason (they had a booked time or times to pick from); the decision itself stays private. */ interviewOffNotes?: number; /** send_decision: the message and until when Undo can take it back (plan G9); null when it went at once. */ communicationId?: string | null; undoUntil?: string | null; /** The approved wording the message used (Q28). */ wording?: DecisionWording | null; /** A decision: the message one Send would now write (plan G4). */ decisionMessage?: DecisionMessagePreview | null; /** A decision: the day the untold safety net acts on it (YYYY-MM-DD, the company's calendar), the day the "not told yet" card names (12 November 2026); older answers leave it out. */ untoldFallbackOn?: string | null };
 /**
  * What may be done with the application right now; the API decides, the page only shows (see apps/api/src/services/application-actions.ts).
  * `send_new_times`: someone under Cancelled with no interview open; `stop_new_times`: their automatic set waits for its day.
@@ -336,11 +338,14 @@ export type CandidateEmailState = "held" | "failed" | "no_email" | null;
  * the interview, what may be said about the email (never that it left), and whether that email says the time moved.
  */
 export type InterviewBooked = InterviewSummary & { candidateNotice?: "queued" | "held" | "not_sent_no_email" | null; moved?: boolean; /** The same day, time, length and place again: nothing changed and no email goes (11 November 2026). */ unchanged?: boolean; /** The same start with new details: the email says the details changed, never that it moved (11 November 2026). */ changed?: boolean };
-/** The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts). */
+/**
+ * The interviewer's brief (F7, F8): what the round is for, what it covers, what the evidence says so far. `pay` is present only for roles that may see it (packages/agents/src/interviewer-brief.ts).
+ * Each must-have's `met` and each skill's `finding` is the one the match score counts (12 November 2026); a skill it counts nothing for reads "not_evidenced" when a reading wrote about it, never "contradicted". A must-have's `source` is where its quote is from, said after the quote (`quoteWithSource`). A skill's `evaluatedIn` is "interview" when it is checked only in the team's own interviews (read by no AI review); older answers leave it out.
+ */
 export type InterviewerBrief = {
   candidateFirstName: string;
   round: { key: string; title: string; purpose: string; durationMinutes: number; format: string };
-  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: string | null; note: string | null }>;
+  competencies: Array<{ key: string; name: string; definition: string; indicators: string[]; finding: string | null; note: string | null; evaluatedIn?: string | null }>;
   questions: string[];
   mustHaves: Array<{ key: string; text: string; met: string; quote: string | null; source: string | null }>;
   strengths: Array<{ claim: string; quote: string | null; source: string | null }>;
@@ -358,5 +363,5 @@ export type SendMessageResult = { ok: true; status: "queued" | "held"; communica
 // chosen; each person's match score (B2) and, when their reading was made against an earlier version of the role, the
 // label; and the team's private notes on them (plan H3), for those who read notes.
 export type CompareCandidate = { applicationId: string; name: string; stage: string; stageLabel: string; group: string; ownerStage?: OwnerStage; ownerStageLabel?: string; mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }>; screen: { recommendation: string; summary: string } | null; resume: { overall: string; recommendation: string; summary: string } | null; unknownCount: number; open: string; score?: MatchScore | null; readingVersion?: ReadingVersion | null; notes?: NoteView[] };
-export type CompareResponse = { role: { id: string; title: string }; version?: number | null; mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; definition: string }>; candidates: CompareCandidate[]; max: number; reminder: string };
+export type CompareResponse = { role: { id: string; title: string }; version?: number | null; mustHaves: Array<{ key: string; text: string }>; competencies: Array<{ key: string; name: string; definition: string; /** The score counts it as the must-have of the same name ("Counted as the must-have"); an older answer leaves it out. */ asMustHave?: boolean }>; candidates: CompareCandidate[]; max: number; reminder: string };
 export type MyCalendar = { connection: { id: string; provider: string; status: string; externalAccountId: string | null; connectedAt: string | null; lastError: string | null; disconnectedAt: string | null; credentialsDeleted: boolean } | null; availability: { timezone: string; windows: Array<{ day: number; start: string; end: string }>; bufferMinutes: number; maxPerDay: number; updatedAt: string } | null; providers: Array<{ key: string; status: string }> };

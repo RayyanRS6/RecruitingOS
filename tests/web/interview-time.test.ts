@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SetInterviewTime } from "../../packages/contracts/src/domain/interview";
+import { ZONE_CHOICES, zoneName } from "../../apps/web/src/company-setup";
+import { zoneShortName } from "../../packages/core/src/business-hours";
 import { defaultInterviewers } from "../../apps/web/src/interview-defaults";
 import { DECISION_WORDS, bookLabel, candidateEmailLine, clashKey, clashShown, defaultDuration, durationChoices, durationWords, formFromBooked, freshForm, interviewLine, interviewNeedingTime, interviewWord, placeKindFor, setTimeBody, setTimeMissing, timeLabel, todayIn, whenLine, type SetTimeForm } from "../../apps/web/src/interview-time";
 import { bookOnBehalfToast, interviewSetToast, pickTimesToast } from "../../apps/web/src/talent-actions";
@@ -35,7 +37,7 @@ describe("the form's choices", () => {
   });
 
   it("names the company's zone beside the time, never the browser's", () => {
-    expect(timeLabel("America/Chicago")).toBe("Time (America/Chicago)");
+    expect(timeLabel("America/Chicago")).toBe("Time (Central time)");
     expect(timeLabel(null)).toBe("Time (your company's time zone)");
     expect(todayIn("America/Los_Angeles", NOW)).toBe("2026-11-09");
     // late evening in Los Angeles is already tomorrow in UTC: the company's day is what counts
@@ -43,14 +45,36 @@ describe("the form's choices", () => {
   });
 
   it("says the time back as typed, on the company's clock and by its zone's name", () => {
-    expect(whenLine("2026-11-10", "14:00", "America/Chicago", NOW)).toBe("Tuesday, November 10 at 2:00 PM, America/Chicago");
-    expect(whenLine("2026-11-10", "09:05", "America/Chicago", NOW)).toBe("Tuesday, November 10 at 9:05 AM, America/Chicago");
+    expect(whenLine("2026-11-10", "14:00", "America/Chicago", NOW)).toBe("Tuesday, November 10 at 2:00 PM, Central time");
+    expect(whenLine("2026-11-10", "09:05", "America/Chicago", NOW)).toBe("Tuesday, November 10 at 9:05 AM, Central time");
     // the year only when it is not this one
-    expect(whenLine("2027-01-05", "10:00", "America/Chicago", NOW)).toBe("Tuesday, January 5, 2027 at 10:00 AM, America/Chicago");
+    expect(whenLine("2027-01-05", "10:00", "America/Chicago", NOW)).toBe("Tuesday, January 5, 2027 at 10:00 AM, Central time");
     // nothing until both are real
     expect(whenLine("", "14:00", "America/Chicago", NOW)).toBeNull();
     expect(whenLine("2026-11-10", "", "America/Chicago", NOW)).toBeNull();
     expect(whenLine("2026-02-30", "10:00", "America/Chicago", NOW)).toBeNull();
+  });
+
+  // Live test, 12 November 2026: "Time (America/Los_Angeles)" and "Thursday, November 12 at 10:00 AM, America/Los_Angeles"
+  it("names the zone in the sign-up form's words, never its id", () => {
+    expect(timeLabel("America/Los_Angeles")).toBe("Time (Pacific time)");
+    expect(whenLine("2026-11-12", "10:00", "America/Los_Angeles", NOW)).toBe("Thursday, November 12 at 10:00 AM, Pacific time");
+    const id = /[A-Za-z]+\/[A-Za-z_]+/;
+    for (const z of ZONE_CHOICES) {
+      expect(timeLabel(z.value), z.value).toBe(`Time (${z.short})`);
+      expect(timeLabel(z.value), z.value).not.toMatch(id);
+      expect(whenLine("2026-11-12", "10:00", z.value, NOW), z.value).not.toMatch(id);
+    }
+    // a zone the form does not offer is named as the browser names it
+    expect(timeLabel("America/Detroit")).not.toContain("America/");
+    expect(whenLine("2026-11-12", "10:00", "America/Detroit", NOW)).not.toContain("America/");
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#61): the server names the zone in its notices and emails with its own
+  // list (apps/web cannot import @ros/core), so the two lists are kept saying the same words
+  it("names each zone in the same words the server's notices and emails use", () => {
+    for (const z of ZONE_CHOICES) expect(zoneShortName(z.value), z.value).toBe(zoneName(z.value, "short"));
+    expect(zoneShortName("America/Detroit")).toBe(zoneName("America/Detroit", "short"));
   });
 });
 

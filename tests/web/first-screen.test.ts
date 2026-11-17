@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { VERTICAL_TO_PLAYBOOK } from "../../packages/playbooks/src/index";
 import { MAX_LEVELS, MIN_LEVELS } from "../../packages/core/src/policy";
-import { GUIDED_VERTICALS, VERTICALS, ZONE_CHOICES, snapTimeZone, verticalHint } from "../../apps/web/src/company-setup";
+import { GUIDED_VERTICALS, VERTICALS, ZONE_CHOICES, snapTimeZone, verticalHint, zoneName } from "../../apps/web/src/company-setup";
 import { LEVELS, allowedLevels } from "../../apps/web/src/policy-levels";
 import { ACCESS_LIMITS, accessChip, accessWords, requestSentText, scopeOf } from "../../apps/web/src/recruiter-access";
 import { can } from "../../packages/core/src/permissions";
@@ -29,6 +29,20 @@ describe("the sign-up form", () => {
     expect(snapTimeZone("Not/A_Zone", winter)).toBe("");
     expect(snapTimeZone(undefined, winter)).toBe("");
     for (const z of ZONE_CHOICES) expect(() => new Intl.DateTimeFormat("en-US", { timeZone: z.value })).not.toThrow();
+  });
+
+  // Live test, 12 November 2026: the owner's screens showed "America/Los_Angeles" where this form said "Pacific time (Los Angeles)".
+  it("gives every zone it offers a name in its own words for the other screens, never the id", () => {
+    for (const z of ZONE_CHOICES) {
+      expect(zoneName(z.value), z.value).toBe(z.label);
+      expect(zoneName(z.value, "short"), z.value).toMatch(/^[A-Z][a-z]+ time$/);
+    }
+    expect(zoneName("America/Los_Angeles")).toBe("Pacific time (Los Angeles)");
+    expect(zoneName("America/Los_Angeles", "short")).toBe("Pacific time");
+    expect(zoneName("America/Phoenix", "short")).toBe("Arizona time");
+    // a zone the form does not offer reads as the browser names it, else as stored
+    expect(zoneName("America/Detroit", "short")).not.toContain("/");
+    expect(zoneName("Not/A_Zone")).toBe("Not/A_Zone");
   });
 });
 

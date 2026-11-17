@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { anonymizeCandidate, entitlements } from "@ros/core";
-import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, screens, users, withTenant } from "@ros/db";
+import { NOT_ASKED_NOTE, composeInterviewerBrief, renderInterviewerBriefText } from "@ros/agents";
+import { CHAT_WRAP_KEY, anonymizeCandidate, entitlements } from "@ros/core";
+import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, rolePackets, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -81,7 +82,8 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     companyId = co.id;
     companySlug = co.slug;
     await entitlements.applyPlan(container.db, companyId, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
+    // The must-haves come last, on their own line: the fake intake reads a must-haves line to its end ("active CA RDH license").
+    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Just draft it.\nMust-haves: active CA RDH license" })).json()) as { session: { id: string } };
     roleId = (await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string }).roleId;
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." })).status).toBe(200);
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: Packet } };
@@ -374,12 +376,27 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const questions = (packet as unknown as { screening: { questions: Array<{ key: string; question: string; kind: string }> } }).screening.questions;
     const payQuestion = questions.find((q) => q.kind === "compensation")!;
     const workQuestion = questions.find((q) => q.kind === "skills")!;
+    const daysQuestion = questions.find((q) => q.kind === "availability")!;
     expect(payQuestion, "the playbook asks about pay").toBeTruthy();
+    expect(daysQuestion, "the playbook asks when they can work").toBeTruthy();
     const payAnswer = "I am looking for $61 to $64 an hour";
     const workAnswer = "Six years of perio charting and patient education at a busy family practice";
-    await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `pay-brief-${cand.id}`, completedAt: new Date(BASE).toISOString(), answers: { [payQuestion.key]: payAnswer, [workQuestion.key]: workAnswer } });
-    const scorecard = { overall: "potential", confidence: "medium", summary: "Two answers.", strengths: [{ claim: "Gave a concrete answer about recent work", evidence: { source: "screen", quote: workAnswer } }], concerns: [{ claim: "Expects more than the posted range", evidence: { source: "screen", quote: payAnswer } }], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { stated: payAnswer, withinRange: "above" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "hold", rationale: "x" };
+    // A second look at the fix below: an answer to another question that names an amount, and the closing answer with her
+    // number, reach an interviewer neither.
+    const daysAnswer = "Tuesday to Friday, from the 1st, at $50 or more";
+    const closingAnswer = "Text me at (949) 555-0177 after 5";
+    await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `pay-brief-${cand.id}`, completedAt: new Date(BASE).toISOString(), answers: { [payQuestion.key]: payAnswer, [workQuestion.key]: workAnswer, [daysQuestion.key]: daysAnswer, [CHAT_WRAP_KEY]: closingAnswer } });
+    // The second review of the live-test fixes (#5): the résumé's quote on a must-have the AI interview left unknown names
+    // her pay, and a strength quotes her phone number. The owner reads both; an interviewer reads neither. A strength quoting
+    // the practice's own figures keeps its claim for an interviewer, without the quote.
+    const payMust = packet.requirements.mustHaves[0];
+    const payQuote = "Active CA RDH license, 4 years; desired pay $28/hour";
+    const phoneQuote = "Perio program lead, call me at (714) 555-0142";
+    const figuresQuote = "Hygiene production up to $90k a month";
+    const scorecard = { overall: "potential", confidence: "medium", summary: "Two answers.", strengths: [{ claim: "Gave a concrete answer about recent work", evidence: { source: "screen", quote: workAnswer } }], concerns: [{ claim: "Expects more than the posted range", evidence: { source: "screen", quote: payAnswer } }], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: payMust.key, met: "unknown" }], anomalies: [], questionFindings: [], compensationExpectation: { stated: payAnswer, withinRange: "above" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "hold", rationale: "x" };
     await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard as never, overall: "potential", confidence: "medium" });
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence.", strengths: [{ claim: "Leads the perio program", evidence: { source: "resume", quote: phoneQuote } }, { claim: "Grew the hygiene schedule", evidence: { source: "resume", quote: figuresQuote } }], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: payMust.key, met: "yes", evidence: { source: "resume", quote: payQuote } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: new Date(Date.now() + 60_000).toISOString() });
     // not on any of their interviews yet: refused
     expect((await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).status).toBe(403);
     const round = packet.interviews.plan[0];
@@ -411,14 +428,23 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(mail!.text).not.toContain("$61");
     expect(mail!.text).not.toContain(payQuestion.question);
     expect(mail!.text).not.toContain("Expects more than the posted range");
+    // the must-have still reads met, without the quote that names her pay; the strength without the quote holding her number
+    expect(mail!.text).not.toContain("$28");
+    expect(mail!.text).not.toContain("555-0142");
+    expect(mail!.text.split("\n")).toContain(`- ${payMust.text}: met`);
+    expect(mail!.text.split("\n")).toContain("- Leads the perio program");
+    // the strength quoting the practice's figures without its quote, and neither the answer naming an amount nor her number
+    expect(mail!.text.split("\n")).toContain("- Grew the hygiene schedule");
+    expect(mail!.text).not.toMatch(/\$90k|\$50 or more|555-0177/);
     // the interviewer's view of that candidate: the brief and little else
-    const view = (await (await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).json()) as { viewer: string; allowedActions: string[]; candidate: Record<string, unknown>; brief: { round: { key: string }; includesPay: boolean; pay: unknown; mustHaves: Array<{ text: string; met: string }> }; interviews: Array<{ id: string }> };
+    const view = (await (await json(interviewer, "GET", `/api/v1/applications/${cand.id}`)).json()) as { viewer: string; allowedActions: string[]; candidate: Record<string, unknown>; brief: { round: { key: string }; includesPay: boolean; pay: unknown; mustHaves: Array<{ key: string; text: string; met: string; quote: string | null }> }; interviews: Array<{ id: string }> };
     expect(view.viewer).toBe("interviewer");
     expect(view.allowedActions).toEqual([]);
     expect(view.brief.round.key).toBe(round.key);
     expect(view.brief.includesPay).toBe(false);
     expect(view.brief.pay).toBeNull();
     expect(view.brief.mustHaves.map((m) => m.text)).toEqual(packet.requirements.mustHaves.map((m) => m.text));
+    expect(view.brief.mustHaves.find((m) => m.key === payMust.key)).toMatchObject({ met: "yes", quote: null });
     expect(view.interviews.map((i) => i.id)).toContain(iv.id);
     expect(view.candidate).toEqual({ firstName: "Elena", lastName: "Park" });
     const text = JSON.stringify(view);
@@ -426,6 +452,9 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(text).not.toMatch(/rationale|compensation|internalNotes|communications|documents/);
     expect(text).toContain(workAnswer);
     expect(text).not.toContain("$61");
+    expect(text).not.toContain("$28");
+    expect(text).not.toContain("555-0142");
+    expect(text).not.toMatch(/\$90k|\$50 or more|555-0177/);
     expect(text).not.toContain(payQuestion.question);
     expect((await audits("candidate.viewed")).some((a) => a.actor.id === samId && a.target?.id === cand.id)).toBe(true);
     // another candidate: refused
@@ -436,13 +465,130 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(mine.brief?.includesPay).toBe(false);
     expect(JSON.stringify(mine.brief)).toContain(workAnswer);
     expect(JSON.stringify(mine.brief)).not.toContain("$61");
+    expect(JSON.stringify(mine.brief)).not.toContain("$28");
+    expect(JSON.stringify(mine.brief)).not.toContain("555-0142");
+    expect(JSON.stringify(mine.brief)).not.toMatch(/\$90k|\$50 or more|555-0177/);
+    expect(JSON.stringify(mine.brief)).toContain("Grew the hygiene schedule");
     const theirs = (await (await json(owner, "GET", `/api/v1/interviews/${iv.id}`)).json()) as { brief: { includesPay: boolean } | null };
     expect(theirs.brief?.includesPay).toBe(true);
     // the owner may see pay: the answer, the concern and the expectation are all in their copy
     expect(theirs.brief).toMatchObject({ pay: { expectation: payAnswer, withinRange: "above" }, concerns: expect.arrayContaining([expect.objectContaining({ quote: payAnswer, aboutPay: true })]), screen: { answers: expect.arrayContaining([expect.objectContaining({ answer: payAnswer, aboutPay: true })]) } });
+    // and the quotes an interviewer does not get: the must-have's, marked as about pay, and the strength's with her number
+    expect(theirs.brief).toMatchObject({ mustHaves: expect.arrayContaining([expect.objectContaining({ key: payMust.key, met: "yes", quote: payQuote, source: "resume", aboutPay: true })]), strengths: expect.arrayContaining([expect.objectContaining({ claim: "Leads the perio program", quote: phoneQuote }), expect.objectContaining({ claim: "Grew the hygiene schedule", quote: figuresQuote })]) });
+    // and the answers: the one naming an amount, marked as about pay, and the closing one with her number
+    expect(theirs.brief).toMatchObject({ screen: { answers: expect.arrayContaining([expect.objectContaining({ answer: daysAnswer, aboutPay: true }), expect.objectContaining({ answer: closingAnswer, aboutPay: false })]) } });
     // the interview page's "Message the candidate" leads to the sheet with the text box open
     const sheet = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { interviews: Array<{ id: string }> };
     expect(sheet.interviews.some((i) => i.id === iv.id)).toBe(true);
+  });
+
+  /**
+   * The live test of 12 November 2026: the AI interview asks only about what the résumé does not show, so its scorecard
+   * said "unknown" on a must-have the résumé shows and wrote that silence as a concern. The brief read "unknown so far" and
+   * Compare the same, beside the breakdown's "Shown, from the AI review of the résumé"; the Overview listed the concern.
+   */
+  it("the brief and Compare show the finding the score counts, and a scorecard's silence about what the résumé shows is no concern", async () => {
+    const cand = await apply("Maya", "Lindqvist");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const full = pv.packet;
+    const round = full.interviews.plan[0]!;
+    const must = full.requirements.mustHaves.find((m) => /licen/i.test(m.text)) ?? full.requirements.mustHaves[0]!;
+    const skill = full.competencies.find((c) => c.evaluatedIn !== "interview" && round.competencyKeys.includes(c.key))!;
+    expect(skill, "the first round covers a skill the AI reviews read").toBeTruthy();
+    // newer than the reading written on apply, and in this order
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+    const resumeQuote = "Active CA RDH license #55321, Coastal Family Dentistry";
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence and the skill.", strengths: [], concerns: [], unknowns: [], competencyFindings: [{ competencyKey: skill.key, finding: "evidenced", evidence: { source: "resume", quote: "Periodontal charting at every recall visit" } }], requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { source: "resume", quote: resumeQuote } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: later(1) });
+    // a scorecard stored before 12 November 2026: the chat never touched either, and its silence is under concerns
+    const silence = { claim: `${must.text} is not described in the AI interview.`, evidence: { source: "screen", unquoted: true } };
+    const quoted = { claim: "Wants a four-day week", evidence: { source: "screen", quote: "I would like to work four days a week" } };
+    const scorecard = (requirementFindings: unknown[], competencyFindings: unknown[]) => ({ overall: "potential", confidence: "medium", summary: "Answered the questions.", strengths: [], concerns: [silence, quoted], unknowns: [], competencyFindings, requirementFindings, anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "x" });
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard([{ requirementKey: must.key, met: "unknown" }], [{ competencyKey: skill.key, finding: "not_evidenced", note: NOT_ASKED_NOTE }]) as never, overall: "potential", confidence: "medium", createdAt: later(2) });
+    const briefOf = async () => (await withTenant(container.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId: cand.id, candidateFirstName: "Maya", packet: full, roundKey: round.key })))!;
+    type Compared = { candidates: Array<{ mustHaves: Record<string, { met: string; quote: string | null }>; competencies: Record<string, { finding: string; note: string | null }> }> };
+    const compared = async () => ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${cand.id}`)).json()) as Compared).candidates[0]!;
+
+    // the brief: the résumé's "yes" with its quote, as the score counts it, and none of the chat's silence
+    const brief = await briefOf();
+    expect(brief.mustHaves.find((m) => m.key === must.key)).toMatchObject({ met: "yes", quote: resumeQuote, source: "resume" });
+    expect(brief.competencies.find((c) => c.key === skill.key)).toMatchObject({ finding: "evidenced", evaluatedIn: skill.evaluatedIn });
+    expect(brief.concerns.map((c) => c.claim)).toEqual([quoted.claim]);
+    // Compare reads the same
+    const cell = await compared();
+    expect(cell.mustHaves[must.key]).toEqual({ met: "yes", quote: resumeQuote });
+    expect(cell.competencies[skill.key]?.finding).toBe("evidenced");
+    // the candidate's page: the newest reading (the scorecard) without that concern, beside the breakdown that shows it
+    const detail = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { assessments: Array<{ kind: string; result: { concerns: Array<{ claim: string }> } }>; matchScore: { breakdown: Array<{ key: string; source: string; finding: string }> } };
+    expect(detail.assessments[0]!.kind).toBe("screen");
+    expect(detail.assessments[0]!.result.concerns.map((c) => c.claim)).toEqual([quoted.claim]);
+    expect(detail.matchScore.breakdown.find((c) => c.key === must.key)).toMatchObject({ source: "resume", finding: "Shown" });
+    // the rule reads the stored scorecard; nothing in it is rewritten
+    const [stored] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, cand.id), eq(assessments.kind, "screen")));
+    expect((stored!.result as { concerns: unknown[] }).concerns).toHaveLength(2);
+
+    // the AI interview's own quoted no wins, as in the score: their own latest words
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard([{ requirementKey: must.key, met: "no", evidence: { source: "screen", quote: "My RDH license lapsed last year" } }], [{ competencyKey: skill.key, finding: "contradicted", evidence: { source: "screen", quote: "I have never charted perio" } }]) as never, overall: "weak", confidence: "medium", createdAt: later(3) });
+    const after = await briefOf();
+    expect(after.mustHaves.find((m) => m.key === must.key)).toMatchObject({ met: "no", quote: "My RDH license lapsed last year", source: "screen" });
+    expect(after.competencies.find((c) => c.key === skill.key)?.finding).toBe("contradicted");
+    const cellAfter = await compared();
+    expect(cellAfter.mustHaves[must.key]).toEqual({ met: "no", quote: "My RDH license lapsed last year" });
+    expect(cellAfter.competencies[skill.key]?.finding).toBe("contradicted");
+
+    // The second review of the live-test fixes (#3, #20, #38): a "goes against it" with nothing checked quoted is not known
+    // to the score, so the brief and Compare read it "not seen yet", with a note only from an entry that says so
+    const notSeen = "Not mentioned in the résumé.";
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: { ...resumeReading, competencyFindings: [{ competencyKey: skill.key, finding: "not_evidenced", note: notSeen }] } as never, overall: "strong", confidence: "high", createdAt: later(4) });
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard([{ requirementKey: must.key, met: "unknown" }], [{ competencyKey: skill.key, finding: "contradicted", evidence: { source: "screen", unquoted: true }, note: "quote could not be verified against the source" }]) as never, overall: "potential", confidence: "medium", createdAt: later(5) });
+    const unchecked = await briefOf();
+    expect(unchecked.competencies.find((c) => c.key === skill.key)).toMatchObject({ finding: "not_evidenced", note: notSeen });
+    const email = renderInterviewerBriefText(unchecked);
+    expect(email).toContain(`(so far: not seen yet; ${notSeen})`);
+    expect(email).not.toMatch(/contradicted by the evidence|could not be verified/);
+    expect((await compared()).competencies[skill.key]).toEqual({ finding: "not_evidenced", note: notSeen });
+    const scored = (await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { matchScore: { unknown: Array<{ key: string; unquotedNo?: boolean }> } };
+    expect(scored.matchScore.unknown.find((u) => u.key === skill.key)).toMatchObject({ unquotedNo: true });
+    // nothing that says "not seen" at all: no note
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: { ...resumeReading, competencyFindings: [] } as never, overall: "strong", confidence: "high", createdAt: later(6) });
+    expect((await briefOf()).competencies.find((c) => c.key === skill.key)).toMatchObject({ finding: "not_evidenced", note: null });
+    expect((await compared()).competencies[skill.key]).toEqual({ finding: "not_evidenced", note: null });
+  });
+
+  /**
+   * The second review of the live-test fixes (#1): a concern with nothing quoted about a must-have the résumé shows is the
+   * AI interview's silence only when the conversation its scorecard read never asked about it. A tapped "No" is too short
+   * to quote, so the concern resting on it looked like silence and was left out.
+   */
+  it("a concern about the licence the AI interview asked about stays on the candidate's page and in the brief, and the stored scorecard keeps it either way", async () => {
+    const cand = await apply("Nia", "Okafor");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const full = pv.packet;
+    const must = full.requirements.mustHaves.find((m) => /licen/i.test(m.text)) ?? full.requirements.mustHaves[0]!;
+    expect(must.text).toBe("active CA RDH license");
+    const licenceQuestion = full.screening.questions.find((q) => q.key === "license_confirm")!;
+    expect(licenceQuestion, "the hygienist's AI interview asks about the licence").toBeTruthy();
+    const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+    const resumeReading = { overall: "strong", confidence: "high", summary: "Shows the licence.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: must.key, met: "yes", evidence: { source: "resume", quote: "Active CA RDH license #55321" } }], anomalies: [], recommendation: "screen", rationale: "x" };
+    await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "triage", packetVersion: cand.row.packetVersion, result: resumeReading as never, overall: "strong", confidence: "high", createdAt: later(1) });
+    // the scorecard's concern rests on her tapped "No", which the evidence rules leave unquoted; its own finding left the licence out
+    const notActive = { claim: "RDH license is not active in this state", evidence: { source: "screen", unquoted: true } };
+    const scorecard = { overall: "potential", confidence: "medium", summary: "Answered the questions.", strengths: [], concerns: [notActive], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "x" };
+    const [card] = await container.db.insert(assessments).values({ companyId, applicationId: cand.id, kind: "screen", packetVersion: cand.row.packetVersion, result: scorecard as never, overall: "potential", confidence: "medium", createdAt: later(2) }).returning();
+    const at = new Date(BASE).toISOString();
+    const [scr] = await container.db.insert(screens).values({ companyId, applicationId: cand.id, channel: "web", status: "completed", token: `asked-${cand.id}`, completedAt: at, assessmentId: card.id, answers: { [licenceQuestion.key]: "No" }, transcript: [{ role: "assistant", content: licenceQuestion.question, at, questionKey: licenceQuestion.key }, { role: "candidate", content: "No", at, questionKey: licenceQuestion.key, source: "tap" }] }).returning();
+    const shown = async () => ({
+      page: ((await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { assessments: Array<{ id: string; result: { concerns: Array<{ claim: string }> } }> }).assessments.find((r) => r.id === card.id)!.result.concerns.map((c) => c.claim),
+      brief: (await withTenant(container.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId: cand.id, candidateFirstName: "Nia", packet: full, roundKey: full.interviews.plan[0]!.key })))!.concerns.map((c) => c.claim),
+    });
+    // the AI interview asked about the licence: the concern stays
+    expect(await shown()).toEqual({ page: [notActive.claim], brief: [notActive.claim] });
+    // had it asked only about her work, the same concern is its silence about what the résumé shows
+    await container.db.update(screens).set({ transcript: [{ role: "assistant", content: "Tell me about your most recent hygiene work.", at, questionKey: "experience" }, { role: "candidate", content: "Six years of perio charting at a family practice.", at }] }).where(eq(screens.id, scr.id));
+    expect(await shown()).toEqual({ page: [], brief: [] });
+    // the stored scorecard keeps it either way
+    const [stored] = await container.db.select().from(assessments).where(eq(assessments.id, card.id));
+    expect((stored!.result as { concerns: unknown[] }).concerns).toEqual([notActive]);
   });
 
   it("the comparison view answers owners with the columns in the chosen order, refuses interviewers and takes five at most", async () => {
@@ -478,5 +624,45 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     // a hiring manager may compare too (application.read)
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager", email: "priya@messages.test" });
     expect((await json(hm, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id},${b.id}`)).status).toBe(200);
+  });
+
+  // The second review of the live-test fixes (#25, #27): a skill named like a must-have the AI interview confirms counts
+  // once, as that must-have, and the page cannot tell which from the must-haves it gets, so the answer marks it
+  it("the comparison view marks a skill the score counts as the must-have of the same name, and only while the AI interview confirms that must-have", async () => {
+    const a = await apply("Hana", "Sato");
+    const [pv] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    const must = pv.packet.requirements.mustHaves[0]!;
+    expect(must.evidencedBy).toContain("screen");
+    const twin = { key: "licence_skill", name: `${must.text.toUpperCase()}.`, definition: "Holds the licence.", weight: 5, evaluatedIn: "both" as const, indicators: ["Names the licence"] };
+    type Compared = { competencies: Array<{ key: string; asMustHave?: boolean }>; candidates: Array<{ mustHaves: Record<string, { met: string }>; competencies: Record<string, { finding: string; note: string | null }>; unknownCount: number; score: { breakdown: Array<{ key: string; mustHave: boolean }>; unknown: Array<{ key: string; mustHave: boolean }> } }> };
+    const compared = async () => (await (await json(owner, "GET", `/api/v1/roles/${roleId}/compare?ids=${a.id}`)).json()) as Compared;
+    const stillUnknown = (await compared()).candidates[0]!.unknownCount;
+    try {
+      await container.db.update(rolePackets).set({ packet: { ...pv.packet, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
+      const out = await compared();
+      expect(out.competencies.filter((c) => c.asMustHave).map((c) => c.key)).toEqual([twin.key]);
+      // The second look at the twin rule: it has no cell of its own, as the score counts none of its findings (the
+      // must-have's row holds what counts), so it is never "still unknown" either
+      expect(out.candidates[0]!.unknownCount).toBe(stillUnknown);
+      // a résumé reading that knows nothing of the licence as the must-have but shows it as the skill: the skill's finding
+      // is not sent, and the must-have's cell says what the score counts
+      const later = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+      const resumeReading = { overall: "potential", confidence: "medium", summary: "Shows the licence as a skill.", strengths: [], concerns: [], unknowns: [], competencyFindings: [{ competencyKey: twin.key, finding: "evidenced", evidence: { source: "resume", quote: "Active CA RDH license #55321" } }], requirementFindings: [{ requirementKey: must.key, met: "unknown" }], anomalies: [], recommendation: "screen", rationale: "x" };
+      await container.db.insert(assessments).values({ companyId, applicationId: a.id, kind: "triage", packetVersion: a.row.packetVersion, result: resumeReading as never, overall: "potential", confidence: "medium", createdAt: later(1) });
+      const read = (await compared()).candidates[0]!;
+      expect(read.competencies[twin.key]).toBeUndefined();
+      expect(read.mustHaves[must.key]).toEqual({ met: "unknown", quote: null });
+      expect([...read.score.breakdown, ...read.score.unknown].filter((c) => c.key === twin.key && !c.mustHave)).toEqual([]);
+      // with the AI interview's tick taken off that must-have, the skill counts on its own, is not marked, and its cell is
+      // the finding the score counts
+      const unticked = pv.packet.requirements.mustHaves.map((m, i) => (i === 0 ? { ...m, evidencedBy: ["resume" as const] } : m));
+      await container.db.update(rolePackets).set({ packet: { ...pv.packet, requirements: { ...pv.packet.requirements, mustHaves: unticked }, competencies: [...pv.packet.competencies, twin] } }).where(eq(rolePackets.id, pv.id));
+      const own = await compared();
+      expect(own.competencies.some((c) => "asMustHave" in c)).toBe(false);
+      expect(own.candidates[0]!.competencies[twin.key]).toEqual({ finding: "evidenced", note: null });
+      expect(own.candidates[0]!.score.breakdown.find((c) => c.key === twin.key && !c.mustHave)).toBeTruthy();
+    } finally {
+      await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
+    }
   });
 });

@@ -1,20 +1,22 @@
 import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
-  DraftRolePacket as DraftRolePacketSchema, IntakeServerState, RolePacket as RolePacketSchema,
-  type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact, type IntakeMessage,
-  type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole, type RolePacket,
+  DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, askedKind, mustHaveOf, rulesOut, withoutOwnersCallMark,
+  type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
+  type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeSuggestion, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
+  type RolePacket,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey, emit,
-  guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, typedByOwner, typedCeiling, unresolvedFlags,
-  withoutRemoved, withoutServerOwned,
+  DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, IntakeEditError, MAX_MUST_HAVES, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey,
+  draftKeyMatches, emit, guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, setOnDraftByRule, typedByOwner, typedCeiling,
+  unresolvedFlags, withoutRemoved, withoutServerOwned,
   type FactsEdit, type TeamMember,
 } from "@ros/core";
 import { companies, intakeSessions, memberships, playbooks, rolePackets, roles, users, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { VERTICAL_TO_PLAYBOOK, compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import type { CompAdapter } from "@ros/integrations";
-import { packetFingerprint } from "./packet-revise";
+import { packetFingerprint, plainWords } from "./packet-revise";
+import { sameRequirement } from "./requirements-check";
 
 export type IntakeDeps = { ai: AiRuntime; comp: CompAdapter };
 
@@ -174,10 +176,33 @@ function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionFie
   return q.mode === "pay" ? "compensation" : q.field;
 }
 
-/** The server's own card that offers stated deal-breakers back as must-haves. */
-const DEAL_PROMPT = "You named these as deal-breakers. Which should count openly as must-haves?";
+/**
+ * The server's own card that offers stated deal-breakers back as must-haves. Its options are the requirements they rule
+ * people out on, which the owner never named, so it says where they come from (review of the live test, 12 Nov 2026);
+ * it keeps the word "deal-breakers", which the web's `isDealBreakerCard` reads.
+ */
+const DEAL_PROMPT = "From your deal-breakers: which should count openly as must-haves?";
+/** The same card's words before 12 Nov 2026, still on cards stored before then. */
+const DEAL_PROMPT_BEFORE = "You named these as deal-breakers. Which should count openly as must-haves?";
+/** The deal-breaker card, by its question: with or without the deal-breakers it names (`dealPrompt`), or in the words before. */
 function isDealCard(q: Pick<IntakeQuestion, "field" | "prompt">): boolean {
-  return q.field === "must_haves" && q.prompt === DEAL_PROMPT;
+  return q.field === "must_haves" && (q.prompt === DEAL_PROMPT || q.prompt.startsWith(`${DEAL_PROMPT} `) || q.prompt === DEAL_PROMPT_BEFORE);
+}
+
+/**
+ * The deal-breaker card's question. It names the deal-breakers it offers no ready-made answer for (words that still rule
+ * someone out, "No RDA"), so the owner sees each one and can write what they need in the box for their own words, and
+ * none is marked as asked without a word on the card (review of the must-haves fix, 12 Nov 2026: "No RDA" beside
+ * "Cannot work Saturdays" was never named). Two by name at most, each cut to 60 characters, then how many more: within a
+ * card's 300 characters.
+ */
+function dealPrompt(toWrite: readonly string[]): string {
+  if (!toWrite.length) return DEAL_PROMPT;
+  const cut = (d: string) => { const t = d.trim().replace(/\s+/g, " ").replace(/"/g, "'"); return t.length > 60 ? `${t.slice(0, 59).trimEnd()}…` : t; };
+  const named = toWrite.slice(0, 2).map((d) => `"${cut(d)}"`);
+  const more = toWrite.length - named.length;
+  const list = more ? `${named.join(", ")} and ${more} more` : named.join(" and ");
+  return `${DEAL_PROMPT} To count ${list}, write ${toWrite.length === 1 ? "it" : "them"} as what they need.`.slice(0, 300);
 }
 
 /**
@@ -217,6 +242,8 @@ export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean, ty
   if (said(f.benefits)) out.push("benefits");
   if (f.decisionMaker || f.decisionMakerUserId) out.push("decision_maker");
   if (f.interviewers.length || f.interviewerUserIds?.length) out.push("interviewers");
+  // the owner went through the questions for the form: never asked on a card again
+  if (f.formQuestionsChosen) out.push("eligibility");
   return out;
 }
 
@@ -235,13 +262,18 @@ const CLEAR_FIELD: Record<NonNullable<IntakeFactsPatch["clear"]>[number], Intake
   reasonDetail: "reason_for_hire", benefits: "benefits", targetStartDate: "timeline", urgency: "timeline", whatFailureLooksLike: "what_failure_looks_like", decisionMaker: "decision_maker",
 };
 
-/** The card fields a panel edit touches: a fact the owner set, added to, took from or cleared is theirs, and not asked about again. */
+/**
+ * The card fields a panel edit touches: a fact the owner set, added to, took from or cleared is theirs, and not asked
+ * about again; so are the questions for the form once the owner went through them, even with every one left unticked.
+ */
 export function fieldsSetOnPanel(patch: IntakeFactsPatch | undefined): IntakeQuestionField[] {
   if (!patch) return [];
   const out: IntakeQuestionField[] = [];
   for (const k of Object.keys(patch.set ?? {}) as Array<keyof NonNullable<IntakeFactsPatch["set"]>>) out.push(...(PATCH_SET_FIELD[k] ?? []));
   for (const x of [...(patch.add ?? []), ...(patch.remove ?? [])]) out.push(LIST_FACT_FIELD[x.field]);
   for (const c of patch.clear ?? []) out.push(CLEAR_FIELD[c]);
+  for (const u of patch.unticked ?? []) out.push(u.field);
+  if (patch.formQuestionsChosen) out.push("eligibility");
   return out;
 }
 
@@ -274,6 +306,22 @@ export function keepAnswered(merged: IntakeFacts, before: IntakeFacts, answered:
   const b = before as Record<string, unknown>;
   for (const k of answered) {
     if (!KEPT_FACTS.has(k)) continue;
+    if (b[k] === undefined) delete m[k];
+    else m[k] = b[k];
+  }
+}
+
+/**
+ * Puts back every fact the written draft's words come from, as it stood before the model's turn: only what is set on the
+ * draft by rule (`setOnDraftByRule`: pay, why you are hiring, who decides and who interviews, the deal-breakers) may move.
+ * Used on a turn that follows answers alone once a draft is written (live test, 12 Nov 2026: such a turn read a must-have
+ * into the answers, and the draft asked to be written again); after the draft, words typed go to a change by chat.
+ */
+export function keepWordsFacts(merged: IntakeFacts, before: IntakeFacts): void {
+  const m = merged as Record<string, unknown>;
+  const b = before as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(m), ...Object.keys(b)])) {
+    if (setOnDraftByRule(k)) continue;
     if (b[k] === undefined) delete m[k];
     else m[k] = b[k];
   }
@@ -375,24 +423,41 @@ export function rememberPrompts(asked: readonly string[], shown: readonly Intake
 }
 
 /**
+ * A team card asks one thing, in the words of the fact its answer sets (`applyTeam`: the final say, or else who
+ * interviews). Live test, 12 Nov 2026: "Who should interview candidates, and who makes the final decision?" set only who
+ * interviews, and a later card about the final say was dropped as a repeat of it.
+ */
+const TEAM_CARD = {
+  decision_maker: { prompt: "Who has the final say?", why: "Their approval opens the role." },
+  interviewers: { prompt: "Who will interview?", why: "They get the interview plan and the questions to ask." },
+} as const;
+
+/**
  * The cards as they are stored and shown (C6, C15, C17). The server, not the model: numbers every card; drops a card
  * whose field was already asked in this draft or that the owner already told us (`settled`), so nothing is asked twice;
- * fills team cards with the real team (deciders only for the final say) and "Someone not on the team yet"; clears the
- * options of the pay card (drawn from the pay data); drops any offered answer that fails the fairness check; labels
- * "Your words" only where the words are the owner's; asks hourly or salary first when nobody knows; offers stated
- * deal-breakers back as must-haves. Three cards at most.
+ * fills team cards with the real team (deciders only for the final say) and "Someone not on the team yet", each worded
+ * by what its answer sets (`TEAM_CARD`); clears the options of the pay card (drawn from the pay data); drops any offered
+ * answer that fails the fairness check, and takes words meant only for the AI out of the rest (`withoutOwnersCallMark`);
+ * labels "Your words" only where the words are the owner's; asks hourly or salary
+ * first when nobody knows; offers stated deal-breakers back as must-haves, each worded as the requirement it rules people
+ * out on ("No active California RDA license" is offered as "Active California RDA license", `mustHaveOf`), which the
+ * owner can reword: "Your words" only when the words are the deal-breaker's unchanged, else the assistant's, and none
+ * ready-made for one whose words still rule someone out ("No RDA"), which the card's question names for the owner to
+ * write in their own words (review of the live test, 12 Nov 2026, and of its fix). Three cards at most.
  */
 export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; team: TeamMember[]; basisKnown: boolean; payConfirmed: boolean; dealBreakers: string[]; settled?: readonly IntakeQuestionField[]; ownerWords?: ReadonlySet<string>; askedPrompts?: readonly string[] }): IntakeQuestion[] {
   const settled = new Set(input.settled ?? []);
   const asked = input.askedPrompts ?? [];
   const out: IntakeQuestion[] = [];
   for (const raw1 of raw) {
-    const q = input.ownerWords ? honestOrigins(raw1, input.ownerWords) : raw1;
+    const honest = input.ownerWords ? honestOrigins(raw1, input.ownerWords) : raw1;
+    const team = honest.mode === "team" || honest.field === "interviewers" || (honest.field === "decision_maker" && honest.mode !== "free");
+    const q = team ? { ...honest, ...TEAM_CARD[honest.field === "decision_maker" ? "decision_maker" : "interviewers"] } : honest;
     if (settled.has(cardField(q))) continue;
     if (out.some((x) => x.field === q.field)) continue;
-    if (COMPANY_QUESTION.test(q.prompt)) continue;
+    if (COMPANY_QUESTION.test(honest.prompt)) continue;
     if ([...asked, ...out.map((x) => x.prompt)].some((p) => sameQuestion(p, q.prompt))) continue;
-    if (q.mode === "team" || q.field === "interviewers" || (q.field === "decision_maker" && q.mode !== "free")) {
+    if (team) {
       const deciders = q.field === "decision_maker";
       const members = input.team.filter((m) => !deciders || DECIDER_ROLES.includes(m.role));
       out.push({ ...q, mode: "team", options: [...members.slice(0, 7).map((m) => ({ label: m.name.slice(0, 200), value: m.userId, origin: "team" as const })), { label: "Someone not on the team yet", value: SOMEONE_NEW, origin: "team" as const }], allowOwn: true });
@@ -403,15 +468,32 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
       out.push({ ...q, field: "compensation", mode: "pay", options: [], allowOwn: true });
       continue;
     }
-    const options = q.options.filter((o) => !screenCriterion(o.label) && !screenCriterion(o.value)).slice(0, 6);
+    // Words meant only for the AI never reach the owner: an option copied with the owner's-call mark (or any "(ask only
+    // when …)") is shown, and stored when ticked, without it (review of the live-test fixes, 12 Nov 2026).
+    const options = q.options
+      .map((o) => ({ ...o, label: withoutOwnersCallMark(o.label), value: withoutOwnersCallMark(o.value) }))
+      .filter((o) => o.label && o.value && !screenCriterion(o.label) && !screenCriterion(o.value))
+      .slice(0, 6);
     if ((q.mode === "single" || q.mode === "multi") && !options.length && !q.allowOwn) continue;
     out.push({ ...q, options });
   }
   const cards: IntakeQuestion[] = [];
   const payAsked = settled.has("compensation_basis") || settled.has("compensation");
   if (!input.basisKnown && !input.payConfirmed && !payAsked && !out.some((q) => q.field === "compensation_basis" || q.mode === "pay")) cards.push(BASIS_CARD("basis"));
+  // The requirement each deal-breaker rules people out on, once each: never its negative words as a must-have (live test,
+  // 12 Nov 2026). One whose words still rule someone out gets no option, only the box for the owner's own words, and the
+  // card's question names it (`dealPrompt`); an option is "Your words" only when it is the deal-breaker's words unchanged
+  // (review of the live test, 12 Nov 2026, and of its fix).
+  const needs = input.dealBreakers
+    .map((d): IntakeQuestion["options"][number] => { const m = mustHaveOf(d); return { label: m.slice(0, 200), value: m.slice(0, 500), origin: m === d.trim().replace(/\s+/g, " ") ? "owner" : "assistant" }; })
+    .filter((o, i, all) => o.value && !rulesOut(o.value) && all.findIndex((x) => x.value.toLowerCase() === o.value.toLowerCase()) === i)
+    .slice(0, 6);
+  const toWrite = input.dealBreakers.filter((d, i, all) => {
+    const m = mustHaveOf(d).slice(0, 500).toLowerCase();
+    return !needs.some((o) => o.value.toLowerCase() === m) && all.findIndex((x) => x.trim().toLowerCase() === d.trim().toLowerCase()) === i;
+  });
   const deal: IntakeQuestion | null = input.dealBreakers.length
-    ? { id: "deal", field: "must_haves", prompt: DEAL_PROMPT, mode: "multi", options: input.dealBreakers.slice(0, 6).map((d) => ({ label: d.slice(0, 200), value: d.slice(0, 500), origin: "owner" as const })), allowOwn: false, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
+    ? { id: "deal", field: "must_haves", prompt: dealPrompt(toWrite), mode: "multi", options: needs, allowOwn: true, why: "Every application is reviewed against the must-haves, and a person can explain them to a candidate; anything left out here is not used to judge anyone." }
     : null;
   const room = 3 - cards.length - (deal ? 1 : 0);
   // The deal-breaker card takes the place of a must-haves card of the model's own on this turn (one list card at a time);
@@ -471,8 +553,36 @@ export function factsFromExtraction(facts: IntakeFacts, x: IntakeExtraction): In
 }
 
 /**
+ * Hire again (C14): the questions the old job's form left off, as questions left unticked (facts.suggestions with field
+ * "eligibility"), so the new draft's form asks what the old one asked. Each is for a deal-breaker the old job counted
+ * openly (a must-have is the requirement it rules people out on) that no question on the old form asks: none is the same
+ * requirement (`sameRequirement`), nor, for the schedule or the right to work, about the same (`askedKind`), as the
+ * backstop reads them. intake.compile v6 adds a rule for each deal-breaker counted openly unless the owner left a
+ * question asking it unticked, and `withoutUntickedQuestions` takes out one a model adds anyway (review of the hire-again
+ * fix, 12 Nov 2026: the RDA question the owner had left off the old form came back). Its words ask for the must-have as
+ * a question, never in the must-have's own words; only the draft's prompt reads them. A must-have still worded as what
+ * rules someone out asks nothing.
+ */
+export function questionsLeftOffTheOldForm(facts: Pick<IntakeFacts, "mustHaves" | "dealBreakers" | "eligibilityNotes">): IntakeSuggestion[] {
+  const out: IntakeSuggestion[] = [];
+  for (const d of facts.dealBreakers) {
+    const need = mustHaveOf(d);
+    const must = facts.mustHaves.find((m) => normalizeCriterion(m) === normalizeCriterion(need) || sameRequirement(m, need));
+    if (!must || rulesOut(must)) continue;
+    const kind = askedKind(must);
+    if (facts.eligibilityNotes.some((n) => sameRequirement(n, must) || (kind !== null && askedKind(n) === kind))) continue;
+    const text = `Do you have this: ${must.trim().replace(/[\s.?!]+$/, "")}?`;
+    if (!out.some((s) => s.text === text)) out.push({ field: "eligibility", text, origin: "owner" });
+  }
+  return out;
+}
+
+/**
  * Starts a draft together with its first message (C3): a draft is never created empty. A long first message is kept as
- * a pasted ad (C5); "just draft it" in typed words is recorded; a "hire again" draft starts from that role's facts.
+ * a pasted ad (C5); "just draft it" in typed words is recorded; a "hire again" draft starts from that role's facts, and
+ * its deal-breakers count as already offered: they were decided on that role (counted openly or not used to judge), so
+ * no deal-breaker card asks about them again, however the role's must-haves word them (review of the live-test fixes,
+ * 12 Nov 2026). The questions its form left off for a deal-breaker it counted openly stay off (`questionsLeftOffTheOldForm`).
  */
 export async function startIntakeSession(
   tx: Tx,
@@ -480,20 +590,40 @@ export async function startIntakeSession(
 ): Promise<IntakeSessionRow> {
   const at = new Date().toISOString();
   const state: Partial<IntakeServerState> = {};
+  let facts = input.facts ?? EMPTY_FACTS;
   if (input.message.kind === "pasted_ad") state.ad = { messageIndex: 0, chars: input.message.content.length, extracted: false, takenFromAd: [] };
   if (input.message.kind === "text" && DRAFT_IT_WORDS.test(input.message.content)) state.draftRequestedAt = at;
-  if (input.fromRole) state.fromRole = input.fromRole;
+  if (input.fromRole) {
+    const old = normalizeFacts(facts);
+    state.fromRole = input.fromRole;
+    state.dealBreakersOffered = [...old.dealBreakers];
+    const leftOff = questionsLeftOffTheOldForm(old);
+    if (leftOff.length) facts = { ...facts, suggestions: [...(facts.suggestions ?? []), ...leftOff] };
+  }
   const [session] = await tx
     .insert(intakeSessions)
-    .values({ companyId: input.companyId, createdBy: input.actor, createdByUserId: input.userId, messages: [{ role: "owner", content: input.message.content, at, kind: input.message.kind }], facts: input.facts ?? EMPTY_FACTS, serverState: state })
+    .values({ companyId: input.companyId, createdBy: input.actor, createdByUserId: input.userId, messages: [{ role: "owner", content: input.message.content, at, kind: input.message.kind }], facts, serverState: state })
     .returning();
   await emit(tx, { type: "intake.started", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { kind: input.message.kind, ...(input.via ? { via: input.via } : {}), ...(input.fromRole ? { fromRoleId: input.fromRole.roleId } : {}) } });
   return session;
 }
 
+/** "the three questions", "3 quick questions", "Two more cards": a count of the cards in the assistant's own words. */
+const CARD_COUNT = /\b(?:(the|these|those|your|my|first|next|following)\s+)?(two|three|four|five|six|[2-6])\s+(?=(?:(?:quick|short|simple|more|follow-up)\s+)?(?:questions|cards)\b)/gi;
+
+/**
+ * The assistant's reply with no count of its cards (live test, 12 Nov 2026: "Please answer the three questions below"
+ * above a card saying "1 of 2"): the server decides which cards are shown, after the model wrote its message, so the
+ * cards count themselves. "the three questions" reads "the questions", "3 quick questions" reads "some quick questions".
+ */
+export function withoutCardCount(message: string): string {
+  return message.replace(CARD_COUNT, (_all, det: string | undefined, num: string) => (det ? `${det} ` : /^[A-Z]/.test(num) ? "Some " : "some "));
+}
+
 /**
  * One owner message in (or none, when it was already recorded), one assistant reply out. Persists the transcript, the
- * facts and the cards. A pasted ad is read first in the same request, so both model calls share the request's deadline.
+ * facts and the cards, and, once a draft is written, its parts set by rule (`draftByRule`). A pasted ad is read first in
+ * the same request, so both model calls share the request's deadline.
  */
 export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnInput): Promise<IntakeTurnOutcome> {
   const deadlineAt = routeDeadline();
@@ -518,7 +648,8 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
   if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true, refusedHoldUsd: out.refusedHoldUsd };
   const agent: Actor = { kind: "agent", id: "intake", runId: out.runId };
   return withTenant(db, input.companyId, async (q) => {
-    const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
+    // Locked: the draft's parts set by rule are written below, never over a change saved on the draft a moment ago.
+    const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
     if (!session) throw new IntakeSessionError("not_found");
     if (!out.ok) {
       await emit(q, { type: "ai.run_failed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: out.reason, error: out.error } });
@@ -532,9 +663,14 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     merged.decisionMakerUserId = before.decisionMakerUserId;
     merged.interviewerUserIds = before.interviewerUserIds;
     merged.suggestions = before.suggestions;
+    if (before.formQuestionsChosen) merged.formQuestionsChosen = true;
+    else delete merged.formQuestionsChosen;
     // What the owner just answered on a card or set on the panel stays as they gave it: on a turn that follows answers
     // alone the model does not rewrite it (only words the owner typed can change it).
     if (!typedSinceReply(session.messages)) keepAnswered(merged, before, state.answeredFacts);
+    // Once the draft is written, such a turn changes no answer its words come from: only what is set on it by rule moves
+    // (a decision maker read from a team card's answer still comes through).
+    if (session.draftPacket && !typedSinceReply(session.messages)) keepWordsFacts(merged, before);
     if (merged.decisionMakerUserId && merged.decisionMaker !== before.decisionMaker) merged.decisionMakerUserId = undefined;
     const offer = dealBreakerOffer(merged, state.dealBreakersOffered);
     if (offer.declined.length) merged.declinedCriteria = [...merged.declinedCriteria, ...offer.declined.filter((d) => !merged.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))).map((d) => ({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) }))];
@@ -573,12 +709,14 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     state.benchmark = bench.benchmark;
     state.benchmarkGap = bench.gap;
     if (state.ad && out.output.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: out.output.takenFromAd };
-    const withReply = [...session.messages, { role: "assistant" as const, content: out.output.assistantMessage, at: new Date().toISOString(), aiRunId: out.runId }];
-    await q.update(intakeSessions).set({ messages: withReply, facts: merged, missingFacts: out.output.missingFacts, serverState: state, ...(notARole ? { status: "abandoned" } : {}) }).where(eq(intakeSessions.id, session.id));
+    const message = withoutCardCount(out.output.assistantMessage);
+    const withReply = [...session.messages, { role: "assistant" as const, content: message, at: new Date().toISOString(), aiRunId: out.runId }];
+    const draftPacket = !notARole && session.draftPacket ? draftByRule(await loadIntakeInputs(q, input.companyId, input.sessionId), { facts: merged, state, messages: withReply }, input.actor) : null;
+    await q.update(intakeSessions).set({ messages: withReply, facts: merged, missingFacts: out.output.missingFacts, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.turn_completed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { readyToCompile: out.output.readyToCompile, missing: out.output.missingFacts, confidence: out.output.confidence, questions: questions.map((x) => x.field) } });
     // Not a role: nothing is left behind as a draft (founder decision Q5); the conversation stays in the record.
     if (notARole) await emit(q, { type: "intake.abandoned", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: "not_a_role", turns: withReply.length } });
-    return { turn: { ...out.output, factsExtracted: merged, questions }, aiRunId: out.runId, notARole, benchmark: bench.benchmark, benchmarkGap: bench.gap ?? null };
+    return { turn: { ...out.output, assistantMessage: message, factsExtracted: merged, questions }, aiRunId: out.runId, notARole, benchmark: bench.benchmark, benchmarkGap: bench.gap ?? null };
   });
 }
 
@@ -590,16 +728,26 @@ export type EditOutcome = { session: IntakeSessionRow; refused: IntakeRefusal[];
  * Tapped answers and panel edits (C6, C7). One summary goes into the conversation as the owner's message (C15), words
  * typed beside the cards go in as their own message, the facts change with set / add / remove semantics (not the
  * append-only merge), pay set on the card or the panel is recorded as set by this person, and values a person took out
- * are held out of what the assistant sends back. The next turn, if any, is the caller's.
+ * are held out of what the assistant sends back. With `dealBreakersOffered` (the quick start, whose step 8 asked which
+ * deal-breakers count openly as must-haves), the edit's deal-breakers are recorded as offered, so the deal-breaker card
+ * never asks about them again. Once a draft is written, its parts set by rule follow the answers at once
+ * (`draftByRule`). The next turn, if any, is the caller's.
  */
-export async function applyIntakeEdit(db: Db, input: { companyId: string; sessionId: string; actor: Actor; answers: IntakeAnswer[]; patch?: IntakeFactsPatch; draftIt?: boolean; note?: string }): Promise<EditOutcome> {
+export async function applyIntakeEdit(db: Db, input: { companyId: string; sessionId: string; actor: Actor; answers: IntakeAnswer[]; patch?: IntakeFactsPatch; draftIt?: boolean; note?: string; dealBreakersOffered?: boolean }): Promise<EditOutcome> {
   return withTenant(db, input.companyId, async (q) => {
-    const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1);
+    // Locked: the draft's parts set by rule are written below, never over a change saved on the draft a moment ago.
+    const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
     if (!session) throw new IntakeSessionError("not_found");
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const team = await loadTeam(q, input.companyId);
-    const fromAnswers = applyAnswers(normalizeFacts(session.facts), state.openQuestions, input.answers, team);
+    // A must-have picked on a deal-breaker card is stored as the requirement it rules people out on: a card stored before
+    // 12 Nov 2026 offered the deal-breakers in their own words. One that still rules someone out is stored as it is; the
+    // owner's own words on the card are never turned round (review of the live test, 12 Nov 2026).
+    const asNeed = (v: string) => (rulesOut(mustHaveOf(v)) ? v : mustHaveOf(v));
+    const cards = state.openQuestions.map((x) => (isDealCard(x) ? { ...x, options: x.options.map((o) => ({ ...o, label: asNeed(o.label).slice(0, 200), value: asNeed(o.value).slice(0, 500) })) } : x));
+    const picks = input.answers.map((a) => (cards.some((x) => x.id === a.questionId && isDealCard(x)) ? { ...a, selected: a.selected.map(asNeed) } : a));
+    const fromAnswers = applyAnswers(normalizeFacts(session.facts), cards, picks, team);
     const fromPatch = input.patch ? applyFactsPatch(fromAnswers.facts, input.patch, team) : null;
     const edits: FactsEdit[] = fromPatch ? [fromAnswers, fromPatch] : [fromAnswers];
     const facts = (fromPatch ?? fromAnswers).facts;
@@ -625,6 +773,10 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
     const setOnPanel = new Set(fieldsSetOnPanel(input.patch));
     state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id) && (isDealCard(x) || !setOnPanel.has(cardField(x))));
     if (input.answers.length) state.answeredRounds += 1;
+    if (input.dealBreakersOffered) {
+      const offered = (input.patch?.add ?? []).filter((x) => x.field === "dealBreakers").map((x) => x.value);
+      state.dealBreakersOffered = [...state.dealBreakersOffered, ...offered.filter((d) => !state.dealBreakersOffered.some((o) => normalizeCriterion(o) === normalizeCriterion(d)))];
+    }
     if (input.draftIt && !state.draftRequestedAt) state.draftRequestedAt = now;
     if (input.note && DRAFT_IT_WORDS.test(input.note) && !state.draftRequestedAt) state.draftRequestedAt = now;
     const summary = edits.flatMap((e) => e.summary);
@@ -641,7 +793,8 @@ export async function applyIntakeEdit(db: Db, input: { companyId: string; sessio
       state.pay = { by: actorOfTurn(input.actor), at: now, via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax!, ...(ceiling !== undefined ? { ceiling } : {}) };
       await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed" } });
     }
-    const [updated] = await q.update(intakeSessions).set({ facts, messages, serverState: state }).where(eq(intakeSessions.id, session.id)).returning();
+    const draftPacket = session.draftPacket ? draftByRule(await loadIntakeInputs(q, input.companyId, input.sessionId), { facts, state, messages }, input.actor) : null;
+    const [updated] = await q.update(intakeSessions).set({ facts, messages, serverState: state, ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id)).returning();
     await emit(q, { type: "intake.answered", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { questionIds: [...answered], edited: !!input.patch, refused: refused.length, draftIt: !!input.draftIt } });
     return { session: updated, refused, summary };
   });
@@ -678,7 +831,8 @@ export const INTAKE_COMPILE_MAX_TOKENS = 32_000;
  * Writes the draft beside the conversation (C7, founder decision Q8): one model call at the judgment tier, never per
  * turn. Each stage is recorded as it starts (benchmark, writing, then checking, which runs the checks and saves in one
  * transaction, then done) so the page can show real progress while it polls; the draft carries pay only once a person
- * set or confirmed it, then passes the packet guard. The answers the model wrote from are recorded as a key, so the page
+ * set or confirmed it and no question for the form the owner left unticked, then passes the packet guard. The answers
+ * the model wrote from are recorded as a key, so the page
  * can tell when they change afterwards. The market check and the saves before the call count against the request's
  * deadline, so the call ends in time for the route to answer.
  */
@@ -713,7 +867,9 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    const draft = finalizeDraft(out.output, { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [], benchmark: bench.benchmark, messages: session.messages });
+    // A question the owner left unticked never goes on the form in the model's own words either: the same words, the same
+    // credential, or a rule of its kind for the schedule and the right to work (`withoutUntickedQuestions`).
+    const draft = finalizeDraft(withoutUntickedQuestions(out.output, facts), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [], benchmark: bench.benchmark, messages: session.messages });
     const at = new Date().toISOString();
     // The key is of the answers the model was given, so anything changed while it wrote shows the draft as out of date.
     state.draft = { at, aiRunId: out.runId, by: actorOfTurn(input.actor), payKey: payConfirmed(facts, state) ? payKey(state) : null, factsKey: draftFactsKey(ctx.facts), edits: 0 };
@@ -730,11 +886,81 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
 const serverAssumption = (a: string) => a.startsWith("Not set yet: ") || a === PAY_NOT_SET || a.endsWith(INTERVIEWERS_DEFAULT_NOTE);
 const PAY_NOT_SET = "Pay is not set yet: nobody has set or confirmed it.";
 
+/** A line saying something was not given: "You did not say…", "…were not named", "nobody". */
+const NOT_GIVEN = /\b(?:did not|didn't|has not|hasn't|have not|haven't|was not|wasn't|were not|weren't|not yet)\b|\bnot (?:named|said|stated|given|chosen|set|known)\b|\bno one\b|\bnobody\b/i;
+/** The essentials such a line can be about, by the words that name them. */
+const ESSENTIAL_WORDS: Partial<Record<IntakeEssentialKey, RegExp>> = {
+  reason_for_hire: /\bwhy (?:you are|you're|they are) hiring\b|\breason for (?:the )?hir(?:e|ing)\b|\bhiring reason\b/i,
+  interviewers: /\binterviewers?\b|\bwho (?:will )?interviews?\b/i,
+  decision_maker: /\bfinal (?:decision|say)\b|\bdecision[- ]maker\b|\bwho decides\b/i,
+};
+
+/**
+ * A line of the model's saying an essential was not given, when it has been since (live test, 12 Nov 2026: "You did not
+ * say why you are hiring, so the reason is listed as 'other'" stayed after the answer). The server's own lines say what
+ * is still missing, written afresh each time.
+ */
+function answeredSince(line: string, done: ReadonlySet<IntakeEssentialKey>): boolean {
+  if (!NOT_GIVEN.test(line)) return false;
+  return (Object.entries(ESSENTIAL_WORDS) as Array<[IntakeEssentialKey, RegExp]>).some(([key, words]) => done.has(key) && words.test(line));
+}
+
+/** "…does not screen anyone out", "…will not stop anyone from applying", "holds nobody", "is not a knockout". */
+const HOLDS_NOBODY: readonly RegExp[] = [
+  /\b(?:does not|doesn't|do not|don't|will not|won't|would not|wouldn't|is not|isn't|are not|aren't|never|not)\b[^.,;]{0,25}?\b(?:(?:screen|rule|filter|hold|knock|block|disqualif|exclud|reject|stop|prevent)\w*|bar(?:s|red|ring)?)\b[^.,;]{0,30}?\b(?:out|anyone|anybody|nobody|no one|applicants?|candidates?|applications?|people)\b/i,
+  /\b(?:holds?|screens?|rules?)\s+(?:out\s+)?(?:nobody|no one)\b/i,
+  /\bnot\s+(?:a\s+)?knock[\s-]?out\b/i,
+];
+/**
+ * "…is optional", "…is asked but not required", "…is for information only", "a non-knockout question", "…can still
+ * apply": only about a question on the form (a question, a licence, a certificate), so "Candidates without dental
+ * experience can still apply." stays.
+ */
+const NOT_REQUIRED = /\boptional\b|\binformational\b|\bfor information(?:al purposes)? only\b|\bnon[\s-]?(?:knock[\s-]?out|disqualifying|blocking|required|mandatory)\b|\bnot (?:required|a requirement|mandatory)\b|\bcan still (?:apply|be considered|move forward|proceed)\b/i;
+const ABOUT_THE_FORM = /\b(?:questions?|form|licen[cs]es?|licensure|certificat\w*|permits?|registrations?|credentials?|eligib\w*)\b/i;
+
+/**
+ * A line of the model's saying a question on the form holds nobody, screens, rules or stops nobody, or is optional or not
+ * required (live test, 12 Nov 2026: "…the license question is shown to candidates but does not automatically screen
+ * anyone out" stayed under "What the assistant assumed" beside a question that held every "no"; its review: "The RDA
+ * license question is optional; candidates without it can still apply." stayed too).
+ */
+export function saysFormHoldsNobody(line: string): boolean {
+  return HOLDS_NOBODY.some((re) => re.test(line)) || (NOT_REQUIRED.test(line) && ABOUT_THE_FORM.test(line));
+}
+
+/**
+ * A draft just written without the questions for the form the owner left unticked (facts.suggestions with field
+ * "eligibility"): a rule that is the same requirement as one of them (`sameRequirement`) is dropped, unless it is the same
+ * as one they chose too (facts.eligibilityNotes). A question about the schedule or the right to work has no short form
+ * and a model words it its own way ("Which of these days can you work: Mon, Tue, Wed?"), so one of them left unticked,
+ * with none of the questions chosen about the same (`askedKind`), drops every rule of that type. The backstop behind
+ * intake.compile v6's own line, which a model can still miss, also for a deal-breaker counted openly (review of the
+ * live-test fixes, 12 Nov 2026). Only on a draft just written (`draftIntake`), never when a saved one is brought up to
+ * date: a question put back by a change the owner confirmed stays.
+ */
+export function withoutUntickedQuestions(draft: DraftRolePacket, facts: Pick<IntakeFacts, "eligibilityNotes" | "suggestions">): DraftRolePacket {
+  const unticked = (facts.suggestions ?? []).filter((s) => s.field === "eligibility").map((s) => s.text);
+  if (!unticked.length) return draft;
+  const chosen = facts.eligibilityNotes ?? [];
+  const kindsLeftOff = new Set<string>();
+  for (const u of unticked) {
+    const kind = askedKind(u);
+    if (kind && !chosen.some((n) => askedKind(n) === kind)) kindsLeftOff.add(kind);
+  }
+  const leftOff = (r: DraftRolePacket["requirements"]["eligibility"][number]) => kindsLeftOff.has(r.type) || unticked.some((u) => sameRequirement(u, r.question));
+  const eligibility = draft.requirements.eligibility.filter((r) => chosen.some((n) => sameRequirement(n, r.question)) || !leftOff(r));
+  return eligibility.length === draft.requirements.eligibility.length ? draft : { ...draft, requirements: { ...draft.requirements, eligibility } };
+}
+
 /**
  * The deterministic part after the model (C1, C7, C15, C17): pay only from a person's confirmation (with who and how),
- * the decision maker and the interviewers as team members, the owner's deal-breakers in their own words, the essentials
- * still missing listed as assumptions, the market figure on the record, and then the packet guard. Run again on a saved
- * draft (a change by chat, asking for approval), it brings all of that up to date with the answers as they are now.
+ * why you are hiring as answered, the decision maker and the interviewers as team members, the owner's deal-breakers in
+ * their own words, every question on the form holding a "no" for the owner's decision (and none of the model's lines
+ * saying one holds nobody, once one it wrote so is made to hold), no word meant only for the AI in a question, the
+ * essentials still missing listed as assumptions (and none of the model's own lines about one answered since), the market
+ * figure on the record, and then the packet guard. Run again on a saved draft (an answer, a change by chat, asking for
+ * approval), it brings all of that up to date with the answers as they are now.
  *
  * Nothing the model wrote about who decided what is kept: its `ownerStated`, its wording flags (a flag "kept" by the
  * model would read as kept by the person asking, so a pasted ad could switch the fairness check off), and interviewer
@@ -773,17 +999,42 @@ export function finalizeDraft(
     delete packet.provenance.payConfirmedBy;
     delete packet.provenance.payOrigin;
   }
+  // Why you are hiring is the answer, set by rule (live test, 12 Nov 2026: the draft kept the model's "other" after the
+  // owner answered): a reason's code as it is, words as "Another reason" with the words. With no answer, the model's stays.
+  const reason = facts.reason?.trim();
+  if (reason) {
+    const code = HireReason.safeParse(reason);
+    packet.business.reason = code.success ? code.data : "other";
+    const detail = facts.reasonDetail?.trim() || (code.success ? "" : reason);
+    if (detail) packet.business.reasonDetail = detail;
+    else delete packet.business.reasonDetail;
+  }
   packet.preferences.decisionMakerName = facts.decisionMaker ?? packet.preferences.decisionMakerName;
   if (facts.decisionMakerUserId) packet.preferences.decisionMakerUserId = facts.decisionMakerUserId;
   else delete packet.preferences.decisionMakerUserId;
   packet.preferences.dealBreakersInTheirWords = facts.dealBreakers;
+  // Every question on a draft's form holds a "no" for the owner's decision (it never declines anyone): the assistant
+  // never decides that a question holds nobody (live test, 12 Nov 2026: an RDA licence asked of everyone held nobody).
+  // Only a person makes one "asked, not required", on the saved job. Whether one the model wrote held nobody is noted
+  // first: its own lines saying so go below.
+  const madeToHold = packet.requirements.eligibility.some((r) => !r.knockout);
+  for (const r of packet.requirements.eligibility) r.knockout = true;
+  // The owner's-call mark the draft's prompt shows beside a playbook question (or any "(ask only when …)") is for the AI
+  // only: never in a question candidates answer and the owner reads (review of the live-test fixes, 12 Nov 2026).
+  for (const r of packet.requirements.eligibility) r.question = withoutOwnersCallMark(r.question) || r.question;
+  for (const q of packet.screening.questions) q.question = withoutOwnersCallMark(q.question) || q.question;
   // Who interviews is chosen from the team on a card or the panel; ids the model wrote (made up, or people nobody chose) are not kept.
   for (const r of packet.interviews.plan) r.interviewerUserIds = [...(facts.interviewerUserIds ?? [])];
   const readiness = intakeReadiness({ facts, state: prov.state, messages: prov.messages ?? ctx.messages, draft: null });
   const notSet = readiness.essentials.filter((e) => !e.done).map((e) => `Not set yet: ${ESSENTIAL_LABEL[e.key].toLowerCase()}.`);
   const assumed = readiness.essentials.filter((e) => e.done && e.note).map((e) => `${ESSENTIAL_LABEL[e.key]}: ${e.value}. ${e.note}`);
-  // The server's own lines are written afresh each time, so a saved draft never keeps one the answers have since settled.
-  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a));
+  // The server's own lines are written afresh each time, so a saved draft never keeps one the answers have since settled;
+  // nor one of the model's saying an essential was not given, once it has been; nor, once a question it wrote as holding
+  // nobody is made to hold, one saying a question holds nobody (review of the live-test fixes, 12 Nov 2026). The model's
+  // own say "the job", never "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant
+  // assumed".
+  const done = new Set(readiness.essentials.filter((e) => e.done).map((e) => e.key));
+  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a))).map((a) => plainWords(a, ctx.company.name));
   packet.provenance = {
     ...packet.provenance,
     intakeSessionId: prov.sessionId,
@@ -798,6 +1049,26 @@ export function finalizeDraft(
   const declined: DeclinedCriterion[] = facts.declinedCriteria;
   const guarded = guardPacket(packet, { companyName: ctx.company.name, companyLocations: ctx.company.locations, declined, previousFlags: prov.previousFlags ?? [], actor: prov.actor, now: new Date().toISOString() });
   return DraftRolePacketSchema.parse(guarded.packet);
+}
+
+/**
+ * The written draft with its parts set by rule brought up to date with the answers as they are about to be saved (an
+ * answer on a card or the panel, the assistant's turn), with no model call and its words as written: live test, 12 Nov
+ * 2026, the answers to the builder's follow-up cards reached the panel but not the draft, which still said "Not set yet:
+ * why you are hiring". Null when there is no draft or nothing set by rule moved, so a change worked out on the draft just
+ * before stays good; a count of saved changes is never touched. A draft that no longer reads is left as it is: asking for
+ * approval brings it up to date anyway.
+ */
+function draftByRule(loaded: IntakeInputs, next: { facts: IntakeFacts; state: IntakeServerState; messages: IntakeMessage[] }, actor: Actor): DraftRolePacket | null {
+  const current = loaded.session.draftPacket;
+  if (!current) return null;
+  try {
+    const ctx = contextFrom({ ...loaded, session: { ...loaded.session, facts: next.facts, messages: next.messages }, state: next.state }, { benchmark: next.state.benchmark ?? null, gap: next.state.benchmarkGap });
+    const draft = finalizeDraft(current, { ...ctx, facts: next.facts }, { sessionId: loaded.session.id, aiRunId: next.state.draft?.aiRunId ?? "", state: next.state, actor, previousFlags: current.provenance.flags ?? [], benchmark: next.state.benchmark ?? null, messages: next.messages });
+    return packetFingerprint(draft) === packetFingerprint(current) ? null : draft;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -836,7 +1107,8 @@ export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string; noC
  * essentials are in, a person set or confirmed the pay, and no wording check is open.
  *
  * The role is made from the draft the person saw: its words are never rewritten here. The parts set by rule (the pay
- * set or confirmed since, who decides and who interviews, the deal-breakers, the assumptions) are brought up to date
+ * set or confirmed since, who decides and who interviews, the deal-breakers, the form's questions holding a "no", the
+ * assumptions) are brought up to date
  * with the answers as they are now. Only the one-step `draftFirst` path (POST /compile, for API clients) writes a draft
  * first, when there is none, or when the answers moved on and nobody saved a change on it since. Two asks at once take
  * turns on the draft's row: the second gets the role the first created.
@@ -949,13 +1221,157 @@ export async function keepDraftFlag(db: Db, input: { companyId: string; sessionI
   });
 }
 
+/** The lists on a draft that the answers hold too, with the card field that asks them. */
+const LISTS_ON_DRAFT = [
+  { fact: "mustHaves", field: "must_haves", of: (p: DraftRolePacket) => p.requirements.mustHaves.map((m) => m.text) },
+  { fact: "niceToHaves", field: "nice_to_haves", of: (p: DraftRolePacket) => p.requirements.niceToHaves.map((m) => m.text) },
+] as const;
+/** The single facts on a draft that the answers hold too. */
+const FACTS_ON_DRAFT = [
+  { fact: "title", of: (p: DraftRolePacket) => p.identity.title },
+  { fact: "schedule", of: (p: DraftRolePacket) => p.identity.schedule },
+  { fact: "employmentType", of: (p: DraftRolePacket) => p.identity.employmentType },
+  { fact: "remotePolicy", of: (p: DraftRolePacket) => p.identity.remotePolicy },
+] as const;
+
+/**
+ * What a seventh must-have by chat (or by a fix) is told (review of the live-test fixes, 12 Nov 2026): with the draft
+ * behind answers that already hold six, the one added came seventh and every later read dropped it, with no word to
+ * anyone. Taking one out with Edit leaves the draft as it is, so the same change can be confirmed again.
+ */
+const TOO_MANY_MUST_HAVES = "Your answers already have six must-haves, the most a job can have. Take one out with Edit beside the draft, then try this change again.";
+
+/**
+ * The answers after a change confirmed on the draft (by asking, or with a suggested fix): a change to what the answers
+ * hold too (the title, the schedule, full or part time, the work model, the must-haves, the nice-to-haves) is written
+ * into them, so writing the draft again keeps it (live test, 12 Nov 2026: a rewrite brought back the words a change by
+ * chat had fixed). A draft written from these very answers gives its lists whole, in its own words; otherwise only what
+ * the change added or took out moves, so an answer the draft does not have yet stays, and a change that would leave the
+ * answers more than six must-haves is refused (`too_many_must_haves`), never stored or cut short. There, a value the
+ * change took out (or reworded) leaves the answers in the words the draft was written from: its own, or for a must-have
+ * the owner's words intake.compile v6 turns round ("No active California RDA license" for "Active California RDA
+ * license"). A value the answers may still hold in other words (the model's rewording, or the hiring guide's when the
+ * owner chose none) cannot be followed: `uncarried` says so, since writing the draft again could bring it back, unless
+ * the owner already took it out with Edit (review of the change-by-chat fix, 13 Nov 2026). A list value taken out is
+ * held out of what the assistant sends back, one put back is no longer held, and what changed is not asked on a card
+ * again. A deal-breaker counted openly as a must-have is recorded as offered, so a reworded must-have never brings it
+ * back as a card. A draft up to date with the answers before the change stays so.
+ */
+export function answersFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState; uncarried: boolean } {
+  const f = normalizeFacts(structuredClone(facts));
+  const s = structuredClone(state);
+  const key = s.draft?.factsKey;
+  const upToDate = !!key && draftKeyMatches(key, f);
+  const same = (a: string, b: string) => normalizeCriterion(a) === normalizeCriterion(b);
+  const has = (list: readonly string[], v: string) => list.some((x) => same(x, v));
+  let changed = false;
+  let uncarried = false;
+  for (const l of LISTS_ON_DRAFT) {
+    const was = l.of(before);
+    const now = l.of(after);
+    if (was.length === now.length && was.every((v, i) => v === now[i])) continue;
+    changed = true;
+    const mine = f[l.fact];
+    /** Whether the draft writes this answer as `v`: in its words, or a must-have the way intake.compile v6 turns it round. */
+    const writes = (answer: string, v: string) => same(answer, v) || (l.fact === "mustHaves" && same(mustHaveOf(answer), v));
+    const gone = was.filter((v) => !has(now, v));
+    const kept = mine.filter((m) => has(now, m) || !gone.some((v) => writes(m, v)));
+    const next = upToDate ? [...now] : [...kept, ...now.filter((v) => !has(was, v) && !kept.some((m) => writes(m, v)))];
+    if (l.fact === "mustHaves" && next.length > MAX_MUST_HAVES) throw new IntakeEditError("too_many_must_haves", TOO_MANY_MUST_HAVES);
+    if (!upToDate) uncarried ||= gone.some((v) => !mine.some((m) => writes(m, v)) && !s.removed.some((r) => r.field === l.fact && writes(r.value, v)));
+    const out = [...gone, ...mine.filter((m) => !has(next, m))];
+    for (const v of out) if (!s.removed.some((r) => r.field === l.fact && same(r.value, v))) s.removed.push({ field: l.fact, value: v });
+    s.removed = s.removed.filter((r) => !(r.field === l.fact && has(next, r.value)));
+    if (l.fact === "mustHaves") {
+      const counted = f.dealBreakers.filter((d) => [...mine, ...next].some((m) => same(m, d) || same(m, mustHaveOf(d))));
+      s.dealBreakersOffered = [...s.dealBreakersOffered, ...counted.filter((d) => !has(s.dealBreakersOffered, d))];
+    }
+    if (f.suggestions) f.suggestions = f.suggestions.filter((x) => !(x.field === l.field && has(next, x.text)));
+    f[l.fact] = next;
+    s.settledFields = settle(s.settledFields, [l.field]);
+  }
+  const held: string[] = [];
+  for (const x of FACTS_ON_DRAFT) {
+    const was = x.of(before)?.trim() ?? "";
+    const now = x.of(after)?.trim() ?? "";
+    if (was === now) continue;
+    changed = true;
+    if (now) (f as Record<string, unknown>)[x.fact] = now;
+    else delete (f as Record<string, unknown>)[x.fact];
+    held.push(x.fact);
+  }
+  s.answeredFacts = holdFacts(s.answeredFacts, held);
+  if (changed && upToDate && s.draft) s.draft = { ...s.draft, factsKey: draftFactsKey(f) };
+  return { facts: f, state: s, uncarried };
+}
+
+/**
+ * The answers after a change confirmed on the draft moved why you are hiring: the draft's reason and its words go into
+ * them before the draft is brought up to date with the answers, which set the reason by rule (review of the live-test
+ * fixes, 12 Nov 2026: a reason changed by chat was shown, confirmed and saved, then put back). Only when the change moved
+ * it from the draft as it was: a fix, or a change to anything else, never copies a reason the draft held over the answer.
+ * The reason is held as the owner's and not asked on a card again; a draft up to date with the answers stays so.
+ */
+export function reasonFollowingChange(facts: IntakeFacts, state: IntakeServerState, before: DraftRolePacket, after: DraftRolePacket): { facts: IntakeFacts; state: IntakeServerState } {
+  const detail = (p: DraftRolePacket) => p.business.reasonDetail?.trim() ?? "";
+  if (after.business.reason === before.business.reason && detail(after) === detail(before)) return { facts, state };
+  const f = structuredClone(facts);
+  const s = structuredClone(state);
+  const key = s.draft?.factsKey;
+  const upToDate = !!key && draftKeyMatches(key, f);
+  f.reason = after.business.reason;
+  if (detail(after)) f.reasonDetail = detail(after);
+  else delete f.reasonDetail;
+  s.answeredFacts = holdFacts(s.answeredFacts, ["reason", "reasonDetail"]);
+  s.settledFields = settle(s.settledFields, ["reason_for_hire"]);
+  if (upToDate && s.draft) s.draft = { ...s.draft, factsKey: draftFactsKey(f) };
+  return { facts: f, state: s };
+}
+
+/**
+ * The parts of a draft that writing it again writes afresh from the answers, to compare: everything but what the answers
+ * hold too (the title, the schedule, full or part time, the work model, why you are hiring, and the words of the
+ * must-haves and nice-to-haves), the parts set by rule (pay, who decides and who interviews, the deal-breakers, every
+ * question on the form holding) and the record (`provenance`). A must-have or nice-to-have whose words both drafts hold
+ * still counts for why it matters and how it is checked; one the change added or took out is carried by its words, and
+ * `answersFollowingChange` says when the answers could not follow it.
+ */
+function writtenAfresh(p: DraftRolePacket, other: DraftRolePacket): unknown {
+  const { provenance: _record, compensation: _pay, ...rest } = p;
+  const kept = (list: DraftRolePacket["requirements"]["mustHaves"], theirs: DraftRolePacket["requirements"]["mustHaves"]) =>
+    list
+      .filter((m) => theirs.some((t) => normalizeCriterion(t.text) === normalizeCriterion(m.text)))
+      .map((m) => ({ text: normalizeCriterion(m.text), rationale: m.rationale, evidencedBy: [...m.evidencedBy].sort() }))
+      .sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0));
+  return {
+    ...rest,
+    identity: { ...rest.identity, title: undefined, schedule: undefined, employmentType: undefined, remotePolicy: undefined },
+    business: { ...rest.business, reason: undefined, reasonDetail: undefined },
+    requirements: { ...rest.requirements, mustHaves: kept(p.requirements.mustHaves, other.requirements.mustHaves), niceToHaves: kept(p.requirements.niceToHaves, other.requirements.niceToHaves), eligibility: rest.requirements.eligibility.map((e) => ({ ...e, knockout: true })) },
+    interviews: { ...rest.interviews, plan: rest.interviews.plan.map((r) => ({ ...r, interviewerUserIds: [] })) },
+    preferences: { ...rest.preferences, decisionMakerName: undefined, decisionMakerUserId: undefined, dealBreakersInTheirWords: [] },
+  };
+}
+
+/**
+ * Whether writing the draft again would lose part of a change confirmed on it (review of the live-test fixes, 12 Nov
+ * 2026: "Write it again" warned that a must-have fixed by chat, which the answers kept, would be replaced): only such a
+ * change is counted, so the warning is there only when there is something to lose.
+ */
+export function lostOnRewrite(before: DraftRolePacket, after: DraftRolePacket): boolean {
+  return packetFingerprint(writtenAfresh(before, after)) !== packetFingerprint(writtenAfresh(after, before));
+}
+
 /**
  * Saves a revised draft before the role exists (for "change it by chat" and the requirements check's fixes, C10, C16):
  * through the packet guard, keeping who kept which flag, with pay only as confirmed. The caller has shown the change and
  * the person confirmed it. With `expectedHash` (the fingerprint of the draft the change was worked out on) the row is
  * locked and the save is refused (`stale_draft`) when the draft changed since, so two changes never overwrite each
- * other; `onSaved` records what the caller needs (the proposal's outcome, the event) in the same transaction. The count
- * of saved changes goes up by one: writing the draft again would replace them, and the page says so first.
+ * other; `onSaved` records what the caller needs (the proposal's outcome, the event) in the same transaction. A change to
+ * why you are hiring goes into the answers first (`reasonFollowingChange`), and a change to what the answers hold too
+ * goes into them (`answersFollowingChange`, which refuses a seventh must-have before anything is saved). The count of
+ * saved changes goes up by one only when writing the draft again would lose part of this one (`lostOnRewrite`, or a
+ * value taken out that the answers could not follow, `uncarried`), and the page says so first.
  */
 export async function storeDraftPacket(
   db: Db,
@@ -969,12 +1385,15 @@ export async function storeDraftPacket(
     if (loaded.session.status !== "active") throw new IntakeSessionError("not_active");
     const current = loaded.session.draftPacket;
     if (input.expectedHash !== undefined && (!current || packetFingerprint(current) !== input.expectedHash)) throw new IntakeSessionError("stale_draft");
-    const facts = normalizeFacts(loaded.session.facts);
+    const answered = normalizeFacts(loaded.session.facts);
+    const reasoned = current ? reasonFollowingChange(answered, loaded.state, current, input.draft) : { facts: answered, state: loaded.state };
+    const facts = reasoned.facts;
     const ctx = contextFrom(loaded, { benchmark: loaded.state.benchmark ?? null, gap: loaded.state.benchmarkGap });
-    const draft = finalizeDraft(input.draft, { ...ctx, facts }, { sessionId: loaded.session.id, aiRunId: loaded.state.draft?.aiRunId ?? "", state: loaded.state, actor: input.actor, previousFlags: current?.provenance.flags ?? [], benchmark: loaded.state.benchmark ?? null, messages: loaded.session.messages });
-    const state = loaded.state;
-    if (state.draft) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
-    await q.update(intakeSessions).set({ draftPacket: draft, serverState: state }).where(eq(intakeSessions.id, loaded.session.id));
+    const draft = finalizeDraft(input.draft, { ...ctx, facts }, { sessionId: loaded.session.id, aiRunId: loaded.state.draft?.aiRunId ?? "", state: reasoned.state, actor: input.actor, previousFlags: current?.provenance.flags ?? [], benchmark: loaded.state.benchmark ?? null, messages: loaded.session.messages });
+    const followed = current ? answersFollowingChange(facts, reasoned.state, current, draft) : { facts, state: reasoned.state, uncarried: false };
+    const state = followed.state;
+    if (state.draft && (!current || followed.uncarried || lostOnRewrite(current, draft))) state.draft = { ...state.draft, edits: (state.draft.edits ?? 0) + 1 };
+    await q.update(intakeSessions).set({ draftPacket: draft, facts: followed.facts, serverState: state }).where(eq(intakeSessions.id, loaded.session.id));
     if (opts.onSaved) await opts.onSaved(q, draft);
     return draft;
   });

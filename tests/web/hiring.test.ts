@@ -37,14 +37,81 @@ describe("Offer made (Q29)", () => {
     expect(waitingOnCandidateText(a as never, new Date(2026, 9, 9, 10))).toBe("You recorded an offer made on Tuesday, October 6 (3 days ago). The next move is Maria's. When they answer, record it here; nothing is sent to them either way.");
   });
 
+  // Live test, 12 November 2026: an offer made on 11 November in Los Angeles read "(yesterday)" in Pakistan, where it was
+  // already the 12th, while the date field had capped the day at the company's today.
+  it("counts the days since the offer on the company's calendar, the one its day is recorded on", () => {
+    const evening = new Date("2026-11-12T04:00:00Z"); // 8 PM on the 11th in Los Angeles, already the 12th in Pakistan
+    expect(daysAgoWords("2026-11-11", evening, "America/Los_Angeles")).toBe("today");
+    expect(daysAgoWords("2026-11-10", evening, "America/Los_Angeles")).toBe("yesterday");
+    expect(daysAgoWords("2026-11-08", evening, "America/Los_Angeles")).toBe("3 days ago");
+    expect(daysAgoWords("not a day", evening, "America/Los_Angeles")).toBe("");
+    const a = { stageChangedAt: "2026-11-12T03:00:00.000Z", timeline: [ev("offer.created", { madeOn: "2026-11-11" })], candidate: { firstName: "Maria" } };
+    expect(waitingOnCandidateText(a as never, evening, "America/Los_Angeles")).toBe("You recorded an offer made on Wednesday, November 11 (today). The next move is Maria's. When they answer, record it here; nothing is sent to them either way.");
+    // the card reads the company's zone
+    const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/hiring.tsx", import.meta.url), "utf8");
+    expect(card).toContain("waitingOnCandidateText(a, undefined, timeZone)");
+  });
+
   it("shows the wait on the candidate on their row, and their answer privately", () => {
-    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 3 })).toBe("Offer made: waiting on their answer 3 days");
-    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", daysInStage: 0 })).toBe("Offer made today: waiting on their answer");
-    expect(waitingOnCandidateRow({ group: "waiting_on_you", daysInStage: 3 })).toBeNull();
+    const at = new Date("2026-10-09T17:00:00Z"); // 10 AM on the 9th in Los Angeles
+    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", stageChangedAt: "2026-10-06T17:00:00.000Z", offerMadeOn: "2026-10-06" }, at, "America/Los_Angeles")).toBe("Offer made 3 days ago: waiting on their answer");
+    expect(waitingOnCandidateRow({ group: "waiting_on_candidate", stageChangedAt: "2026-10-09T16:00:00.000Z", offerMadeOn: "2026-10-09" }, at, "America/Los_Angeles")).toBe("Offer made today: waiting on their answer");
+    expect(waitingOnCandidateRow({ group: "waiting_on_you", stageChangedAt: "2026-10-06T17:00:00.000Z", offerMadeOn: null }, at, "America/Los_Angeles")).toBeNull();
     expect(offerAnswerToast("declined", {})).toEqual({ title: "Recorded: they declined the offer.", detail: "Recorded with your name. Nothing was sent to them." });
     expect(offerAnswerToast("withdrew", { interviewsCancelled: 1, interviewOffNotes: 1 }).detail).toMatch(/they were sent a short note now saying only that it is off\.$/);
   });
+
+  // Review of the live-test fixes, 12 November 2026 (#58): the row counted whole 24 hours since the stage changed and the
+  // card the offer's day on the company's calendar, so the morning after an evening offer the row said "today" and the
+  // card "yesterday"; a day recorded as earlier than the click was never on the row at all.
+  it("says on the row the day the card on their panel says, on the company's calendar whatever the reader's clock", () => {
+    const LA = "America/Los_Angeles";
+    // recorded at 11 PM on Thursday the 12th in Los Angeles: 2 AM on Friday the 13th for the owner reading in New York
+    const recorded = "2026-11-13T07:00:00.000Z";
+    const card = (madeOn: string) => ({ stageChangedAt: recorded, timeline: [ev("offer.created", { madeOn }, recorded)], candidate: { firstName: "Maria" } });
+    const row = (offerMadeOn?: string) => ({ group: "waiting_on_candidate", stageChangedAt: recorded, offerMadeOn });
+    asReaderIn("America/New_York", () => {
+      // 8:30 AM the next morning in Los Angeles: under ten hours since the click, and the 12th was yesterday there
+      const morning = new Date("2026-11-13T16:30:00.000Z");
+      expect(waitingOnCandidateText(card("2026-11-12") as never, morning, LA)).toContain(" (yesterday). ");
+      expect(waitingOnCandidateRow(row("2026-11-12"), morning, LA)).toBe("Offer made yesterday: waiting on their answer");
+      // 11:30 PM on the 12th in Los Angeles, already the 13th in New York: today in both, on the company's calendar
+      const late = new Date("2026-11-13T07:30:00.000Z");
+      expect(waitingOnCandidateText(card("2026-11-12") as never, late, LA)).toContain(" (today). ");
+      expect(waitingOnCandidateRow(row("2026-11-12"), late, LA)).toBe("Offer made today: waiting on their answer");
+      // a day recorded as earlier than the click: that day, in both
+      expect(waitingOnCandidateText(card("2026-11-09") as never, morning, LA)).toContain(" (4 days ago). ");
+      expect(waitingOnCandidateRow(row("2026-11-09"), morning, LA)).toBe("Offer made 4 days ago: waiting on their answer");
+      // an older answer without the offer's day: the day they moved to Offer, as the card without the offer's fact, also on
+      // the company's calendar (the second look at this fix: both read the UTC date, the 13th, and said "today" all day)
+      const moved = { ...card("2026-11-12"), timeline: [] };
+      expect(offerMadeOn(moved, LA)).toBe("2026-11-12");
+      expect(waitingOnCandidateText(moved as never, morning, LA)).toContain(" made on Thursday, November 12 (yesterday). ");
+      expect(waitingOnCandidateRow(row(), morning, LA)).toBe("Offer made yesterday: waiting on their answer");
+      // until the company's zone has loaded, both on the reader's own calendar: already the 13th in New York
+      expect(offerMadeOn(moved)).toBe("2026-11-13");
+      expect(waitingOnCandidateRow(row(), morning)).toBe("Offer made today: waiting on their answer");
+    });
+    // the row reads the company's zone, as the card does, and so does the panel's "Where things stand" line
+    const list = readFileSync(new URL("../../apps/web/src/pages/People.tsx", import.meta.url), "utf8");
+    expect(list).toContain("waitingOnCandidateRow(a, undefined, timeZone)");
+    const where = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/sections.tsx", import.meta.url), "utf8");
+    expect(where).toContain("plainDayWords(offerMadeOn(a, timeZone))");
+  });
 });
+
+/** Reads as someone whose own clock is in `zone`: the process's zone is set there while `read` runs, then put back. */
+function asReaderIn(zone: string, read: () => void): void {
+  const own = process.env.TZ;
+  const system = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  process.env.TZ = zone;
+  try {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the reader's own zone").toBe(zone);
+    read();
+  } finally {
+    process.env.TZ = own ?? system;
+  }
+}
 
 describe("a recorded outcome on the panel", () => {
   it("says a hire's start day the way the app says days, never the stored 2026-11-30 (10 November 2026)", () => {
@@ -119,6 +186,21 @@ describe("the hire sheet (plan H1)", () => {
     expect(v.keepWarmWords).not.toMatch(/reminds you about your backups/);
     expect(hireFollowUpView({ ...hire, backups: { count: 1, people: hire.backups.people.slice(0, 1) } }, "Maria", after).keepWarmWords).toMatch(/Home asks you to close the job until you do\.$/);
     expect(keepWarmToast("Maria", "2026-11-02", after)).toEqual({ title: "The job stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." });
+  });
+
+  // The same clock as the offer's day (live test, 12 November 2026): Home keeps its backups card through the start day on
+  // the company's calendar, so the sheet says the start has passed only once that day is over there.
+  it("says whether the start date has passed on the company's calendar", () => {
+    const evening = new Date("2026-11-03T04:00:00Z"); // 8 PM on 2 November in Los Angeles, already the 3rd in Pakistan
+    expect(hireFollowUpView(hire, "Maria", evening, "America/Los_Angeles")).toMatchObject({ started: false, startLine: "Maria starts on Monday, November 2." });
+    expect(keepWarmToast("Maria", "2026-11-02", evening, 1, "America/Los_Angeles").detail).toMatch(/Home reminds you about your backups until Maria starts/);
+    const nextEvening = new Date("2026-11-04T04:00:00Z");
+    expect(hireFollowUpView(hire, "Maria", nextEvening, "America/Los_Angeles")).toMatchObject({ started: true, startLine: "Maria started on Monday, November 2." });
+    expect(keepWarmToast("Maria", "2026-11-02", nextEvening, 1, "America/Los_Angeles").detail).toBe("Nobody was told anything. Home asks you to close it until you do.");
+    // the sheet reads the company's zone
+    const sheet = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/hiring.tsx", import.meta.url), "utf8");
+    expect(sheet).toContain("hireFollowUpView(after, a.candidate.firstName || name, undefined, timeZone)");
+    expect(sheet).toContain("keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count, timeZone)");
   });
 
   it("names closing in job words, like every other button (10 November 2026), and says \"and tell them\" only when someone can be told", () => {

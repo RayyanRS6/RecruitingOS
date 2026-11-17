@@ -7,7 +7,7 @@ import { Alert, Button, cn, Drawer, Field, IconButton, IconLabel, Segmented } fr
 import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
 import { ClosingDateField } from "../components/ClosingDate";
 import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
-import { CHECKED_IN, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
+import { CHECKED_IN, COUNTS_AS_MUST_HAVE, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, rowsCountedAsMustHaves, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
 import { toast } from "../toast";
 import { UnsavedPreview } from "./new-role/CandidatePreview";
 import { EVIDENCE_CHOICES } from "./role/evidence";
@@ -117,13 +117,16 @@ function RequirementRows({ rows, onChange, idPrefix, max, addLabel }: { rows: Ro
 /**
  * The skills we look for (plan F3, F12): what each means, how much it counts in the match score (Essential, Important or
  * Helpful) and where it is checked. Removing one that a screening question or an interview round leans on says so first;
- * one that is the only skill an interview round checks cannot be removed until the round checks another.
+ * one that is the only skill an interview round checks cannot be removed until the round checks another. A skill named as
+ * one of the must-haves above that the AI interview confirms says "Counts as the must-have" under its picker, from those
+ * rows as they are now.
  */
-function SkillRows({ rows, onChange, packet }: { rows: SkillRow[]; onChange: (rows: SkillRow[]) => void; packet: RolePacket }) {
+function SkillRows({ rows, onChange, packet, mustHaves }: { rows: SkillRow[]; onChange: (rows: SkillRow[]) => void; packet: RolePacket; mustHaves: Row[] }) {
   const [asking, setAsking] = useState<string | null>(null);
   const update = (i: number, patch: Partial<SkillRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const remove = (i: number) => { setAsking(null); onChange(rows.filter((_, j) => j !== i)); };
   const filled = rows.filter((r) => r.name.trim()).length;
+  const asMustHave = rowsCountedAsMustHaves(rows, mustHaves);
   return (
     <div className="stack gap-2.5">
       {rows.map((r, i) => {
@@ -134,7 +137,7 @@ function SkillRows({ rows, onChange, packet }: { rows: SkillRow[]; onChange: (ro
             <Field label={`${i + 1}. Skill`} htmlFor={`sk-name-${i}`}><input id={`sk-name-${i}`} className="input" value={r.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="e.g. Putting patients at ease" /></Field>
             <Field label="What it means" htmlFor={`sk-def-${i}`}><input id={`sk-def-${i}`} className="input" value={r.definition} onChange={(e) => update(i, { definition: e.target.value })} placeholder="e.g. Explains each step and calms nervous patients" /></Field>
             <div className="grid-2">
-              <Field label="How much it counts" hint={IMPORTANCE_HINT[r.importance]}>
+              <Field label="How much it counts" hint={asMustHave[i] ? COUNTS_AS_MUST_HAVE : IMPORTANCE_HINT[r.importance]}>
                 <Segmented value={r.importance} onChange={(importance) => update(i, { importance })} ariaLabel={`How much ${label} counts`} options={IMPORTANCE_CHOICES.map((o) => ({ value: o.value, label: o.label }))} />
               </Field>
               <Field label="Where we check it" htmlFor={`sk-in-${i}`}>
@@ -441,7 +444,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
                   <summary>How this works</summary>
                   <p className="hint">{SCORE_WEIGHTS_LINE}</p>
                 </details>
-                <SkillRows rows={skills} onChange={setSkills} packet={packet} />
+                <SkillRows rows={skills} onChange={setSkills} packet={packet} mustHaves={mustHaves} />
               </RequirementGroup>
               {/* kept in sight: the AI conversation is marked as AI with a person instead, and nobody is turned down automatically */}
               <RequirementGroup legend={`Screening questions (${SCREENING_MIN} to ${SCREENING_MAX})`} hint="Asked in a short conversation marked as AI, in this order, with a person available instead.">
@@ -477,7 +480,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
             </>
           ) : (
             <div className={SOLO}>
-              <Field label="Role packet JSON" htmlFor="packet-json"><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
+              <Field label="All the job's details (JSON)" htmlFor="packet-json"><textarea id="packet-json" className="textarea min-h-[360px] font-mono text-[12px]" value={json} onChange={(e) => setJson(e.target.value)} /></Field>
             </div>
           )}
           {/* The foot: what changed (with what a save does to people already read), anything wrong, and the save as the primary pill (or the review of a live change) */}

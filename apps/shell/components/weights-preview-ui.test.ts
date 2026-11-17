@@ -90,6 +90,23 @@ describe("the weights preview drawer", () => {
     const plain = render(client([[["applications", "r1", "board"], board]]), createElement(WeightsPreview, { roleId: "r1", packet: noInterviewOnly, onClose: () => undefined, onUse: () => undefined }));
     expect(text(plain)).not.toContain(wp.INTERVIEW_ONLY_LINE);
     expect(html).toContain('<option value="off">Leave out of the score</option>');
+    // no skill counts as a must-have here, so nothing says so
+    expect(text(html)).not.toContain(wp.AS_MUST_HAVE_LINE);
+  });
+
+  // The second review of the live-test fixes (#25, #27): a skill named like a must-have the AI interview confirms counts
+  // once, as the must-have, so it has no row, and the drawer says why once
+  it("lists no row for a skill named like a must-have the AI interview confirms, and says once why", () => {
+    const withTwin = { ...packet, competencies: [...packet.competencies, { key: "xray", name: "Radiography certificate.", definition: "Holds the certificate.", weight: 5, evaluatedIn: "both" }] } as Packet;
+    const html = render(client([[["applications", "r1", "board"], board]]), createElement(WeightsPreview, { roleId: "r1", packet: withTwin, onClose: () => undefined, onUse: () => undefined }));
+    expect(html).not.toContain('id="weights-s-xray"');
+    expect(html).toContain('<label for="weights-m-mh_xray">Radiography certificate</label>');
+    expect(text(html).split(wp.AS_MUST_HAVE_LINE)).toHaveLength(2);
+    // beside a must-have the AI interview does not confirm, the skill counts on its own: weighed like any other, no line
+    const resumeOnly = { ...withTwin, requirements: { ...withTwin.requirements, mustHaves: withTwin.requirements.mustHaves.map((m) => (m.key === "mh_xray" ? { ...m, evidencedBy: ["resume" as const] } : m)) } };
+    const own = render(client([[["applications", "r1", "board"], board]]), createElement(WeightsPreview, { roleId: "r1", packet: resumeOnly, onClose: () => undefined, onUse: () => undefined }));
+    expect(own).toContain('<label for="weights-s-xray">Radiography certificate.</label>');
+    expect(text(own)).not.toContain(wp.AS_MUST_HAVE_LINE);
   });
 
   it("lists the candidates in score order with plain numbers, never the score badge, and counts those with no score apart", () => {
@@ -160,5 +177,18 @@ describe("the Scoring tab of the job page", () => {
     const t = text(render(client([[["me"], me([{ role: "owner" }])], [["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } }], [["role", "r1"], { ...job, counts: {} }]]), createElement(RoleDetail)));
     expect(t).toContain("Change the skills or how much each counts");
     expect(t).not.toContain("Try different weights");
+  });
+
+  // The second review of the live-test fixes (#25, #27): "What we look for" tagged a skill the score counts as the
+  // must-have of the same name "Essential", right above the line saying Essential skills count
+  it("tags a skill named like a must-have the AI interview confirms \"Counts as the must-have\", never by its importance", () => {
+    const withTwin = { ...packet, competencies: [...packet.competencies, { key: "xray", name: "Radiography certificate.", definition: "Holds the certificate.", weight: 5, evaluatedIn: "both" }] } as Packet;
+    const html = render(client([[["me"], me([{ role: "owner" }])], [["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } }], [["role", "r1"], { ...job, currentPacket: { ...job.currentPacket, packet: withTwin } }]]), createElement(RoleDetail));
+    expect(html).toMatch(/<strong>Radiography certificate\.<\/strong> <span class="sbar-tag">Counts as the must-have<\/span>/);
+    // the other skills keep their importance
+    expect(html).toMatch(/<strong>Chairside skill<\/strong> <span class="sbar-tag">Essential<\/span>/);
+    expect(html.split("Counts as the must-have")).toHaveLength(2);
+    // without the twin, nothing reads so
+    expect(page(me([{ role: "owner" }]))).not.toContain("Counts as the must-have");
   });
 });

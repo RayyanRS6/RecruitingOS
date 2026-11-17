@@ -3,9 +3,10 @@ import { createCompanyThroughTheForm, expectAccessible, gotoSettled, signIn, ski
 
 /**
  * The quick start for a new job (Wave S2 K2, Wave S3) in a real browser with the fake AI: /roles/new offers the quick
- * questions; ten small steps, one question each with "Step N of 10"; the review lists every answer with its Edit; "Write
- * the job post" hands everything to the job builder, which shows the title and the pay. A step and the review are
- * checked against WCAG 2.1 AA with axe.
+ * questions; ten small steps, one question each with "Step N of 10"; the review lists every answer with its Edit; back on
+ * step 8, a deal-breaker counts as the must-have it is written as ("As a must-have"), never in words that rule someone
+ * out, and step 9's RDA question then ticks itself; "Write the job post" hands everything to the job builder, which shows
+ * the title, the pay and the must-haves. Steps 1, 5, 8 and 9 and the review are checked against WCAG 2.1 AA with axe.
  */
 const run = Date.now().toString(36);
 
@@ -82,9 +83,13 @@ test.describe("the quick start", () => {
     await page.getByRole("checkbox", { name: "None" }).check({ force: true });
     await next(page);
 
-    // 9. the suggested questions stay as they are
+    // 9. the suggested questions stay as they are: the RDA licence, the owner's call, waits unticked (no must-have names
+    // it), the others start ticked, and the line says what a "no" does (live test, 12 Nov 2026)
     await step(page, 9, "What should every applicant answer?");
-    await expect(page.getByRole("group", { name: "What should every applicant answer?" }).getByRole("checkbox").first()).toBeChecked();
+    await expect(page.getByText('A "no" holds the application for your decision.')).toBeVisible();
+    const questions = page.getByRole("group", { name: "What should every applicant answer?" }).getByRole("checkbox");
+    await expect(questions.first()).not.toBeChecked();
+    await expect(questions.nth(1)).toBeChecked();
     await next(page);
 
     // 10. the review: one row a step, each with its Edit
@@ -99,14 +104,60 @@ test.describe("the quick start", () => {
     await expect(answers).toContainText("Dentrix experience");
     await expect(answers).toContainText("X-ray certificate");
     await expect(answers).toContainText("None");
-    await expect(answers).toContainText(/\d+ on the form/);
+    // the questions on the form say that a "no" holds the application (review of the live-test fixes, 12 Nov 2026)
+    await expect(answers).toContainText('2 on the form (a "no" holds the application for your decision)');
     await expect(answers.getByRole("button", { name: /^Edit / })).toHaveCount(9);
     await expectAccessible(page, "quick start review");
+
+    // back to step 8 with a deal-breaker after all: it counts as the requirement it rules people out on, which the owner
+    // can reword, and never in words that rule someone out (live test and its review, 12 Nov 2026)
+    const back = () => page.getByRole("button", { name: "Back", exact: true }).click();
+    await back();
+    await step(page, 9, "What should every applicant answer?");
+    await back();
+    await step(page, 8, "What rules someone out?");
+    await page.getByRole("checkbox", { name: "None" }).uncheck({ force: true });
+    const deal = page.getByRole("textbox", { name: "Add a deal-breaker" });
+    await deal.fill("No active California RDA license");
+    await deal.press("Enter");
+    const wording = page.getByRole("textbox", { name: "As a must-have" });
+    await expect(wording).toHaveValue("Active California RDA license");
+    // left empty, or still worded as what rules someone out, the step says what to write and does not move on
+    const problem = page.getByRole("status").filter({ hasText: "Write each ticked deal-breaker as what they need, for example Able to work Saturdays." });
+    await wording.fill("");
+    await next(page);
+    await expect(problem).toBeVisible();
+    await wording.fill("No RDA");
+    await expect(problem).toBeHidden();
+    await next(page);
+    await expect(problem).toBeVisible();
+    await step(page, 8, "What rules someone out?");
+    await wording.fill("Active RDA license (California)");
+    await expectAccessible(page, "quick start, deal-breakers step");
+    await next(page);
+
+    // 9 again: the RDA licence question ticks itself, now that a must-have names the licence
+    await step(page, 9, "What should every applicant answer?");
+    await expect(questions.first()).toBeChecked();
+    await expectAccessible(page, "quick start, questions step");
+    await next(page);
+
+    // the review counts the deal-breaker as the must-have it was written as
+    await step(page, 10, "Check your answers");
+    await expect(answers).toContainText("No active California RDA license (must-have)");
+    await expect(answers).toContainText("Dentrix experience; X-ray certificate; Active RDA license (California)");
+    await expect(answers).toContainText('3 on the form (a "no" holds the application for your decision)');
 
     // Write the job post: the job builder opens on the new draft with the title and the pay
     await page.getByRole("button", { name: "Write the job post" }).click();
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 90_000 });
     await expect(page.getByRole("heading", { level: 1 })).toContainText(/Dental assistant/i, { timeout: 60_000 });
     await expect(page.getByText(/\$20\s*(–|-|to)\s*\$24/).first()).toBeVisible({ timeout: 60_000 });
+    // once the post is written, its questions on the form carry the saved job's chip: a "no" holds the application
+    await expect(page.getByText('A "no" holds it for your decision')).toBeVisible({ timeout: 60_000 });
+    // its must-haves ask for what the owner wrote, never the deal-breaker's words
+    const lookingFor = page.getByRole("region", { name: "What we're looking for" });
+    await expect(lookingFor.getByRole("listitem").filter({ hasText: "Active RDA license (California)" })).toBeVisible({ timeout: 60_000 });
+    await expect(lookingFor).not.toContainText("No active");
   });
 });

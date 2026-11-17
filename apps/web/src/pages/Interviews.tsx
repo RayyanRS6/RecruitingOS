@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { quoteWithSource } from "@ros/contracts";
 import { Link, useNavigate, useParams } from "../nav";
 import { Alert, Avatar, Button, Card, Chip, Drawer, EmptyState, ErrorState, Eyebrow, Field, Icon, PageHeader, Pill, Skeleton, type SortValue, sortRows, Table, Timeline, useTableSort } from "@ros/ui";
 import { api, ApiError, isCandidateLocked, type InterviewBooked, type InterviewDetail, type InterviewSummary, type InterviewerBrief, type Me, type NewTimesSettingView, type SendNewTimesResult } from "../api/client";
 import { LockedCard } from "../components/LockedCandidates";
 import { SetTimeForm } from "../components/SetTimeForm";
 import { useCompanyCheck, useCompanyTimezone } from "../components/use-company-check";
+import { zoneName } from "../company-setup";
 import { toast } from "../toast";
 import { interviewNewTimesText } from "../cancelled";
 import { DECISION_WORDS, candidateEmailLine, formFromBooked, freshForm, interviewWord, shortWhen, type SetTimeForm as SetTimeFormState } from "../interview-time";
@@ -226,7 +228,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           ) : null}
           <Card title="Details" className={SHEET_CARD}>
             <dl className="glance">
-              <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.timezone ? ` (${i.timezone})` : ""}</dd>
+              {/* the zone by name, never its id, and only beside a time (live test, 12 November 2026) */}
+              <dt>When</dt><dd>{when(i.startsAt, i.timezone)}{i.startsAt && i.timezone ? ` (${zoneName(i.timezone, "short")})` : ""}</dd>
               <dt>Length</dt><dd>{i.durationMinutes} minutes, {i.format.replace("_", " ")}</dd>
               {/* where it is: the address or the phone a person chose, else the link */}
               {i.selectedSlot?.address ? <><dt>Where</dt><dd>{i.selectedSlot.address}</dd></> : setByPerson && i.format === "phone" ? <><dt>Where</dt><dd>By phone</dd></> : <><dt>Link</dt><dd>{i.meetingUrl ? <a href={i.meetingUrl} target="_blank" rel="noreferrer">{i.meetingUrl}</a> : noLinkText(i)}</dd></>}
@@ -237,7 +240,8 @@ function InterviewSheet({ id, role, userId, all }: { id: string; role: string | 
           </Card>
           {i.candidateAvailability?.note || i.candidateAvailability?.accessibilityNote ? <Alert tone="info">{i.candidateAvailability.accessibilityNote ? `Accommodation request: ${i.candidateAvailability.accessibilityNote}. ` : ""}{i.candidateAvailability.note ? `The candidate wrote: "${i.candidateAvailability.note}"` : ""}</Alert> : null}
           {i.status === "scheduling" && aheadSlots(i.offeredSlots).length ? (
-            <Card title="Times offered to the candidate" className={SHEET_CARD}>
+            // the times are on the company's clock: its zone by name, once, in the title (review of the live-test fixes)
+            <Card title={i.timezone ? `Times offered to the candidate (${zoneName(i.timezone, "short")})` : "Times offered to the candidate"} className={SHEET_CARD}>
               {/* times that have passed are not offered, nor booked for them (the server refuses them too) */}
               <ul className="small grid gap-2">{aheadSlots(i.offeredSlots).map((s) => <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-surface-2 px-3 py-2">{when(s.startsAt, i.timezone)}{manage ? <> <Button size="sm" variant="quiet" loading={book.isPending} onClick={() => book.mutate(s.id)}>Book this for them</Button></> : null}</li>)}</ul>
               {manage ? <p className="small muted mt-3">Booking on their behalf is for when you agreed a time by phone; it is recorded as your action.</p> : null}
@@ -363,7 +367,8 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         <div>
           <Eyebrow as="h3" className="mb-2 flex">What to look for</Eyebrow>
           <ul className={BRIEF_LIST}>
-            {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
+            {/* a skill checked only in the team's own interviews is read by no AI review: it is for this interview, never "not assessed yet" (live test, 12 November 2026) */}
+            {brief.competencies.map((c) => <li key={c.key}><strong>{c.name}</strong>: {c.definition} <Chip tone={c.finding ? FINDING_TONE[c.finding] ?? "neutral" : "neutral"}>{c.finding ? FINDING_LABEL[c.finding] ?? c.finding : c.evaluatedIn === "interview" ? "for this interview" : "not assessed yet"}</Chip>{c.note ? <span className="muted"> {c.note}</span> : null}</li>)}
           </ul>
         </div>
         {brief.questions.length ? (
@@ -375,7 +380,8 @@ function BriefCard({ brief }: { brief: InterviewerBrief }) {
         <div>
           <Eyebrow as="h3" className="mb-2 flex">Must-haves and what we know</Eyebrow>
           <ul className={BRIEF_LIST}>
-            {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> "{m.quote}"</span> : null}</li>)}
+            {/* each quote says where it is from ("from the résumé", "in the AI interview"), as the email does */}
+            {brief.mustHaves.map((m) => <li key={m.key}>{m.text} <Chip tone={MET_TONE[m.met] ?? "neutral"}>{MET_LABEL[m.met] ?? m.met}</Chip>{m.quote ? <span className="muted"> {quoteWithSource(m.quote, m.source)}</span> : null}</li>)}
           </ul>
         </div>
         <div>

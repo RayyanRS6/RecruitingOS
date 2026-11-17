@@ -5,6 +5,7 @@ import {
 } from "@ros/contracts";
 import type { StepState } from "@ros/ui";
 import { START_HIRE_HREF } from "../../start-hire";
+import { HOLDS_FOR_DECISION } from "../role/applicant-questions";
 
 /**
  * The job builder's rules that need no browser (plan Wave C: C5, C6, C7, C8, C15), kept out of the components so
@@ -108,10 +109,13 @@ export function picksOne(q: Pick<IntakeQuestion, "mode" | "field">): boolean {
   return q.mode === "single" || (q.mode === "team" && q.field === "decision_maker");
 }
 
-/** The line under the question: what kind of answer it takes. */
-export function pickHint(q: Pick<IntakeQuestion, "mode" | "field">): string {
+/**
+ * The line under the question: what kind of answer it takes. A card with nothing to pick, only the box for the owner's
+ * own words, takes typing (the deal-breaker card for "No RDA", review of the live test, 12 Nov 2026).
+ */
+export function pickHint(q: Pick<IntakeQuestion, "mode" | "field"> & { options?: readonly unknown[] }): string {
   if (q.mode === "pay") return "Set the pay";
-  if (q.mode === "free") return "Type your answer";
+  if (q.mode === "free" || ((q.mode === "single" || q.mode === "multi") && q.options?.length === 0)) return "Type your answer";
   return picksOne(q) ? "Pick one" : "Pick any that apply";
 }
 
@@ -408,9 +412,10 @@ export type SectionId = "basics" | "about" | "must" | "nice" | "screening" | "el
 
 /**
  * One section of the draft panel. `path` is where it lives in the Role Packet; `seenBy` says plainly who sees it
- * ("Candidates see this", "Only your team sees this"), from the packet's visibility map in @ros/contracts.
+ * ("Candidates see this", "Only your team sees this"), from the packet's visibility map in @ros/contracts. `note` is a
+ * status the panel shows as a chip: on the questions for the form, the saved job's 'A "no" holds it for your decision'.
  */
-export type DraftSection = { id: SectionId; title: string; path: string; visibility: PacketVisibility; seenBy: string; text: string | null; items: string[]; empty: string };
+export type DraftSection = { id: SectionId; title: string; path: string; visibility: PacketVisibility; seenBy: string; text: string | null; items: string[]; empty: string; note?: string };
 
 export const WORK_MODEL_WORD: Readonly<Record<string, string>> = { onsite: "On site", hybrid: "Hybrid", remote: "Remote" };
 export const EMPLOYMENT_WORD: Readonly<Record<string, string>> = { full_time: "Full time", part_time: "Part time", contract: "Contract", temporary: "Temporary", per_diem: "Per diem", internship: "Internship" };
@@ -473,7 +478,12 @@ export function draftSections(view: { facts: IntakeFacts; draft: DraftRolePacket
     section("nice", "Nice to have", "requirements.niceToHaves", { items: d ? d.requirements.niceToHaves.map((m) => m.text) : f.niceToHaves }, "Helpful, never a reason to turn anyone away."),
     section("screening", "You'll be asked during the application", "screening.questions", { items: d ? d.screening.questions.map((q) => q.question) : f.screeningQuestions ?? [] }, d ? "" : "A few questions candidates answer in a short conversation, marked as AI, with a person available."),
   ];
-  if (d) out.push(section("eligibility", "Quick questions on the application form", "requirements.eligibility", { items: d.requirements.eligibility.map((e) => e.question) }, "None."));
+  // Every question on a draft's form holds a "no" for the owner's decision: said with the saved job's chip, so a draft
+  // built by chat or "Hire again" says it too, not only the quick start's step 9 (review of the live-test fixes, 12 Nov 2026).
+  if (d) {
+    const holds = d.requirements.eligibility.some((e) => e.knockout);
+    out.push({ ...section("eligibility", "Quick questions on the application form", "requirements.eligibility", { items: d.requirements.eligibility.map((e) => e.question) }, "None."), ...(holds ? { note: HOLDS_FOR_DECISION } : {}) });
+  }
   const reason = f.reason ? `${REASON_WORD[f.reason] ?? f.reason}${f.reasonDetail ? `: ${f.reasonDetail}` : ""}` : null;
   out.push(section("why", "Why you're hiring", "business", { text: reason }, "Not said yet."));
   const team = [
@@ -518,8 +528,8 @@ export function sectionOfPath(path: string): SectionId | null {
 
 /**
  * Whether the person changed answers after the draft was written in a way only writing it again carries into its
- * words. The server decides (`readiness.draftOutOfDate`, from a key of the answers the draft was written from); pay, the
- * team and the deal-breakers are brought up to date on their own and never make it out of date.
+ * words. The server decides (`readiness.draftOutOfDate`, from a key of the answers the draft was written from); pay, why
+ * they are hiring, the team and the deal-breakers are brought up to date on their own and never make it out of date.
  */
 export function draftOutOfDate(view: Pick<IntakeSessionView, "readiness">): boolean {
   return view.readiness.hasDraft && view.readiness.draftOutOfDate;
@@ -527,11 +537,15 @@ export function draftOutOfDate(view: Pick<IntakeSessionView, "readiness">): bool
 
 /**
  * What "Write it again" says before it replaces anything: the changes saved on the draft since it was written (by chat
- * or with a fix) are replaced by the new words, so the person is asked first. Null when there is nothing to lose.
+ * or with a fix) that the new words would replace, so the person is asked first. The server counts only those
+ * (`draftEdits`): a change to what the answers hold too (the title, the schedule, full or part time, the work model, why
+ * you are hiring, the wording of the must-haves and nice-to-haves) went into the answers when it was saved, so it is
+ * kept, and so are the parts set by rule; the warning names them as the owner sees them in Edit (review of the live-test
+ * fixes, 12 Nov 2026). Null when there is nothing to lose.
  */
 export function redraftWarning(r: Pick<IntakeReadiness, "draftEdits">): string | null {
   if (!r.draftEdits) return null;
-  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix). Pay, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
+  return `Writing it again replaces the ${r.draftEdits === 1 ? "change" : `${r.draftEdits} changes`} you saved on the draft since it was written (by asking, or with a suggested fix), except changes to the title, schedule, full or part time, work model, and the wording of the must-haves and nice-to-haves. Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over. Ask for ${r.draftEdits === 1 ? "that change" : "those changes"} again afterwards if you still want ${r.draftEdits === 1 ? "it" : "them"}.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

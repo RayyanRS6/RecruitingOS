@@ -205,6 +205,28 @@ const ZONE_NAMES: Record<string, string> = {
   "America/Los_Angeles": "Pacific", "America/Denver": "Mountain", "America/Phoenix": "Arizona", "America/Chicago": "Central", "America/New_York": "Eastern",
   "America/Anchorage": "Alaska", "Pacific/Honolulu": "Hawaii", UTC: "UTC",
 };
+
+/**
+ * A zone by its name beside a time, never its id ("America/Los_Angeles" in the team's booking notice and email and on an
+ * interviewer's Home: review of the live-test fixes, 12 November 2026). The seven US zones in the sign-up form's own short
+ * words, "Pacific time" (the same as apps/web's `zoneName(zone, "short")`, which cannot import this package;
+ * tests/web/interview-time.test.ts keeps the two in step), "UTC" for UTC, any other zone as Intl names it ("Pakistan
+ * Standard Time"), and the id only when nothing can name it.
+ */
+export function zoneShortName(zone: string): string {
+  const name = ZONE_NAMES[zone];
+  if (name) return zone === "UTC" ? name : `${name} time`;
+  for (const style of ["longGeneric", "long"] as const) {
+    try {
+      const named = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: style }).formatToParts(new Date(Date.UTC(2026, 0, 15))).find((p) => p.type === "timeZoneName")?.value;
+      if (named) return named;
+    } catch {
+      // a zone or a style this runtime does not know: try the next
+    }
+  }
+  return zone;
+}
+
 const DAY_NAMES: Record<WeekdayKey, string> = { sun: "Sunday", mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday" };
 
 function clockWord(hhmm: string): string {

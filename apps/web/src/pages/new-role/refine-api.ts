@@ -1,12 +1,12 @@
-import { PACKET_REVISION_MESSAGE_MAX, type PacketFlag, type PacketRevisionProposal, type RequirementSuggestion, type RequirementsCheck, type RevisableSection } from "@ros/contracts";
+import { PACKET_REVISION_MESSAGE_MAX, requirementsCheckReads, type PacketFlag, type PacketRevisionProposal, type RequirementSuggestion, type RequirementsCheck, type RevisableSection } from "@ros/contracts";
 import { sectionOfPath, type SectionId } from "./rules";
 
 /**
  * "Change it by asking" (plan C10), the requirements check (C16) and the candidate view (C9), as the job builder and the
  * role page use them. The API is apps/api/src/routes/role-packets.ts: a request in the person's words comes back as a
  * proposed change (a summary and the change field by field); nothing is saved until a person presses Confirm, and "Keep
- * as is" is recorded too. The requirements check only suggests; each suggestion's fixes apply with one tap. Every
- * address the pages call is here.
+ * as is" is recorded too. One that changes nothing is shown as the assistant's reply (`nothingToConfirm`). The
+ * requirements check only suggests; each suggestion's fixes apply with one tap. Every address the pages call is here.
  */
 
 export type { PacketRevisionProposal, RequirementSuggestion, RequirementsCheck };
@@ -62,9 +62,23 @@ export function proposalSections(p: Pick<PacketRevisionProposal, "diff" | "secti
   return out;
 }
 
-/** The assistant asked back instead of changing anything: shown as its question, with nothing to confirm. */
-export function asksBack(p: Pick<PacketRevisionProposal, "question" | "sections">): boolean {
-  return !!p.question && p.sections.length === 0;
+/**
+ * A proposal that changes nothing (the assistant asked back, or said why nothing needs doing) is the assistant's reply,
+ * never a change to confirm (live test, 12 Nov 2026: "I did not change anything…" came as a proposed change with a greyed
+ * Confirm). The server still answers it as a proposal, and saving it is refused as nothing to apply.
+ */
+export function nothingToConfirm(p: Pick<PacketRevisionProposal, "sections">): boolean {
+  return p.sections.length === 0;
+}
+
+/** One part of a request that was not done, with why: "Not done: Change the pay. Pay is set on the pay card." */
+export function notDoneLine(n: { request: string; reason: string }): string {
+  return `Not done: ${n.request.trim().replace(/[.!?]+$/, "")}. ${n.reason}`;
+}
+
+/** That reply in words: the question back (or what the assistant said), then each part not done and why. */
+export function replyWords(p: Pick<PacketRevisionProposal, "question" | "summary" | "notChanged">): string {
+  return [p.question?.trim() || p.summary, ...p.notChanged.map(notDoneLine)].join(" ");
 }
 
 /** What pressing Confirm does, said before it is pressed. */
@@ -105,12 +119,15 @@ export function suggestionsBySection(check: Pick<RequirementsCheck, "suggestions
 }
 
 /**
- * A short fingerprint of what the requirements check reads (the requirements, the description, the screening
- * questions), so the check is asked for again only when one of them changed, not on every edit.
+ * A short fingerprint of what the requirements check and its fixes read (`requirementsCheckReads`: the requirements, the
+ * description, the screening questions, what the interview looks for, the warning signs and the deal-breakers in the
+ * owner's words), the very parts a draft's check is based on, so the check is asked for again exactly when one of them
+ * changed, never on an answer that only brings the draft's other parts up to date (review of the live-test fixes, 12 Nov
+ * 2026).
  */
-export function checkSignature(packet: { requirements: unknown; description: { publicJobDescription: string }; screening: { questions: unknown } } | null | undefined): string {
+export function checkSignature(packet: Parameters<typeof requirementsCheckReads>[0] | null | undefined): string {
   if (!packet) return "none";
-  const text = JSON.stringify([packet.requirements, packet.description.publicJobDescription, packet.screening.questions]);
+  const text = JSON.stringify(requirementsCheckReads(packet));
   let h = 5381;
   for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   return `${text.length}-${(h >>> 0).toString(36)}`;

@@ -76,6 +76,12 @@ test.describe("the job builder", () => {
     const closeCards = page.getByRole("button", { name: "Close the questions" });
     if (await closeCards.isVisible()) await closeCards.click();
     await expect(page.getByRole("textbox", { name: "Ask for a change to the draft" })).toHaveAttribute("placeholder", /Ask me to change anything/);
+    // a request that changes nothing is the assistant's reply in the conversation, never a change to confirm (live test,
+    // 12 Nov 2026); the stand-in answers that a draft's pay is set on the pay card
+    await page.getByRole("textbox", { name: "Ask for a change to the draft" }).fill("Change the pay to $50 to $60 an hour");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Conversation with the assistant" }).getByText("Not done: Change the pay to $50 to $60 an hour. Pay is set on the pay card.")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
     // a change by chat is shown field by field first, and saved only on Confirm
     await page.getByRole("textbox", { name: "Ask for a change to the draft" }).fill("Add a must-have: Dentrix experience");
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -147,8 +153,13 @@ test.describe("the job builder", () => {
     await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
     const card = page.getByRole("region", { name: "Questions from the assistant" });
     await expect(card).toBeVisible({ timeout: 60_000 });
+    // the second card: what they would own is written into the draft's words. The first card asks why you are hiring,
+    // which is set on the draft by rule since 12 November 2026, so a pick there would show nothing about the order.
+    await card.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(card.getByRole("heading", { name: "What is the first thing they would own?" })).toBeVisible();
     const first = card.locator("label.option-row").first();
-    const picked = (await first.innerText()).split("\n")[0]!.trim();
+    // the words kept are the answer's own (its value), which the draft's description quotes
+    const picked = (await first.locator("input").getAttribute("value"))!.replace(/\.$/, "");
     await first.locator("input").check({ force: true });
     await page.getByRole("button", { name: "Write the draft" }).click();
     await expect(page.getByRole("status").filter({ hasText: "The draft is written." })).toBeVisible({ timeout: 90_000 });

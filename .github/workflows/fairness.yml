@@ -6,6 +6,9 @@
 # and the scoring never sees a name, email, phone, street, zip code or link (triage.redaction).
 # Since Wave S7 (15 October 2026) the "Which tests" choice can also run the screening chat, its scorecard and the
 # answers written up from it (the screen and chat suites), which until then ran only on the stand-in model.
+# Since the live test of 12 November 2026 it can also run the job builder: the draft from what an owner types (the
+# intake suites) and changes asked for by chat (packet.revise). Claude Sonnet 5.5 writes each draft, so that choice
+# costs more than the CV tests.
 # Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
 # to a fork's code. About ten cents a run for the CV tests; the chat tests make more calls and cost more. How to use
 # it: docs/runbooks/fairness-tests.md.
@@ -17,15 +20,18 @@ on:
       tests:
         description: "Which tests (the first is the original CV reading and scoring set)"
         type: choice
-        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat"]
+        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat", "intake,packet.revise"]
         default: "resume,triage"
+      # The ids stay: the concurrency group and the env below use them. The model and effort set the standard tier
+      # (packages/ai/src/routing.ts): screening, and also the job builder's conversation and changes by chat, so the
+      # runbook says to keep both as they are for the job-builder choice.
       screening_model:
-        description: "Model that screens the CVs (the app uses claude-haiku-5-5)"
+        description: "Model for screening, the job builder's conversation and changes by chat (the app uses claude-haiku-5-5)"
         type: choice
         options: [claude-haiku-5-5, claude-sonnet-5-5]
         default: claude-haiku-5-5
       screening_effort:
-        description: "How hard it thinks while screening (app setting = what the app uses)"
+        description: "How hard it thinks for screening, the job builder's conversation and changes by chat (app setting = what the app uses)"
         type: choice
         options: [app setting, low, medium, high]
         default: app setting
@@ -73,7 +79,9 @@ jobs:
           # Only the two allowed models are offered; the app refuses any other (packages/ai/src/routing.ts).
           AI_MODEL_STANDARD: ${{ inputs.screening_model || 'claude-haiku-5-5' }}
           AI_EFFORT_STANDARD: ${{ inputs.screening_effort != 'app setting' && inputs.screening_effort || '' }}
-          # One of the fixed choices above, passed through the environment rather than pasted into the command.
+          # One of the fixed choices above, passed through the environment rather than pasted into the command. A name
+          # in it that chooses no suite fails the run. tests/policy/fairness-choices.test.ts checks each choice against
+          # packages/evals/thresholds.json, which CI's whole run of the evaluations holds to the runner's own suites.
           SUITES: ${{ inputs.tests || 'resume,triage' }}
         run: pnpm --filter @ros/evals exec tsx src/runner.ts --suite "$SUITES"
 

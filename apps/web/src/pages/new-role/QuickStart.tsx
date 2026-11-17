@@ -15,8 +15,8 @@ import { OriginMark } from "./marks";
 import { PayFields } from "./PayCard";
 import {
   BELOW_CHOICES, DEAL_BREAKERS_MAX, EMPLOYMENT_CHOICES, EXPERIENCE_CHOICES, MUST_HAVES_MAX, OWN_QUESTIONS_MAX, QUICK_STEPS, STEP_HINT, STEP_QUESTION, WORK_MODEL_CHOICES,
-  addItem, allMustHaves, clearQuickStart, closingDateAsked, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesRoom, offeredQuestions, openDealBreakers,
-  quickStartDraftKey, quickStartPatch, readQuickStart, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, todayDay, toggleItem, writeQuickStart,
+  addItem, allMustHaves, clearQuickStart, closingDateAsked, dealBreakerKey, dealBreakerWording, emptyQuickState, enterMovesOn, experienceMustHave, fillFromAd, firstMessage, firstUnfinished, hasAnswers, mustHavesFromDealBreakers, mustHavesRoom, offeredQuestions,
+  questionOn, quickStartDraftKey, quickStartPatch, readQuickStart, removeDealBreaker, reviewRows, skippedAnswers, stepProblem, suggestedMustHaves, todayDay, toggleItem, toggleQuestion, writeQuickStart,
   type QuickAnswers, type QuickScope, type QuickState,
 } from "./quick-start";
 import { GENERAL_QUESTIONS } from "./quick-starts";
@@ -126,7 +126,9 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
     mutationFn: async () => {
       const answers = state.answers;
       let sessionId = state.sessionId;
-      let facts: Pick<IntakeFacts, "mustHaves"> | null = null;
+      // what the assistant may already have read from the first message (must-haves, the experience, eligibility notes),
+      // which the edit takes out unless the person chose it
+      let facts: Pick<IntakeFacts, "mustHaves" | "niceToHaves" | "eligibilityNotes"> | null = null;
       let open: IntakeQuestion[] = [];
       if (sessionId) {
         // Made on an earlier try whose answers did not go through: the answers go on that draft, not a second one. A
@@ -153,11 +155,13 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
         setState((s) => ({ ...s, sessionId: made }));
       }
       const id = sessionId;
+      // Step 8 already asked which deal-breakers count openly as must-haves: the builder's card never asks again.
       const edited = await api.post<IntakeTurnResponse>(`/api/v1/intake/sessions/${encodeURIComponent(id)}/answers`, {
         answers: skippedAnswers(open),
         patch: quickStartPatch(answers, vertical, facts),
         draftIt: true,
         reply: false,
+        dealBreakersOffered: true,
       });
       return { kind: "written" as const, sessionId: id, edited };
     },
@@ -422,7 +426,8 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
       const own = a.mustHaves.filter((m) => !suggested.some((s) => s.toLowerCase() === m.toLowerCase()));
       const room = Math.max(0, mustHavesRoom(a));
       const count = allMustHaves(a).length;
-      const dealCount = openDealBreakers(a).length;
+      // a deal-breaker counts here only for the must-have it adds (none while its wording is still to be written)
+      const dealCount = mustHavesFromDealBreakers(a).length;
       return (
         <>
           {suggested.length ? (
@@ -430,12 +435,16 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
           ) : null}
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_SKILLS} /> : null}
           <AddOwn id="qs-must-own" label="Add a must-have" placeholder={suggested.length ? "Add your own…" : "e.g. Two years in a busy dental office"} items={own} max={room} onAdd={(t) => set({ mustHaves: addItem(a.mustHaves, t, room) })} onRemove={(t) => set({ mustHaves: a.mustHaves.filter((m) => m !== t) })} />
-          <p className="small muted" aria-live="polite">{count} of {MUST_HAVES_MAX} chosen{experienceMustHave(a) ? ", with the experience" : ""}{dealCount ? `, with ${dealCount} deal-breaker${dealCount === 1 ? "" : "s"}` : ""}.</p>
+          {/* the count against the most a job can have, never "3 of 6", which read as a list of six with one missing (live test, 12 Nov 2026) */}
+          <p className="small muted" aria-live="polite">{count} chosen (up to {MUST_HAVES_MAX}){experienceMustHave(a) ? ", with the experience" : ""}{dealCount ? `, with ${dealCount} deal-breaker${dealCount === 1 ? "" : "s"}` : ""}.</p>
         </>
       );
     }
     case "dealbreakers": {
       // Founder decision Q19: each deal-breaker counts openly as a must-have unless unticked; an unticked one judges nobody.
+      // A ticked one counts as the requirement it rules people out on, which the person can reword ("As a must-have"):
+      // never its negative words (live test, 12 Nov 2026). One that cannot be turned round starts empty, with the step's
+      // own example as the field's placeholder, for the person to write (review of the live test, 12 Nov 2026).
       const roomLeft = MUST_HAVES_MAX - allMustHaves(a).length;
       const isOpen = (d: string) => !a.dealBreakersPrivate.some((p) => p.toLowerCase() === d.toLowerCase());
       const add = (t: string) => {
@@ -444,7 +453,7 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
         // ticked by default, unless the six must-haves are already full
         set({ dealBreakers: list, noDealBreakers: false, ...(added && roomLeft <= 0 ? { dealBreakersPrivate: [...a.dealBreakersPrivate, added] } : {}) });
       };
-      const remove = (t: string) => set({ dealBreakers: a.dealBreakers.filter((d) => d !== t), dealBreakersPrivate: a.dealBreakersPrivate.filter((d) => d.toLowerCase() !== t.toLowerCase()) });
+      const remove = (t: string) => set(removeDealBreaker(a, t));
       return (
         <>
           <Choices legend={STEP_QUESTION.dealbreakers} name="qs-none" multi options={[{ value: "none", label: "None" }]} checked={() => a.noDealBreakers} onPick={() => set({ noDealBreakers: !a.noDealBreakers })} />
@@ -453,15 +462,23 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
             <fieldset className="grid min-w-0 gap-2">
               <legend className="mb-2 text-[13px] font-semibold text-ink">Count it openly as a must-have</legend>
               <div className={OPTIONS}>
-                {a.dealBreakers.map((d) => {
+                {a.dealBreakers.map((d, i) => {
                   const on = isOpen(d);
                   return (
-                    // the word at the end says what the tick does: counted as a must-have, or used to judge nobody
-                    <label key={d} className={OPTION_ROW_TAGGED}>
-                      <input type="checkbox" checked={on} aria-label={`Count "${d}" openly as a must-have`} disabled={!on && roomLeft <= 0} onChange={() => set({ dealBreakersPrivate: toggleItem(a.dealBreakersPrivate, d) })} />
-                      <span className={OPTION_WORDS}>{d}</span>
-                      <span className="option-tag">{on ? "Must-have" : "Not used to judge"}</span>
-                    </label>
+                    // one deal-breaker a cell: its tick, and under it the must-have it counts as while ticked
+                    <div key={d} className="grid min-w-0 content-start gap-2">
+                      {/* the word at the end says what the tick does: counted as a must-have, or used to judge nobody */}
+                      <label className={OPTION_ROW_TAGGED}>
+                        <input type="checkbox" checked={on} aria-label={`Count "${d}" openly as a must-have`} disabled={!on && roomLeft <= 0} onChange={() => set({ dealBreakersPrivate: toggleItem(a.dealBreakersPrivate, d) })} />
+                        <span id={`qs-deal-words-${i}`} className={OPTION_WORDS}>{d}</span>
+                        <span className="option-tag">{on ? "Must-have" : "Not used to judge"}</span>
+                      </label>
+                      {on ? (
+                        <Field label="As a must-have" htmlFor={`qs-deal-must-${i}`}>
+                          <input id={`qs-deal-must-${i}`} className="input" value={dealBreakerWording(a, d)} maxLength={300} autoComplete="off" placeholder="e.g. Able to work Saturdays" aria-describedby={`qs-deal-words-${i}`} onChange={(e) => set({ dealBreakerMusts: { ...a.dealBreakerMusts, [dealBreakerKey(d)]: e.target.value } })} />
+                        </Field>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
@@ -473,12 +490,14 @@ export function StepBody({ step, a, set, vertical, suggest = { kind: "none" }, o
       );
     }
     case "questions": {
-      // the guide's for a job it knows; else the general ones and the assistant's, all ticked as before
+      // the guide's for a job it knows; else the general ones and the assistant's, all ticked, except one that is the
+      // owner's call (the RDA licence), unticked until the job title or a must-have names it or the person ticks it
+      // (`questionOn`)
       const suggested = offeredQuestions(a, vertical);
       const fromAi = (q: string) => suggest.kind === "ai" && suggest.questions.some((x) => sameText(x, q)) && !GENERAL_QUESTIONS.some((g) => sameText(g, q));
       return (
         <>
-          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { origin: "assistant" as const } : {}) }))} checked={(v) => !a.questionsOff.some((x) => x.toLowerCase() === v.toLowerCase())} onPick={(v) => set({ questionsOff: toggleItem(a.questionsOff, v) })} />
+          <Choices legend={STEP_QUESTION.questions} name="qs-questions" multi options={suggested.map((q) => ({ value: q, label: q, ...(fromAi(q) ? { origin: "assistant" as const } : {}) }))} checked={(v) => questionOn(a, v, vertical)} onPick={(v) => set(toggleQuestion(a, v, vertical))} />
           {suggest.kind === "waiting" ? <Suggesting words={SUGGESTING_QUESTIONS} /> : null}
           <AddOwn id="qs-question-own" label="Add a question for the AI interview" showLabel placeholder="Add your own question…" items={a.ownQuestions} max={OWN_QUESTIONS_MAX} onAdd={(t) => set({ ownQuestions: addItem(a.ownQuestions, t, OWN_QUESTIONS_MAX) })} onRemove={(t) => set({ ownQuestions: a.ownQuestions.filter((q) => q !== t) })} />
         </>

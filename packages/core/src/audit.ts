@@ -56,6 +56,8 @@ export type AuditAction =
   /** A rate limit tripped (21 Sep, item 5): the key is a hash, never the subject. */
   | "security.rate_limited"
   | "outcome.corrected"
+  /** A decision recorded as an outcome ("No hire", "We declined") taken back with it before the candidate was told (17 November 2026): the record kept, marked taken back. */
+  | "outcome.taken_back"
   | "role.outcome_recorded"
   /** Privacy requests (correction 7). */
   | "data_request.created"

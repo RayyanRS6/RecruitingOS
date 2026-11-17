@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { companyDay, createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
  * The loop after an interview in a real browser (audit findings F6 and J13): the owner sets the date and time herself
@@ -34,12 +34,13 @@ test.describe("decision after an interview", () => {
     await sheet.getByRole("button", { name: /^Stage: / }).click();
     await sheet.getByRole("menuitemradio", { name: /^Interviewing/ }).click();
     await expect(sheet.getByRole("heading", { name: "Set a date and time" })).toBeVisible();
-    // greyed with its reason until the day and time are chosen; the time is on the company's clock, named beside it
+    // greyed with its reason until the day and time are chosen; the time is on the company's clock, its zone named beside
+    // it in words, never its id (live test, 12 November 2026)
     await expect(sheet.getByText("Choose a date and a time.", { exact: true })).toBeVisible();
-    const day = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
-    await sheet.getByLabel("Date", { exact: true }).fill(day);
+    await sheet.getByLabel("Date", { exact: true }).fill(companyDay(3));
+    await expect(sheet.getByLabel("Time (Pacific time)")).toBeVisible();
     await sheet.getByLabel(/^Time \(/).fill("10:30");
-    await expect(sheet.getByText(/ at 10:30 AM, America\//)).toBeVisible();
+    await expect(sheet.getByText(/ at 10:30 AM, Pacific time$/)).toBeVisible();
     // an optional personal line for the invitation (Q28), checked like any other
     await sheet.getByText("Add a personal line (optional)", { exact: true }).click();
     await sheet.getByLabel("A personal line for the invitation (optional)").fill("We enjoyed reading about your work.");
@@ -120,8 +121,7 @@ test.describe("decision after an interview", () => {
     await candidate.getByRole("button", { name: "They accepted" }).click();
     // the hire sheet, on one card: the start date, a confirmation, then what to do with the role
     await expect(candidate.getByRole("heading", { name: "Hire Maria Reyes" })).toBeVisible();
-    const start = new Date(Date.now() + 21 * 86_400_000).toISOString().slice(0, 10);
-    await candidate.getByLabel("Start date (agreed with them)").fill(start);
+    await candidate.getByLabel("Start date (agreed with them)").fill(companyDay(21));
     await candidate.getByRole("button", { name: "Continue" }).click();
     await expect(candidate.getByText(/^Record the hire of Maria Reyes, starting /)).toBeVisible();
     await expectAccessible(page, "candidate panel hire sheet");

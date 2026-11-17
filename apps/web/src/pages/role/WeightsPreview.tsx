@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { skillsCountedAsMustHaves } from "@ros/contracts";
 import { Alert, Button, Card, Chip, Drawer, EmptyState, ErrorState, Skeleton } from "@ros/ui";
 import { api, type BoardView, type RolePacket } from "../../api/client";
 import type { EditorFocus } from "../../skills-form";
-import { INTERVIEW_ONLY_LINE, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
+import { AS_MUST_HAVE_LINE, INTERVIEW_ONLY_LINE, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WEIGHT_LEVEL_LABEL, changeWords, changedRows, focusFor, jobLevels, movedWords, placeWords, previewOrder, previewStatus, scoreWords, unscoredWords, weightFieldId, weightRows, type WeightLevel, type WeightRow } from "../../weights-preview";
 
 /**
  * "Try different weights" (founder decision L-07 A, preview only), opened from the job's Scoring tab and the More menu
@@ -16,7 +17,8 @@ import { INTERVIEW_ONLY_LINE, NOBODY_SCORED, PREVIEW_LABEL, USE_WEIGHTS_LINE, WE
  * "Use these weights" closes this and opens the job's editor, where saving makes a new version of the job.
  *
  * Fewer words (23 Oct 2026): no line under the title (the banner says it is a preview that saves nothing), the
- * interview-only note only when a skill is left out for that reason, and what "Use these weights" does under it.
+ * interview-only note only when a skill is left out for that reason, the must-have note only when a skill counts as one
+ * (the second review of the live-test fixes), and what "Use these weights" does under it.
  */
 export function WeightsPreview(props: { roleId: string; packet: RolePacket; onClose: () => void; onUse: (focus: EditorFocus) => void }) {
   const { roleId } = props;
@@ -41,6 +43,8 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
   const skills = rows.filter((r) => !r.mustHave);
   // A skill checked only in the team's own interviews is not in the score, so it is not listed: said only when one is.
   const interviewOnly = props.packet.competencies.some((c) => c.evaluatedIn === "interview");
+  // Nor is one the score counts as the must-have of the same name: said once, only when there is one.
+  const asMustHave = skillsCountedAsMustHaves(props.packet).length > 0;
   return (
     <Drawer open size="lg" title="Try different weights" banner={<Alert tone="info">{PREVIEW_LABEL}</Alert>} onClose={props.onClose}>
       {/* Two panes on a desk (the drawer is wide enough from md): the weights on the left, the order they give on the right. */}
@@ -51,6 +55,7 @@ export function WeightsPreview(props: { roleId: string; packet: RolePacket; onCl
           {musts.length ? <Card className="p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Must-haves</legend>{musts.map(field)}</fieldset></Card> : null}
           {skills.length ? <Card className="p-4"><fieldset className="weights-set grid gap-3"><legend className="eyebrow">Skills we look for</legend>{skills.map(field)}</fieldset></Card> : null}
           {interviewOnly ? <p className="small muted">{INTERVIEW_ONLY_LINE}</p> : null}
+          {asMustHave ? <p className="small muted">{AS_MUST_HAVE_LINE}</p> : null}
           <div className="row"><Button size="sm" disabled={!changed.length} onClick={() => setLevels(jobLevels(rows))}>Back to the job's weights</Button></div>
           {changed.length ? (
             <ul className="small grid list-disc gap-1 rounded-xl border border-line-tint bg-tint py-3.5 pr-3.5 pl-8">{changed.map((r, i) => <li key={r.id}>{words[i]}</li>)}</ul>

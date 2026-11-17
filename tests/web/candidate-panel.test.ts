@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../apps/web/src/api/client";
-import { screenQuestionText } from "../../apps/web/src/evidence";
+import { screenAnswerQuestion, screenQuestionText } from "../../apps/web/src/evidence";
 import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, offersNewInterviewLink, panelQuestions, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
 
 /**
@@ -171,6 +171,21 @@ describe("History: who did what, why, and what the candidate was told", () => {
     const items = historyItems([ev("application.received", {}, { kind: "candidate", id: "c" }, "2026-10-01T10:00:00.000Z")], help);
     expect(items.map((i) => i.what)).toEqual(["The ITS recruiter answered", "An ITS recruiter picked up the request", "Asked an ITS recruiter for help", "Applied"]);
     expect(items[0]).toMatchObject({ who: "Paula (ITS recruiter)", why: "Worth a working interview." });
+  });
+
+  // The second look at the review of the live-test fixes: a hold a person decided closes ITS's request, or notes it on one a
+  // recruiter took, as the system; the History said a recruiter answered when nobody at ITS had done anything.
+  it("says the system closed a request ITS no longer needed, never that a recruiter answered it", () => {
+    const intake = { kind: "system", id: "workflow:application_intake", name: "Recruiting OS" };
+    const decided = "Someone has now decided about this application, so nothing more is needed.";
+    const closed = historyItem(ev("recruiter.resolved", { resolution: decided, holdDecided: true }, intake));
+    expect(closed).toMatchObject({ what: "The request to ITS was closed", who: "The system", why: decided });
+    expect(closed?.what).not.toBe("The ITS recruiter answered");
+    // a stopped step that finished once ITS tried it again closes its request the same way
+    expect(historyItem(ev("recruiter.resolved", { resolution: "ITS ran the stopped step again and it finished. Nothing more is needed from you.", retriedRun: true }, { kind: "system", id: "workflow:retry", name: "Recruiting OS" }))?.what).toBe("The request to ITS was closed");
+    expect(historyItem(ev("recruiter.replied", { messageId: "m1" }, intake))).toMatchObject({ what: "A note was added to the request for the recruiter", who: "The system" });
+    // a recruiter's own note keeps its words
+    expect(historyItem(ev("recruiter.replied", { messageId: "m2" }, { kind: "recruiter", id: "r1", name: "Paula" }))).toMatchObject({ what: "The ITS recruiter wrote about the request", who: "Paula (ITS recruiter)" });
   });
 
   it("tells what became of the assistant's suggestions: asked, approved by whom, 'Not now', closed, run out of time", () => {
@@ -414,5 +429,21 @@ describe("the company's questions on the panel (Wave S7)", () => {
     expect(screenQuestionText(a, "wq_why")).toBe("Why this practice?");
     expect(screenQuestionText(a, "q_sat")).toBe("Can you work Saturdays?");
     expect(screenQuestionText({ ...a, packetLabels: { ...labels, written: undefined } }, "wq_why")).toBeNull();
+  });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): the AI review's answers to a must-have's gap question and
+  // to the closing question are kept under keys no question names, and read "mh 1 license" and "wrap up".
+  it("names the AI review's answers by the words they were asked in: a gap question by its must-have, the closing one by the closing question, never by key", () => {
+    const a = { packetLabels: labels, screens: [sentScreen()] } as Pick<ApplicationDetail, "packetLabels" | "screens">;
+    expect(screenQuestionText(a, "mh_1_license")).toBeNull();
+    expect(screenQuestionText(a, "wrap_up")).toBeNull();
+    expect(screenAnswerQuestion(a, "mh_1_license")).toBe("An active CA RDH license");
+    expect(screenAnswerQuestion(a, "wrap_up")).toBe("Is there anything else you would like the hiring team to know before we finish?");
+    // the questions first, as before
+    expect(screenAnswerQuestion(a, "wq_why")).toBe("Why this practice?");
+    expect(screenAnswerQuestion(a, "q_sat")).toBe("Can you work Saturdays?");
+    // a must-have or a written question the job no longer has: plain words, without the key's prefix or an underscore
+    expect(screenAnswerQuestion(a, "mh_3_digital_xrays")).toBe("Digital xrays");
+    expect(screenAnswerQuestion(a, "wq_shift_swaps")).toBe("Shift swaps");
   });
 });

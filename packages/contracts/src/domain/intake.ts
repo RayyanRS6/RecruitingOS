@@ -64,8 +64,169 @@ export const IntakeFacts = z.object({
   decisionMakerUserId: z.string().optional(),
   interviewerUserIds: z.array(z.string()).optional(),
   suggestions: z.array(IntakeSuggestion).optional(),
+  /**
+   * Set only by the server: the owner went through the questions for the form (the quick start's step 9, `patch.
+   * formQuestionsChosen`), or, on "hire again", the old job's form questions are carried as the owner's choice
+   * (`packetToFacts`), so `eligibilityNotes` holds the ones they chose and `suggestions` with field "eligibility" the
+   * ones they left unticked (on hire again, the ones the old form left off for a deal-breaker it counted openly), and the
+   * draft's form has exactly the chosen ones (intake.compile v6). Without it the draft starts from the playbook's typical
+   * questions. Never in what intake.turn extracts (`IntakeTurn`), so the model cannot set it (review of the live-test
+   * fixes, 12 Nov 2026: a note the assistant read from a sentence made the form "exactly" that one question).
+   */
+  formQuestionsChosen: z.boolean().optional(),
 });
 export type IntakeFacts = z.infer<typeof IntakeFacts>;
+
+/** "No …", "Without …", "Lacks …", "Missing …" or "Does not have …", and what follows (an "a", "any" or "the" aside). */
+const LACKS = /^(?:no|without|lacks?|lacking|missing|(?:does|do)(?:\s+not|n['’]t)\s+(?:have|hold))\s+(?:an?\s+|any\s+|the\s+)?(.+)$/i;
+
+/**
+ * A licence, licensure, certificate, certification, permit, registration or credential named last ("…RDA license",
+ * "…BLS certifications."). A short form alone is not one ("No RDA", "No x-ray cert"): the owner writes what they need.
+ */
+const CREDENTIAL_LAST = /\b(?:licen[cs]es?|licensure|certificates?|certifications?|permits?|registrations?|credentials?)\.?$/i;
+
+/**
+ * Words that say the credential is not in force, or that name the problem itself ("expired", "unlicensed", "license
+ * issues", "registered sex offenders", "one without a licence", "points", "a DUI"): after "No" they are what rules
+ * someone out, so dropping the "No" would ask for it (review of the live test, 12 Nov 2026: "No expired RDH license"
+ * became "Expired RDH license"). A word family counts in any of its forms ("suspended", "suspension"; "revoked",
+ * "revocation"; "lapsed", "a lapse"), as the review of that fix found the noun forms turned round. Words that only begin
+ * with the letters (under, unit, union, uniform, unique, universal) are not un- words.
+ */
+const NOT_IN_FORCE = /\b(?!under|unit|union|uniform|unique|univers)un[a-z]|\bnon[-\s]?[a-z]|\b(?:expir\w*|laps\w*|suspen\w*|revo[ck]\w*|restrict\w*|probation\w*|pending|inactive|invalid|provisional|temporary|conditional|hardship|encumb\w*|foreign|learner(?:['’]?s)?|out[-\s]of[-\s]state|issues?|problems?|gaps?|violations?|sanction\w*|disciplin\w*|complaints?|points?|tickets?|citations?|accidents?|DUIs?|DWIs?|denials?|denied|offen[cs]\w*|felon\w*|convict\w*|criminal|arrest\w*|records?|without|lacking|missing|no|not|never)\b/i;
+
+/**
+ * A word that joins something to the credential named last ("points on driver's license", "a lapse in BLS
+ * certification", "board action against license", "a license that has expired"): what it joins is what rules someone
+ * out, so the words are no credential to turn round (review of the must-haves fix, 12 Nov 2026: "No points on driver's
+ * license" became "Points on driver's license"). A whole word only, never inside one with a hyphen ("in-state").
+ */
+const LINKED = /(?:^|\s)(?:of|on|in|at|against|with|from|for|by|that|which|who|whose)(?=[\s,.;:!?]|$)/i;
+
+/** "Cannot be …" and "Cannot have …" are rules ("Cannot be late"), not what someone is unable to do: never turned round. */
+const CANNOT_BE = /^(?:cannot|can\s+not|can['’]t)\s+(?:be|have)\b/i;
+
+/**
+ * What the employer does to the people applying, after "Cannot …", "Unable to …" and the like ("Can't accept applicants
+ * without a license", "Unable to sponsor visas"): the owner's rule, not what the candidate cannot do, so "Able to …" would
+ * be nonsense the AI interview then asks about. The verb may come after a word ending in -ly ("currently"), "just",
+ * "even", "ever", "also", "still", "then", "afford to" or "by law" ("Can't afford to hire inexperienced staff"), and
+ * "hire" may be "re-hire" or "rehire" or come after another verb and "or", "and" or "to" ("Can't recruit or hire
+ * minors"): a candidate never hires, and "hire" in `NAMES_APPLICANTS` names a person only (final check of the
+ * employer-verbs repair, 17 Nov 2026: "Can't afford to hire inexperienced staff" became "Able to afford to hire …").
+ * "Take" and "use" count here, unlike after "Won't …", so "Can't take x-rays" and "Can't even use a computer" are asked of
+ * the owner as what they need (lead's decision, 17 Nov 2026, on what the repair of the must-haves left out).
+ */
+const EMPLOYER_DOES = /^(?:(?:[a-z]+ly|just|even|ever|also|still|then|afford\s+to|by\s+law)\s+)*(?:(?:[a-z]+\s+(?:or|and|to)\s+)?(?:re[-\s]?)?hire|accept|take|consider|employ|interview|on[-\s]?board|sponsor|bring\s+on(?:[-\s]?board)?|use|allow|offer|pay)\b/i;
+
+/**
+ * Words naming the people applying ("anyone who smokes", "new hires"): after "Cannot …" the words are then a rule about
+ * them. "Hire" in the singular names a person only after a word that picks one out ("a hire", "a new hire", "any new
+ * hire", "the new hire"); otherwise, unless it is the employer's verb (`EMPLOYER_DOES`), it is the hiring itself ("within
+ * 30 days of hire", "before hire", "the hire date", "contract-to-hire", "new hire orientation"), so the words are still
+ * what the candidate does and are turned round (review of the employer-verbs fix, 17 Nov 2026: "Unable to get BLS
+ * certified within 30 days of hire" stayed as typed).
+ */
+const NAMES_APPLICANTS = /\b(?:applicants?|candidates?|anyone|anybody|someone|somebody|people|those|hires|(?:an?|another|any|each|every)\s+(?:new\s+)?hire|(?:the|our|your)\s+new\s+hire)\b/i;
+
+/**
+ * What only the employer does, after "Won't …" ("Won't hire smokers", "Will not accept applicants without a CDL"): the
+ * words are the owner's rule, not something the candidate will not do, so "Willing to …" would be its opposite (review of
+ * the must-haves fix, 12 Nov 2026). Never "take", which a candidate does too ("Won't take weekend shifts").
+ */
+const EMPLOYER_VERB = /^(?:hire|accept|consider|tolerate|allow|employ|interview|permit|sponsor|train|pay|offer|provide)\b/i;
+
+/**
+ * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
+ * license" became a must-have in those very words, so the job page asked for the opposite and nobody was held). Only
+ * clear shapes are turned round: "No …", "Without …", "Lacks …", "Missing …" or "Does not have …" a licence, certificate,
+ * permit, registration or credential named last (`lacksCredential`), with no word saying it is not in force or naming the
+ * problem itself (`NOT_IN_FORCE`) and none joining something to it (`LINKED`); "Cannot …" or "Unable to …" ("Able to
+ * …") about what the candidate does, never "Cannot be …" or "Cannot have …", nor what the employer does to the people
+ * applying (`EMPLOYER_DOES`, "Can't accept applicants without a license") or words naming them (`NAMES_APPLICANTS`,
+ * "Cannot let anyone without a license start"); "Not licensed …", "Not available …" and the like; "Won't …" ("Willing to
+ * …"), never "Won't hire …", "Won't accept …" or another verb only the employer does (`EMPLOYER_VERB`). Anything else
+ * comes back as typed (never its opposite: review of the live test, 12 Nov 2026, and of its fix), so "No recent grads"
+ * is still refused by the fairness check, and words that still rule someone out (`rulesOut`) are asked of the owner as
+ * what they need (the quick start's "As a must-have", and the job builder's card, which names them).
+ */
+export function mustHaveOf(dealBreaker: string): string {
+  const t = dealBreaker.trim().replace(/\s+/g, " ");
+  const up = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const lacks = t.match(LACKS);
+  if (lacks) return lacksCredential(t) ? up(lacks[1]) : t;
+  const cannot = t.match(/^(?:cannot|can\s+not|can['’]t|unable\s+to|not\s+able\s+to)\s+(.+)$/i);
+  if (cannot) return CANNOT_BE.test(t) || EMPLOYER_DOES.test(cannot[1]) || NAMES_APPLICANTS.test(cannot[1]) ? t : `Able to ${cannot[1]}`;
+  const not = t.match(/^not\s+((?:licen[cs]ed|certified|registered|authori[sz]ed|available|eligible)\b.*)$/i);
+  if (not) return up(not[1]);
+  const wont = t.match(/^(?:won['’]t|will\s+not|unwilling\s+to|not\s+willing\s+to)\s+(.+)$/i);
+  if (wont) return EMPLOYER_VERB.test(wont[1]) ? t : `Willing to ${wont[1]}`;
+  return t;
+}
+
+/**
+ * Whether words name a credential someone lacks ("No x-ray permit", "Without a current BLS certification"): the shape
+ * `mustHaveOf` turns round by its first branch, a licence, certificate, permit, registration or credential named last
+ * with nothing saying it is not in force (`NOT_IN_FORCE`) and nothing joined to it ("No points on driver's license",
+ * `LINKED`). It is the one shape safe to turn round whoever wrote the words: "Cannot …", "Won't …" and "Not registered
+ * …" can be a rule worded in the negative ("Will not share patient information", "Not registered as a sex offender"),
+ * which the requirements check turns round only when they are a deal-breaker's own words (review of the hire-again fix,
+ * 12 Nov 2026).
+ */
+export function lacksCredential(text: string): boolean {
+  const lacks = text.trim().replace(/\s+/g, " ").match(LACKS);
+  return !!lacks && CREDENTIAL_LAST.test(lacks[1]) && !NOT_IN_FORCE.test(lacks[1]) && !LINKED.test(lacks[1]);
+}
+
+/**
+ * The must-haves a deal-breaker can come back as: the requirement it rules people out on (`mustHaveOf`), and its words
+ * with the leading "No", "Without" and the like dropped, which can say the opposite ("No felonies or license
+ * suspensions" as "Felonies or license suspensions"). A deal-breaker the fairness check refuses is refused in each of
+ * them too, with the same reason (review of the live test, 12 Nov 2026).
+ */
+export function restatementsOf(dealBreaker: string): string[] {
+  const t = dealBreaker.trim().replace(/\s+/g, " ");
+  const rest = t.match(LACKS)?.[1];
+  const out = [mustHaveOf(t), ...(rest ? [rest.charAt(0).toUpperCase() + rest.slice(1)] : [])];
+  return out.filter((x, i) => out.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i);
+}
+
+/** No, not, never, without, lacks, missing, cannot, can't, won't, unable, unwilling, does not, don't, must not, at the start (any case, apostrophe or not). */
+const RULES_OUT = /^(?:no|not|never|without|lacks?|lacking|missing|cannot|can\s+not|can['’]?t|won['’]?t|will\s+not|unable|unwilling|(?:does|do)(?:\s+not|n['’]?t)|must\s+not|mustn['’]?t)\b/i;
+
+/**
+ * Whether words rule someone out ("No RDA", "Cant work weekends", "Must not smoke"). A deal-breaker still worded so is
+ * never offered or filled in as a must-have: the quick start asks the owner for what they need, and the job builder's
+ * card gives it no ready-made option and names it for the owner to write (review of the live test, 12 Nov 2026, and of
+ * its fix). A stored must-have can still read so (a pick on a deal-breaker card stored before 12 Nov 2026, kept as it is,
+ * or words the owner typed on a card or the panel): the requirements check flags it (`rules_out`).
+ */
+export function rulesOut(text: string): boolean {
+  return RULES_OUT.test(text.trim());
+}
+
+/** The legal right to work, in any words ("Are you authorized to work in the U.S.?", "…require visa sponsorship?"). */
+const ABOUT_THE_RIGHT_TO_WORK = /\b(?:authori[sz]ed|eligible|permitted|allowed|entitled)\s+to\s+(?:legally\s+)?work\b|\bright\s+to\s+work\b|\bwork\s+authori[sz]ation\b|\bsponsorship\b/i;
+/** Being available, the schedule, shifts, the regular hours, or which days or hours they can work ("Can you work Saturdays?"). */
+const ABOUT_THE_SCHEDULE = /\bavailab\w*|\bschedul\w*|\bshifts?\b|\bweekends?\b|\bweekdays?\b|\b(?:mon|tues|wednes|thurs|fri|satur|sun)days?\b|\bwhich (?:of (?:these|the) )?days\b|\bwhat days\b|\b(?:days|hours) (?:a|per) (?:week|day)\b|\b(?:posted|standard|regular|normal|usual|business|office)\s+hours\b|\bovertime\b|\bon[\s-]call\b|\bwork(?:ing)? (?:on |the |a |an |during )?(?:nights?|evenings?|mornings?|holidays?|hours)\b/i;
+/** …never when they could start, how they get to the workplace, a licence or a certificate, or a physical task. */
+const NOT_THE_SCHEDULE = /\bstart\b|\bget to\b|\bcommut\w*|\btranspor\w*|\blicen[cs]\w*|\bcertif\w*|\blift\w*|\bcarry\w*|\bstand(?:ing)?\b|\bpounds?\b|\blbs?\b/i;
+
+/**
+ * The kind of rule a question for the form asks, read from its words, for the two kinds a model words its own way and no
+ * short form names: the schedule ("Are you available for the days this office is open?", "Which of these days can you
+ * work: Mon, Tue, Wed?") and the right to work ("Are you authorized to work in the U.S.?"). Null for any other question,
+ * a start date ("Can you start within 30 days?"), getting to the workplace ("Can you get to the workplace on the days the
+ * job needs?") and a physical task ("Can you stand for an 8-hour shift?") among them. The job builder's backstop for a
+ * question left unticked and the quick start's offer of the assistant's questions both read it (review of the live-test
+ * fixes, 12 Nov 2026).
+ */
+export function askedKind(question: string): "schedule_availability" | "work_authorization" | null {
+  if (ABOUT_THE_RIGHT_TO_WORK.test(question)) return "work_authorization";
+  if (ABOUT_THE_SCHEDULE.test(question) && !NOT_THE_SCHEDULE.test(question)) return "schedule_availability";
+  return null;
+}
 
 export const IntakeMissingFact = z.enum([
   "title",
@@ -135,10 +296,13 @@ export const IntakeQuestion = z.object({
 });
 export type IntakeQuestion = z.infer<typeof IntakeQuestion>;
 
-/** One assistant turn of the intake conversation (intake.turn v2). */
+/**
+ * One assistant turn of the intake conversation (intake.turn v2). What it extracts is the facts without the marker only
+ * the server sets (`formQuestionsChosen`): the model is never asked for it, and a copy it wrote anyway is dropped.
+ */
 export const IntakeTurn = z.object({
   assistantMessage: z.string().min(1),
-  factsExtracted: IntakeFacts,
+  factsExtracted: IntakeFacts.omit({ formQuestionsChosen: true }),
   missingFacts: z.array(IntakeMissingFact),
   /** Up to three question cards, the most important first. The owner can always ignore them and type. */
   questions: z.array(IntakeQuestion).max(3).default([]),
@@ -204,9 +368,9 @@ export const IntakeServerState = z.object({
    */
   settledFields: z.array(IntakeQuestionField).default([]),
   /**
-   * The single-value facts the owner gave on a card (not skipped) or set or cleared on the panel, by name (locationText,
-   * reason…): the assistant never changes those on a turn that follows answers alone; a correction the owner types still
-   * goes through.
+   * The single-value facts the owner gave on a card (not skipped), set or cleared on the panel, or changed on the written
+   * draft (`answersFollowingChange`), by name (locationText, reason…): the assistant never changes those on a turn that
+   * follows answers alone; a correction the owner types still goes through.
    */
   answeredFacts: z.array(z.string()).default([]),
   /** The wording of every card shown in this draft (the latest 60): a card that asks one of them again under another field is dropped. */
@@ -218,8 +382,8 @@ export const IntakeServerState = z.object({
   progress: z.object({ stage: IntakeProgressStage, startedAt: z.string(), at: z.string() }).optional(),
   /**
    * The draft as last written: when, by which run, for whom, the pay it was written with, a key of the answers the
-   * assistant wrote it from (`draftFactsKey`: answers changed since make it out of date), and how many changes were saved
-   * on it since (by chat or with a fix), which writing it again would replace.
+   * assistant wrote it from (`draftFactsKey`: answers changed since make it out of date), and how many changes saved on it
+   * since (by chat or with a fix) writing it again would replace part of: a change the answers took in too is not counted.
    */
   draft: z.object({ at: z.string(), aiRunId: z.string(), by: Actor, payKey: z.string().nullable(), factsKey: z.string().optional(), edits: z.number().int().default(0) }).optional(),
   fromRole: z.object({ roleId: z.string(), version: z.number().int(), title: z.string() }).optional(),
@@ -239,9 +403,13 @@ export type IntakeReadiness = {
   mayDraft: boolean;
   draftBlocker: string | null;
   hasDraft: boolean;
-  /** Answers changed after the draft was written in a way only writing it again can carry (pay, the team and deal-breakers carry over by themselves). */
+  /** Answers changed after the draft was written in a way only writing it again can carry (pay, why you are hiring, the team and deal-breakers carry over by themselves). */
   draftOutOfDate: boolean;
-  /** Changes saved on the draft since it was written (by chat or with a fix): writing it again replaces them. */
+  /**
+   * Changes saved on the draft since it was written (by chat or with a fix) that writing it again would replace part of;
+   * one to the title, the schedule, full or part time, the work model, why you are hiring or the wording of a must-have or
+   * nice-to-have went into the answers too, so it is not counted.
+   */
   draftEdits: number;
   openFlags: number;
   /** Whether "Ask for approval" works: a written, up-to-date draft, the six essentials, pay a person set or confirmed, and no open wording check. */

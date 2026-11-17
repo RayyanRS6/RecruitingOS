@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { RolePacket, ScreenAssessment, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import type { RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_WRAP_KEY, chatCounter } from "@ros/core";
+import { CHAT_WRAP_KEY, chatCounter, tapFormatFor } from "@ros/core";
+import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, enforceChatTurn, enforceTurnRules, gapQuestion,
-  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, type ChatFacts,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, currentTapFormat, enforceChatTurn, enforceTurnRules, gapQuestion,
+  newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, withoutResumeShownConcerns, type ChatFacts,
 } from "./screening";
-import { answerInContext, credentialMustHaves } from "./triage";
+import { answerInContext, closedAnswer, credentialMustHaves } from "./triage";
 import { FOCUS_INTRO, focusQuestionsFrom, focusedPacket, packetForFocusedInvite, unfairQuestion } from "./screen-focus";
 import { registerFakeHandlers } from "./fake-handlers";
 
@@ -359,6 +360,40 @@ describe("a plain yes or no to the licence question settles the licence", () => 
     // while the question about the job's own licence still settles it
     expect([...plainCredentialAnswers([asked("Do you hold an RN license?", "rn_check"), said("Yes")], new Set(["rn"]), rn)]).toEqual([["rn", { met: "yes", quote: "Yes" }]]);
   });
+
+  // The review of the live-test fixes (12 November 2026): "Which certifications do you hold, such as x-ray, …?" has "do
+  // you hold" in it, so a typed "yes" read as "I hold , such as x-ray, coronal polishing, RDA or BLS": the x-ray
+  // certificate was settled as shown in code, and a model "yes" quoting it stood as evidence for the RDA licence.
+  it("a bare 'yes' to a question that asks them to name something settles nothing, and is no quote", () => {
+    const xray = new Map([["xray", "X-ray certification"]]);
+    const which = ["Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?", "Thanks. Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?", "And which certifications do you hold, such as x-ray or BLS?"];
+    for (const q of which) {
+      for (const m of ["yes", "Yes, I do", "yes, I have", "No"]) expect(plainCredentialAnswers([asked(q, "certs"), said(m)], new Set(["xray"]), xray).size, `${q} ${m}`).toBe(0);
+      expect(closedAnswer(q, "yes"), q).toBeNull();
+      expect(answerInContext(q, "yes"), q).toBeNull();
+      expect(screenAnswerOf("yes", "Active California RDA license", [asked(q, "certs"), said("yes")]), q).toBeNull();
+    }
+    for (const q of ["What certifications do you hold?", "How long have you held your RDH license?", "When did you get your RDA license?", "Where are you licensed?", "Who issued your license?", "Whose name is the license under?", "So, which license do you have?"]) {
+      expect(closedAnswer(q, "Yes"), q).toBeNull();
+      expect(answerInContext(q, "Yes"), q).toBeNull();
+    }
+    // a model "yes" quoting the bare "yes" stays "no quote", never shown in full, and nothing settles the x-ray certificate
+    const transcript = [asked(which[0]!, "certs"), said("yes")];
+    const both = new Map([["rda", "Active California RDA license"], ["xray", "X-ray certification"]]);
+    const read = verifyScreenQuotes(card([{ requirementKey: "rda", met: "yes", evidence: { source: "screen", quote: "yes" } }]), "yes", { transcript, subjects: both, credentials: new Set(["rda", "xray"]) });
+    expect(read.requirementFindings).toEqual([{ requirementKey: "rda", met: "yes", evidence: { source: "screen", unquoted: true } }]);
+  });
+
+  it("a closed question still settles from its start: after 'And' or 'So', and after a sentence before it", () => {
+    for (const q of ["Do you hold a California RDH license?", "And do you hold a California RDH license?", "So, do you hold a California RDH license?", "Thanks. Next: Do you hold a California RDH license?", "Got it.\n\nAre you licensed as an RDH in California?"]) {
+      expect([...plainCredentialAnswers([asked(q, "licence_check"), said("Yes")], credentialMustHaves(packet), subjects)], q).toEqual([["licence", { met: "yes", quote: "Yes" }]]);
+    }
+    expect(closedAnswer("So do you have an active RDH license?", "No, I don't")).toEqual({ held: false, statement: "I do not have an active RDH license" });
+    // "do you have" further on in a question that starts otherwise is not the question asked
+    expect(closedAnswer("Could you list what you hold, and do you have BLS?", "yes")).toBeNull();
+    // a yes or no to any other closed question is still read with it
+    expect(answerInContext("Is your license active?", "Yes")).toBe("Is your license active? Yes");
+  });
 });
 
 describe("the scorecard is read three times, like the résumé (known bugs 20 and 106)", () => {
@@ -403,7 +438,7 @@ describe("the scorecard reads each answer for its own question, and settles a st
   const at = "2026-10-15T10:00:00.000Z";
   const question = (key: string, kind: string, text: string, competencyKey?: string) => ({ key, kind, question: text, ...(competencyKey ? { competencyKey } : {}) });
   const QUESTIONS = [
-    question("license_confirm", "eligibility", "Can you confirm your RDH license state and whether it is currently active?"),
+    question("license_confirm", "eligibility", "Is your RDH license active in the state this office is in?"),
     question("perio_approach", "skills", "Walk me through how you handle a new patient with generalized moderate periodontitis.", "clinical_quality"),
     question("anxious_patient", "behavioral", "Tell me about a time a patient was anxious or resistant. What did you do?", "patient_communication"),
     question("appointment_length", "skills", "What appointment length are you used to for an adult prophy, and how do you handle running behind?", "efficiency_time"),
@@ -537,6 +572,226 @@ describe("the scorecard reads each answer for its own question, and settles a st
     const bare = { ...PACKET, requirements: { ...PACKET.requirements, mustHaves: [] }, competencies: [] } as unknown as RolePacket;
     expect(settledScreenRecommendation(strong, bare)).toBe("interview");
   });
+
+  it("counts a skill named as a must-have once, as the must-have, as the match score does (live test, 12 November 2026)", () => {
+    // the draft's skill "Experience with periodontal charting and therapy" beside the must-have of the same name
+    const twin = { ...PACKET, competencies: [...PACKET.competencies, { ...skill("perio_skill"), name: "Experience with Periodontal Charting and Therapy." }] } as unknown as RolePacket;
+    // two skills of four evidenced is not most, and the twin's evidence never makes it so: the must-have already counted it
+    const two = reading("partially_evidenced", "not_evidenced", "strong_interview");
+    const withTwin = { ...two, competencyFindings: [...two.competencyFindings, { competencyKey: "perio_skill", finding: "evidenced" as const, evidence: { source: "screen" as const, quote: "I do full perio charting and radiographs" } }] };
+    expect(settledScreenRecommendation(withTwin, twin)).toBe("interview");
+    expect(settledScreenRecommendation(withTwin, PACKET)).toBe("interview");
+    // three of four is most, with or without the twin beside them
+    expect(settledScreenRecommendation({ ...withTwin, competencyFindings: withTwin.competencyFindings.map((f) => (f.competencyKey === "efficiency_time" ? { ...f, finding: "evidenced" as const } : f)) }, twin)).toBe("strong_interview");
+    // The second review of the live-test fixes (#2): beside a must-have the chat is not asked to confirm, its scorecard has
+    // no place for that must-have, so the skill of the same name holds what the candidate said and counts on its own
+    const perioSkill = { ...skill("perio_skill"), name: "Experience with Periodontal Charting and Therapy." };
+    const against = { ...two, competencyFindings: [two.competencyFindings[0]!, { competencyKey: "perio_skill", finding: "contradicted" as const, evidence: { source: "screen" as const, quote: "I have never charted perio" } }] };
+    // confirmed by the chat, the skill is the must-have: one skill of one shown is most
+    expect(settledScreenRecommendation(against, { ...PACKET, competencies: [skill("clinical_quality"), perioSkill] } as unknown as RolePacket)).toBe("strong_interview");
+    const unconfirmed = { ...PACKET, requirements: { ...PACKET.requirements, mustHaves: PACKET.requirements.mustHaves.map((m) => (m.key === "perio_experience" ? { ...m, evidencedBy: ["resume", "interview"] } : m)) }, competencies: [skill("clinical_quality"), perioSkill] } as unknown as RolePacket;
+    expect(settledScreenRecommendation({ ...against, requirementFindings: [against.requirementFindings[0]!] }, unconfirmed)).toBe("interview");
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the chat asks no gap question about what the résumé shows (`chatGaps`), so its
+ * scorecard wrote that silence as a concern, "Digital radiography work is not described, and the x-ray certificate's
+ * current status is not stated.", with nothing quoted, beside the breakdown's "Shown, from the AI review of the résumé".
+ * Such a concern goes where the team reads it; one quoting the candidate stays, and so does one about anything the chat
+ * asked or the scorecard's own finding quotes (the second review of the live-test fixes).
+ */
+describe("the scorecard leaves out a concern that is only the chat's silence about what the résumé shows", () => {
+  const packet = {
+    requirements: { mustHaves: [{ key: "mh_dr", text: "Digital radiography", rationale: "r", evidencedBy: ["resume", "screen"] }, { key: "mh_rda", text: "Active California RDA license", rationale: "law", evidencedBy: ["resume", "screen"] }], niceToHaves: [], eligibility: [] },
+    competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both", indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "interview", indicators: ["x"] }],
+    screening: { questions: [{ key: "certs", question: "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?", kind: "eligibility" }, { key: "procedures", question: "Which procedures are you most comfortable assisting with?", kind: "skills", competencyKey: "chairside" }, { key: "availability", question: "Which days and hours are you available, and when could you start?", kind: "availability" }], maxMinutes: 10 },
+  } as unknown as RolePacket;
+  const at = "2026-11-12T10:00:00.000Z";
+  const asked = (content: string, questionKey?: string): ScreenTranscriptEntry => ({ role: "assistant", content, at, ...(questionKey ? { questionKey } : {}) });
+  const said = (content: string, over: Partial<ScreenTranscriptEntry> = {}): ScreenTranscriptEntry => ({ role: "candidate", content, at, ...over });
+  // the live Dental Assistant chat: its questions never asked about digital radiography ("x-ray" is one word of its certs question)
+  const NEVER_ASKED: ScreenTranscriptEntry[] = [asked(packet.screening.questions[0]!.question, "certs"), said("X-ray and BLS, both current."), asked(packet.screening.questions[2]!.question, "availability"), said("Monday to Friday, from December.")];
+  const silence = { claim: "Digital radiography work is not described, and the x-ray certificate's current status is not stated.", evidence: { source: "screen" as const, unquoted: true } };
+  const pay = { claim: "Pay expectation is above the posted range", evidence: { source: "screen" as const, unquoted: true } };
+  const card = (concerns: ScreenAssessment["concerns"]): ScreenAssessment => ({ overall: "strong", confidence: "medium", summary: "s", strengths: [], concerns, unknowns: [], competencyFindings: [], requirementFindings: [{ requirementKey: "mh_dr", met: "unknown" }], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "r" });
+  type Resume = Parameters<typeof withoutResumeShownConcerns>[1];
+  const resume = (met: "yes" | "partially", quote?: string, chairside?: "evidenced" | "partially_evidenced"): Resume => ({
+    requirementFindings: [{ requirementKey: "mh_dr", met, ...(quote ? { evidence: { source: "resume" as const, quote } } : {}) }],
+    competencyFindings: chairside ? [{ competencyKey: "chairside", finding: chairside, evidence: { source: "resume" as const, quote: "Chairside assisting for Dr Lee" } }] : [],
+  });
+  const shown = resume("yes", "Take full-mouth and bitewing X-rays with digital sensors");
+  const unquoted = (claim: string) => ({ claim, evidence: { source: "screen" as const, unquoted: true } });
+
+  it("removes the live concern when the résumé reading shows the must-have on a checked quote, and keeps the rest", () => {
+    for (const chat of [NEVER_ASKED, []]) {
+      const out = withoutResumeShownConcerns(card([silence, pay]), shown, packet, chat);
+      expect(out.concerns).toEqual([pay]);
+      // the rest of the scorecard is as it was
+      expect({ ...out, concerns: [] }).toEqual({ ...card([silence, pay]), concerns: [] });
+    }
+  });
+
+  it("keeps a concern on the same thing that quotes the candidate, or a recruiter's note", () => {
+    const quoted = { claim: "Digital radiography was only on film at their last office", evidence: { source: "screen" as const, quote: "we only had film X-rays" } };
+    const noted = { claim: "Digital radiography not used since 2019", evidence: { source: "recruiter_note" as const, quote: "Said no digital X-rays since 2019" } };
+    expect(withoutResumeShownConcerns(card([quoted, noted]), shown, packet, NEVER_ASKED).concerns).toEqual([quoted, noted]);
+  });
+
+  it("keeps the concern when the résumé shows it only in part, or with nothing quoted, or not at all", () => {
+    for (const r of [resume("partially", "some digital X-rays"), resume("yes"), { requirementFindings: [{ requirementKey: "mh_dr", met: "yes" as const, evidence: { source: "resume" as const, unquoted: true } }], competencyFindings: [] }, { requirementFindings: [], competencyFindings: [] }]) {
+      expect(withoutResumeShownConcerns(card([silence]), r, packet, NEVER_ASKED).concerns).toEqual([silence]);
+    }
+  });
+
+  it("removes a concern naming a skill the résumé shows evidenced, and only when it names all of the skill", () => {
+    const chairside = unquoted("Chairside work was not discussed");
+    const licence = unquoted("The RDA license status is not stated");
+    expect(withoutResumeShownConcerns(card([chairside, licence]), resume("yes", "Take full-mouth and bitewing X-rays with digital sensors", "evidenced"), packet, NEVER_ASKED).concerns).toEqual([licence]);
+    // shown only in part, it stays
+    expect(withoutResumeShownConcerns(card([chairside]), resume("yes", "digital sensors", "partially_evidenced"), packet, NEVER_ASKED).concerns).toEqual([chairside]);
+    // "RDA license" alone is not all of "Active California RDA license", even when the résumé shows that one (and with no
+    // chat at all: the live chat's certs question also names the licence, by "RDA")
+    const rda: Resume = { requirementFindings: [{ requirementKey: "mh_rda", met: "yes", evidence: { source: "resume", quote: "RDA license CA #12345, active" } }], competencyFindings: [] };
+    for (const chat of [NEVER_ASKED, []]) expect(withoutResumeShownConcerns(card([licence]), rda, packet, chat).concerns).toEqual([licence]);
+  });
+
+  it("returns the same scorecard when nothing goes, or with no résumé reading", () => {
+    const c = card([silence, pay]);
+    expect(withoutResumeShownConcerns(c, null, packet, NEVER_ASKED)).toBe(c);
+    expect(withoutResumeShownConcerns(c, undefined, packet, NEVER_ASKED)).toBe(c);
+    const kept = card([pay]);
+    expect(withoutResumeShownConcerns(kept, shown, packet, NEVER_ASKED)).toBe(kept);
+  });
+
+  it("keeps a concern about the licence the chat asked about, though the tapped No it rests on is too short to quote (second review of the live-test fixes, #1)", () => {
+    const hygienist = {
+      requirements: { mustHaves: [{ key: "mh_rdh", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume", "screen"] }], niceToHaves: [], eligibility: [] },
+      competencies: [],
+      screening: { questions: [{ key: "license_confirm", question: "Is your RDH license active in the state this office is in?", kind: "eligibility" }], maxMinutes: 10 },
+    } as unknown as RolePacket;
+    const licensed: Resume = { requirementFindings: [{ requirementKey: "mh_rdh", met: "yes", evidence: { source: "resume", quote: "RDH license CA #55321" } }], competencyFindings: [] };
+    const tapped = [asked(hygienist.screening.questions[0]!.question, "license_confirm"), said("No", { questionKey: "license_confirm", source: "tap" })];
+    const notActive = unquoted("RDH license is not active in this state");
+    const withFindings = (requirementFindings: ScreenAssessment["requirementFindings"]): ScreenAssessment => ({ ...card([notActive]), requirementFindings });
+    // the chat asked about the licence: the concern stays, whatever the scorecard's own finding says
+    expect(withoutResumeShownConcerns(withFindings([]), licensed, hygienist, tapped).concerns).toEqual([notActive]);
+    // never asked, and nothing quoted on the finding: that is the chat's silence
+    expect(withoutResumeShownConcerns(withFindings([]), licensed, hygienist, NEVER_ASKED).concerns).toEqual([]);
+    // the scorecard's own finding quotes their "No": the concern stays, asked or not
+    expect(withoutResumeShownConcerns(withFindings([{ requirementKey: "mh_rdh", met: "unknown", evidence: { source: "screen", quote: "No" } }]), licensed, hygienist, NEVER_ASKED).concerns).toEqual([notActive]);
+    // as the evidence rules leave three readings quoting the tap: the concern loses its "No", too short alone, while the
+    // finding keeps it, read with the question; the concern stays
+    const reading: ScreenAssessment = { ...card([{ claim: notActive.claim, evidence: { source: "screen", quote: "No" } }]), requirementFindings: [{ requirementKey: "mh_rdh", met: "unknown", evidence: { source: "screen", quote: "No" } }] };
+    const out = scorecardReadings([1, 2, 3].map((i) => ({ ok: true as const, output: reading, runId: `r${i}`, model: "m" })), { restore: (s: string) => s }, { transcript: tapped, answers: {}, progress: EMPTY_SCREEN_PROGRESS }, hygienist);
+    if (!out.ok) throw new Error("expected a scorecard");
+    expect(out.output.concerns).toEqual([notActive]);
+    expect(out.output.requirementFindings).toEqual([{ requirementKey: "mh_rdh", met: "unknown", evidence: { source: "screen", quote: "No" } }]);
+    for (const chat of [tapped, NEVER_ASKED]) expect(withoutResumeShownConcerns(out.output, licensed, hygienist, chat).concerns).toEqual([notActive]);
+  });
+
+  it("counts as asked a gap question for the must-have, a question about the skill, any line about it and a recruiter's notes of a call", () => {
+    const evidenced = resume("yes", "Take full-mouth and bitewing X-rays with digital sensors", "evidenced");
+    const chairside = unquoted("Chairside work was not discussed");
+    // the chat's gap item for the must-have, in its own words, and the question the packet ties to the skill
+    expect(withoutResumeShownConcerns(card([silence]), shown, packet, [...NEVER_ASKED, asked("Tell me about the imaging you do with patients.", "mh_dr")]).concerns).toEqual([silence]);
+    expect(withoutResumeShownConcerns(card([chairside]), evidenced, packet, [...NEVER_ASKED, asked(packet.screening.questions[1]!.question, "procedures")]).concerns).toEqual([chairside]);
+    // a line of the chat about it, x-ray read as radiography, or a recruiter's notes of the call
+    expect(withoutResumeShownConcerns(card([silence]), shown, packet, [...NEVER_ASKED, asked("Do you take digital x-rays yourself?")]).concerns).toEqual([silence]);
+    const note: ScreenTranscriptEntry = { role: "recruiter", content: "Called her: digital radiography daily, Dexis sensors.", at, source: "recruiter_call" };
+    expect(withoutResumeShownConcerns(card([silence]), shown, packet, [note]).concerns).toEqual([silence]);
+    // the candidate's own words are not a question the chat asked
+    expect(withoutResumeShownConcerns(card([silence]), shown, packet, [...NEVER_ASKED, said("I take digital x-rays every day.")]).concerns).toEqual([]);
+  });
+
+  it("reads a plural, x-ray and radiography as one word, and one part of a name with several parts (second review of the live-test fixes, #32)", () => {
+    const named = {
+      requirements: {
+        mustHaves: [
+          { key: "mh_scan", text: "Digital radiography and intraoral scanning", rationale: "r", evidencedBy: ["resume", "screen"] },
+          { key: "mh_crowns", text: "Impressions and provisional crowns", rationale: "r", evidencedBy: ["resume", "screen"] },
+          { key: "mh_steri", text: "Sterilization and OSHA compliance", rationale: "r", evidencedBy: ["resume", "screen"] },
+        ],
+        niceToHaves: [],
+        eligibility: [],
+      },
+      competencies: [],
+    } as unknown as RolePacket;
+    const all: Resume = { requirementFindings: [{ requirementKey: "mh_scan", met: "yes", evidence: { source: "resume", quote: "Digital X-rays with Dexis sensors; iTero intraoral scans" } }, { requirementKey: "mh_crowns", met: "yes", evidence: { source: "resume", quote: "Alginate impressions and temporary crowns" } }, { requirementKey: "mh_steri", met: "yes", evidence: { source: "resume", quote: "Run the sterilization room to OSHA standards" } }], competencyFindings: [] };
+    const live = unquoted("Digital radiography work is not described");
+    // removed when the chat never asked: the live sentence names one whole part; "X-rays" is radiography, "crown" is "crowns"
+    for (const gone of [live, unquoted("Digital X-rays were not described"), unquoted("Provisional crown work was not described")]) expect(withoutResumeShownConcerns(card([gone]), all, named, NEVER_ASKED).concerns, gone.claim).toEqual([]);
+    expect(withoutResumeShownConcerns(card([unquoted("Digital X-rays were not described")]), shown, packet, NEVER_ASKED).concerns).toEqual([]);
+    // kept: an unrelated concern that shares one word with a must-have, a part of one word ("Impressions") included
+    for (const kept of [unquoted("Overall impression: answers were brief"), unquoted("Provisional start date was not confirmed"), unquoted("Intraoral camera use was not discussed")]) expect(withoutResumeShownConcerns(card([kept]), all, named, NEVER_ASKED).concerns, kept.claim).toEqual([kept]);
+    // the chat asked about the must-have by two of its words: nothing about it is the chat's silence
+    expect(withoutResumeShownConcerns(card([live]), all, named, [...NEVER_ASKED, asked("Tell me about the intraoral scanning you do.")]).concerns).toEqual([live]);
+    // asked about sterilization alone, the chat never asked about the must-have: its silence on the other part goes, and a
+    // concern about the part of one word it asked stays
+    const steri = [...NEVER_ASKED, asked("Describe your sterilization routine between patients.")];
+    expect(withoutResumeShownConcerns(card([unquoted("OSHA compliance was not discussed"), unquoted("Sterilization steps were vague")]), all, named, steri).concerns.map((c) => c.claim)).toEqual(["Sterilization steps were vague"]);
+  });
+
+  /**
+   * The second look at that fix (skeptic issue S1 on #1): the Dental Assistant's certs question names the licence by one
+   * word only ("RDA"), and the evidence rules take a "None" off the concern and off the scorecard's own finding alike (too
+   * short to quote, and the question asks which), so nothing quoted was left to show the chat had asked.
+   */
+  it("keeps a concern about a licence a question names by one of its own words, though the None it rests on is too short to quote", () => {
+    const rda: Resume = { requirementFindings: [{ requirementKey: "mh_rda", met: "yes", evidence: { source: "resume", quote: "Registered Dental Assistant (RDA), Dental Board of California, active since 2020" } }], competencyFindings: [] };
+    const none = [asked(packet.screening.questions[0]!.question, "certs"), said("None")];
+    const doesNotHold = unquoted("Does not hold an active California RDA license");
+    const reading: ScreenAssessment = { ...card([{ claim: doesNotHold.claim, evidence: { source: "screen", quote: "None" } }]), requirementFindings: [{ requirementKey: "mh_rda", met: "no", evidence: { source: "screen", quote: "None" } }] };
+    const out = scorecardReadings([1, 2, 3].map((i) => ({ ok: true as const, output: reading, runId: `r${i}`, model: "m" })), { restore: (s: string) => s }, { transcript: none, answers: {}, progress: EMPTY_SCREEN_PROGRESS }, packet);
+    if (!out.ok) throw new Error("expected a scorecard");
+    // the evidence rules take "None" off both
+    expect(out.output.concerns).toEqual([doesNotHold]);
+    const finding = out.output.requirementFindings.find((f) => f.requirementKey === "mh_rda");
+    expect(finding?.met).toBe("unknown");
+    expect(finding?.evidence?.quote).toBeUndefined();
+    // "RDA" in the certs question names the licence: the chat asked about it, so the concern stays
+    expect(withoutResumeShownConcerns(out.output, rda, packet, none).concerns).toEqual([doesNotHold]);
+    // a chat that never named it: the same concern is its silence
+    expect(withoutResumeShownConcerns(out.output, rda, packet, [asked(packet.screening.questions[2]!.question, "availability"), said("Weekdays")]).concerns).toEqual([]);
+  });
+
+  /** The second look at #32 (skeptic issues S2 to S4): the parts of a name, and a note in brackets at its end. */
+  it("reads a part of two words only together and in order, a part of one word only with another word of its name the chat never held, and a name without its bracketed note", () => {
+    const one = (key: string, text: string) => ({ requirements: { mustHaves: [{ key, text, rationale: "r", evidencedBy: ["resume", "screen"] }], niceToHaves: [], eligibility: [] }, competencies: [] }) as unknown as RolePacket;
+    const shownOn = (key: string, quote: string): Resume => ({ requirementFindings: [{ requirementKey: key, met: "yes", evidence: { source: "resume", quote } }], competencyFindings: [] });
+    // S2: "Open Dental" is a part of the name, so its words count only side by side and in that order
+    const days = unquoted("Availability for the days this dental office is open was not confirmed");
+    const openDental = unquoted("Open Dental use was not described");
+    for (const name of ["Dentrix / Eaglesoft / Open Dental", "Experience with Dentrix, Eaglesoft, or Open Dental"]) {
+      expect(withoutResumeShownConcerns(card([days, openDental]), shownOn("mh_pms", "Chart treatment in Dentrix"), one("mh_pms", name), NEVER_ASKED).concerns, name).toEqual([days]);
+    }
+    // S3: #32's own sentence goes, "Impressions" with "crown" beside it, when no line of the chat held either word
+    const crowns = one("mh_crowns", "Impressions and provisional crowns");
+    const temporaries = shownOn("mh_crowns", "Alginate impressions and temporary crowns");
+    const impressionAndCrown = unquoted("Impression and crown work was not discussed");
+    expect(withoutResumeShownConcerns(card([impressionAndCrown]), temporaries, crowns, NEVER_ASKED).concerns).toEqual([]);
+    expect(withoutResumeShownConcerns(card([impressionAndCrown]), temporaries, crowns, [...NEVER_ASKED, asked("Do you make temporary crowns chairside?")]).concerns).toEqual([impressionAndCrown]);
+    // one word of the name alone is never enough
+    expect(withoutResumeShownConcerns(card([unquoted("Overall impression: answers were brief")]), temporaries, crowns, NEVER_ASKED).concerns).toEqual([unquoted("Overall impression: answers were brief")]);
+    // a concern about the part of one word the chat asked stays, with the other part's word beside it too
+    const steri = one("mh_steri", "Sterilization and OSHA compliance");
+    const osha = shownOn("mh_steri", "Run the sterilization room to OSHA standards");
+    const vague = unquoted("Sterilization and OSHA steps were vague");
+    expect(withoutResumeShownConcerns(card([vague]), osha, steri, [...NEVER_ASKED, asked("Describe your sterilization routine between patients.")]).concerns).toEqual([vague]);
+    expect(withoutResumeShownConcerns(card([vague]), osha, steri, NEVER_ASKED).concerns).toEqual([]);
+    // S3: the hiring guide's "(state-dependent)" is a note, not words a concern names; asked about, the concern stays
+    const anesthesia = one("mh_la", "Local anesthesia certification (state-dependent)");
+    const certified = shownOn("mh_la", "Local anesthesia certification, Dental Board of California, 2019");
+    const notDiscussed = unquoted("Local anesthesia certification was not discussed");
+    expect(withoutResumeShownConcerns(card([notDiscussed]), certified, anesthesia, NEVER_ASKED).concerns).toEqual([]);
+    expect(withoutResumeShownConcerns(card([notDiscussed]), certified, anesthesia, [...NEVER_ASKED, asked("Do you hold a local anesthesia permit in this state?")]).concerns).toEqual([notDiscussed]);
+    // S4: "&" splits a name as "and" does
+    for (const name of ["Scaling & root planing", "Scaling and root planing"]) {
+      const srp = shownOn("mh_srp", "Scaling and root planing, 4 quadrants a day");
+      expect(withoutResumeShownConcerns(card([unquoted("Root planing was not described")]), srp, one("mh_srp", name), NEVER_ASKED).concerns, name).toEqual([]);
+      expect(withoutResumeShownConcerns(card([unquoted("Scaling was not described")]), srp, one("mh_srp", name), NEVER_ASKED).concerns, name).toEqual([unquoted("Scaling was not described")]);
+    }
+  });
 });
 
 describe("AI-written questions pass the code's fairness check before a candidate sees them (known bug 29)", () => {
@@ -563,7 +818,13 @@ describe("AI-written questions pass the code's fairness check before a candidate
     for (const fair of [
       "How do you review their medical history and their medications before a cleaning?", "How do you explain gum disease to patients and their health risks?",
       "Thanks, that is within the current pay range for this role.", "How many children do you see in a typical day?", "How do you adjust care for a patient with a medical condition?",
+      // review of the criminal-record fix, 17 Nov 2026: the work's own words were replaced with "Thanks."
+      "Thanks. Were you charged with training the new hygienists?", "How did you follow up on any pending charges before month end?",
+      // and its final check: a medical "arrest" was read as one
+      "Thanks. Have you received any cardiac arrest training?",
     ]) expect(unfairQuestion(fair), fair).toBeNull();
+    // and a question about the candidate's record in the words that got past it
+    for (const unfair of ["Are you a person with a criminal record?", "Do you have a clean record?", "Do you have any fraud convictions?"]) expect(unfairQuestion(unfair), unfair).not.toBeNull();
   });
 
   it("an unfair acknowledgment is replaced, the packet's own question kept; with nothing left the chat closes", () => {
@@ -591,7 +852,7 @@ describe("AI-written questions pass the code's fairness check before a candidate
  * here is a turn the real model could write.
  */
 describe("a chat without a plan holds every turn to what the candidate wrote (Wave S9)", () => {
-  const rdh = { screening: { questions: [{ key: "licence", question: "Can you confirm your RDH license state and whether it is currently active?", kind: "eligibility" }, { key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
+  const rdh = { screening: { questions: [{ key: "licence", question: "Is your RDH license active in the state this office is in?", kind: "eligibility" },{ key: "experience", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
   const at = "2026-10-15T10:00:00.000Z";
   const turnOf = (over: Partial<ScreenTurn>): ScreenTurn => ({ messageToCandidate: "Thanks.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
   /** The conversation: a string is the candidate's, `ask` the assistant's (with the question it moved to). */
@@ -610,7 +871,7 @@ describe("a chat without a plan holds every turn to what the candidate wrote (Wa
     expect(back).toMatchObject({ answerRecorded: null, followUpReason: null, questionKey: null });
     expect(back.messageToCandidate).toBe("The posted range is $45 to $55 an hour. Back to my question: Tell me about your most recent work.");
     const onLicence: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: ["licence"], currentQuestionKey: "licence" };
-    const mixed = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "licence", answer: "Yes, active in CA. What does it pay?", complete: true } }), onLicence, chat({ ask: "Can you confirm your RDH license state and whether it is currently active?", key: "licence" }, "Yes, active in CA. What does it pay?"), {});
+    const mixed = rules(turnOf({ candidateAskedAbout: "pay", messageToCandidate: "The posted range is $45 to $55 an hour.", answerRecorded: { questionKey: "licence", answer: "Yes, active in CA. What does it pay?", complete: true } }), onLicence, chat({ ask: "Is your RDH license active in the state this office is in?", key: "licence" }, "Yes, active in CA. What does it pay?"), {});
     expect(mixed.answerRecorded).toEqual({ questionKey: "licence", answer: "Yes, active in CA.", complete: true });
     for (const m of ["Before I go on, what does this pay per hour?", "Ok. What are the hours?", "Is it full time?", "Hi, what does it pay?", "Ok, so isn’t it full time?", "???"]) expect(onlyQuestions(m), m).toBe(true);
     for (const m of ["Yes. What are the hours?", "Six years.", "??? what do you mean"]) expect(onlyQuestions(m), m).toBe(false);
@@ -697,7 +958,7 @@ describe("a chat without a plan holds every turn to what the candidate wrote (Wa
     expect(gone.messageToCandidate).toBe("Thanks. Tell me about your most recent work.");
     const opening = enforceTurnRules(turnOf({ messageToCandidate: "Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person." }), rdh, EMPTY_SCREEN_PROGRESS, {}, { transcript: [], latest: null });
     expect(opening.questionKey).toBe("licence");
-    expect(opening.messageToCandidate).toBe("Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person. Can you confirm your RDH license state and whether it is currently active?");
+    expect(opening.messageToCandidate).toBe("Hi Alex, this is the hiring team's AI assistant. Reply HUMAN at any time to reach a person. Is your RDH license active in the state this office is in?");
   });
 
   it("an answer recorded is the candidate's own words: reworded, or missing their first words, it is what they wrote; a personal detail left out stays out", () => {
@@ -1661,5 +1922,45 @@ describe("the chat's line after a tap or a skip, in code (22 Oct 2026 try-out)",
     // a skip says the same as before
     expect(chatCodeLead(null)).toBe("No problem, we can leave that one.");
     expect(chatCodeLead(null, true)).toBe("No problem, your answer is kept.");
+  });
+});
+
+/**
+ * The live test of 12 November 2026: the Dental Assistant's "Which certifications do you hold, such as x-ray, coronal
+ * polishing, RDA or BLS?" came with Yes and No, because every question of kind eligibility got them. Now only a question
+ * whose words ask yes or no does, in every playbook, and a tap posted from a page that still showed them saves nothing.
+ */
+describe("Yes and No in the AI interview only for a question asked as yes or no (live test, 12 November 2026)", () => {
+  const comp = { basis: "hourly" as const, currency: "USD" };
+  const asQuestion = (q: { question: string; kind: string }) => q as Pick<ScreeningQuestion, "kind" | "question">;
+  const dental = ALL_PLAYBOOKS.find((p) => p.vertical === "dental")!;
+  const roleQuestion = (role: string, key: string) => dental.roles.find((r) => r.key === role)!.screeningQuestions.find((q) => q.key === key)!;
+
+  it("no playbook question that asks them to name, list or describe something gets the buttons", () => {
+    const all = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.screeningQuestions.map((q) => ({ role: `${p.vertical} ${r.key}`, ...q }))));
+    expect(all.length).toBeGreaterThan(20);
+    for (const q of all.filter((x) => /\b(which|what|how|who|tell|describe|list|explain)\b/i.test(x.question))) expect(tapFormatFor(asQuestion(q), comp)?.kind, `${q.role}: ${q.question}`).not.toBe("yes_no");
+    // the Dental Assistant's certificates are typed, while the hygienist's licence question keeps its buttons
+    const certs = roleQuestion("da", "certs");
+    expect(certs.kind).toBe("eligibility");
+    expect(tapFormatFor(asQuestion(certs), comp)).toBeNull();
+    expect(tapFormatFor(asQuestion(roleQuestion("rdh", "license_confirm")), comp)).toEqual({ kind: "yes_no" });
+  });
+
+  // The review of the live-test fixes: the form's licence questions end "in the state where this office is located", and
+  // a chat change or the owner can ask one in the AI interview instead, where its "where" took the buttons away.
+  it("every playbook form question asked in the AI interview keeps Yes and No", () => {
+    const form = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.eligibility.map((e) => ({ role: `${p.vertical} ${r.key}`, question: e.question }))));
+    expect(form.filter((q) => /\bwhere\b/.test(q.question)).length).toBeGreaterThanOrEqual(3);
+    for (const q of form) expect(tapFormatFor(asQuestion({ question: q.question, kind: "eligibility" }), comp), `${q.role}: ${q.question}`).toEqual({ kind: "yes_no" });
+  });
+
+  it("a Yes posted for the certificates question fits nothing, so nothing is saved; the check-your-answers page offers the box", () => {
+    const certs = roleQuestion("da", "certs");
+    const packet = { screening: { questions: [{ key: certs.key, question: "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?", kind: "eligibility" }], maxMinutes: 10 }, compensation: { basis: "hourly", currency: "USD", min: 23, max: 28 } } as unknown as RolePacket;
+    const progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, askedKeys: [certs.key], currentQuestionKey: certs.key };
+    expect(currentTapFormat(packet, progress)).toBeNull();
+    expect(tapWords(packet, progress, { kind: "yes_no", choice: "yes" })).toBeNull();
+    expect(reviewItems({ answers: { [certs.key]: "X-ray and BLS." }, progress }, packet)[0]).toMatchObject({ key: certs.key, answer: "X-ray and BLS.", tap: null });
   });
 });

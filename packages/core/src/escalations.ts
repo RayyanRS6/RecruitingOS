@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, like, lt, sql } from "drizzle-orm"
 import type { Actor, EscalationThreadEntry } from "@ros/contracts";
 import {
   adminAlerts, applications, assessments, candidates, communications, companies, documents, escalationMessages, events, intakeSessions, interviews, jobs, memberships, recruiterEscalations,
-  rolePackets, roles, scorecards, screens, staffAccessGrants, users, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
+  rolePackets, roles, scorecards, screens, staffAccessGrants, users, workflowRuns, type EscalationMessageKind, type EscalationMessageSide, type Queryable,
 } from "@ros/db";
 import { raiseAlert } from "./alerts";
 import { emit } from "./events";
@@ -231,9 +231,10 @@ const RETRY_ACTOR: Actor = { kind: "system", id: "workflow:retry", name: "Recrui
  * A run that stopped raised a request (`workflow_runs.escalation_id`, packages/workflows engine.ts failForGood); ITS
  * pressed Retry and the run has now finished. A request nobody has picked up yet is answered and closed with
  * RETRIED_RUN_FINISHED, so the team is not left waiting on work that is done and the queue no longer shows it; the
- * owners and whoever asked are told, as for any answer. A request a recruiter has already accepted stays theirs to
- * resolve: it gets the same line as a note on its thread. Anything else (answered, cancelled) is left as it is. Runs in
- * the company's transaction; no access was granted on an open request, so there is none to end.
+ * owners and whoever asked are told it closed, under a kind of its own (`recruiter.request_closed`), so neither the
+ * notice nor its email says a recruiter answered: none did (17 November 2026). A request a recruiter has already
+ * accepted stays theirs to resolve: it gets the same line as a note on its thread. Anything else (answered, cancelled)
+ * is left as it is. Runs in the company's transaction; no access was granted on an open request, so there is none to end.
  */
 export async function settleRetriedRunRequest(q: Queryable, input: { escalationId: string; companyId: string; now: Date }): Promise<"resolved" | "noted" | null> {
   const [e] = await q.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.id, input.escalationId), eq(recruiterEscalations.companyId, input.companyId))).limit(1).for("update");
@@ -249,8 +250,97 @@ export async function settleRetriedRunRequest(q: Queryable, input: { escalationI
   await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: RETRY_ACTOR, subject: { type: "escalation", id: e.id }, payload: { resolution: RETRIED_RUN_FINISHED, minutesSpent: null, responseMinutes: null, retriedRun: true } });
   const owners = await q.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, e.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
   const readers = [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
-  await notify(q, { companyId: e.companyId, kind: "recruiter.resolved", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "Read the answer", href: `/?request=${e.id}` }, userIds: readers });
+  await notify(q, { companyId: e.companyId, kind: "recruiter.request_closed", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "See the request", href: `/?request=${e.id}` }, userIds: readers });
   return "resolved";
+}
+
+/** What a held application's request says once a person kept them in or declined them. */
+export const HOLD_DECIDED = "Someone has now decided about this application, so nothing more is needed.";
+/** The intake's own run raises a held application's request (`ineligible_review`), as Recruiting OS. */
+const HOLD_RAISED_BY = "workflow:application_intake";
+const HOLD_ACTOR: Actor = { kind: "system", id: HOLD_RAISED_BY, name: "Recruiting OS" };
+
+/** A request a recruiter holds that got HOLD_DECIDED as a note: whom to tell once the decision has committed. */
+export type HoldDecidedNote = { escalationId: string; companyId: string; kind: string; holderId: string; messageId: string };
+
+/**
+ * A held application's request: kind `review`, raised by the intake's run, never a stopped run's request (its run names
+ * that one in `workflow_runs.escalation_id`).
+ */
+const holdRequest = () => and(
+  eq(recruiterEscalations.kind, "review"),
+  sql`${recruiterEscalations.requestedBy}->>'id' = ${HOLD_RAISED_BY}`,
+  sql`NOT EXISTS (SELECT 1 FROM ${workflowRuns} WHERE ${workflowRuns.escalationId} = ${recruiterEscalations.id})`,
+);
+
+/** Answers and closes a hold's request nobody has picked up, unless someone took or closed it first. */
+async function closeHoldRequest(q: Queryable, e: EscalationRow, now: Date): Promise<boolean> {
+  const [closed] = await q.update(recruiterEscalations).set({ status: "resolved", resolvedAt: now.toISOString(), resolution: HOLD_DECIDED }).where(and(eq(recruiterEscalations.id, e.id), eq(recruiterEscalations.status, "open"))).returning({ id: recruiterEscalations.id });
+  if (!closed) return false;
+  await recordEscalationAnswer(q, { escalation: e, author: HOLD_ACTOR, body: HOLD_DECIDED, now });
+  await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: HOLD_ACTOR, subject: { type: "escalation", id: e.id }, payload: { resolution: HOLD_DECIDED, minutesSpent: null, responseMinutes: null, holdDecided: true } });
+  return true;
+}
+
+/**
+ * The request a held application raised, once a person kept them in or declined them (the review of the live-test fixes,
+ * 12 November 2026): when a "No" on the form waits past the hold's escalation threshold, the intake asks ITS to review it
+ * with the customer. A person's decision leaves ITS nothing to do. One nobody has picked up is answered and closed with
+ * HOLD_DECIDED, so it leaves the queue and no overdue alert is raised for it; nobody is told, since the person who
+ * decided knows. One a recruiter accepted stays theirs to resolve: it gets the same line as a note on its thread, as
+ * `settleRetriedRunRequest` does, and `holders` names whoever holds it, for the caller to email once its transaction has
+ * committed. Runs in the company's transaction. Returns how many were closed and how many noted.
+ */
+export async function settleHoldRequests(q: Queryable, input: { companyId: string; applicationId: string; now: Date }): Promise<{ resolved: number; noted: number; holders: HoldDecidedNote[] }> {
+  const held = await q
+    .select()
+    .from(recruiterEscalations)
+    .where(and(
+      eq(recruiterEscalations.companyId, input.companyId),
+      eq(recruiterEscalations.applicationId, input.applicationId),
+      inArray(recruiterEscalations.status, STILL_OPEN),
+      holdRequest(),
+    ))
+    .orderBy(asc(recruiterEscalations.createdAt))
+    .for("update");
+  let resolved = 0;
+  let noted = 0;
+  const holders: HoldDecidedNote[] = [];
+  for (const e of held) {
+    if (e.status !== "open") {
+      const note = await addEscalationReply(q, { escalation: e, side: "recruiter", author: HOLD_ACTOR, body: HOLD_DECIDED, now: input.now });
+      if (e.assignedToUserId) holders.push({ escalationId: e.id, companyId: e.companyId, kind: e.kind, holderId: e.assignedToUserId, messageId: note.id });
+      noted += 1;
+      continue;
+    }
+    if (await closeHoldRequest(q, e, input.now)) resolved += 1;
+  }
+  return { resolved, noted, holders };
+}
+
+/**
+ * The hourly check's part of `settleHoldRequests` (the second look at the review of the live-test fixes): a hold's request
+ * nobody has picked up, whose application a person has since kept in or declined (it is past the hold, or declined), is
+ * answered and closed the same way. That decision came before a decision closed the request by itself, or while the
+ * request was being raised. A request whose candidate withdrew, or whose job closed (the talent pool), stays as it is:
+ * nobody decided. One a recruiter took stays theirs, and so does one the team reopened ("This didn't solve it"): they
+ * asked ITS again. Platform side: run it in a platform transaction (the hourly check does). Returns how many it closed.
+ */
+export async function settleDecidedHoldRequests(q: Queryable, now: Date): Promise<number> {
+  const left = await q
+    .select()
+    .from(recruiterEscalations)
+    .where(and(
+      eq(recruiterEscalations.status, "open"),
+      holdRequest(),
+      sql`EXISTS (SELECT 1 FROM ${applications} WHERE ${applications.id} = ${recruiterEscalations.applicationId} AND ${applications.stage} NOT IN ('applied', 'received', 'ineligible', 'withdrawn', 'talent_pool'))`,
+      sql`NOT EXISTS (SELECT 1 FROM ${escalationMessages} WHERE ${escalationMessages.escalationId} = ${recruiterEscalations.id} AND ${escalationMessages.kind} = 'reopen')`,
+    ))
+    .orderBy(asc(recruiterEscalations.createdAt))
+    .limit(200);
+  let closed = 0;
+  for (const e of left) if (await closeHoldRequest(q, e, now)) closed += 1;
+  return closed;
 }
 
 /** What a request's thread says when the candidate it is about writes back: never their words, which stay on the application's own thread. */
@@ -330,7 +420,9 @@ async function recruiterWhoCanReturn(q: Queryable, e: EscalationRow): Promise<{ 
  * answered before the thread existed (migration 0029) shows its one answer. For the recruiter (`forRecruiter`), the
  * customer's side carries no names: the names of the company's team stay with the company, as the queue screen says.
  * A request nobody on the team raised says who did on its question (`raisedBy`: Recruiting OS on its own, or a
- * candidate), so neither side reads it as the customer asking (15 October 2026).
+ * candidate), so neither side reads it as the customer asking (15 October 2026). An entry Recruiting OS wrote itself (its
+ * answer when it closed the request, or its note) says so too (`raisedBy: "system"`), so nobody reads it as a recruiter
+ * answering (17 November 2026).
  */
 export function escalationThread(
   e: Pick<EscalationRow, "id" | "question" | "createdAt" | "requestedBy" | "resolution" | "resolvedAt"> & Partial<Pick<EscalationRow, "kind" | "summary" | "roleId" | "applicationId">>,
@@ -346,7 +438,7 @@ export function escalationThread(
   if (origin === "system" || origin === "candidate") question.raisedBy = origin;
   const out: EscalationThreadEntry[] = [question];
   const ordered = [...messages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : {}) });
+  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : m.author.kind === "system" ? { raisedBy: "system" as const } : {}) });
   if (e.resolution && !ordered.some((m) => m.kind === "answer")) out.push({ id: `${e.id}:answer`, side: "recruiter", kind: "answer", body: e.resolution, by: recruiterName, at: e.resolvedAt ?? e.createdAt });
   return out;
 }

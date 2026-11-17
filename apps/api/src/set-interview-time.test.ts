@@ -254,9 +254,25 @@ describe("a person sets the date and time", () => {
       const team = mailTo("owner@settime.test").filter((m) => m.subject.startsWith("Interview booked: Ben Cole"));
       expect(team).toHaveLength(1);
       expect(team[0].text).toContain("Join: https://meet.example/ben");
+      // the zone by its name, as the form that set the time said it, never its id (review of the live-test fixes, #61);
+      // the links are left out of the look for an id, since a path reads like one
+      const zoneId = /[A-Za-z]+\/[A-Za-z_]+/;
+      const words = (s: string) => s.replace(/https?:\/\/\S+/g, "");
+      const teamWhen = team[0].text.split("\n")[0];
+      expect(teamWhen).toMatch(/ \(Pacific time\)\.$/);
+      expect(team[0].text).toContain(`${teamWhen}\nJoin: https://meet.example/ben\n\nOpen: ${container.env.APP_BASE_URL}/interviews/${booked.id}`);
+      expect(words(teamWhen)).not.toMatch(zoneId);
+      expect(team[0].text).not.toContain(TZ);
       // not one of the old path's asks
       for (const kind of ["interview.no_availability", "interview.declare_availability", "interview.assigned"]) expect(await noticesAbout(kind, "Ben"), kind).toHaveLength(0);
-      expect((await noticesAbout("interview.confirmed", "Ben Cole")).length).toBeGreaterThan(0);
+      const confirmed = await noticesAbout("interview.confirmed", "Ben Cole");
+      expect(confirmed.length).toBeGreaterThan(0);
+      // the interviewers' notice, shown on Home's Recent activity as written: "<the day and time> (Pacific time). Join: …"
+      expect(confirmed.some((x) => x.body.includes(" (Pacific time). Join: https://meet.example/ben"))).toBe(true);
+      for (const x of confirmed) {
+        expect(words(`${x.title} ${x.body}`)).not.toMatch(zoneId);
+        expect(x.body).not.toContain(TZ);
+      }
       expect(await runs(booked.id)).toHaveLength(1);
     });
 
@@ -1449,6 +1465,9 @@ describe("a person sets the date and time", () => {
       const page = await confirmedPage(token);
       expect(page).toMatch(/E[DS]T/);
       expect(page).toContain("<span>For the team</span>");
+      // the picker names each zone in the times email's words, the saved one chosen; its values stay the ids (LT-15)
+      expect(page).toContain('<select id="tz" name="timezone"><option value="America/New_York" selected="">Eastern time</option><option value="America/Los_Angeles">Pacific time</option>');
+      expect(page).not.toMatch(/>(America|Pacific)\//);
       setClock(instant(chosen.date, chosen.time) - 23 * H);
       await container.drain();
       setClock(BASE);

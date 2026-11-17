@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
-import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket } from "@ros/contracts";
+import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket, type ScreenTranscriptEntry } from "@ros/contracts";
 import { anonymizeCandidate, entitlements, matchScore, readingPair } from "@ros/core";
 import { FAKE_SAMPLE_RESUMES } from "@ros/agents";
 import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, screens, withPlatform, withTenant } from "@ros/db";
@@ -639,6 +639,59 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       const p = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items: [{ applicationId: lu, action: "not_moving_forward", reason: "not_a_match_skills" }, { applicationId: ola, action: "not_moving_forward", reason: "not_a_match_skills" }] })).json()) as BatchPreview;
       expect(p.items.map((i) => [i.name, i.allowed])).toEqual([["Lu Pool", false], ["Ola Pool", true]]);
       expect(p.items[0].refusedReason).toBe("They have no AI interview and none is open, so the board leaves them out. Decide from their own page, or send them a new AI interview link.");
+    });
+  });
+
+  /**
+   * The second review of the live-test fixes (#19, #31, #35): when nothing the score judged lost points, a card's gap line
+   * is the latest reading's first concern, and the newest scorecard's concerns read there as on the candidate's page:
+   * without the AI interview's silence about what the résumé shows, also when the résumé reading came after the scorecard.
+   */
+  describe("the board card's gap line reads a scorecard's concerns as the candidate's page does", () => {
+    const at = new Date().toISOString();
+    const line = (role: ScreenTranscriptEntry["role"], content: string, questionKey?: string): ScreenTranscriptEntry => ({ role, content, at, ...(questionKey ? { questionKey } : {}) });
+    // the hygienist's AI interview, which never asked about periodontal charting
+    const NEVER_ASKED = [line("assistant", "Is your RDH license active in the state this office is in?", "license_confirm"), line("candidate", "Yes"), line("assistant", "Which days and hours are you available, and when could you start?", "availability"), line("candidate", "Monday to Friday.")];
+    /** A scorecard as their latest reading, with the conversation it read linked to it, as the AI interview's run stores them. */
+    const scorecardFor = (applicationId: string, concerns: EvidenceAssessment["concerns"], transcript: ScreenTranscriptEntry[], createdAt?: string) =>
+      withTenant(container.db, companyId, async (tx) => {
+        const result = { ...resultOf([]), strengths: [], concerns, recommendation: "interview", questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [] } as unknown as EvidenceAssessment;
+        const [card] = await tx.insert(assessments).values({ companyId, applicationId, kind: "screen", packetVersion: 1, result, overall: "potential", confidence: "medium", ...(createdAt ? { createdAt } : {}) }).returning();
+        await tx.insert(screens).values({ companyId, applicationId, channel: "web", status: "completed", token: `scr${randomToken(8)}`, invitedVia: "with_application", assessmentId: card.id, completedAt: at, transcript });
+        await tx.update(applications).set({ stage: "screen_complete", latestAssessmentId: card.id }).where(eq(applications.id, applicationId));
+        return card.id;
+      });
+    const cardOf = async (applicationId: string) => {
+      const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`);
+      return [...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.noAiInterview].find((c) => c.applicationId === applicationId)!;
+    };
+
+    it("leaves out the silence, keeps a quoted concern and one about what the chat asked, and the stored scorecard keeps them all", async () => {
+      const both = [yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")];
+      const silence = { claim: `${must(1).text} was not discussed in the AI interview.`, evidence: { source: "screen" as const, unquoted: true } };
+      const quoted = { claim: "Wants a four-day week", evidence: { source: "screen" as const, quote: "I would like to work four days a week" } };
+      // Pia: every requirement the score judged is shown, so nothing lost points and the gap line is a concern
+      const pia = await seed("Pia", resultOf(both));
+      const piaCard = await scorecardFor(pia, [silence, quoted], NEVER_ASKED);
+      const card = await cardOf(pia);
+      expect(card.score).toMatchObject({ score: 100 });
+      expect(card.gap).toEqual({ claim: quoted.claim, quote: quoted.evidence.quote, source: "screen", unquoted: false });
+      const [stored] = await container.db.select().from(assessments).where(eq(assessments.id, piaCard));
+      expect(stored!.result.concerns).toEqual([silence, quoted]);
+      // Quinn: the silence alone, so no gap line at all
+      const quinn = await seed("Quinn", resultOf(both));
+      await scorecardFor(quinn, [silence], NEVER_ASKED);
+      expect((await cardOf(quinn)).gap).toBeNull();
+      // Rio: the chat asked about periodontal charting, so the same words are no silence and stay
+      const rio = await seed("Rio", resultOf(both));
+      await scorecardFor(rio, [silence], [...NEVER_ASKED, line("assistant", "Tell me about your periodontal charting.")]);
+      expect((await cardOf(rio)).gap).toEqual({ claim: silence.claim, quote: null, source: "screen", unquoted: true });
+      // Sky: her résumé reading landed after the scorecard, which stays her latest reading; the board reads it the same way
+      const sky = await seed("Sky", resultOf(both));
+      await scorecardFor(sky, [silence], NEVER_ASKED, new Date(Date.now() - 60_000).toISOString());
+      const skyPair = readingPair(await container.db.select().from(assessments).where(eq(assessments.applicationId, sky)));
+      expect(Date.parse(skyPair.resume!.createdAt)).toBeGreaterThan(Date.parse(skyPair.screen!.createdAt));
+      expect((await cardOf(sky)).gap).toBeNull();
     });
   });
 });

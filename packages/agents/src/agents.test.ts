@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
-import { DraftRolePacket, IntakeExtraction, IntakeTurn, type IntakeQuestion } from "@ros/contracts";
-import { consumerPlaybook, matchPlaybookRole } from "@ros/playbooks";
+import { FakeProvider, OWNERS_CALL_MARK, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
+import { DraftRolePacket, IntakeExtraction, IntakeQuestion, IntakeTurn, repeatsMustHave, type IntakeFacts } from "@ros/contracts";
+import { applyAnswers, normalizeFacts } from "@ros/core";
+import { consumerPlaybook, dentalPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
-import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf } from "./intake";
+import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, keepWordsFacts, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf, withoutCardCount } from "./intake";
 import { verifyQuotes } from "./triage";
 
 describe("what candidate emails say about future roles (Wave 0 item 0.11)", () => {
@@ -129,6 +130,43 @@ describe("fake intake handler", () => {
   });
 });
 
+describe("the stand-in's draft names no skill the same as a must-have (intake.compile v6)", () => {
+  const fake = new FakeProvider();
+  registerFakeHandlers(fake);
+  const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
+  const draftFor = async (title: string, more: Partial<IntakeFacts> = {}) => {
+    const facts: IntakeFacts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title, locationText: "Irvine, CA", employmentType: "full_time", compensationBasis: "hourly", compensationMin: 34, compensationMax: 40, ...more };
+    const ctx: IntakeContext = { company: { name: "Harbor Dental", vertical: "dental", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] }, playbook: dentalPlaybook, playbookRole: matchPlaybookRole(dentalPlaybook, title), benchmark: null, facts, messages: [{ role: "owner", content: "Just draft it.", at: "2026-11-12T12:00:00.000Z", kind: "text" }], confirmedPay: { basis: "hourly", min: 34, max: 40 } };
+    const r = await callPrompt(rt, intakeCompilePrompt, ctx, { companyId: null });
+    if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a draft: ${r.result.kind}`);
+    return DraftRolePacket.parse(r.result.output);
+  };
+  const pointsOnlyAtItsSkills = (d: DraftRolePacket) => {
+    const keys = new Set(d.competencies.map((c) => c.key));
+    return d.screening.questions.every((q) => !q.competencyKey || keys.has(q.competencyKey)) && d.interviews.plan.every((r) => r.competencyKeys.length > 0 && r.competencyKeys.every((k) => keys.has(k)));
+  };
+
+  it("leaves out the Dental Office Manager's playbook skill 'Team leadership' beside the must-have drafted from the playbook (second review of the live-test fixes, #24)", async () => {
+    const d = await draftFor("Dental Office Manager");
+    expect(d.requirements.mustHaves.map((m) => m.text)).toEqual(["Dental practice management experience", "Team leadership", "Insurance and AR management"]);
+    expect(d.competencies.map((c) => c.name)).toEqual(["Financial management", "Operations", "Patient experience", "Judgment and calm"]);
+    expect(d.competencies.filter((c) => repeatsMustHave(c, d.requirements.mustHaves))).toEqual([]);
+    expect(pointsOnlyAtItsSkills(d)).toBe(true);
+    // the owner's own must-have in a skill's words, likewise
+    const assistant = await draftFor("Dental Assistant", { mustHaves: ["Chairside skill", "Digital radiography"] });
+    expect(assistant.competencies.map((c) => c.name)).toEqual(["Sterilization and safety", "Patient care and communication", "Reliability", "Practice software"]);
+    expect(pointsOnlyAtItsSkills(assistant)).toBe(true);
+  });
+
+  it("makes up three skills with general ones none of the must-haves names", async () => {
+    const d = await draftFor("Warehouse Lead", { mustHaves: ["Communication", "Forklift license"] });
+    expect(d.competencies.map((c) => c.name)).toEqual(["Warehouse Lead skill", "Reliability", "Teamwork"]);
+    expect(pointsOnlyAtItsSkills(d)).toBe(true);
+    // with no must-have named like one, the general three as before
+    expect((await draftFor("Warehouse Lead", { mustHaves: ["Forklift license"] })).competencies.map((c) => c.name)).toEqual(["Warehouse Lead skill", "Communication", "Reliability"]);
+  });
+});
+
 describe("market pay in the assistant's words, from the real prompt (intake.turn v3, polish list)", () => {
   const fake = new FakeProvider();
   registerFakeHandlers(fake);
@@ -152,7 +190,8 @@ describe("market pay in the assistant's words, from the real prompt (intake.turn
   });
 
   it("writes money and places the way the pay card does", async () => {
-    expect(intakeTurnPrompt.version).toBe(5);
+    // v6 (the live test and its review, 12 Nov 2026): the playbook's RDA question reworded for candidates, with no mark
+    expect(intakeTurnPrompt.version).toBe(6);
     // v4: option values and facts in plain words, never codes (staging, 13 Oct 2026).
     expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).toContain('never a code: "California RDA license", not "rda_license"');
     // v5: what was already asked is in the notes and never asked again; a job for another business is said once, never asked
@@ -289,6 +328,106 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
     expect(out[2].prompt).toMatch(/deal-breakers/);
   });
 
+  it("offers a deal-breaker back as the requirement it rules people out on, never its negative words, and lets the owner reword it (live test, 12 Nov 2026)", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No active California RDA license", "Cannot work Saturdays", "Without an active California RDA license"] });
+    expect(out).toHaveLength(1);
+    // the owner never named these requirements: the card says where they come from, and each reworded one is the
+    // assistant's, never "Your words" (review of the live test, 12 Nov 2026)
+    expect(out[0].prompt).toBe("From your deal-breakers: which should count openly as must-haves?");
+    expect(out[0].options).toEqual([
+      { label: "Active California RDA license", value: "Active California RDA license", origin: "assistant" },
+      { label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" },
+    ]);
+    expect(out[0].allowOwn).toBe(true);
+  });
+
+  it("never shows the owner words meant only for the AI: the owner's-call mark is taken out of an option, and of what a tick stores (review of the live-test fixes, 12 Nov 2026)", () => {
+    const RDA = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
+    const out = prepareQuestions([card({ id: "e", field: "eligibility", prompt: "Which of these should every applicant answer?", options: [{ label: `${RDA}${OWNERS_CALL_MARK}`, value: `${RDA}${OWNERS_CALL_MARK}`, origin: "playbook" }, { label: "Are you available for the days this office is open? (ask only when the office needs it)", value: "Are you available for the days this office is open?", origin: "playbook" }] })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [] });
+    expect(out[0].options.map((o) => [o.label, o.value])).toEqual([[RDA, RDA], ["Are you available for the days this office is open?", "Are you available for the days this office is open?"]]);
+    expect(JSON.stringify(out)).not.toMatch(/ask only when|\bowner\b/i);
+    // ticked, the answer is stored in the candidate's words, and the owner's summary line reads them
+    const picked = applyAnswers(normalizeFacts({}), out, [{ questionId: out[0].id, selected: [RDA], own: [], skipped: false }], team);
+    expect(picked.facts.eligibilityNotes).toEqual([RDA]);
+    expect(picked.summary).toEqual([`Eligibility: ${RDA}`]);
+    // a card stored before, with the mark in its option, stores and says the words without it
+    const stored = card({ id: "old", field: "eligibility", options: [{ label: `${RDA}${OWNERS_CALL_MARK}`, value: `${RDA}${OWNERS_CALL_MARK}`, origin: "playbook" }] });
+    const old = applyAnswers(normalizeFacts({}), [stored], [{ questionId: "old", selected: [`${RDA}${OWNERS_CALL_MARK}`], own: [], skipped: false }], team);
+    expect(old.facts.eligibilityNotes).toEqual([RDA]);
+    expect(old.summary).toEqual([`Eligibility: ${RDA}`]);
+    expect(applyAnswers(normalizeFacts({}), [stored], [{ questionId: "old", selected: [], own: [], skipped: false }], team).facts.suggestions).toEqual([{ field: "eligibility", text: RDA, origin: "playbook" }]);
+  });
+
+  it("offers no ready-made must-have for a deal-breaker whose words still rule someone out, only the owner's own words (review of the live test, 12 Nov 2026)", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA", "No expired RDH license", "Smokers", "No restrictions on license", "Won't hire smokers"] });
+    expect(out).toHaveLength(1);
+    // "No RDA" never becomes "RDA", "No expired RDH license" never "Expired RDH license", "No restrictions on license"
+    // never "Restrictions on license" and "Won't hire smokers" never "Willing to hire smokers" (review of the must-haves
+    // fix, 12 Nov 2026); the owner's own words unchanged are theirs
+    expect(out[0].options).toEqual([{ label: "Smokers", value: "Smokers", origin: "owner" }]);
+    expect(out[0].allowOwn).toBe(true);
+    expect(out[0].prompt).toBe('From your deal-breakers: which should count openly as must-haves? To count "No RDA", "No expired RDH license" and 2 more, write them as what they need.');
+    // with none ready-made, the card is still asked, and names it, for the owner to write what they need
+    const none = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA"] });
+    expect(none).toEqual([expect.objectContaining({ field: "must_haves", prompt: 'From your deal-breakers: which should count openly as must-haves? To count "No RDA", write it as what they need.', options: [], allowOwn: true })]);
+    // a card stored before 12 Nov 2026, in the old words, is still the deal-breaker card: it is never remembered as a must-haves card
+    expect(rememberPrompts([], [...none, { ...none[0], prompt: "You named these as deal-breakers. Which should count openly as must-haves?" }])).toEqual([]);
+  });
+
+  // review of the must-haves fix, 12 Nov 2026: "No RDA" beside "Cannot work Saturdays" was never on the card, and was still
+  // marked as asked
+  it("names on the card each deal-breaker it has no ready-made answer for, within the length a card may hold", () => {
+    const out = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["Cannot work Saturdays", "No RDA"] });
+    expect(out).toHaveLength(1);
+    expect(out[0].prompt).toBe('From your deal-breakers: which should count openly as must-haves? To count "No RDA", write it as what they need.');
+    expect(out[0].options).toEqual([{ label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" }]);
+    // still the deal-breaker card: never remembered as a must-haves card
+    expect(rememberPrompts([], out)).toEqual([]);
+    // two by name, each cut to 60 characters, then how many more: always within a card's 300 characters
+    const long = Array.from({ length: 10 }, (_, i) => `No ${"very ".repeat(20)}long deal-breaker number ${i + 1}`);
+    const many = prepareQuestions([], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: long });
+    expect(many[0].prompt.length).toBeLessThanOrEqual(300);
+    expect(many[0].prompt).toMatch(/^From your deal-breakers: which should count openly as must-haves\? To count "No very .{50,}…", "No very .{50,}…" and 8 more, write them as what they need\.$/);
+    expect(IntakeQuestion.parse(many[0])).toEqual(many[0]);
+    // one whose requirement is on the card is not named, two worded as one requirement included
+    const twins = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["No RDA license", "Without an RDA license", "Cannot work Saturdays"] });
+    expect(twins[0].prompt).toBe("From your deal-breakers: which should count openly as must-haves?");
+    expect(twins[0].options.map((o) => o.value)).toEqual(["RDA license", "Able to work Saturdays"]);
+    // what the employer does after "Cannot" is never offered as "Able to …": it is named for the owner to write (lead's
+    // decision, 17 Nov 2026)
+    const ban = prepareQuestions([], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: ["Can't accept applicants without a license", "Cannot work Saturdays"] });
+    expect(ban[0].prompt).toBe(`From your deal-breakers: which should count openly as must-haves? To count "Can't accept applicants without a license", write it as what they need.`);
+    expect(ban[0].options).toEqual([{ label: "Able to work Saturdays", value: "Able to work Saturdays", origin: "assistant" }]);
+  });
+
+  it("words a team card by what its answer sets, so a card that asks two things never leaves the final say unasked (live test, 12 Nov 2026)", () => {
+    const two = "Who should interview candidates, and who makes the final decision?";
+    const out = prepareQuestions([card({ field: "interviewers", mode: "team", prompt: two, why: "So the right people meet them and the right person decides." })], { turnNo: 2, team, basisKnown: true, payConfirmed: true, dealBreakers: [] });
+    expect(out[0]).toMatchObject({ field: "interviewers", mode: "team", prompt: "Who will interview?", why: "They get the interview plan and the questions to ask." });
+    // the two-part wording was taken as the same question as the final say, which was then never asked
+    expect(sameQuestion(two, "Who makes the final decision?")).toBe(true);
+    const finalSay = card({ field: "decision_maker", mode: "team", prompt: "Who makes the final decision?" });
+    const later = prepareQuestions([finalSay], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [], settled: ["interviewers"], askedPrompts: rememberPrompts([], out) });
+    expect(later.map((q) => [q.field, q.prompt])).toEqual([["decision_maker", "Who has the final say?"]]);
+    // a draft that remembered the two-part wording before this still gets the card about the final say
+    expect(prepareQuestions([finalSay], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [], settled: ["interviewers"], askedPrompts: [two] })).toHaveLength(1);
+  });
+
+  it("never counts the cards in the reply: the server decides which are shown (live test, 12 Nov 2026)", () => {
+    expect(withoutCardCount("Please answer the three questions below.")).toBe("Please answer the questions below.");
+    expect(withoutCardCount("I've put 3 quick questions beside this.")).toBe("I've put some quick questions beside this.");
+    expect(withoutCardCount("Three quick questions on the right.")).toBe("Some quick questions on the right.");
+    expect(withoutCardCount("Answer these two cards and I'll write it.")).toBe("Answer these cards and I'll write it.");
+    for (const kept of ["You asked for two years of experience.", "One question: is it full time?", "I have one question.", "Two people interview."]) expect(withoutCardCount(kept)).toBe(kept);
+  });
+
+  it("once the draft is written, a turn that follows answers alone moves only what is set on it by rule (live test, 12 Nov 2026)", () => {
+    const before = { mustHaves: ["Active RDH license"], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title: "Dental Hygienist" };
+    const merged = { ...before, mustHaves: ["Active RDH license", "Dentrix experience"], title: "Hygienist", schedule: "Monday to Friday", decisionMaker: "Dr Chen", reason: "growth" };
+    keepWordsFacts(merged, before);
+    expect(merged).toEqual({ ...before, decisionMaker: "Dr Chen", reason: "growth" });
+  });
+
   it("never shows a pay card once a person confirmed the pay", () => {
     expect(prepareQuestions([card({ field: "compensation", mode: "pay" })], { turnNo: 3, team, basisKnown: true, payConfirmed: true, dealBreakers: [] })).toEqual([]);
   });
@@ -312,6 +451,8 @@ describe("question cards as the server stores them (C6, C15, C17)", () => {
     expect(fieldsKnownFromFacts(facts, false)).not.toContain("must_haves");
     expect(fieldsKnownFromFacts(facts, true)).toEqual(expect.arrayContaining(["compensation", "compensation_basis"]));
     expect(fieldsSetOnPanel({ set: { pay: { basis: "hourly", min: 15, max: 20 }, decisionMakerUserId: "u-owner" }, add: [{ field: "mustHaves", value: "SQL" }], clear: ["targetStartDate"] }).sort()).toEqual(["compensation", "compensation_basis", "decision_maker", "must_haves", "timeline"].sort());
+    // the quick start's questions for the form, every one left unticked: the owner went through them, so none is asked again
+    expect(fieldsSetOnPanel({ unticked: [{ field: "eligibility", value: "Do you hold an active RDA license?", origin: "playbook" }] })).toEqual(["eligibility"]);
     expect(settle(["title"], ["title", "location"])).toEqual(["title", "location"]);
   });
 

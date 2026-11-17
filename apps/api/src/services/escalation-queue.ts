@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, queueCommunication, sendQueuedCommunication } from "@ros/agents";
 import type { Actor } from "@ros/contracts";
-import { errorForLog, loadBusinessCalendar, raiseAlert, servedSummary } from "@ros/core";
+import { errorForLog, loadBusinessCalendar, raiseAlert, servedSummary, zoneShortName } from "@ros/core";
 import { recruiterEscalations, users, withPlatform, withTenant, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
@@ -41,10 +41,13 @@ const OPENING: Record<QueueNoticeOrigin, string> = {
   system: "The product raised a request for a recruiter on its own.",
 };
 
-/** The queue email's words: pre-acceptance context only (correction 11), never the request's own words. */
+/**
+ * The queue email's words: pre-acceptance context only (correction 11), never the request's own words. ITS's zone is
+ * named in words after the time, "(Pacific time)", never by its id (LT-15).
+ */
 export function queueNoticeEmail(n: QueueNotice, appBaseUrl: string): { subject: string; text: string } {
   return {
-    subject: `[${n.kind}] ${n.urgency} urgency: respond by ${new Date(n.slaDueAt).toLocaleString("en-US", { timeZone: n.timeZone })} (${n.timeZone})`,
+    subject: `[${n.kind}] ${n.urgency} urgency: respond by ${new Date(n.slaDueAt).toLocaleString("en-US", { timeZone: n.timeZone })} (${zoneShortName(n.timeZone)})`,
     text: `${OPENING[n.origin ?? "customer"]}\n\nCategory: ${n.kind}\nUrgency: ${n.urgency}\nNeeds: ${n.requiredExpertise}\nSummary: ${n.summary}\n\nAccept it in the queue to open the full request: ${appBaseUrl}/recruiter/queue/${n.id}`,
   };
 }
@@ -124,12 +127,11 @@ export async function emailHolderAboutNote(container: Container, n: HeldNote): P
 }
 
 /**
- * Tells the recruiter holding a request that the candidate it is about wrote back (someone the team cannot read, Rule 2), never
- * their words: the queue row looks the same, and a reply can be a request for an adjustment that nobody else may read. Not
- * the customer's note, so not `emailHolderAboutNote`'s words. It runs after the reply has committed and never fails it: when the
- * email cannot go, ITS is put in front of it to tell them another way.
+ * One email to the recruiter holding a request, about the line just added to its thread (`escalation-message:<id>`, so
+ * it goes once). It runs after the caller's transaction has committed and never fails it: when the email cannot go, ITS
+ * is put in front of it (`recruiter.notify_failed`) to tell them another way.
  */
-export async function emailHolderAboutCandidateReply(container: Container, n: HeldNote & { companyId: string }): Promise<void> {
+async function emailHolder(container: Container, n: HeldNote & { companyId: string }, mail: { subject: string; text: string; template: string }, failed: { title: string; body: (error: string | null) => string }): Promise<void> {
   let error: string | null = null;
   try {
     const [holder] = await withPlatform(container.db, (tx) => tx.select({ email: users.email }).from(users).where(eq(users.id, n.holderId)).limit(1));
@@ -137,10 +139,10 @@ export async function emailHolderAboutCandidateReply(container: Container, n: He
       const sent = await container.integrations.email.send({
         to: holder.email,
         from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
-        subject: `[${n.kind}] The candidate wrote back on a request you hold`,
-        text: `The candidate on a request you are working on wrote back. Their words are on the Messages tab of their page in the customer's workspace, which you open from the request: ${container.env.APP_BASE_URL}/recruiter/queue/${n.escalationId}`,
+        subject: mail.subject,
+        text: mail.text,
         idempotencyKey: `escalation-message:${n.messageId}`,
-        tags: { template: "escalation_candidate_reply" },
+        tags: { template: mail.template },
       });
       if (sent.status !== "failed") return;
       error = sent.error ?? "no reason given";
@@ -150,7 +152,35 @@ export async function emailHolderAboutCandidateReply(container: Container, n: He
   } catch (err) {
     error = errorForLog(err);
   }
-  await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: "A recruiter was not told a candidate wrote back", body: `A candidate on a request a recruiter holds wrote back, and the email to the recruiter failed (${error}). Tell them another way: the reply is on the application's thread.`, companyId: n.companyId, target: { type: "escalation", id: n.escalationId }, details: { recruiterUserId: n.holderId, error } }).catch((err: unknown) => console.warn(`[replies] could not raise the alert about a holder not told: ${errorForLog(err)}`));
+  await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: failed.title, body: failed.body(error), companyId: n.companyId, target: { type: "escalation", id: n.escalationId }, details: { recruiterUserId: n.holderId, error } }).catch((err: unknown) => console.warn(`[escalations] could not raise the alert about a holder not told: ${errorForLog(err)}`));
+}
+
+/**
+ * Tells the recruiter holding a request that the candidate it is about wrote back (someone the team cannot read, Rule 2), never
+ * their words: the queue row looks the same, and a reply can be a request for an adjustment that nobody else may read. Not
+ * the customer's note, so not `emailHolderAboutNote`'s words. It runs after the reply has committed and never fails it: when the
+ * email cannot go, ITS is put in front of it to tell them another way.
+ */
+export async function emailHolderAboutCandidateReply(container: Container, n: HeldNote & { companyId: string }): Promise<void> {
+  await emailHolder(container, n, {
+    subject: `[${n.kind}] The candidate wrote back on a request you hold`,
+    text: `The candidate on a request you are working on wrote back. Their words are on the Messages tab of their page in the customer's workspace, which you open from the request: ${container.env.APP_BASE_URL}/recruiter/queue/${n.escalationId}`,
+    template: "escalation_candidate_reply",
+  }, { title: "A recruiter was not told a candidate wrote back", body: (error) => `A candidate on a request a recruiter holds wrote back, and the email to the recruiter failed (${error}). Tell them another way: the reply is on the application's thread.` });
+}
+
+/**
+ * Tells the recruiter holding an eligibility hold's request that a person has now kept the candidate in or declined them
+ * (`settleHoldRequests` put HOLD_DECIDED on its thread), so it needs nothing more (the second look at the review of the
+ * live-test fixes). Never the candidate's name or the decision: they read the request under their grant. After the
+ * decision has committed, never failing it.
+ */
+export async function emailHolderAboutDecision(container: Container, n: HeldNote & { companyId: string }): Promise<void> {
+  await emailHolder(container, n, {
+    subject: `[${n.kind}] A request you hold needs nothing more`,
+    text: `Someone has now decided about the application on a request you are working on, so nothing more is needed. Resolve it in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${n.escalationId}`,
+    template: "escalation_hold_decided",
+  }, { title: "A recruiter was not told a hold was decided", body: (error) => `A person decided about an application whose request a recruiter holds, and the email to the recruiter failed (${error}). Tell them another way: the request needs nothing more.` });
 }
 
 /**

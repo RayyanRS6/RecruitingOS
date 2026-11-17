@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, ne, or } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
-import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
+import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, settleDecidedHoldRequests, type CancelWorkflowRun } from "@ros/core";
 import { aiRuns, cspReports, inboundEmails, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { settleTrials } from "./services/trial";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
@@ -167,14 +167,15 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
 export const HEALTH_CHECK_JOB_KIND = "ops.health_check";
 export const HOURLY_MS = 3600_000;
 
-export type HourlyReport = { interruptedSends: number; interruptedAiRuns: number; overdueRequests: number; workerStale: boolean; queueStale: boolean; healthAlerts: number; trialsStarted: number; trialsEnded: number; trialsWarned: number };
+export type HourlyReport = { interruptedSends: number; interruptedAiRuns: number; holdRequestsClosed: number; overdueRequests: number; workerStale: boolean; queueStale: boolean; healthAlerts: number; trialsStarted: number; trialsEnded: number; trialsWarned: number };
 
 /**
  * What the worker checks every hour (`HEALTH_CHECK_JOB_KIND`, armed with `engine.ensureQueued` like every recurring
  * job): sends interrupted mid-call are found within the hour, not the next day (audit row 37: the decision goes back to
  * "not told" and the team is asked to check); so are AI calls whose process went away (`closeInterruptedAiRuns`, one
- * update of the calls still `running` an hour after any call can end, so it never closes a live one); recruiter
- * requests past their reply-by time with nobody on them raise one alert each (row 38); the Trial plan's 30 days (founder decision L-02 B, services/trial.ts): started for a confirmed
+ * update of the calls still `running` an hour after any call can end, so it never closes a live one); an eligibility
+ * hold's request nobody picked up is closed once a person has decided about the application (`settleDecidedHoldRequests`);
+ * recruiter requests past their reply-by time with nobody on them raise one alert each (row 38); the Trial plan's 30 days (founder decision L-02 B, services/trial.ts): started for a confirmed
  * company on Trial that has none yet, one notice to the owners a week and a day before a trial ends, and one alert and
  * one notice for each trial that ended; then the stale worker and
  * stale queue checks. Each part runs even when another fails; the first failure is thrown at the end so the queue
@@ -192,11 +193,13 @@ export async function runHourlyChecks(db: Db, now: Date, opts: MaintenanceOption
   };
   const interruptedSends = await attempt(0, () => sweepStaleSending(db, now));
   const interruptedAiRuns = await attempt(0, () => closeInterruptedAiRuns(db, now));
+  // Before the overdue check, which then resolves any alert still standing for a request this closed.
+  const holdRequestsClosed = await attempt(0, () => withPlatform(db, (tx) => settleDecidedHoldRequests(tx, now)));
   const overdue = await attempt({ raised: 0, resolved: 0 }, () => withPlatform(db, (tx) => alertOverdueEscalations(tx, now)));
   const trials = await attempt({ started: 0, ended: 0, warned: 0 }, () => withPlatform(db, (tx) => settleTrials(tx, now)));
   const health = await attempt({ workerStale: false, queueStale: false, raised: 0 }, () => checkOperationalHealth(db, now, opts));
-  const report = { interruptedSends, interruptedAiRuns, overdueRequests: overdue.raised, workerStale: health.workerStale, queueStale: health.queueStale, healthAlerts: health.raised, trialsStarted: trials.started, trialsEnded: trials.ended, trialsWarned: trials.warned };
-  if (interruptedSends > 0 || interruptedAiRuns > 0 || overdue.raised > 0 || trials.started > 0 || trials.ended > 0 || trials.warned > 0) console.log(`[hourly] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  const report = { interruptedSends, interruptedAiRuns, holdRequestsClosed, overdueRequests: overdue.raised, workerStale: health.workerStale, queueStale: health.queueStale, healthAlerts: health.raised, trialsStarted: trials.started, trialsEnded: trials.ended, trialsWarned: trials.warned };
+  if (interruptedSends > 0 || interruptedAiRuns > 0 || holdRequestsClosed > 0 || overdue.raised > 0 || trials.started > 0 || trials.ended > 0 || trials.warned > 0) console.log(`[hourly] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   if (firstError) throw firstError;
   return report;
 }

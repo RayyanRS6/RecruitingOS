@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EvidenceAssessment, MatchScore, RolePacket } from "@ros/contracts";
-import { COMPARE_MAX, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
+import { COMPARE_MAX, COUNTED_AS_MUST_HAVE, NO_CELL_OF_ITS_OWN, cellFigures, criterionCell, mixedScores, orderCandidates, orderLine, scoreSummary, skillTag, togglePick, versionNotes, type CompareCandidateView } from "../../apps/web/src/pages/compare/compare-view";
 import { matchScore, type ScoredReading } from "../../packages/core/src/match-score";
 
 /**
@@ -56,10 +56,22 @@ describe("the comparison view", () => {
     expect(scoreSummary(ana)).toMatchObject({ score: 64, verdict: "Potential match", coverage: "Based on 4 of 5 requirements", basis: "Résumé only: no AI interview" });
     // two must-haves judged, one shown missing by their own words: 4 of the 14 points, under the cap of 54
     expect(scoreSummary(ben)).toMatchObject({ score: 29, verdict: "Missing a must-have", missing: ["Missing must-have: Active CA RDH license"] });
-    expect(scoreSummary(cy)).toEqual({ score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] });
+    expect(scoreSummary(cy)).toEqual({ score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [], noScore: "No score yet" });
     // an older answer without the word: the band's
     const { fit: _fit, ...older } = ana.score!;
     expect(scoreSummary({ ...ana, score: older as MatchScore }).verdict).toBe(ana.score!.bandLabel);
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#57): someone declined before any AI review read "No AI review yet"
+  it("words someone decided before any reading as the panel and the list do: no score, no AI review, never 'yet'", () => {
+    for (const stage of ["rejected", "talent_pool", "withdrawn", "hired", "declined"]) {
+      expect(scoreSummary({ ...cy, stage }), stage).toEqual({ score: null, verdict: null, coverage: "No AI review", basis: null, missing: [], noScore: "No score" });
+    }
+    // still in process, or held on an eligibility answer: a review can still come
+    for (const stage of ["triaged", "ineligible", "finalist"]) expect(scoreSummary({ ...cy, stage }), stage).toMatchObject({ coverage: "No AI review yet", noScore: "No score yet" });
+    // decided with a reading that could judge nothing: that reading's own words, and the badge as for anyone with a reading
+    const nothing = person("n", "Nia", reading([must("rdh", "unknown")]), { stage: "rejected" });
+    expect(scoreSummary(nothing)).toMatchObject({ score: null, coverage: nothing.score!.coverage.words, noScore: "No score yet" });
   });
 
   it("says beside each score whether the AI interview is in it, so a résumé-only number is never read as an interviewed one (R20-9)", () => {
@@ -116,6 +128,36 @@ describe("the comparison view", () => {
     expect(skillTag([cy, ana], "chairside")).toBe("Essential");
     expect(skillTag([cy, ana], "patients")).toBe("Important");
     expect(skillTag([cy], "patients")).toBeNull();
+  });
+
+  // The second review of the live-test fixes (#25, #27): a skill the score counts as the must-have of the same name had a
+  // bare muted row with no tag, as if read against an earlier version
+  it("tags a skill the score counts as the must-have of the same name so, whatever a column's score holds", () => {
+    expect(COUNTED_AS_MUST_HAVE).toBe("Counted as the must-have");
+    expect(skillTag([cy, ana], "chairside", true)).toBe(COUNTED_AS_MUST_HAVE);
+    expect(skillTag([cy], "radiography", true)).toBe(COUNTED_AS_MUST_HAVE);
+    expect(skillTag([cy, ana], "chairside", false)).toBe("Essential");
+  });
+
+  // The second look at the twin rule (second review of the live-test fixes): under "Counted as the must-have" its cells kept
+  // the skill's own finding ("Shown", "Goes against it"), which the score never counts, beside the must-have's "Not known yet"
+  it("shows no finding of its own in the cells of a skill the score counts as the must-have of the same name", () => {
+    expect(NO_CELL_OF_ITS_OWN).toBe("—");
+    for (const finding of ["evidenced", "partially_evidenced", "contradicted", "not_evidenced"]) {
+      // an older answer still sending the skill's own finding: never shown
+      const twin = person("t", "Tia", reading([must("rdh", "unknown")]), { competencies: { radiography: { finding, note: null } } });
+      expect(criterionCell(twin, "radiography", false, true), finding).toEqual({ state: "none", words: NO_CELL_OF_ITS_OWN });
+      // the must-have's row keeps what the score counts
+      expect(criterionCell(twin, "rdh", true, true)).toEqual({ state: "unknown", words: "Not known yet, no points so far" });
+      // a skill of its own keeps its words
+      expect(criterionCell(twin, "radiography", false)).toMatchObject({ state: "raw" });
+    }
+    // and none with no entry at all, never "No evidence yet": the must-have's row says what is known
+    expect(criterionCell(cy, "radiography", false, true)).toEqual({ state: "none", words: NO_CELL_OF_ITS_OWN });
+    // a column whose own score counted the skill (read against an earlier version, where it was its own requirement) shows
+    // what it counted
+    expect(criterionCell(ana, "chairside", false, true)).toMatchObject({ state: "judged", words: "Shown", pctMet: 100 });
+    expect(criterionCell(ana, "patients", false, true)).toEqual({ state: "unknown", words: "Not known yet, no points so far" });
   });
 
   it("names the people read against an earlier version of the role (plan F4)", () => {

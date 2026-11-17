@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { BATCH_ACTION_LABEL, BatchAction, DECLINE_REASON_LABEL, MARK_LABEL, TRIAL_ENDED_LINE, type Actor, type ApplicationAction, type BatchPreview, type BatchPreviewItem, type BatchResult, type BatchResultItem, type MarkKind, type RejectReason, type RoleBatchItem, type RoleBatchRequest } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, PermissionError, assertCan, can, createEscalation, emit, entitlements, markBlockedReason, randomToken } from "@ros/core";
+import { ESCALATION_ACCESS_DAYS, PermissionError, assertCan, can, createEscalation, emit, entitlements, markBlockedReason, randomToken, type HoldDecidedNote } from "@ros/core";
 import { applications, companies, roles, withPlatform, withTenant, type Tx } from "@ros/db";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
 import { reportError } from "../observability";
@@ -9,7 +9,7 @@ import type { Tenant } from "../middleware/session";
 import { applicationActionState, applicationFacts, performApplicationAction, type ApplicationCapability } from "./application-actions";
 import { columnWords, isUuid, loadPool, type PoolRow } from "./pool";
 import { staffMayAsk, staffScopeOf } from "./staff-scope";
-import { attachBoardSnapshot, emailItsQueue, queueNoticeOf, type QueueNotice } from "./escalation-queue";
+import { attachBoardSnapshot, emailHolderAboutDecision, emailItsQueue, queueNoticeOf, type QueueNotice } from "./escalation-queue";
 import { companyTrialStanding } from "./trial";
 
 /**
@@ -163,6 +163,7 @@ export async function applyBatch(container: Container, input: { roleId: string; 
   const toEscalate: Array<{ item: RoleBatchItem; name: string; suggested: BatchAction | null }> = [];
   for (const item of body.items) {
     const out: BatchResultItem = { applicationId: item.applicationId, name: "Unknown", action: item.action, suggested: null, ok: false, code: null, message: "", ownerStage: null, candidateNotice: null };
+    let holdersToTell: HoldDecidedNote[] = [];
     try {
       await withTenant(container.db, t.companyId, async (tx) => {
         // The row is locked, as on the person's own page: two people sorting the same candidate take turns.
@@ -186,11 +187,14 @@ export async function applyBatch(container: Container, input: { roleId: string; 
         } else if (item.action === "invite_screen") action = { action: "invite_screen" };
         else action = { action: "set_mark", mark: MARK_OF[item.action], note: item.note };
         const r = await performApplicationAction(tx, container, { app: row!.app, body: action, tenant: t, actor, via });
+        holdersToTell = r.holdersToTell ?? [];
         out.ok = true;
         out.ownerStage = r.ownerStage ?? null;
         out.candidateNotice = r.candidateNotice ?? null;
         out.message = item.action === "invite_screen" ? "Invitation to the AI interview on its way." : item.action === "not_moving_forward" ? "Filed as not moving forward, privately. They were not told." : `${MARK_LABEL[MARK_OF[item.action]!]}, privately. They were not told.`;
       });
+      // As on the person's own page: a recruiter holding the request their hold raised is told once this one has committed.
+      for (const n of holdersToTell) await emailHolderAboutDecision(container, n);
     } catch (e) {
       if (e instanceof HttpError) {
         out.code = e.code;

@@ -1169,12 +1169,12 @@ The tests and CI use fakes for everything. Staging state comes from `docs/audit/
   - [ ] Check that neither Vercel nor Railway sets `AI_MODEL_*` or `AI_EFFORT_STANDARD`; the effort override is KB #108.
   - [ ] Moving any task to Sonnet 5.5 needs evidence (evals or live failures) and a plain explanation to the founder **before** the change (13 Oct rule).
 - [ ] **Effort.** The résumé reading (`triage.assess`) and the screening scorecard (`screen.assess`) run at high effort (`routing.ts:94`). Everything else runs at the tier default.
-- [ ] **The fairness test button.** In GitHub: Actions → **fairness** → Run workflow. It needs the `ANTHROPIC_API_KEY` repository secret and runs the résumé and reading suites on the real model.
-  - **Press it after any change to:** résumé reading or extraction prompts, `FINDING_RULES` or `FAIRNESS_RULES`, the evidence rules, the score, the model, or the effort.
+- [ ] **The fairness test button.** In GitHub: Actions → **fairness** → Run workflow. It needs the `ANTHROPIC_API_KEY` repository secret and runs on the real models the set chosen under **Which tests**: `resume,triage` (résumé reading and scoring), `screen,chat` (the screening chat, its scorecard and the answers written up for Review & send), `resume,triage,screen,chat` (both) or `intake,packet.revise` (the job draft and change-by-chat), as in `docs/runbooks/fairness-tests.md`.
+  - **Press it after any change to:** résumé reading or extraction prompts, `FINDING_RULES` or `FAIRNESS_RULES`, the evidence rules or the score (`resume,triage`); the screening chat's or the scorecard's prompts (`screen,chat`); the job draft's or change-by-chat's prompts (`intake,packet.revise`); the model or the effort (each choice it touches).
   - [ ] All suites meet `packages/evals/thresholds.json`.
   - [ ] The twin résumés (differing only by name, graduation year or zip) get the same reading and score band.
   - [ ] Paste the run's link and its Summary table into the pull request. The result files are git-ignored, so nothing is committed (KB #132).
-  - Not covered by the button: the screening conversation, the scorecard, the job draft, change-by-chat, the about text and the suggested line. For changes to those, an engineer runs `packages/evals/src/runner.ts` by hand with `AI_PROVIDER=anthropic`, and saves the result in the pull request.
+  - Not covered by the button: the about text and the suggested line (`company.about`, `message.suggest_line`). For changes to those, an engineer runs `packages/evals/src/runner.ts` by hand with `AI_PROVIDER=anthropic`, and saves the result in the pull request.
 - [ ] **Evals on the fake provider** (`pnpm eval` in CI, 17 suites) stay green. They prove the code-side rules, not the prompts (`packages/evals/README.md:5`).
 - [ ] **The model never writes a number.**
   - The score is arithmetic over checked findings, recomputed every time it is shown, and never stored.
@@ -1269,7 +1269,7 @@ These could not be confirmed from the code on 14 Oct 2026. A change that depends
   - TOTP;
   - the JWT signing method;
   - whether the production `ros_app` and `ros_worker` roles match the migrations.
-- [ ] **The real AI:** the fairness workflow ran on the real models after Wave S7 (run 38717936154, 15 Oct 2026) and passed all 11 résumé-reading and scoring suites it runs; the run after Wave S5 had failed two bias pairs, fixed in S7. Still not run on the real models: the screening chat and the scorecard suites (the workflow runs only the résumé and scoring groups), the job draft, and adversarial candidate text.
+- [ ] **The real AI:** the fairness workflow ran on the real models after Wave S7 (run 38717936154, 15 Oct 2026) and passed all 11 résumé-reading and scoring suites it ran; the run after Wave S5 had failed two bias pairs, fixed in S7. Still not run on the real models: the screening chat and the scorecard suites (the button offers them as `screen,chat` since Wave S7, but no real-model run of them is recorded yet), the job draft and change-by-chat (`intake,packet.revise`, offered since 12 Nov 2026, no run recorded yet either), and adversarial candidate text.
 - [ ] **Real Postgres:** tenant isolation on Supabase (`TEST_DATABASE_URL` runs are optional and manual).
 - [ ] **Operations:**
   - whether any uptime monitor polls `/healthz?strict=1`;

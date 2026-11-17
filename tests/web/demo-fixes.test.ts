@@ -170,4 +170,10 @@ describe("someone held on an eligibility answer", () => {
     expect(notReadYetWords("ineligible")).toBe("The assistant reads this application once someone keeps them in.");
     expect(notReadYetWords("received")).toContain("a minute or two");
   });
+
+  // Live test, 12 November 2026: declined while held, the panel still promised a reading "a minute or two" away
+  it("once decided before any reading, says none was made, never that one is coming", () => {
+    expect(notReadYetWords("rejected")).toBe("The assistant did not read this application before the decision.");
+    for (const stage of ["rejected", "talent_pool", "withdrawn", "hired", "declined"]) expect(notReadYetWords(stage), stage).not.toMatch(/a minute or two|once someone keeps them in/);
+  });
 });

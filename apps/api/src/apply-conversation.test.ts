@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { BoardView, RolePacket, TapAnswer } from "@ros/contracts";
 import { CHAT_CAP_CLOSING, CHAT_WRAP_QUESTION, MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, chatClosingMessage, chatNextLine, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
-import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, grantStaffAccess } from "@ros/core";
+import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, grantStaffAccess, tapFormatFor } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, companies, entitlements, events, notifications, recruiterEscalations, rolePackets, roles, screens, usageEvents, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -26,7 +26,8 @@ describe("Wave E: applying and the conversation in one visit", () => {
   let companyId = "";
   let roleId = "";
   let elig: Array<{ key: string }> = [];
-  let questions: Array<{ key: string; question: string; kind: string }> = [];
+  let questions: RolePacket["screening"]["questions"] = [];
+  let compensation: RolePacket["compensation"];
   const BASE = Math.floor(Date.now() / 60_000) * 60_000;
   let offset = 0;
   const setClock = (ms: number) => { offset = ms; (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offset); };
@@ -110,6 +111,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(role.applyMode).toBeNull();
     elig = role.currentPacket.packet.requirements.eligibility;
     questions = role.currentPacket.packet.screening.questions;
+    compensation = role.currentPacket.packet.compensation;
   });
   afterAll(async () => { await container.close(); });
 
@@ -225,8 +227,10 @@ describe("Wave E: applying and the conversation in one visit", () => {
     // a tap is said back in the assistant's voice, never the candidate's own "I'm looking for …" (22 Oct 2026 try-out)
     expect(scr.transcript.some((t) => t.role === "assistant" && t.content.startsWith("Noted: $50 to $54 an hour.\n\n"))).toBe(true);
     expect(scr.transcript.filter((t) => t.role === "assistant" && /^Noted: (?:I|I'm)\b/.test(t.content))).toEqual([]);
-    // only the typed answers went to the model (and the answer to the closing question), and the allowance did not count again
-    const typed = questions.filter((q) => q.kind !== "behavioral" && q.kind !== "compensation" && q.kind !== "eligibility").length;
+    // only the typed answers went to the model (and the answer to the closing question), and the allowance did not count
+    // again. Typed: every question with no tap but the skipped example; its words decide whether it has one, never its
+    // kind alone (`tapFormatFor`: an eligibility question that asks "Which ...?" is typed, live test, 12 November 2026)
+    const typed = questions.filter((q) => q.kind !== "behavioral" && tapFormatFor(q, compensation) === null).length;
     expect(await turnsFor()).toBe(before + gapTurns + typed + 1);
     const [ent2] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
     expect(ent2.used).toBe(ent0.used + 1);

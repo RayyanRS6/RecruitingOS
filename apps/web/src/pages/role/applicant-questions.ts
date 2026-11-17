@@ -71,6 +71,12 @@ export function quickAnswerWords(q: QuickQuestion): string {
   return `A number${unit}${range}`;
 }
 
+/**
+ * The chip beside the yes/no questions whose "no" holds the application for a person's decision: on the saved job's
+ * questions, and on a draft's (the job builder's draft panel, where every question on the form holds one).
+ */
+export const HOLDS_FOR_DECISION = 'A "no" holds it for your decision';
+
 /** The yes/no questions that may hold an application (the eligibility questions), first on the form, as the card lists them. */
 export function eligibilityList(p: RolePacket): Array<{ key: string; question: string; holds: boolean }> {
   return p.requirements.eligibility.map((e) => ({ key: e.key, question: e.question, holds: e.knockout }));

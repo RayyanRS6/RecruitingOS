@@ -1,4 +1,4 @@
-import { REQUIREMENT_CHECK_TITLE, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
+import { REQUIREMENT_CHECK_TITLE, lacksCredential, mustHaveOf, rulesOut, type Competency, type DraftRolePacket, type RequirementCheckKind, type RequirementFix, type RequirementSuggestion, type RequirementsCheck } from "@ros/contracts";
 import { PROXY_RULES, normalizeCriterion } from "@ros/core";
 
 /**
@@ -10,7 +10,9 @@ import { PROXY_RULES, normalizeCriterion } from "@ros/core";
  * - personality traits presented as skills ("team player with a positive attitude");
  * - the same thing said twice, which counts it twice;
  * - wording that stands in for a protected trait (the packet guard's own phrase list);
- * - a maximum number of years of experience, which shuts out experienced, often older, people.
+ * - a maximum number of years of experience, which shuts out experienced, often older, people;
+ * - a must-have or nice-to-have worded as what rules someone out ("No active California RDA license"), which the job
+ *   page would list as wanted.
  */
 
 type ListName = "mustHaves" | "niceToHaves" | "eligibility" | "screening" | "redFlags";
@@ -78,6 +80,12 @@ function isTrait(text: string): boolean {
 const CULTURE_FIT = /\bcultur(?:e|al) fit\b/i;
 const APPEARANCE = /\bpresentable\b|\bpolished\b|\bprofessional appearance\b/i;
 
+/** Why words that rule someone out read wrong as a must-have or a nice-to-have, and what to do about it. */
+const RULES_OUT_WHY: Readonly<Record<"mustHaves" | "niceToHaves", string>> = {
+  mustHaves: "It says who is ruled out, but the job page lists it as what you are looking for, and applications are reviewed against it. Write it as what they need.",
+  niceToHaves: "It says who is ruled out, but the job page lists it as nice to have. Write it as what they need.",
+};
+
 /** A range of years of experience ("2-5 years of experience", "between 2 and 5 years"): its top end is a cap. */
 const YEAR_RANGE = /\b(?:between\s+)?(\d{1,2})\s*(?:-|–|to|and)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b/i;
 const ABOUT_EXPERIENCE = /\bexperience\b|\bexp\b/i;
@@ -108,6 +116,23 @@ function sameThing(a: string, b: string): boolean {
   return shared / Math.min(x.size, y.size) >= 0.8;
 }
 
+/** A credential's short form, as a question names it: three to six capital letters, whole ("RDA", "CPR/BLS", "(RDH)"). */
+const SHORT_FORM = /\b[A-Z]{3,6}\b/g;
+const shortForms = (text: string): Set<string> => new Set(/[a-z]/.test(text) ? text.match(SHORT_FORM) ?? [] : []);
+
+/**
+ * Two questions for the form ask the same requirement: the same thing said twice (`sameThing`), or both name the same
+ * credential by its short form, however the rest is worded ("Do you currently hold an active California RDA license?"
+ * and the playbook's "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is
+ * located?"). Words all in capitals are read for their words only.
+ */
+export function sameRequirement(a: string, b: string): boolean {
+  if (sameThing(a, b)) return true;
+  const x = shortForms(a);
+  for (const s of shortForms(b)) if (x.has(s)) return true;
+  return false;
+}
+
 /** The words with the matched phrase cut out and the joins tidied, or null when too little would be left to mean anything. */
 function without(text: string, phrase: string): string | null {
   const left = text.replace(phrase, " ").replace(/\s*[,;:]\s*([,;:]|$)/g, "$1").replace(/\s{2,}/g, " ").replace(/^[\s,;:.–-]+|[\s,;:–-]+$/g, "").trim();
@@ -131,6 +156,8 @@ function find(p: DraftRolePacket): Found[] {
     out.push({ suggestion: { id, kind, path: `${LIST_PATH[item.list]}[${item.key}]`, text: item.text, why }, item, fixes: offers(item, fixes) });
   };
   const judged = (item: Item) => item.list === "mustHaves" || item.list === "niceToHaves";
+  // a version stored before the list existed lacks it
+  const dealBreakers = p.preferences.dealBreakersInTheirWords ?? [];
   const intoInterview = { op: "to_interview" as const, label: "Ask about it in the interview instead", text: null };
   const takeOut = { op: "remove" as const, label: "Take it out", text: null };
 
@@ -152,11 +179,29 @@ function find(p: DraftRolePacket): Found[] {
     }
     // A range of years of experience ("2-5 years of experience"): keep the floor, drop the cap.
     const range = !proxied && item.list !== "redFlags" && ABOUT_EXPERIENCE.test(item.text) ? item.text.match(YEAR_RANGE) : null;
-    if (range && Number(range[2]) > Number(range[1])) {
+    const capped = !!range && Number(range[2]) > Number(range[1]);
+    if (range && capped) {
       const floor = item.text.replace(range[0], `${range[1]} or more years`);
       add("max_years", item, "The top of this range works as a cap: someone with more experience would be turned away. Keep the minimum only.", [{ op: "replace_text", label: `Change it to "${floor}"`, text: floor }]);
     }
     if (!judged(item)) continue;
+    // Words that rule someone out on a list the job page shows as wanted ("No active California RDA license", a
+    // deal-breaker's own words, as drafts and jobs saved before 12 November 2026 can hold): the requirement it reads as is
+    // one tap when there is one (`mustHaveOf`), else the person writes what they need. Words found to shut people out
+    // unfairly, or to cap experience, have their own suggestion instead (review of the live-test fixes, 12 Nov 2026).
+    // Turned round only where that cannot give a rule its opposite: a credential someone lacks ("No x-ray permit"), or a
+    // deal-breaker's very words ("Cannot work Saturdays"); "Will not share patient information" is a rule, so the person
+    // writes it as what they need (review of the hire-again fix, 12 Nov 2026), and so do they for a deal-breaker whose
+    // words `mustHaveOf` leaves as typed: after "Cannot", "Unable to" and the like, a verb an employer does to applicants,
+    // "take" and "use" among them ("Can't accept applicants without a license", "Can't take x-rays"), or words naming the
+    // people applying (LT-32).
+    if (!proxied && !capped && rulesOut(item.text)) {
+      const words = item.text.trim().replace(/\s+/g, " ");
+      const need = mustHaveOf(words);
+      const safe = lacksCredential(words) || dealBreakers.some((d) => normalizeCriterion(d) === normalizeCriterion(words));
+      const turned = safe && need !== words && !rulesOut(need);
+      add("rules_out", item, RULES_OUT_WHY[item.list === "mustHaves" ? "mustHaves" : "niceToHaves"], turned ? [{ op: "replace_text", label: `Change it to "${need}"`, text: need }] : []);
+    }
     if (UNPROVABLE.test(item.text)) {
       add("unprovable", item, "Nothing a candidate sends or says can show this before they start, so it would come down to a hunch. Ask for an example from their past work in the interview instead.", [intoInterview, takeOut]);
     } else if (isTrait(item.text)) {

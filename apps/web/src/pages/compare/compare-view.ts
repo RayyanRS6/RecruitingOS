@@ -1,6 +1,6 @@
 import { IMPORTANCE_LABEL, MATCH_FIT_LABEL, type MatchScore, type ReadingVersion } from "@ros/contracts";
 import type { CompareCandidate, CompareResponse } from "../../api/client";
-import { scoreBasis, scoreRank } from "../../talent-list";
+import { decidedUnread, noScoreWords, scoreBasis, scoreRank } from "../../talent-list";
 
 /**
  * The comparison view (docs/spec/21 F10; founder decision B2): up to five people side by side, each one's match score
@@ -34,18 +34,22 @@ export function orderCandidates<T extends { score?: MatchScore | null }>(cands: 
 /**
  * What the top line of a column says: the number and its one verdict word (the band's on an older answer without it), what
  * it rests on (the coverage, and the label, R20-9: "Résumé only: AI interview not done yet" beside an interviewed person's
- * "From the résumé and the AI interview"), and any missing must-have.
+ * "From the résumé and the AI interview"), and any missing must-have. `noScore`: the badge's words when there is no number.
+ * Someone decided before any reading reads "No score" and "No AI review", never "yet", as on their panel and the list.
  */
-export function scoreSummary(c: CompareCandidateView): { score: number | null; verdict: string | null; coverage: string | null; basis: string | null; missing: string[] } {
+export function scoreSummary(c: CompareCandidateView): { score: number | null; verdict: string | null; coverage: string | null; basis: string | null; missing: string[]; noScore: string } {
   const m = c.score;
-  if (!m) return { score: null, verdict: null, coverage: "No AI review yet", basis: null, missing: [] };
-  return { score: m.score, verdict: m.fit ? MATCH_FIT_LABEL[m.fit] : m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`) };
+  const read = !!m || !!c.resume || !!c.screen;
+  const noScore = noScoreWords(c.stage, read);
+  if (!m) return { score: null, verdict: null, coverage: decidedUnread(c.stage, read) ? "No AI review" : "No AI review yet", basis: null, missing: [], noScore };
+  return { score: m.score, verdict: m.fit ? MATCH_FIT_LABEL[m.fit] : m.bandLabel, coverage: m.coverage.words, basis: scoreBasis(m), missing: m.missingMustHave.map((x) => `Missing must-have: ${x.label}`), noScore };
 }
 
 /**
  * One cell: what the score counted for this requirement (`judged`, with % met and the points it cost), a requirement
  * the evidence says nothing about (`unknown`, no points so far), a finding the score could not use because the
- * reading was made against an earlier version of the role (`raw`, the words only), or nothing at all (`none`).
+ * reading was made against an earlier version of the role (`raw`, the words only), or nothing at all (`none`): no evidence
+ * yet, or a skill the score counts as the must-have of the same name, which has no finding of its own (`NO_CELL_OF_ITS_OWN`).
  */
 export type CompareCell =
   | { state: "judged"; words: string; pctMet: number; pointsLost: number; mustHave: boolean; quote: string | null }
@@ -55,17 +59,40 @@ export type CompareCell =
 
 const RAW_WORDS: Record<string, string> = { yes: "Shown", partially: "Partly shown", no: "Not met", unknown: "Not known yet", evidenced: "Shown", partially_evidenced: "Partly shown", not_evidenced: "Not shown yet", contradicted: "Goes against it" };
 
-export function criterionCell(c: CompareCandidateView, key: string, mustHave: boolean): CompareCell {
+/**
+ * A cell of a skill the score counts as the must-have of the same name (`asMustHave`), under its row's "Counted as the
+ * must-have": the score counts none of that skill's own findings, so none of them shows there ("Shown" or "Goes against
+ * it" read as counted for the must-have, beside the must-have's own "Not known yet"); the must-have's row holds what counts
+ * (the second look at the twin rule, the second review of the live-test fixes).
+ */
+export const NO_CELL_OF_ITS_OWN = "—";
+
+/**
+ * `asMustHave`: the row is a skill the score counts as the must-have of the same name. A column whose own score still
+ * counted that skill (a reading made against an earlier version, where it was a requirement of its own) shows what it
+ * counted; any other column has no cell of its own there.
+ */
+export function criterionCell(c: CompareCandidateView, key: string, mustHave: boolean, asMustHave = false): CompareCell {
   const judged = c.score?.breakdown.find((b) => b.key === key && b.mustHave === mustHave);
   if (judged) return { state: "judged", words: judged.finding, pctMet: judged.pctMet, pointsLost: judged.pointsLost, mustHave, quote: judged.quote };
   if (c.score?.unknown.some((u) => u.key === key && u.mustHave === mustHave)) return { state: "unknown", words: "Not known yet, no points so far" };
+  if (asMustHave && !mustHave) return { state: "none", words: NO_CELL_OF_ITS_OWN };
   const raw = mustHave ? c.mustHaves[key]?.met : c.competencies[key]?.finding;
   if (raw) return { state: "raw", words: RAW_WORDS[raw] ?? raw.replace(/_/g, " "), quote: mustHave ? (c.mustHaves[key]?.quote ?? null) : null };
   return { state: "none", words: "No evidence yet" };
 }
 
-/** A skill row's tag (Essential, Important, Helpful), from whichever column's score knows it; null when none does. */
-export function skillTag(cands: readonly CompareCandidateView[], key: string): string | null {
+/** The tag of a skill row the score counts as the must-have of the same name (`asMustHave` on GET /roles/:id/compare). */
+export const COUNTED_AS_MUST_HAVE = "Counted as the must-have";
+
+/**
+ * A skill row's tag (Essential, Important, Helpful), from whichever column's score knows it; null when none does. A skill
+ * the score counts as the must-have of the same name (`asMustHave`) is tagged so instead (the second review of the
+ * live-test fixes, 12 November 2026), so its row never reads like a reading made against an earlier version; its cells
+ * show no finding of its own (`NO_CELL_OF_ITS_OWN`).
+ */
+export function skillTag(cands: readonly CompareCandidateView[], key: string, asMustHave = false): string | null {
+  if (asMustHave) return COUNTED_AS_MUST_HAVE;
   for (const c of cands) {
     const imp = c.score?.breakdown.find((b) => b.key === key && !b.mustHave)?.importance ?? c.score?.unknown.find((u) => u.key === key && !u.mustHave)?.importance;
     if (imp) return IMPORTANCE_LABEL[imp];

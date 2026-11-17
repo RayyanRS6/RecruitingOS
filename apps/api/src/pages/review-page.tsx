@@ -1,7 +1,7 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
-import type { ReviewItem, TapFormat, WriteupAnswer } from "@ros/contracts";
+import { answerKeyWords, type ReviewItem, type TapFormat, type WriteupAnswer } from "@ros/contracts";
 import { writeupCounts } from "@ros/agents";
 import { errorForLog } from "@ros/core";
 import type { Vars } from "../middleware/session";
@@ -163,7 +163,10 @@ function SendPage(props: { view: ConversationView; writeup: NonNullable<Conversa
       <section class="send-part" aria-labelledby="send-chat">
         <h2 id="send-chat">From your chat</h2>
         <p>Written up from your own replies. Change anything that came out wrong.</p>
-        <ol class="answers">{writeup.answers.map((a, i) => <WrittenItem answer={a} question={asked.get(a.questionKey) ?? review.find((r) => r.key === a.questionKey)?.question ?? a.questionKey} n={i + 1} base={base} />)}</ol>
+        {/* Only a guard: the page and the write-up read the conversation's own version of the job (`view.written`, which a
+            change to the job never alters), so `asked` names every written-up answer. Should one ever not be named, it
+            reads in plain words, never as its key (`answerKeyWords`). */}
+        <ol class="answers">{writeup.answers.map((a, i) => <WrittenItem answer={a} question={asked.get(a.questionKey) ?? review.find((r) => r.key === a.questionKey)?.question ?? answerKeyWords(a.questionKey)} n={i + 1} base={base} />)}</ol>
         {others.length ? (
           <>
             <h3>Your other answers</h3>
@@ -299,7 +302,7 @@ candidatePages.get("/c/screen/:token/answers/:key", async (c) => {
   const w = written.findIndex((a) => a.questionKey === key);
   if (w >= 0) {
     const item = view.review.find((i) => i.key === key);
-    const question = view.written.find((q) => q.key === key)?.question ?? item?.question ?? key;
+    const question = view.written.find((q) => q.key === key)?.question ?? item?.question ?? answerKeyWords(key);
     c.header("Cache-Control", "no-store");
     return c.html(<WrittenEditPage view={view} answer={written[w]} question={question} tap={item?.tap ?? null} n={w + 1} total={written.length} error={error} />);
   }

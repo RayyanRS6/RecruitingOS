@@ -97,7 +97,9 @@ export function WaitingOnCandidateCard({ a, roleId, onAccepted }: { a: Applicati
   });
   const mayRecord = a.allowedActions.includes("record_outcome");
   const privateNote = offerNote(a);
-  const words = firstSentence(waitingOnCandidateText(a));
+  // "today", "yesterday" on the company's calendar, the one the offer's day was recorded on (live test, 12 November 2026)
+  const timeZone = useCompanyTimeZone();
+  const words = firstSentence(waitingOnCandidateText(a, undefined, timeZone));
   return (
     <Card needsYou title={`Waiting on ${a.candidate.firstName}'s answer`} className={STEP}>
       <p className={LEAD}>{words.line}</p>
@@ -138,7 +140,9 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   const name = `${a.candidate.firstName} ${a.candidate.lastName}`.trim();
   const [startDate, setStartDate] = useState("");
   const [acceptedOn, setAcceptedOn] = useState("");
-  const latestAccepted = offerDateBounds(useCompanyTimeZone()).max;
+  // the company's calendar, for the latest day they can have accepted and whether the start date has passed
+  const timeZone = useCompanyTimeZone();
+  const latestAccepted = offerDateBounds(timeZone).max;
   const [note, setNote] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [after, setAfter] = useState<HireFollowUp | null>(null);
@@ -163,7 +167,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
     onError: (e) => { setConfirming(false); toast(e instanceof ApiError ? e.message : "Could not record the hire."); },
   });
   const close = useMutation({
-    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
+    mutationFn: (path: string) => api.post<{ movedToTalentPool?: number; heldEmailsAddedToTalentPool?: number; interviewsCancelled?: number; interviewOffNotes?: number; lockedInProcess?: number; untoldFallbackOn?: string | null; closingMessage?: ClosingMessagePreview | null }>(path, { outcome: "filled", confirm: true }),
     onSuccess: async (r) => {
       const t = closeRoleToast(r, undefined, mayTell);
       toast(t.title, t.detail);
@@ -175,7 +179,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
   });
   if (closing) return <ClosingMessageCard roleId={roleId} preview={closing} onDone={onClose} />;
   if (after) {
-    const v = hireFollowUpView(after, a.candidate.firstName || name);
+    const v = hireFollowUpView(after, a.candidate.firstName || name, undefined, timeZone);
     return (
       <Card needsYou lift title={`${name} is hired: what about the job?`} className={STEP}>
         <p className={LEAD}>{v.startLine}</p>
@@ -203,7 +207,7 @@ export function HireStep({ a, roleId, mayTell, onClose }: { a: ApplicationDetail
               {/* a start date already past has no Today reminder to promise (plan H1), and with nobody to keep warm there are no backups to name */}
               <strong className="text-[15px]">{v.keepsBackups && !v.started ? "Keep them warm until the start date" : "Leave the job open for now"}</strong>
               <p className="small muted">{v.keepWarmWords}</p>
-              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count); toast(t.title, t.detail); onClose(); }}>{v.keepsBackups && !v.started ? "Keep the job open" : "Leave it open"}</Button>
+              <Button size="sm" onClick={() => { const t = keepWarmToast(a.candidate.firstName || name, after.startDate, undefined, after.backups.count, timeZone); toast(t.title, t.detail); onClose(); }}>{v.keepsBackups && !v.started ? "Keep the job open" : "Leave it open"}</Button>
             </div>
           ) : null}
         </div>

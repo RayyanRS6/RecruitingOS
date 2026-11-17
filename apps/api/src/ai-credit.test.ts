@@ -597,14 +597,15 @@ describe("the AI credit", () => {
       const sessionId = await draftOf(cookie);
       expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
       await spend(id, "9.950000");
-      // changing it by chat is the model's: nothing changed, and the editor is named
+      // changing it by chat is the model's: nothing changed, and on a draft no editor is named, since writing it again
+      // with changed answers needs AI help too (live test, 12 Nov 2026)
       const change = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." });
       expect(change.status).toBe(402);
-      expect(await errorOf(change)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.revise, details: { upgrade: true } });
+      expect(await errorOf(change)).toMatchObject({ code: "ai_credit_used_up", message: "Your plan's AI help is used up. Nothing was changed.", details: { upgrade: true } });
       const asked = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/request-approval`);
       expect(asked.status, await asked.clone().text()).toBe(201);
       const { roleId } = await read<{ roleId: string }>(asked);
-      // and on the role
+      // and on the role, whose editor needs no AI help
       const onRole = await json(cookie, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make the summary shorter." });
       expect(onRole.status).toBe(402);
       expect(await errorOf(onRole)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.revise });
@@ -633,10 +634,10 @@ describe("the AI credit", () => {
         const error = await errorOf(draft);
         expect(error).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.draft });
         expect(error.details?.upgrade).toBeUndefined();
-        // changing it by chat, and the text about the company
+        // changing it by chat (a draft names no editor), and the text about the company
         const change = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." });
         expect(change.status).toBe(409);
-        expect(await errorOf(change)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.revise });
+        expect(await errorOf(change)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.reviseDraft });
         const about = await json(cookie, "POST", "/api/v1/companies/current/about/draft", {});
         expect(about.status).toBe(409);
         expect(await errorOf(about)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.about });
@@ -776,7 +777,7 @@ describe("the AI credit", () => {
       const draftRefused = await errorOf(draft);
       expect(draftRefused).toMatchObject({ code: "ai_credit_used_up", message: `Your plan's AI help is used up. Everything you confirmed is kept. ${way}`, details: { upgrade: true } });
       talksToIts(draftRefused.details.actions);
-      for (const [path, body, line] of [[`/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." }, AI_HELP_LINE.revise], ["/api/v1/companies/current/about/draft", {}, AI_HELP_LINE.about]] as const) {
+      for (const [path, body, line] of [[`/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." }, AI_HELP_LINE.reviseDraft], ["/api/v1/companies/current/about/draft", {}, AI_HELP_LINE.about]] as const) {
         const r = await json(cookie, "POST", path, body);
         expect(r.status, path).toBe(402);
         const e = await errorOf(r);

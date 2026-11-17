@@ -1,3 +1,5 @@
+import { askedKind } from "@ros/contracts";
+
 /**
  * The quick starts under "Who are you hiring?" (plan C4): only roles one of our hiring guides knows, so a tap always
  * starts from real playbook knowledge (typical must-haves, screening questions, pay ranges) and never from a guess.
@@ -53,12 +55,15 @@ export function quickStartsFor(vertical: string | null | undefined): readonly Qu
  * What the ten quick questions (Wave S2, K2) suggest for a role a hiring guide knows: its common qualifications as
  * must-haves to tick, and its yes/no eligibility questions. Mirrors each playbook role's `title`, `aliases`,
  * `commonQualifications` and `eligibility[].question` (packages/playbooks); tests/web/start-hire-quick.test.ts keeps
- * them equal, so a suggestion is always real playbook knowledge and never a guess.
+ * them equal, so a suggestion is always real playbook knowledge and never a guess. `optional` mirrors the questions that
+ * are the owner's call (every expectation optional, `ownersCall`): offered unticked, and ticked by themselves once the
+ * job title or a must-have names one of their `mentions` (live test and its review, 12 Nov 2026).
  */
-export type GuideRole = { key: string; title: string; aliases: readonly string[]; mustHaves: readonly string[]; questions: readonly string[] };
+export type GuideRole = { key: string; title: string; aliases: readonly string[]; mustHaves: readonly string[]; questions: readonly string[]; optional?: ReadonlyArray<{ question: string; mentions: readonly string[] }> };
 
 const US_WORK = "Are you legally authorized to work in the United States for any employer?";
 const POSTED_SCHEDULE = "Are you available for the posted schedule and work model?";
+const DA_LICENSE = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
 
 export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
   dental: [
@@ -74,7 +79,8 @@ export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
       title: "Dental Assistant",
       aliases: ["dental assistant", "RDA", "registered dental assistant", "DA", "EFDA"],
       mustHaves: ["Four-handed dentistry", "Sterilization and OSHA compliance", "Digital radiography", "Impressions and provisional crowns", "Dentrix / Eaglesoft / Open Dental"],
-      questions: ["If this role requires a Registered Dental Assistant (RDA) license in your state, do you hold it? (Answer 'not required' if the owner did not require it.)", "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", "Are you available for the days this office is open?"],
+      questions: [DA_LICENSE, "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", "Are you available for the days this office is open?"],
+      optional: [{ question: DA_LICENSE, mentions: ["RDA", "registered dental assistant"] }],
     },
     {
       key: "front_office",
@@ -146,6 +152,21 @@ export const GUIDE_ROLES: Readonly<Record<string, readonly GuideRole[]>> = {
 
 /** Yes/no questions offered when no guide knows the job: the two every consumer guide role asks. */
 export const GENERAL_QUESTIONS: readonly string[] = [US_WORK, POSTED_SCHEDULE];
+
+/** A day, a time or a shift of its own ("weekends", "night shifts", "12-hour shifts"): more than the posted schedule asks. */
+const ITS_OWN_TIME = /\d|\b(?:weekends?|weekdays?|(?:mon|tues|wednes|thurs|fri|satur|sun)days?|nights?|overnight|evenings?|mornings?|afternoons?|holidays?|on[\s-]call|overtime|split|rotating|graveyard)\b/i;
+
+/**
+ * Whether a question asks what one of the general questions already asks, in other words (`askedKind`, the job
+ * builder's own reading): the legal right to work, or the schedule with no day, time or shift of its own ("Are you
+ * available to work during standard business hours?", never "Can you work Saturdays?"). The assistant's are offered only
+ * for what the general ones do not ask (review of the form-questions fix, 12 Nov 2026: a second right-to-work and a
+ * second schedule question went on the form, both ticked).
+ */
+export function asksAsGeneral(question: string): boolean {
+  const kind = askedKind(question);
+  return kind === "work_authorization" || (kind === "schedule_availability" && !ITS_OWN_TIME.test(question));
+}
 
 /**
  * The guide role a typed job title names, the way the server matches it (`matchPlaybookRole`): the longest title or alias
