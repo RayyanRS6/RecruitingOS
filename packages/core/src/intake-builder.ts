@@ -1,9 +1,9 @@
 import {
-  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange,
+  EmploymentType, HireReason, INTAKE_ESSENTIALS, RemotePolicy, formatPayRange, mustHaveOf, restatementsOf, withoutOwnersCallMark,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
-import { openFlagsMessage, questionCheck, screenCriterion, normalizeCriterion, unresolvedFlags } from "./packet-guard";
+import { openFlagsMessage, questionCheck, screenCriterion, screenDealBreaker, normalizeCriterion, unresolvedFlags, type CriterionCheck } from "./packet-guard";
 
 /**
  * The job builder's rules that need no model and no database (Wave C: C2, C6, C7, C8, C14, C17): what is still missing,
@@ -121,8 +121,18 @@ function essentialValue(key: IntakeEssentialKey, f: IntakeFacts): { done: boolea
   }
 }
 
-/** The facts `finalizeDraft` (packages/agents/src/intake.ts) sets on the draft by rule after the model, so changing them never needs the draft written again. */
-const SET_BY_RULE: ReadonlySet<string> = new Set(["compensationBasis", "compensationMin", "compensationMax", "compensationCeiling", "decisionMaker", "decisionMakerUserId", "interviewers", "interviewerUserIds", "dealBreakers", "declinedCriteria", "suggestions"]);
+/**
+ * The facts `finalizeDraft` (packages/agents/src/intake.ts) sets on the draft by rule after the model, so changing them
+ * never needs the draft written again. Why you are hiring is one of them since 12 November 2026 (the live test: answering
+ * it after the draft was written asked for the draft to be written again): it is only ever for the team, and the
+ * draft's words never say it (intake.compile v6).
+ */
+const SET_BY_RULE: ReadonlySet<string> = new Set(["compensationBasis", "compensationMin", "compensationMax", "compensationCeiling", "reason", "reasonDetail", "decisionMaker", "decisionMakerUserId", "interviewers", "interviewerUserIds", "dealBreakers", "declinedCriteria", "suggestions"]);
+/** The same before 12 November 2026, when the draft's words could still say why you are hiring: drafts written then keep their key this way. */
+const SET_BY_RULE_BEFORE_REASON: ReadonlySet<string> = new Set([...SET_BY_RULE].filter((k) => k !== "reason" && k !== "reasonDetail"));
+
+/** Whether a fact is set on a written draft by rule, so changing it never needs the draft written again. */
+export const setOnDraftByRule = (key: string): boolean => SET_BY_RULE.has(key);
 
 /** A short, stable key of a text (cyrb53): enough to tell whether the answers changed, never to recover them. */
 function shortKey(s: string): string {
@@ -140,12 +150,31 @@ function shortKey(s: string): string {
 
 /**
  * A key of the answers the draft's words are written from (C7): everything except what is set on the draft by rule
- * (pay, who decides and who interviews, the deal-breakers, what was declined, unticked suggestions). A draft written
- * from other answers than the current ones is out of date: only writing it again carries the change into its words.
+ * (pay, why you are hiring, who decides and who interviews, the deal-breakers, what was declined, unticked suggestions).
+ * A draft written from other answers than the current ones is out of date: only writing it again carries the change into
+ * its words.
  */
 export function draftFactsKey(facts: IntakeFacts): string {
+  return factsKeyOf(facts, SET_BY_RULE);
+}
+
+/** The key as a draft written before 12 November 2026 kept it: with why you are hiring among the answers its words came from. */
+export function draftFactsKeyWithReason(facts: IntakeFacts): string {
+  return factsKeyOf(facts, SET_BY_RULE_BEFORE_REASON);
+}
+
+/**
+ * Whether a draft written with this key is up to date with these answers. A draft written before 12 November 2026 kept
+ * its key with the reason in it, so it stays up to date while that key still matches, and is never called out of date
+ * just because the way of keeping the key changed.
+ */
+export function draftKeyMatches(key: string, facts: IntakeFacts): boolean {
+  return key === draftFactsKey(facts) || key === draftFactsKeyWithReason(facts);
+}
+
+function factsKeyOf(facts: IntakeFacts, byRule: ReadonlySet<string>): string {
   const f = normalizeFacts(facts) as Record<string, unknown>;
-  const parts = Object.keys(f).filter((k) => !SET_BY_RULE.has(k)).sort().flatMap((k) => {
+  const parts = Object.keys(f).filter((k) => !byRule.has(k)).sort().flatMap((k) => {
     const v = f[k];
     if (v === undefined || v === null) return [];
     if (Array.isArray(v)) {
@@ -179,7 +208,8 @@ export function intakeReadiness(input: { facts: IntakeFacts; state: IntakeServer
   else if (missing.length && !askedForDraft && !roundAnswered) draftBlocker = "Answer the question cards first, or say \"draft it\".";
   const openFlags = draft ? unresolvedFlags(draft).length : 0;
   // A draft written before the key existed is never called out of date: there is nothing to compare it with.
-  const draftOutOfDate = !!draft && !!state.draft?.factsKey && state.draft.factsKey !== draftFactsKey(facts);
+  const key = state.draft?.factsKey;
+  const draftOutOfDate = !!draft && !!key && !draftKeyMatches(key, facts);
   const approvalBlockers: string[] = [];
   for (const e of essentials) if (!e.done) approvalBlockers.push(`Not set yet: ${e.label.toLowerCase()}.`);
   if (!confirmed) approvalBlockers.push(facts.compensationMin !== undefined ? "Confirm the pay on the pay card." : "Set the pay on the pay card.");
@@ -240,10 +270,20 @@ export function payCard(facts: IntakeFacts, state: IntakeServerState): IntakePay
   return { basis, benchmark: null, gap, stated, confirmed, belowMarket: false, summary: gap.message };
 }
 
-/** The facts a new draft starts from when a role is hired for again (C14). Pay is carried over to be confirmed, never as confirmed. */
+/**
+ * The facts a new draft starts from when a role is hired for again (C14). Pay is carried over to be confirmed, never as
+ * confirmed. A must-have in the very words of one of the role's deal-breakers, as a role approved before 12 November 2026
+ * can hold ("No active California RDA license"), comes back as the requirement it rules people out on (`mustHaveOf`), once;
+ * the deal-breakers keep the owner's words. The form's questions come back as the owner's choice (`formQuestionsChosen`),
+ * so the new draft's form asks what the old one asked, and each holds a "no" there like every question on a draft's form
+ * (review of the live-test fixes, 12 Nov 2026: the RDA question was left off, and the negative words came back).
+ */
 export function packetToFacts(packet: RolePacket): IntakeFacts {
   const loc = packet.identity.locations[0];
   const rounds = packet.interviews.plan.flatMap((r) => r.interviewerRoles);
+  // a version stored before a list existed lacks it: read as empty
+  const dealBreakers = packet.preferences.dealBreakersInTheirWords ?? [];
+  const asNeed = (text: string) => (dealBreakers.some((d) => same(d, text)) ? mustHaveOf(text) : text);
   return {
     title: packet.identity.title,
     locationText: loc ? [loc.city, loc.region].filter(Boolean).join(", ") || undefined : undefined,
@@ -255,14 +295,15 @@ export function packetToFacts(packet: RolePacket): IntakeFacts {
     compensationMax: packet.compensation.max,
     compensationCeiling: packet.compensation.ceiling,
     benefits: packet.compensation.benefitsSummary,
-    mustHaves: packet.requirements.mustHaves.map((m) => m.text),
+    mustHaves: dedupe(packet.requirements.mustHaves.map((m) => asNeed(m.text))),
     niceToHaves: packet.requirements.niceToHaves.map((m) => m.text),
-    eligibilityNotes: [],
+    eligibilityNotes: dedupe((packet.requirements.eligibility ?? []).map((e) => e.question)),
+    formQuestionsChosen: true,
     interviewers: [...new Set(rounds)].filter((r) => r !== "owner"),
     decisionMaker: packet.preferences.decisionMakerName,
     decisionMakerUserId: packet.preferences.decisionMakerUserId,
     whatFailureLooksLike: packet.preferences.whatFailureLooksLike,
-    dealBreakers: packet.preferences.dealBreakersInTheirWords,
+    dealBreakers,
     declinedCriteria: (packet.provenance.declinedCriteria ?? []).map((d) => ({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) })),
     screeningQuestions: packet.screening.questions.map((q) => q.question),
   };
@@ -344,10 +385,11 @@ const REASON_WORDS: Array<[RegExp, string]> = [[/\b(?:replac\w*|left|quit\w*|bac
 /**
  * A card's answer as the role keeps it. The model is asked to make an option's value the words to store, but it sometimes
  * writes a code instead ("rda_license", "mon_fri_days", "backfill" on staging, 13 Oct 2026), which then showed on the
- * draft as the code. A value that looks like a code is replaced by the label the person actually ticked.
+ * draft as the code. A value that looks like a code is replaced by the label the person actually ticked. Words meant only
+ * for the AI ("(ask only when the owner requires it)") are never kept (review of the live-test fixes, 12 Nov 2026).
  */
 export function storedAnswer(option: { label: string; value: string }): string {
-  return /^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value;
+  return withoutOwnersCallMark(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(option.value.trim()) && option.label.trim() ? option.label.trim() : option.value);
 }
 
 /** A plain word for a field the packet keeps as one of a few values ("Full time" is full_time); refused when it names none. */
@@ -412,11 +454,20 @@ function emptyEdit(facts: IntakeFacts): FactsEdit {
  */
 const QUESTION_FIELDS: ReadonlySet<string> = new Set(["eligibility", "eligibilityNotes", "screening_questions", "screeningQuestions"]);
 
-/** The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined it. */
-function screened(edit: FactsEdit, field: string, values: string[]): string[] {
+/**
+ * The deal-breakers, on a card and in an edit: read as what rules someone out, so a record named on its own ("Felony
+ * convictions") is refused too (`screenDealBreaker`; review of the criminal-record fix, 17 Nov 2026).
+ */
+const DEAL_BREAKER_FIELDS: ReadonlySet<string> = new Set(["deal_breakers", "dealBreakers"]);
+
+/**
+ * The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined
+ * it. `also` is one more check for this list (a must-have that restates a refused deal-breaker, in `applyFactsPatch`).
+ */
+function screened(edit: FactsEdit, field: string, values: string[], also?: (v: string) => CriterionCheck | null): string[] {
   const ok: string[] = [];
   for (const v of values) {
-    const hit = QUESTION_FIELDS.has(field) ? questionCheck(v) : screenCriterion(v);
+    const hit = (QUESTION_FIELDS.has(field) ? questionCheck(v) : DEAL_BREAKER_FIELDS.has(field) ? screenDealBreaker(v) : screenCriterion(v)) ?? also?.(v) ?? null;
     if (!hit) {
       ok.push(v);
       continue;
@@ -498,7 +549,7 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     if (value === undefined) continue;
     // An option in the owner's own words is kept as their words, like words typed: never guessed from.
     setText(edit, q.field, value, now, first ? storedAnswer(first) : undefined, first?.origin !== "owner");
-    edit.summary.push(`${FIELD_LABEL[q.field]}: ${first?.label ?? value}`);
+    edit.summary.push(`${FIELD_LABEL[q.field]}: ${withoutOwnersCallMark(first?.label ?? value)}`);
   }
   return edit;
 }
@@ -616,13 +667,43 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
   const byField = new Map<IntakeListFact, { add: string[]; remove: string[] }>();
   for (const a of patch.add ?? []) { const e = byField.get(a.field) ?? { add: [], remove: [] }; e.add.push(a.value); byField.set(a.field, e); }
   for (const r of patch.remove ?? []) { const e = byField.get(r.field) ?? { add: [], remove: [] }; e.remove.push(r.value); byField.set(r.field, e); }
+  // A deal-breaker the fairness check refuses (in its words, or as the requirement it reads as) is refused as a must-have
+  // that restates it in the same edit too, for the same reason, whatever that must-have's own words pass: the must-have
+  // the edit says it counts as (`countsAs`, the quick start's "As a must-have", in the person's words: "No felons" as
+  // "Felony-free"), its requirement, or its words without the "No" (review of the live test, 12 Nov 2026: "No felonies or
+  // license suspensions" was refused while "Felonies or license suspensions" was stored; and of its fix: a wording the
+  // person typed was read on its own words only). A record named on its own is refused as a deal-breaker ("Felony
+  // convictions", and the must-have it counts as: review of the criminal-record fix, 17 Nov 2026). Worked out first: the
+  // edit lists its must-haves before its deal-breakers.
+  const refusedDeals = (patch.add ?? []).filter((a) => a.field === "dealBreakers").flatMap((a) => {
+    const hit = screenDealBreaker(a.value) ?? screenCriterion(mustHaveOf(a.value));
+    return hit ? [{ as: [...restatementsOf(a.value), ...(a.countsAs ? [a.countsAs] : [])], hit }] : [];
+  });
+  const restatesRefused = (v: string) => refusedDeals.find((r) => r.as.some((m) => same(m, v)))?.hit ?? null;
   for (const [field, e] of byField) {
-    const add = screened(edit, field, e.add);
+    const add = screened(edit, field, e.add, field === "mustHaves" ? restatesRefused : undefined);
     listSet(edit, field, add, e.remove);
     if (field === "interviewers" && e.remove.length) f.interviewerUserIds = (f.interviewerUserIds ?? []).filter((id) => !e.remove.some((n) => same(team.find((m) => m.userId === id)?.name ?? "", n)));
     if (add.length) edit.summary.push(`${FACT_LABEL[field]}, added: ${add.join("; ")}`);
     if (e.remove.length) edit.summary.push(`${FACT_LABEL[field]}, taken out: ${e.remove.join("; ")}`);
+    // What the person added is theirs, never also an answer they left unticked (as on a card).
+    if (add.length && edit.facts.suggestions?.length) edit.facts.suggestions = edit.facts.suggestions.filter((s) => !(LIST_OF[s.field as IntakeQuestion["field"]] === field && add.some((v) => same(v, s.text))));
   }
+  // Questions for the form offered and left unticked (the quick start's step 9) are kept as suggestions, which the draft
+  // never uses, and out of the form's list, as an answer left unticked on a card is; a tick in the same edit wins. They
+  // add no line to the conversation.
+  for (const u of patch.unticked ?? []) {
+    const list = LIST_OF[u.field];
+    if (!list || (patch.add ?? []).some((a) => a.field === list && same(a.value, u.value))) continue;
+    listSet(edit, list, [], [u.value]);
+    const suggestions = edit.facts.suggestions ?? [];
+    if (!suggestions.some((s) => s.field === u.field && same(s.text, u.value))) suggestions.push({ field: u.field, text: u.value, origin: u.origin });
+    edit.facts.suggestions = suggestions;
+  }
+  // The person went through the questions for the form (step 9): the draft's form has exactly the ones they chose. Of the
+  // edits, only this one sets the marker (hire again's `packetToFacts` sets it when the draft starts), never the model
+  // (review of the live-test fixes, 12 Nov 2026).
+  if (patch.formQuestionsChosen) f.formQuestionsChosen = true;
   for (const k of patch.clear ?? []) {
     (f as Record<string, unknown>)[k] = undefined;
     if (k === "decisionMaker") f.decisionMakerUserId = undefined;
@@ -674,14 +755,19 @@ function plainFact(k: string, v: string): string {
 
 /**
  * Deal-breakers offered back as visible must-haves (C17, founder decision Q19): each one that passes the fairness check
- * becomes an option on a card; one that fails is declined with the reason, never offered and never used.
+ * is asked about on the deal-breaker card (`prepareQuestions`), as an option worded as the requirement it rules people
+ * out on (`mustHaveOf`), or, when that requirement still rules someone out (`rulesOut`, "No RDA"), named on the card for
+ * the owner to write what they need in their own words; one that fails, in the owner's words (read as a deal-breaker, so
+ * a record named on its own fails: "Felony convictions") or as that requirement, is declined with the reason, never
+ * offered and never used. One already a must-have, either way it is worded, is not offered again.
  */
 export function dealBreakerOffer(facts: IntakeFacts, alreadyOffered: string[]): { offer: string[]; declined: DeclinedCriterion[] } {
   const offer: string[] = [];
   const declined: DeclinedCriterion[] = [];
   for (const d of facts.dealBreakers) {
-    if (alreadyOffered.some((o) => same(o, d)) || facts.mustHaves.some((m) => same(m, d))) continue;
-    const hit = screenCriterion(d);
+    const need = mustHaveOf(d);
+    if (alreadyOffered.some((o) => same(o, d)) || facts.mustHaves.some((m) => same(m, d) || same(m, need))) continue;
+    const hit = screenDealBreaker(d) ?? screenCriterion(need);
     if (hit) declined.push({ requested: d, reason: hit.reason, alternative: hit.alternative, rule: hit.rule });
     else offer.push(d);
   }
@@ -706,6 +792,7 @@ export function withoutServerOwned(facts: IntakeFacts): IntakeFacts {
   delete out.decisionMakerUserId;
   delete out.interviewerUserIds;
   delete out.suggestions;
+  delete out.formQuestionsChosen;
   return out;
 }
 

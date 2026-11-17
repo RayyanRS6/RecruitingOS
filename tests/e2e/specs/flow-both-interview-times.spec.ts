@@ -88,7 +88,7 @@ test.describe("setting interview times", () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(card.getByRole("link", { name: "Open the interview" })).toHaveAttribute("href", /^\/interviews\/[0-9a-f-]{36}$/);
     await card.getByRole("button", { name: "Set a date and time" }).click();
-    await expect(card.getByLabel("Time (America/Los_Angeles)")).toBeVisible();
+    await expect(card.getByLabel("Time (Pacific time)")).toBeVisible();
     await expectAccessible(page, "the panel's card for an interview with no time");
     await setADateAndTime(card, { first: "Ana", daysAhead: 5, time: "14:00", place: "By phone" });
     await expect(toast(page, /Booked\..*The email to Ana is on its way\./)).toBeVisible({ timeout: 30_000 });
@@ -186,6 +186,8 @@ test.describe("setting interview times", () => {
     const sheet = page.getByRole("dialog");
     const offered = sheet.locator(".card", { has: page.getByRole("heading", { name: "Times offered to the candidate" }) });
     await expect(offered).toBeVisible({ timeout: 30_000 });
+    // the times are on the company's clock, and the card says which by name (review of the live-test fixes, 12 November 2026)
+    await expect(offered.getByRole("heading", { name: "Times offered to the candidate (Pacific time)", exact: true })).toBeVisible();
     await expectAccessible(page, "the sheet with times offered");
     const taken = offered.locator("li").filter({ hasText: bensTime });
     await expect(taken, `Cleo was offered Ben's time, ${bensTime}`).toHaveCount(1);

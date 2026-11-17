@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type { Actor, EvidenceAssessment, MatchScore, NoteView, OwnerStage, ReadingVersion, ScreenAssessment } from "@ros/contracts";
-import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, unsentScreenReadings, visibleTo } from "@ros/core";
+import { skillsCountedAsMustHaves, type Actor, type EvidenceAssessment, type MatchScore, type NoteView, type OwnerStage, type ReadingVersion, type ScreenAssessment } from "@ros/contracts";
+import { STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, countedFinding, groupFor, interviewInScore, interviewsInMotionFor, matchScore, ownerStage, ownerStageLabel, readingPair, readingVersion, shownSkillFinding, unsentScreenReadings, visibleTo } from "@ros/core";
 import { applications, assessments, candidates, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -53,6 +53,9 @@ export type CompareCandidate = {
 
 export const COMPARE_REMINDER = "People decide. Each match score is worked out from checked evidence, with the breakdown on the person's page. A blank cell means the evidence has not spoken yet.";
 
+/** A must-have's finding the match score counts (`countedFinding` in @ros/core), in a reading's own words. */
+const MET_OF = { yes: "yes", partly: "partially", no: "no", unknown: "unknown" } as const;
+
 /**
  * The comparison itself, for the route below and for the board's "Compare these" (plan F10). Every candidate shown is
  * audited as viewed. Null when the role is not visible.
@@ -69,7 +72,11 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
   const packet = currentRow?.packet ?? null;
   const byVersion = new Map(packets.map((p) => [p.version, p.packet]));
   const mustHaves = packet?.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })) ?? [];
-  const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition })) ?? [];
+  // A skill the score counts as the must-have of the same name (one the AI interview confirms) says so on its row
+  // (`asMustHave`, "Counted as the must-have"; the second review of the live-test fixes): the page cannot tell, since the
+  // must-haves here carry no "where we check it".
+  const asMustHave = new Set(packet ? skillsCountedAsMustHaves(packet).map((x) => x.key) : []);
+  const competencies = packet?.competencies.map((x) => ({ key: x.key, name: x.name, definition: x.definition, ...(asMustHave.has(x.key) ? { asMustHave: true as const } : {}) })) ?? [];
   const cands = apps.length ? await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, apps.map((a) => a.candidateId))) : [];
   // Never a reading of a conversation the candidate did not send (founder decision of 9 October 2026).
   const all = apps.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, apps.map((a) => a.id))).orderBy(desc(assessments.createdAt)) : [];
@@ -95,18 +102,28 @@ export async function compareCandidates(tx: Tx, input: { roleId: string; ids: st
     const screen = (own.find((x) => x.kind === "screen") as (AssessmentRow & { result: ScreenAssessment }) | undefined) ?? null;
     const resume = (own.find((x) => x.kind !== "screen") as (AssessmentRow & { result: EvidenceAssessment }) | undefined) ?? null;
     const newest = own[0] ?? null;
-    // The screen's finding wins where both looked at the same thing: the candidate spoke to it directly.
+    // Each cell is the finding the match score counts (`countedFinding`), so it never disagrees with the breakdown on their
+    // page (the live test, 12 November 2026: an AI interview that never asked about a must-have hid the résumé's "yes").
+    // Where the score counts nothing, a reading's entry still shows that it looked: a must-have reads "unknown", a skill
+    // "not_evidenced", never "contradicted" (`shownSkillFinding`: a "goes against it" with nothing checked quoted is not
+    // known to the score). With no entry at all the cell stays blank. A skill the score counts as the must-have of the same
+    // name (`asMustHave`) has no cell of its own, as the score counts none of its findings: the must-have's row holds what
+    // counts, so it is never "still unknown" either (the second look at the twin rule, the second review of the live-test
+    // fixes).
+    const pair = { resume, screen };
     const mh: CompareCandidate["mustHaves"] = {};
     for (const m of mustHaves) {
-      const f = screen?.result.requirementFindings?.find((r) => r.requirementKey === m.key) ?? resume?.result.requirementFindings?.find((r) => r.requirementKey === m.key);
-      if (f) mh[m.key] = { met: f.met, quote: f.evidence?.quote ?? null };
+      const f = countedFinding(pair, { key: m.key, mustHave: true });
+      if (f.status !== "unknown") mh[m.key] = { met: MET_OF[f.status], quote: f.quote };
+      else if ([screen, resume].some((r) => r?.result.requirementFindings?.some((x) => x.requirementKey === m.key))) mh[m.key] = { met: MET_OF.unknown, quote: null };
     }
     const comp: CompareCandidate["competencies"] = {};
     for (const x of competencies) {
-      const f = screen?.result.competencyFindings?.find((r) => r.competencyKey === x.key) ?? resume?.result.competencyFindings?.find((r) => r.competencyKey === x.key);
-      if (f) comp[x.key] = { finding: f.finding, note: f.note ?? null };
+      if (x.asMustHave) continue;
+      const shown = shownSkillFinding(pair, x.key);
+      if (shown) comp[x.key] = shown;
     }
-    const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
+    const unknownCount = mustHaves.filter((m) => !mh[m.key] || mh[m.key].met === "unknown").length + competencies.filter((x) => !x.asMustHave && !comp[x.key]).length + (newest?.result.unknowns.length ?? 0);
     await audit(tx, { companyId: t.companyId, actor: input.actor, action: "candidate.viewed", target: { type: "application", id: a.id }, reason: "comparison view" });
     const mark = marks.get(a.id) ?? null;
     const followUp = followUps.get(a.id) ?? null;

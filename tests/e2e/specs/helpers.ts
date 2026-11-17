@@ -41,6 +41,25 @@ export async function expectAccessible(page: Page, name: string) {
 }
 
 /**
+ * The time zone of every company these specs create (the sign-up form's "Pacific time (Los Angeles)"), so the calendar
+ * the screens count the company's days on.
+ */
+export const COMPANY_ZONE = "America/Los_Angeles";
+
+/**
+ * The company's calendar day `days` from today (YYYY-MM-DD; -1 is yesterday), whatever hour and zone the run is in. The
+ * hire sheet, Home's "Close this job?", the interview's date field and the closing date count the company's days, and the
+ * UTC date is the company's tomorrow from 00:00 to 08:00 UTC (07:00 in summer), so a day worked out on the UTC calendar
+ * failed for a third of each day (the review of the live-test fixes, 12 November 2026). Whole calendar days, as the API's
+ * addCalendarDays counts them: the day the clocks change is still one day.
+ */
+export function companyDay(days: number, now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: COMPANY_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(Date.UTC(part("year"), part("month") - 1, part("day") + days)).toISOString().slice(0, 10);
+}
+
+/**
  * Microsoft sign-in through the fake consent page with the second factor unchecked. For an ITS staff address this ends on
  * the authenticator page under /api/v1/auth/mfa (22 September 2026), which is why it does not wait for an app URL.
  */
@@ -83,7 +102,7 @@ export async function createCompanyThroughTheForm(page: Page, name: string) {
   await page.getByLabel("City").fill("Tustin");
   // State and size start empty, and the time zone starts from the browser's own (empty when it is not a US zone).
   await page.getByLabel("State").fill("CA");
-  await page.getByLabel("Time zone").selectOption("America/Los_Angeles");
+  await page.getByLabel("Time zone").selectOption(COMPANY_ZONE);
   await page.getByRole("button", { name: /Create|Continue|Save/ }).click();
   await page.waitForURL((u) => u.pathname === "/");
 }
@@ -256,7 +275,7 @@ export async function fillTheCompanyForm(page: Page, company: string, owner = "S
   await page.getByLabel("How many employees").selectOption("1-19");
   await page.getByLabel("City").fill("Tustin");
   await page.getByLabel("State").fill("CA");
-  await page.getByLabel("Time zone").selectOption("America/Los_Angeles");
+  await page.getByLabel("Time zone").selectOption(COMPANY_ZONE);
   await page.getByLabel("Website (optional)").fill("https://asker.example");
 }
 
@@ -485,11 +504,11 @@ export async function openThePanel(page: Page, roleId: string, name: string) {
 }
 
 /**
- * "Set a date and time" as a person fills it in, on the panel or the interview's sheet: the day (`daysAhead` from today),
- * the time on the company's clock, and Book. Returns the toast that says what happened to the email.
+ * "Set a date and time" as a person fills it in, on the panel or the interview's sheet: the day (`daysAhead` from the
+ * company's today, the calendar its date field reads), the time on the company's clock, and Book. Returns the day.
  */
 export async function setADateAndTime(form: Locator, input: { first: string; daysAhead?: number; time?: string; place?: "Video link" | "Address" | "By phone"; address?: string; clash?: boolean }) {
-  const day = new Date(Date.now() + (input.daysAhead ?? 3) * 86_400_000).toISOString().slice(0, 10);
+  const day = companyDay(input.daysAhead ?? 3);
   await form.getByLabel("Date", { exact: true }).fill(day);
   await form.getByLabel(/^Time \(/).fill(input.time ?? "10:30");
   if (input.place) await form.getByRole("radio", { name: input.place }).check();

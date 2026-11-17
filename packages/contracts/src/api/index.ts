@@ -97,7 +97,8 @@ export type NewTimesSettingView = { auto: boolean; workingDays: number; pending:
 export const UpdateCompany = z.object({
   name: z.string().trim().min(2).max(120),
   website: WebsiteInput,
-  timezone: z.string().min(1).max(64),
+  /** A real zone, as on CreateCompany: the company's days and hours, the safety net's day among them, are counted in it (12 November 2026). */
+  timezone: z.string().min(1).max(64).refine(isTimeZone, { message: "Choose a time zone from the list." }),
   sizeBand: CreateCompany.shape.sizeBand,
   locations: z.array(Location).min(1).max(20),
   settings: CompanySettingsInput,
@@ -148,16 +149,35 @@ export const IntakeFactsPatch = z.object({
     /** Pay set from the panel counts as a person setting it, like the pay card. */
     pay: z.object({ basis: CompensationBasis, min: z.number().nonnegative().max(10_000_000), max: z.number().nonnegative().max(10_000_000), ceiling: z.number().nonnegative().max(10_000_000).optional() }),
   }).partial().strict().optional(),
-  add: z.array(z.object({ field: IntakeListFact, value: FactText })).max(20).optional(),
+  /**
+   * One list item each. `countsAs`, on a deal-breaker: the must-have it counts openly as in this edit, in the person's own
+   * words (the quick start's "As a must-have"), so when the fairness check refuses the deal-breaker that must-have is
+   * refused with it, for the same reason, whatever its own words pass (review of the must-haves fix, 12 Nov 2026: "No
+   * felons" written as "Felony-free" kept the must-have).
+   */
+  add: z.array(z.object({ field: IntakeListFact, value: FactText, countsAs: FactText.optional() })).max(20).optional(),
   remove: z.array(z.object({ field: IntakeListFact, value: z.string().max(500) })).max(20).optional(),
   clear: z.array(IntakeTextFact).max(20).optional(),
+  /**
+   * The yes/no questions for the form that were offered and left unticked (the quick start's step 9): kept as
+   * suggestions, which the draft never uses, as an answer left unticked on a card is (C6).
+   */
+  unticked: z.array(z.object({ field: z.enum(["eligibility"]), value: FactText, origin: z.enum(["playbook", "assistant"]) })).max(12).optional(),
+  /**
+   * The person went through the questions for the form (the quick start's step 9, even with every one left ticked or
+   * every one unticked): the eligibility notes this edit leaves are the ones they chose, and the draft's form has exactly
+   * those (`IntakeFacts.formQuestionsChosen`, which only the server sets: from this, or on "hire again" from the old
+   * job's form, `packetToFacts`; never the assistant's turn).
+   */
+  formQuestionsChosen: z.literal(true).optional(),
 }).strict();
 export type IntakeFactsPatch = z.infer<typeof IntakeFactsPatch>;
 
 /**
  * POST /intake/sessions/:id/answers. The answers to the open cards, an optional panel edit, "draft it", and any words
  * typed beside them. The server writes one short summary to the conversation and, unless `reply` is false (a quiet
- * edit from the panel), asks the assistant for the next turn.
+ * edit from the panel), asks the assistant for the next turn. `dealBreakersOffered`: the person already said which of
+ * the edit's deal-breakers count openly as must-haves (the quick start's step 8), so the builder's card never asks again.
  */
 export const IntakeAnswersRequest = z.object({
   answers: z.array(IntakeAnswer).max(3).default([]),
@@ -165,6 +185,7 @@ export const IntakeAnswersRequest = z.object({
   draftIt: z.boolean().default(false),
   note: z.string().trim().max(INTAKE_MESSAGE_MAX).optional(),
   reply: z.boolean().default(true),
+  dealBreakersOffered: z.boolean().default(false),
 }).refine((b) => b.answers.length > 0 || !!b.patch || b.draftIt || !!b.note, { message: "Answer a question, change something or say what to do next." });
 export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
 
@@ -442,7 +463,9 @@ export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.k
  * One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening.
  * `raisedBy` is on the opening question only when nobody on the team or at ITS raised the request: Recruiting OS on its
  * own ("system"), or a candidate (15 October 2026). It names nobody. It is also on the wordless line saying the candidate wrote
- * back to a request a recruiter holds ("candidate", 6 November 2026), whose words stay on the application's thread.
+ * back to a request a recruiter holds ("candidate", 6 November 2026), whose words stay on the application's thread, and on
+ * an entry Recruiting OS wrote itself ("system", 17 November 2026): its note, or its answer when it closed the request on
+ * its own, which Home heads "Recruiting OS closed it", never as a recruiter's answer.
  */
 export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string; raisedBy?: "system" | "candidate" };
 /**
@@ -459,6 +482,11 @@ export type RecruiterRequestView = {
   locked?: boolean;
   /** A talk about the plan itself: it gives ITS no access to anything, so nothing on the page speaks of access. */
   topic?: "plan";
+  /**
+   * "system" when Recruiting OS closed it on its own, with no recruiter answering: a held application a person decided, or a
+   * stopped step ITS ran again (its newest answer is the system's). Home says "Closed", never "Answered" (17 November 2026).
+   */
+  closedBy?: "system";
 };
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.

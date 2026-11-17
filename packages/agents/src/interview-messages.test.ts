@@ -49,6 +49,16 @@ describe("the times email", () => {
     expect(m.text).toContain("Good news: Harbor Dental would like to interview you for the Dental Assistant position. Conversation with the dentist with Grace and Ben, 30 minutes, video.");
   });
 
+  // Review of the live-test fixes, 12 November 2026 (#61): "times shown in America/Los_Angeles"
+  it("names the zone its times are shown in by its name, never its id", () => {
+    const pick = (candidateTimezone: string) => slotsOfferedMessage({ ...base, candidateTimezone }).text.split("\n").find((line) => line.startsWith("Pick a time that works for you"))!;
+    expect(pick("America/Los_Angeles")).toBe("Pick a time that works for you (times shown in Pacific time; you can change the time zone on the page):");
+    expect(pick("America/New_York")).toContain("(times shown in Eastern time;");
+    // a zone the sign-up form does not offer reads as Intl names it
+    expect(pick("America/Detroit")).toContain("(times shown in Eastern Time;");
+    for (const zone of ["America/Los_Angeles", "America/New_York", "America/Phoenix", "America/Detroit", "Europe/London"]) expect(pick(zone), zone).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
+  });
+
   it("opens the times a candidate asked for when they cancelled with what they asked for", () => {
     const m = slotsOfferedMessage({ ...base, variant: "new_times_asked" });
     expect(m.subject).toBe("New times for your interview: Dental Assistant at Harbor Dental");

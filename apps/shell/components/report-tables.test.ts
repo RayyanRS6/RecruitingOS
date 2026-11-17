@@ -132,7 +132,7 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
     // the day bars: the counts stay in the label, the empty day is marked for its quieter colour, the height is inline;
     // how to read them is the chart's tooltip, not a line under it (fewer words, 23 Oct 2026)
-    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1" title="One bar per day, oldest on the left, days in America/Los_Angeles."><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
+    expect(html).toContain('<div class="daybars" role="img" aria-label="Applicants per day over the last 30 days: 2026-10-09 2, 2026-10-10 1" title="One bar per day, oldest on the left, days in Pacific time."><span title="2026-10-08: 0" class="zero" style="height:4%"></span><span title="2026-10-09: 2" style="height:100%"></span><span title="2026-10-10: 1" style="height:50%"></span></div>');
     expect(html).not.toContain('<p class="small muted mt-1.5 mb-4">One bar per day');
     expect(html).not.toContain("border-radius:2px");
     // every count column, heading and cells
@@ -208,6 +208,18 @@ describe("tables elsewhere on a role", () => {
     expect(html).toContain('<th scope="col">Maria Reyes</th>');
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain('role="status"');
+  });
+
+  // The second look at the twin rule (second review of the live-test fixes): the row tagged "Counted as the must-have" read
+  // the skill's own "Shown", a finding the score never counts
+  it("gives a skill row counted as the must-have of the same name its tag on Compare and no finding of its own", () => {
+    const person = { applicationId: "a1", name: "Maria Reyes", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: { mh_dr: { met: "unknown", quote: null } }, competencies: { dr: { finding: "evidenced", note: null }, c1: { finding: "evidenced", note: null } }, screen: null, resume: null, unknownCount: 1, open: "/roles/r1/talent?open=a1", score: null, notes: [] };
+    const data = { role: { id: "r1", title: "Dental Assistant" }, mustHaves: [{ key: "mh_dr", text: "Digital radiography" }], competencies: [{ key: "dr", name: "Digital Radiography.", definition: "Takes digital X-rays", asMustHave: true }, { key: "c1", name: "Patient care", definition: "Calm with patients" }], max: 5, reminder: "People decide.", candidates: [person] };
+    const html = render(client(), createElement(CompareTable, { data: data as never }));
+    expect(html).toContain('<th scope="row" class="small" title="Takes digital X-rays"><span class="sbar-tag">Counted as the must-have</span> Digital Radiography.</th><td><span class="small muted">—</span></td></tr>');
+    // a skill of its own keeps its words
+    expect(html).toContain('<th scope="row" class="small" title="Calm with patients">Patient care</th><td><span class="small muted">Shown</span></td></tr>');
+    expect(html.split(">Shown<")).toHaveLength(2);
   });
 
   it("gives each person one verdict word on Compare: the word beside their number, never a reading's stored word lower down (6 November 2026)", () => {

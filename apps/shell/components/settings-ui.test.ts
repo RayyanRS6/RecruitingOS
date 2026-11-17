@@ -127,6 +127,17 @@ describe("each card says one line, the rest one click away", () => {
     expect(card.indexOf("Usage")).toBeLessThan(card.indexOf("<details"));
   });
 
+  // Live test, 12 November 2026: Settings printed the zone's id, "America/Los_Angeles", where sign-up said "Pacific time (Los Angeles)".
+  it("names the time zone in the sign-up form's words, on the company card and in the hours' choice", () => {
+    const html = page();
+    expect(text(html)).toContain("Time zone Pacific time (Los Angeles) Contact hours");
+    const hours = html.slice(html.indexOf('<select id="av-tz"'), html.indexOf("</select>", html.indexOf('<select id="av-tz"')));
+    expect(hours).toContain('<option value="America/Los_Angeles" selected="">Pacific time (Los Angeles)</option>');
+    expect(hours).toContain('<option value="America/Phoenix">Arizona (no daylight saving)</option>');
+    expect(hours).not.toMatch(/>America\//);
+    expect(html).not.toMatch(/>America\/Los_Angeles</);
+  });
+
   it("the team card offers your own hours when nobody can book you, and says who can do what when asked", () => {
     const html = page();
     expect(html).toContain('<a class="small" href="#setup-availability">Set your hours</a>');

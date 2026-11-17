@@ -1,4 +1,4 @@
-import type { EvidenceAssessment, RolePacket, ScreenProgress } from "@ros/contracts";
+import { FOCUS_KEY_PREFIX, type EvidenceAssessment, type RolePacket, type ScreenProgress } from "@ros/contracts";
 import { PROTECTED_QUESTION_RULES, PROXY_RULES, screenAnswersOf, writtenQuestionsOf } from "@ros/core";
 
 /**
@@ -13,7 +13,11 @@ import { PROTECTED_QUESTION_RULES, PROXY_RULES, screenAnswersOf, writtenQuestion
 
 export type FocusQuestion = NonNullable<ScreenProgress["focusQuestions"]>[number];
 
-export const FOCUS_KEY_PREFIX = "unknown_";
+/**
+ * The open questions' key prefix lives in @ros/contracts, beside their plain name, so the role's figures in @ros/core
+ * count them as one row and every reader names them alike (`answerKeyWords`).
+ */
+export { FOCUS_KEY_PREFIX } from "@ros/contracts";
 const MAX_FOCUS_QUESTIONS = 4;
 
 /** The sentence the invitation email and the opening message carry when a screen starts with the open questions. */

@@ -100,6 +100,8 @@ test.describe("owner and candidate journey", () => {
     await page.getByText("Change the time zone", { exact: true }).click();
     await page.getByLabel("Show times in").selectOption("America/New_York");
     await page.getByRole("button", { name: "Show times" }).click(); // no inline script under the content-security policy: a real button
+    // the zone shown is named in the times email's words, never by its id (LT-15)
+    await expect(page.getByText("Times are shown in Eastern time.")).toBeVisible();
     await expect(page.getByText(/EDT|EST/).first()).toBeVisible();
     await expectAccessible(page, "pick a time");
     // keyboard only: tab to the first slot, space to choose, then confirm

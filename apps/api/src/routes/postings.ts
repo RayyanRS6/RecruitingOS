@@ -228,7 +228,7 @@ postingRoutes.get("/:id/postings/:channel/package", requireTenant, async (c) => 
     const role = await loadRole(tx, c.req.param("id"));
     const posting = await loadPosting(tx, role.id, channel);
     const pkg = packageFor(await postingContext(tx, container, role), posting);
-    if (!pkg) throw new HttpError(409, "no_packet", "The role has no approved packet yet, so there is nothing to post.");
+    if (!pkg) throw new HttpError(409, "no_packet", "This job has not been approved yet, so there is nothing to post.");
     return pkg;
   });
   return c.json(result);

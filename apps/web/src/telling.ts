@@ -109,22 +109,84 @@ export function bulkUndoneToast(taken: number, late: number): ToastParts {
 export const SAFETY_NET_WORKING_DAYS = 5;
 const DAY = 86_400_000;
 
+/** A day the API names (YYYY-MM-DD) as a date that reads as that same day wherever the reader is: noon on their own clock. */
+export function namedDay(day: string): Date {
+  return new Date(`${day.slice(0, 10)}T12:00:00`);
+}
+
+/** The calendar day (YYYY-MM-DD) of a moment in a time zone, or null when the browser does not know the zone. */
+function dayIn(timeZone: string): ((at: Date) => string) | null {
+  let f: Intl.DateTimeFormat;
+  try {
+    f = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  } catch {
+    return null;
+  }
+  return (at) => {
+    const p = Object.fromEntries(f.formatToParts(at).map((x) => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day}`;
+  };
+}
+
 /**
- * The day the safety net acts: five working days (Monday to Friday) after the moment of the decision, counted the way the
- * daily check counts them. The check runs in the company's time zone and skips the holidays on the ITS calendar, which
- * can move it by a day; a day the API names (`fallbackOn`) wins.
+ * The days of the week the safety net counts (0 Sunday to 6 Saturday): the company's contact days (Settings, "Contact
+ * hours for texts") that fall Monday to Friday, as the daily check reads them (packages/agents `workingDayRulesFor`), or
+ * null when none is set or none of them is a weekday, for Monday to Friday.
  */
-export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS): Date | null {
+export function safetyNetWorkDays(days: readonly unknown[] | null | undefined): number[] | null {
+  const weekdays = (days ?? []).filter((d): d is number => typeof d === "number" && d >= 1 && d <= 5);
+  return weekdays.length ? weekdays : null;
+}
+
+/**
+ * The day the safety net acts: five working days after the moment of the decision, counted the way the daily check counts
+ * them: Monday to Friday, or the company's contact days among them (`workDays`, second review of the live-test fixes, 12
+ * November 2026: a company that contacts candidates on Mondays, Wednesdays and Fridays was told a day five days early).
+ * With `timeZone` (the company's) the days are the company's, as the check counts them (live test, 12 November 2026: a
+ * reader a day ahead of the company was told the day after); without it, or with a zone the browser does not know, the
+ * reader's own. The check also skips the holidays on the ITS calendar, which can move it by a day; after a decision the
+ * API names the day (`untoldFallbackOn`), and that wins.
+ */
+export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS, timeZone?: string | null, workDays?: readonly number[] | null): Date | null {
   const from = Date.parse(decidedAt);
   if (Number.isNaN(from)) return null;
+  const companyDay = timeZone ? dayIn(timeZone) : null;
+  const work = safetyNetWorkDays(workDays) ?? [1, 2, 3, 4, 5];
+  // 0 Sunday to 6 Saturday, on the company's calendar when its zone is known, else on the reader's
+  const weekdayOf = (t: number) => (companyDay ? new Date(`${companyDay(new Date(t))}T00:00:00Z`).getUTCDay() : new Date(t).getDay());
   let t = from;
   let n = 0;
   for (let i = 0; i < 60 && n < days; i++) {
     t += DAY;
-    const weekday = new Date(t).getDay();
-    if (weekday >= 1 && weekday <= 5) n += 1;
+    if (work.includes(weekdayOf(t))) n += 1;
   }
-  return new Date(t);
+  return companyDay ? namedDay(companyDay(new Date(t))) : new Date(t);
+}
+
+/** Days after applying from which someone locked hears by the date they were promised (packages/core `CLOSE_OUT_SENDS_FROM_DAYS`). */
+export const LOCKED_HEARS_FROM_DAYS = 29;
+
+/** The calendar day (YYYY-MM-DD) of a moment on the reader's own clock. */
+function readerDay(at: Date): string {
+  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * The safety net's day for someone locked (the plans of 5 November 2026, Rule 2), who was promised a date when they
+ * applied: the earlier of `on` (five working days, `safetyNetDate`) and the day before that date, or today once that day has
+ * passed, as the daily check counts it (packages/agents `untoldFallbackDay`); on the company's calendar when its `timeZone`
+ * is known, else the reader's. `on` itself for anyone else (the second look at the safety-net day fix, 12 November 2026:
+ * the message went up to a week before the day named).
+ */
+export function lockedSafetyNetDay(on: Date | null, person: { lockedAt?: string | null; createdAt?: string | null }, now: Date = new Date(), timeZone?: string | null): Date | null {
+  const applied = person.lockedAt && person.createdAt ? Date.parse(person.createdAt) : Number.NaN;
+  if (!on || Number.isNaN(on.getTime()) || Number.isNaN(applied)) return on;
+  const dayOf = (timeZone ? dayIn(timeZone) : null) ?? readerDay;
+  const promised = dayOf(new Date(applied + LOCKED_HEARS_FROM_DAYS * DAY));
+  const today = dayOf(now);
+  const by = promised > today ? promised : today;
+  // `on` reads as its day on the reader's clock: noon of the company's day (`namedDay`), or the reader's own count
+  return by < readerDay(on) ? namedDay(by) : on;
 }
 
 /**
@@ -156,13 +218,21 @@ export function dayWords(d: Date): string {
 }
 
 /**
+ * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself or not at all (`tellOneLocked`): with no email
+ * address on file nothing goes to them and nobody is brought in, whatever the day (17 November 2026). Only ITS reads it.
+ */
+export const LOCKED_NO_EMAIL_LINE = "No message goes: no email address on file.";
+
+/**
  * The safety net in one short line (founder decision D-03 A, 14 Oct 2026), said wherever a decision is called private:
  * the day the standard message goes by itself if nobody tells them first or, under settings that keep these messages
  * with a person (or with no address on file), the day an ITS recruiter is brought in instead. `on` is that day when it
  * is known (`safetyNetDate`, or the day the API names); without it the line says "after 5 working days". With the
- * setting unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message.
+ * setting unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message. Someone
+ * `locked` with no address reads `LOCKED_NO_EMAIL_LINE`.
  */
-export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string }): string {
+export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string; locked?: boolean }): string {
+  if (input.locked && input.hasEmail === false) return LOCKED_NO_EMAIL_LINE;
   const who = input.who?.trim() || "them";
   const what = input.what ?? "the standard message";
   const when = input.on && !Number.isNaN(input.on.getTime()) ? `on ${dayWords(input.on)}` : `after ${SAFETY_NET_WORKING_DAYS} working days`;
@@ -184,24 +254,34 @@ export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "s
  * The safety net, in one short sentence on the "not told yet" card (Q27; founder decision D-03 A): on which day the
  * standard message goes by itself if nobody tells them first; or, when the settings ask for approval, keep messages with
  * a person, or there is no address, that a recruiter is brought in that day and nothing is sent. Null when nothing waits
- * on it (told already, or a message waits for an approver).
+ * on it (told already, or a message waits for an approver). With the company's `timeZone`, the day the API names has
+ * come when the company's today reaches it, as the daily check counts it, and the day a recruiter was brought in is the
+ * company's; without it, the reader's own calendar (the second review of the live-test fixes, 12 November 2026: a reader
+ * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles). For
+ * someone locked the day can come sooner, by the date they were promised (`untoldFallbackDay`), so the line says only
+ * that the message goes with the next daily check; with no address on file, that no message goes (`LOCKED_NO_EMAIL_LINE`).
  */
 export function safetyNetLine(input: {
-  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null };
+  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null; lockedAt?: string | null };
   waitingApproval: boolean;
   now?: Date;
+  timeZone?: string | null;
 }): string | null {
   const { a } = input;
   if (!["rejected", "talent_pool"].includes(a.stage) || a.toldState !== "not_told" || input.waitingApproval) return null;
   const name = a.candidate.firstName?.trim() || null;
+  const companyDay = input.timeZone ? dayIn(input.timeZone) : null;
   const acted = safetyNetActed(a.timeline);
-  if (acted?.action === "recruiter") return `An ITS recruiter was brought in on ${dayWords(new Date(acted.at))} to make sure ${name ?? "they"} ${name ? "is" : "are"} told. You can still send the message or record it.`;
+  if (acted?.action === "recruiter") return `An ITS recruiter was brought in on ${dayWords(companyDay ? namedDay(companyDay(new Date(acted.at))) : new Date(acted.at))} to make sure ${name ?? "they"} ${name ? "is" : "are"} told. You can still send the message or record it.`;
+  if (a.lockedAt && !a.candidate.email) return LOCKED_NO_EMAIL_LINE;
   const decided = a.rejectedAt ?? a.stageChangedAt;
-  const on = a.untoldFallbackOn ? new Date(`${a.untoldFallbackOn.slice(0, 10)}T12:00:00`) : safetyNetDate(decided);
+  const on = a.untoldFallbackOn ? namedDay(a.untoldFallbackOn) : safetyNetDate(decided);
   if (!on || Number.isNaN(on.getTime())) return null;
   const sends = a.declineMessage === "sends" && !!a.candidate.email;
   const now = input.now ?? new Date();
-  if (on.getTime() <= now.getTime()) {
+  const come = a.untoldFallbackOn && companyDay ? companyDay(now) >= a.untoldFallbackOn.slice(0, 10) : on.getTime() <= now.getTime();
+  if (come) {
+    if (sends && a.lockedAt) return `The standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`;
     return sends
       ? `${SAFETY_NET_WORKING_DAYS} working days have passed: the standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`
       : `${SAFETY_NET_WORKING_DAYS} working days have passed: an ITS recruiter is brought in with the next daily check. Nothing is sent by itself.`;

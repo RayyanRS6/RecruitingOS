@@ -3,7 +3,7 @@
 import { Hono } from "hono";
 import { and, eq, isNull } from "drizzle-orm";
 import { CandidateAvailability, CandidateCancel, SelectSlot, type CancelNext } from "@ros/contracts";
-import { CANCEL_STAGES, candidateNewTimesPromise, emit, formatInZone, freshSchedulingWindow, groupSlotsByDay, notify, openFollowUp, slotStillAhead, transition, type FollowUpRow, type NewTimesPromise } from "@ros/core";
+import { CANCEL_STAGES, candidateNewTimesPromise, emit, formatInZone, freshSchedulingWindow, groupSlotsByDay, notify, openFollowUp, slotStillAhead, transition, zoneShortName, type FollowUpRow, type NewTimesPromise } from "@ros/core";
 import { MAX_CANDIDATE_RESCHEDULES, autoNewTimesPlan, interviewIcs, newTimesDayWords, participantsOf, sendInterviewCancelled, type AutoPlan } from "@ros/agents";
 import { applications, candidates, communications, companies, interviewFollowups, interviews, jobs, rolePackets, roles, withTenant, type Db, type Tx } from "@ros/db";
 import { armNewTimes } from "@ros/workflows";
@@ -56,6 +56,16 @@ div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 `;
 
 const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York", "America/Anchorage", "Pacific/Honolulu"];
+
+/**
+ * A zone in the words of the times email, never its id (LT-15): "Pacific time" for the zones listed, any other as
+ * `zoneShortName` names it ("Eastern Time"), and one nothing can name in its city words, as before ("America/Los
+ * Angeles"). The line under the heading and both pickers say it; the pickers' values stay the ids.
+ */
+export function zoneLabel(zone: string): string {
+  const name = zoneShortName(zone);
+  return name === zone ? zone.replace(/_/g, " ") : name;
+}
 
 async function loadByToken(db: Db, token: string) {
   if (!token) return null;
@@ -220,13 +230,13 @@ schedulePages.get("/c/schedule/:token", async (c) => {
       {/* Kept through the fewer-words pass (23 October 2026): the only words on the page that say which employer and job this is. */}
       <p class="eyebrow">{b.company.name} · {b.packet?.identity.title ?? b.role.title}</p>
       <h1>Pick a time for your {b.iv.title.toLowerCase()}</h1>
-      <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{tz.replace(/_/g, " ")}</strong>.</p>
+      <p class="lead">{b.iv.durationMinutes} minutes, {b.iv.format.replace("_", " ")}{b.participants.length ? ` with ${b.participants.map((p) => p.firstName).join(" and ")}` : ""}. Times are shown in <strong>{zoneLabel(tz)}</strong>.</p>
       {/* Another time zone, one click away (founder brief, 14 October 2026): the line above already names the one shown. */}
       <details class="more">
         <summary>Change the time zone</summary>
         <form method="get" action={`/c/schedule/${b.iv.scheduleToken}`} class="card">
           <label for="tz" class="flush">Show times in</label>
-          <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+          <select id="tz" name="tz">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{zoneLabel(z)}</option>)}</select>
           <button class="btn secondary" type="submit">Show times</button>
         </form>
       </details>
@@ -388,7 +398,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
           <summary>Change the time zone</summary>
           <form method="post" action={`/c/schedule/${b.iv.scheduleToken}/timezone`} class="card">
             <label for="tz" class="flush">Show times in</label>
-            <select id="tz" name="timezone">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{z.replace(/_/g, " ")}</option>)}</select>
+            <select id="tz" name="timezone">{[...new Set([tz, ...ZONES])].map((z) => <option value={z} selected={z === tz}>{zoneLabel(z)}</option>)}</select>
             <button class="btn secondary" type="submit">Save</button>
           </form>
         </details>

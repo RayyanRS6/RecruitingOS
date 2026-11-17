@@ -44,7 +44,7 @@ describe("the quick start's suggestions", () => {
     expect(body.mustHaves).toContain("Valid driver's licence and a clean driving record");
     expect(body.questions).toContain("Do you hold a valid driver's licence?");
     const [run] = await runs();
-    expect(run).toMatchObject({ agent: "intake", promptKey: "intake.suggest", promptVersion: 1, status: "ok" });
+    expect(run).toMatchObject({ agent: "intake", promptKey: "intake.suggest", promptVersion: 2, status: "ok" });
     expect(run.inputRef).toMatchObject({ purpose: "quick_start" });
     expect(container.fake!.calls.at(-1)).toMatchObject({ task: "intake.suggest", promptKey: "intake.suggest" });
     expect(await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).toEqual([]);

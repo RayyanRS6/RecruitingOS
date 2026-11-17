@@ -201,7 +201,11 @@ describe("the loop after an interview", () => {
     const before = outbox().filter((m) => m.to === cand.email).length;
     const r = await json(owner, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "not_moving_forward", reason: "not_a_match_experience", note: "Needs more perio experience." });
     expect(r.status, await r.clone().text()).toBe(200);
-    expect(await r.json()).toMatchObject({ ok: true, stage: "rejected", dispositionSent: false, candidateNotice: "not_told" });
+    const decided = (await r.json()) as { untoldFallbackOn?: string };
+    expect(decided).toMatchObject({ ok: true, stage: "rejected", dispositionSent: false, candidateNotice: "not_told" });
+    // the day the safety net acts on it, the one the "not told yet" card names (live test, 12 November 2026)
+    expect(decided.untoldFallbackOn).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(decided.untoldFallbackOn).toBe(((await (await json(owner, "GET", `/api/v1/applications/${cand.id}`)).json()) as { untoldFallbackOn: string | null }).untoldFallbackOn);
     expect(await application(cand.id)).toMatchObject({ stage: "rejected", rejectReason: "not_a_match_experience", rejectNote: "Needs more perio experience.", toldState: "not_told" });
     await container.drain();
     expect(outbox().filter((m) => m.to === cand.email).slice(before)).toHaveLength(0);
@@ -327,6 +331,11 @@ describe("the loop after an interview", () => {
     b = await brief(interviewer);
     expect(b.cards.find((c) => c.kind === "interviews")).toMatchObject({ title: "1 interview coming up" });
     expect(b.cards.find((c) => c.kind === "interviews")!.actions[0]).toEqual({ label: "Open interviews", method: "GET", path: "/interviews" });
+    // the booked time beside the company's zone by its name, never its id (review of the live-test fixes, 12 November 2026)
+    const coming = b.cards.find((c) => c.kind === "interviews")!.body.split("\n").find((line) => line.startsWith("Sofia Marin: "))!;
+    expect(coming).toMatch(/ \(Pacific time\)$/);
+    expect(coming).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
+    expect(b.cards.find((c) => c.kind === "interviews")!.body).not.toMatch(/[A-Za-z]+\/[A-Za-z_]+/);
     await finish(iv.id);
     b = await brief(interviewer);
     const ask = b.cards.find((c) => c.title === "Did the interview with Sofia Marin take place?");

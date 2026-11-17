@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, transition, visibleTo, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
+import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, isTimeZone, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, takeBackOutcome, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
-import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, type PersonalLine } from "@ros/agents";
+import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackDay, workingDayRulesFor, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
@@ -536,14 +536,51 @@ type ActionBody = ApplicationAction;
  * short note with no reason (they had a booked time or times to pick from). The decision itself stays private.
  * send_decision: `communicationId` and `undoUntil` while the message waits out its Undo window (plan G9; POST
  * /applications/:id/messages/:communicationId/undo), and the `wording` used. A decision (decline, talent pool) answers
- * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4).
+ * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4); and with
+ * `untoldFallbackOn`: the day the untold safety net acts on it, the day the "not told yet" card names (`untoldFallbackDayOf`).
+ * `holdersToTell` is never in the answer: the recruiters holding the request a decided hold raised, whom the caller takes
+ * off and emails once its transaction has committed (`emailHolderAboutDecision`).
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null };
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null; holdersToTell?: HoldDecidedNote[] };
 
-/** The decision message a Send would write now, for the answer to a decision (a count of one and its preview, plan G4). */
-async function previewAfterDecision(tx: Tx, container: Container, applicationId: string): Promise<DecisionMessagePreview | null> {
+/**
+ * ITS's request about someone held on an eligibility answer, once a person kept them in or declined them
+ * (`settleHoldRequests`): the recruiters holding one are told after the commit, never the person who decided.
+ */
+async function settleHold(tx: Tx, input: { companyId: string; applicationId: string; actor: Actor; now: Date }): Promise<Pick<ActionResult, "holdersToTell">> {
+  const { holders } = await settleHoldRequests(tx, input);
+  const toTell = holders.filter((n) => n.holderId !== input.actor.id);
+  return toTell.length ? { holdersToTell: toTell } : {};
+}
+
+/**
+ * The day the untold safety net acts on this decision (Q27), YYYY-MM-DD in the company's calendar: five working days
+ * after it was made (or after the unlock, for someone a change of plan opened), in the company's time zone, on its
+ * contact days and without the ITS holidays, as the daily check counts them, and the daily check sends on that day
+ * (`untoldFallbackDue`). For someone locked, the day before the date they were promised when they applied if that comes
+ * first, or the company's today once it has passed (`untoldFallbackDay`). One rule for the "not told yet" card (GET
+ * /applications/:id) and the answer to every decision, so the toast names the card's day (live test, 12 November 2026:
+ * the toast counted on the reader's own calendar and named the day after). Null for a stored zone the server does not
+ * know (one saved before PATCH /companies/current checked it): the answer then leaves the day out, and the decision is
+ * never refused for it (the second review of the live-test fixes, 12 November 2026).
+ */
+export async function untoldFallbackDayOf(tx: Tx, app: Pick<App, "id" | "companyId" | "rejectedAt" | "stageChangedAt" | "lockedAt" | "createdAt">, now: Date): Promise<string | null> {
+  const from = waitingSince(app.rejectedAt ?? app.stageChangedAt, (await unlockedAtFor(tx, [app.id])).get(app.id));
+  const rules = await workingDayRulesFor(tx, app.companyId, now);
+  if (rules.timeZone && !isTimeZone(rules.timeZone)) return null;
+  return untoldFallbackDay(new Date(from), now, rules, app);
+}
+
+/**
+ * What the answer to a decision carries: the decision message a Send would write now (a count of one and its preview,
+ * plan G4), and the day the safety net acts on it, when the server knows the company's zone.
+ */
+async function afterDecision(tx: Tx, container: Container, applicationId: string, now: Date): Promise<Pick<ActionResult, "decisionMessage" | "untoldFallbackOn">> {
   const [fresh] = await tx.select().from(applications).where(eq(applications.id, applicationId)).limit(1);
-  return fresh ? decisionMessagePreview(tx, container, fresh) : null;
+  if (!fresh) return {};
+  const decisionMessage = await decisionMessagePreview(tx, container, fresh);
+  const untoldFallbackOn = await untoldFallbackDayOf(tx, fresh, now);
+  return { ...(decisionMessage ? { decisionMessage } : {}), ...(untoldFallbackOn ? { untoldFallbackOn } : {}) };
 }
 
 /**
@@ -601,23 +638,32 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false, ...provenance } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason, ...provenance } });
+      // Someone held on an eligibility answer for so long that ITS was asked to review it: a person has decided now.
+      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
       // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
-      const decisionMessage = input.via ? null : await previewAfterDecision(tx, container, app.id);
-      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...(decisionMessage ? { decisionMessage } : {}) };
+      const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
+      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after, ...held };
     }
     case "override_eligibility": {
       assertCan(t.role, "application.act");
       if (!body.note?.trim()) throw new HttpError(400, "reason_required", "Say why you are keeping them in; it is recorded so the system can learn.");
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor, reason: body.note });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
+      // The résumé is read before the link goes (the review of the live-test fixes, 12 November 2026). An intake still
+      // holding them reads them once woken (below); one that ended (the hold went to ITS after 72 hours, or an "Only a
+      // person" hold) or waits on an approval no wake moves is started again, as for "Review anyway", so the AI
+      // interview's run waits for its reading. Someone locked is read by no AI: their intake stops at its AI notice.
+      const runId = (await intakeOn(tx, app.id)) ?? (await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:kept:${now.getTime()}`, actor })).runId;
       // The held runs go on now, not when their next reminder is due: the reading, and the AI interview, whose link
       // follows by itself; when that run ended already (the sixty days were up, or it came before 20 Oct 2026), it starts again.
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
-      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null) };
+      // ITS's request about the hold, when it waited that long, needs nothing more.
+      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
+      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId, ...held };
     }
     case "review_anyway": {
       // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.
@@ -641,9 +687,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       const optedOut = (await keepInTalentPool(tx, [app.candidateId])).optedOut.length > 0;
       await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: optedOut ? { talentPoolOptOut: true } : {} });
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "moved to the talent pool", actor, candidateEmail: "private_decision" });
-      // Private like every decision (B6); the answer carries the message a Send would write, a count of one (plan G4).
-      const decisionMessage = input.via ? null : await previewAfterDecision(tx, container, app.id);
-      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}), ...(decisionMessage ? { decisionMessage } : {}) };
+      // Private like every decision (B6); the answer carries the message a Send would write, a count of one (plan G4), and the safety net's day.
+      const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
+      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}), ...after };
     }
     case "hold":
     case "set_mark": {
@@ -719,9 +765,13 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       assertCan(t.role, "application.reject");
       const to = reopensAt(facts);
       if (!to) throw new HttpError(409, "not_allowed", stateReason("undo_decision", facts));
+      // A decision recorded as an outcome ("No hire", "We declined") is taken back with it: its record no longer counts
+      // (audited `outcome.taken_back`), and the offer it settled at Offer waits on them again, so their next answer settles
+      // it (17 November 2026). Before the move below, which would be their last.
+      const taken = await takeBackOutcome(tx, { applicationId: app.id, actor, now });
       // On the engine's clock: it decides whether a promised set's day is still ahead (`restoreFollowUpAfterUndo`).
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null }, now });
-      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null } });
+      await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "undo_decision", from: app.stage, to, note: body.note ?? null, ...(taken.outcomeId ? { outcomeId: taken.outcomeId } : {}), ...(taken.offerId ? { reopenedOfferId: taken.offerId } : {}) } });
       // A decision that stopped their AI interview before it was made (waiting for the reading, more interviews or "Keep
       // them in"): it starts again, and the link follows by itself.
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now, cutShort: true });

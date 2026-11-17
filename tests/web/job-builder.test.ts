@@ -13,9 +13,10 @@ import {
 } from "../../apps/web/src/pages/new-role/rules";
 import { factsFormFrom, factsPatch } from "../../apps/web/src/pages/new-role/facts-form";
 import { GUIDE_OF_VERTICAL, QUICK_STARTS, quickStartsFor } from "../../apps/web/src/pages/new-role/quick-starts";
-import { CHANGE_REQUEST_MAX, asksBack, changeLine, checkSignature, openFlags, proposalSections, refinePaths, rewordInstruction, suggestionsBySection, takesEffectWords } from "../../apps/web/src/pages/new-role/refine-api";
+import { CHANGE_REQUEST_MAX, changeLine, checkSignature, notDoneLine, nothingToConfirm, openFlags, proposalSections, refinePaths, replyWords, rewordInstruction, suggestionsBySection, takesEffectWords } from "../../apps/web/src/pages/new-role/refine-api";
 import { partsLine } from "../../apps/web/src/pages/new-role/ProposalCard";
 import { applyPacketForm, moveRow, packetFormFrom, packetFormProblem } from "../../apps/web/src/pages/new-role/packet-form";
+import { HOLDS_FOR_DECISION } from "../../apps/web/src/pages/role/applicant-questions";
 import type { RolePacket as WebRolePacket } from "../../apps/web/src/api/client";
 
 /**
@@ -49,6 +50,8 @@ describe("question cards", () => {
     expect(pickHint(interviewers)).toBe("Pick any that apply");
     expect(pickHint(pay)).toBe("Set the pay");
     expect(pickHint(q({ id: "f", field: "what_failure_looks_like", mode: "free" }))).toBe("Type your answer");
+    // nothing to pick, only the box for the owner's own words: the deal-breaker card for "No RDA" (review of the live test, 12 Nov 2026)
+    expect(pickHint(q({ id: "deal", field: "must_haves", mode: "multi" }))).toBe("Type your answer");
   });
 
   it("a pick-one card keeps one answer: a new pick replaces it, the same pick clears it, typed words replace the pick", () => {
@@ -334,6 +337,14 @@ describe("the draft beside the conversation", () => {
     expect(s.find((x) => x.id === "about")?.text).toBe(d.description.publicJobDescription);
     expect(s.find((x) => x.id === "must")?.items).toEqual(d.requirements.mustHaves.map((m) => m.text));
     expect(s.find((x) => x.id === "eligibility")?.items).toEqual(["Are you available Monday to Friday, 8 to 5?"]);
+    // every question on a draft's form holds a "no": the saved job's chip says so on the draft too, so a draft built by
+    // chat says it as the quick start's step 9 does (review of the live-test fixes, 12 Nov 2026)
+    expect(s.find((x) => x.id === "eligibility")?.note).toBe('A "no" holds it for your decision');
+    expect(s.find((x) => x.id === "eligibility")?.note).toBe(HOLDS_FOR_DECISION);
+    expect(s.filter((x) => x.note).map((x) => x.id)).toEqual(["eligibility"]);
+    // a form with no question that holds says nothing of it
+    const none = draftSections({ facts: facts(), draft: { ...d, requirements: { ...d.requirements, eligibility: [] } } });
+    expect(none.find((x) => x.id === "eligibility")?.note).toBeUndefined();
     expect(s.find((x) => x.id === "why")?.text).toBe("The team is growing");
     expect(basicsChips({ facts: facts(), draft: d }).map((c) => c.text)).toEqual(["Irvine, CA", "On site", "Full time", "$24–$28 an hour", "Monday to Friday, 8 to 5"]);
   });
@@ -366,7 +377,12 @@ describe("the draft beside the conversation", () => {
     expect(redraftWarning({ draftEdits: 0 })).toBeNull();
     expect(redraftWarning({ draftEdits: 1 })).toMatch(/^Writing it again replaces the change you saved on the draft/);
     expect(redraftWarning({ draftEdits: 3 })).toMatch(/replaces the 3 changes you saved/);
-    expect(redraftWarning({ draftEdits: 3 })).toMatch(/Pay, who interviews and decides, and the deal-breakers carry over/);
+    // a change to what the answers hold too went into them when it was saved, so it is kept (live test, 12 Nov 2026), named
+    // as Edit names it, never by the chips' screen-reader names (review of the live-test fixes, 12 Nov 2026); the server
+    // counts only a change a rewrite would lose part of, so the warning comes only then
+    expect(redraftWarning({ draftEdits: 3 })).toMatch(/\), except changes to the title, schedule, full or part time, work model, and the wording of the must-haves and nice-to-haves\. /);
+    expect(redraftWarning({ draftEdits: 3 })).not.toMatch(/job type|workplace/);
+    expect(redraftWarning({ draftEdits: 3 })).toMatch(/Pay, why you are hiring, who interviews and decides, and the deal-breakers carry over/);
   });
 
   it("the server's readiness drives it: changing pay or the decision maker after drafting is carried by rule, other answers are not", () => {
@@ -375,6 +391,8 @@ describe("the draft beside the conversation", () => {
     const written = state({ pay, draft: { at: "x", aiRunId: "r", by: { kind: "user", id: "u-dana" }, payKey: null, factsKey: draftFactsKey(six), edits: 1 } });
     const draft = samplePacket();
     expect(intakeReadiness({ facts: { ...six, decisionMaker: "Sam Lee", compensationMax: 55 }, state: written, messages: [], draft }).draftOutOfDate).toBe(false);
+    // why you are hiring is carried by rule too (live test, 12 Nov 2026)
+    expect(intakeReadiness({ facts: { ...six, reason: "growth", reasonDetail: "A second chair opens" }, state: written, messages: [], draft }).draftOutOfDate).toBe(false);
     expect(intakeReadiness({ facts: { ...six, title: "Office manager" }, state: written, messages: [], draft })).toMatchObject({ draftOutOfDate: true, draftEdits: 1, mayAskForApproval: false });
   });
 });
@@ -609,7 +627,7 @@ describe("change it by asking", () => {
     expect(proposalSections(null)).toEqual([]);
   });
 
-  it("shows each changed field plainly, says what Confirm does, and treats a question back as a reply", () => {
+  it("shows each changed field plainly, says what Confirm does, and treats a question back or no change as a reply", () => {
     expect(changeLine({ kind: "added", before: null, after: "Dentrix experience" })).toBe("Added: Dentrix experience");
     expect(changeLine({ kind: "removed", before: "Weekends", after: null })).toBe("Taken out: Weekends");
     expect(changeLine({ kind: "changed", before: "Warm", after: "Formal" })).toBe("Warm → Formal");
@@ -617,8 +635,20 @@ describe("change it by asking", () => {
     expect(takesEffectWords("draft")).toMatch(/changes the draft/);
     expect(takesEffectWords("after_approval")).toMatch(/once it is approved/);
     expect(takesEffectWords("now")).toMatch(/used straight away/);
-    expect(asksBack({ question: "Which weekend days?", sections: [] })).toBe(true);
-    expect(asksBack({ question: null, sections: ["screening"] })).toBe(false);
+    // a question back, or a proposal that changes nothing, is a reply, with nothing to confirm (live test, 12 Nov 2026)
+    expect(nothingToConfirm({ sections: [] })).toBe(true);
+    expect(nothingToConfirm({ sections: ["screening"] })).toBe(false);
+    expect(replyWords({ question: "Which weekend days?", summary: "I have not changed anything yet.", notChanged: [] })).toBe("Which weekend days?");
+    expect(replyWords({ question: null, summary: "I did not change anything.", notChanged: [{ request: "Change the pay", reason: "Pay is set on the pay card." }] })).toBe("I did not change anything. Not done: Change the pay. Pay is set on the pay card.");
+    // a part not done is said with its reason after a question too, and a request's own full stop is not doubled
+    expect(replyWords({ question: "Which days?", summary: "Nothing yet.", notChanged: [{ request: "Change the pay.", reason: "Pay is set on the pay card." }] })).toBe("Which days? Not done: Change the pay. Pay is set on the pay card.");
+    expect(notDoneLine({ request: "Remove the deal-breaker", reason: "Deal-breakers in a draft are changed with Edit beside the draft." })).toBe("Not done: Remove the deal-breaker. Deal-breakers in a draft are changed with Edit beside the draft.");
+    // a change the server put back is never said to be done: the server's "Nothing was changed." leads (review of the
+    // live-test fixes, 12 Nov 2026: "I changed the CPR question so a no no longer holds the application. Not done: ...")
+    const heldBack = { question: null, summary: "Nothing was changed.", notChanged: [{ request: "Stop a question on the form from holding anyone", reason: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.' }] };
+    expect(nothingToConfirm({ sections: [] })).toBe(true);
+    expect(replyWords(heldBack)).toBe('Nothing was changed. Not done: Stop a question on the form from holding anyone. On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.');
+    expect(replyWords(heldBack)).not.toMatch(/\bI changed\b/);
   });
 
   it("places each requirements-check suggestion under the part it is about, leaving out what was set aside", () => {
@@ -641,6 +671,23 @@ describe("change it by asking", () => {
     expect(checkSignature(a)).not.toBe(checkSignature(b));
     expect(checkSignature(a)).toBe(checkSignature(c));
     expect(checkSignature(null)).toBe("none");
+    // the parts an answer sets on the draft by rule are not read by the check, so its fixes stay good after one (review of
+    // the live-test fixes, 12 Nov 2026: the first fix after answering "Why are you hiring?" was refused)
+    const byRule = samplePacket((p) => {
+      p.business.reason = "growth";
+      p.business.reasonDetail = "A second chair opens";
+      p.preferences.decisionMakerUserId = "u-sam";
+      p.interviews.plan[0].interviewerUserIds = ["u-sam"];
+      if (p.compensation) p.compensation.max += 2;
+      p.provenance.assumptions = ["Not set yet: who interviews."];
+    });
+    expect(checkSignature(byRule)).toBe(checkSignature(a));
+    // what the check and its fixes read does count: the warning signs (named by their place) and what the interview looks for
+    expect(checkSignature(samplePacket((p) => { p.evaluation.redFlags = [...p.evaluation.redFlags, "Badmouths past employers"]; }))).not.toBe(checkSignature(a));
+    expect(checkSignature(samplePacket((p) => { p.competencies = p.competencies.slice(1); }))).not.toBe(checkSignature(a));
+    // and the deal-breakers in the owner's words, since a must-have in their very words is turned round in one tap (review
+    // of the hire-again fix, 12 Nov 2026)
+    expect(checkSignature(samplePacket((p) => { p.preferences.dealBreakersInTheirWords = ["Cannot work Saturdays"]; }))).not.toBe(checkSignature(a));
   });
 
 });

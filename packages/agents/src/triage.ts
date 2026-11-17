@@ -1,5 +1,5 @@
 import { inArray, eq } from "drizzle-orm";
-import { importanceOf, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
+import { importanceOf, skillsInScore, type CompanyQuestions, type Confidence, type EligibilityResult, type Evidence, type EvidenceAssessment, type EvidenceSource, type Overall, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { outOfCredit, resumeExtractPrompt, runPromptDetached, runPromptsDetached, triageAssessPrompt, type AiRuntime, type RunMeta, type RunOutcome, type TriageInput } from "@ros/ai";
 import { applicationAnswerSentences, errorForLog, matchScore, quickQuestionsOf, scoredSkill } from "@ros/core";
 import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
@@ -271,8 +271,9 @@ export function withResumeFlags(kept: Reading, readings: readonly Pick<Reading, 
  * checked quote, a skill for the interviews left out), by the prompt's own definitions:
  * - "unknown" when there is nothing to read the work from (no résumé text and no written description of their work);
  * - "weak" when the candidate's own words show a must-have is not met;
- * - "strong" when every must-have is shown, at least half of the skills (and at least one) are shown, and no essential
- *   skill goes against them;
+ * - "strong" when every must-have is shown, at least half of the skills the score counts (and at least one) are shown, and
+ *   no essential skill goes against them on a checked quote (one named as a must-have included, as `readingConsistency`
+ *   reads it);
  * - "potential" when something relevant is shown, in full or in part;
  * - when the findings say nothing either way (every requirement not known, or only a skill against them), the
  *   readings' own judgement of the work is all there is ("thin but relevant" is potential, "not this kind of work" is
@@ -291,10 +292,15 @@ export function settledOverall(reading: Pick<EvidenceAssessment, "requirementFin
   if (score.missingMustHave.length) return "weak";
   const musts = score.breakdown.filter((c) => c.mustHave);
   const mustUnknown = score.unknown.some((u) => u.mustHave);
-  const skills = packet.competencies.filter(scoredSkill);
+  // the skills the score counts: a skill named as a must-have the AI interview confirms is that must-have, never shown
+  // twice (the live test, 12 November 2026)
+  const skills = skillsInScore(packet);
   const shownSkills = score.breakdown.filter((c) => !c.mustHave && c.pctMet === 100).length;
-  const essential = new Set(skills.filter((c) => importanceOf(c) === "essential").map((c) => c.key));
-  const essentialAgainst = score.breakdown.some((c) => !c.mustHave && c.pctMet === 0 && essential.has(c.key));
+  // Their own checked words against any Essential skill a reading reads keep it from "strong", one named as a must-have
+  // too, by the rule the closer-look check reads it with (`readingConsistency` in @ros/core), so a reading settled here is
+  // never one that check then flags (the second review of the live-test fixes, 12 November 2026).
+  const essential = new Set(packet.competencies.filter((c) => importanceOf(c) === "essential" && scoredSkill(c)).map((c) => c.key));
+  const essentialAgainst = (reading.competencyFindings ?? []).some((f) => f.finding === "contradicted" && essential.has(f.competencyKey) && !!f.evidence?.quote?.trim() && !f.evidence.unquoted);
   const everyMust = !mustUnknown && musts.every((c) => c.pctMet === 100);
   const enoughSkills = skills.length === 0 || shownSkills >= Math.max(1, Math.ceil(skills.length / 2));
   if (everyMust && enoughSkills && !essentialAgainst && (musts.length > 0 || shownSkills > 0)) return "strong";
@@ -383,7 +389,7 @@ export function skillFloor(settled: Combinable["competencyFindings"], readings: 
  */
 export const DATED_JOB_LINE = /\b(?:19|20)\d{2}\s*(?:-|–|—|to|until)\s*(?:(?:19|20)\d{2}|present|current|now|today)\b/i;
 
-/** Whether a quote sits in an answer on the form that is a yes or a no to its question (`answerInContext`). */
+/** Whether a quote sits in an answer on the form that is a yes or a no to its question, whichever question it is (`yesOrNo`). */
 function yesNoFormAnswer(quote: string, application: string): boolean {
   const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
   const q = norm(quote);
@@ -392,7 +398,7 @@ function yesNoFormAnswer(quote: string, application: string): boolean {
     const line = raw.trim();
     if (!norm(line).includes(q)) continue;
     const asked = line.match(/^(.+\?)\s+(\S.*)$/);
-    if (asked && answerInContext(asked[1] ?? "", asked[2] ?? "") !== null) return true;
+    if (asked && yesOrNo(asked[2] ?? "")) return true;
   }
   return false;
 }
@@ -804,8 +810,18 @@ export type EvidenceRuleOptions = {
 
 const YES_ANSWER = /^(?:yes|yeah|yep|yup|sure|correct|i do|i have|i am|i hold)\b/;
 const NO_ANSWER = /^(?:no|nope|not really|i do not|i don['’]t|i have not|i haven['’]t|i am not|i['’]m not)\b/;
-const HOLD_QUESTION = /\b(?:do|did|does)\s+you\s+(?:currently\s+|still\s+)?(have|hold)\b\s*(.*)$/i;
-const ARE_YOU_QUESTION = /\bare\s+you\s+(?:currently\s+|still\s+)?((?:licensed|certified|registered)\b.*)$/i;
+/** Whether an answer is a plain yes or a plain no ("Yes", "No, I don't"), whatever it answers. */
+function yesOrNo(answer: string): boolean {
+  const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
+  return YES_ANSWER.test(a) || NO_ANSWER.test(a);
+}
+// Each reads the last question from its start, after a leading "And" or "So" ("So do you hold …?", as the chat may ask
+// it): "Which certifications do you hold …?" has "do you hold" in it and is no closed question (the review of the
+// live-test fixes, 12 November 2026).
+const HOLD_QUESTION = /^(?:(?:and|so)\b,?\s+)?(?:do|did|does)\s+you\s+(?:currently\s+|still\s+)?(have|hold)\b\s*(.*)$/i;
+const ARE_YOU_QUESTION = /^(?:(?:and|so)\b,?\s+)?are\s+you\s+(?:currently\s+|still\s+)?((?:licensed|certified|registered)\b.*)$/i;
+/** A question that asks them to name something: which, what, how, when, where, who or whose. */
+const OPEN_QUESTION = /^(?:(?:and|so)\b,?\s+)?(?:which|what|how|when|where|who|whose)\b/i;
 
 /** The last question in an assistant's message ("Thanks, that helps. Next: Do you hold ...?"), or the whole message. */
 const lastQuestionOf = (question: string): string => {
@@ -813,11 +829,15 @@ const lastQuestionOf = (question: string): string => {
   return q.split(/(?<=[.!?:])\s+/).filter((s) => s.endsWith("?")).at(-1) ?? q;
 };
 
+/** Whether the last question in an assistant's message asks them to name something ("Which certifications do you hold?"): a bare yes or no answers none of it. */
+const asksOpenly = (question: string): boolean => OPEN_QUESTION.test(lastQuestionOf(question));
+
 /**
  * A yes or no to a closed question about holding something ("Do you hold ...?", "Do you have ...?", "Are you licensed
  * ...?"), as the statement it makes and whether it says held: a bare "No" to "Do you hold a California RDH license?" is
- * { held: false, statement: "I do not hold a California RDH license" }. Null for any other question, and for anything
- * but a yes or a no. Pure; exported for the scorecard (`plainCredentialAnswers`) and the tests.
+ * { held: false, statement: "I do not hold a California RDH license" }. Null for any other question, for one that asks
+ * them to name something (`asksOpenly`: a "yes" to "Which certifications do you hold …?" names none), and for anything but
+ * a yes or a no. Pure; exported for the scorecard (`plainCredentialAnswers`) and the tests.
  */
 export function closedAnswer(question: string, answer: string): { held: boolean; statement: string } | null {
   const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
@@ -825,6 +845,7 @@ export function closedAnswer(question: string, answer: string): { held: boolean;
   const yes = YES_ANSWER.test(a) && !no;
   if (!yes && !no) return null;
   const asked = lastQuestionOf(question);
+  if (OPEN_QUESTION.test(asked)) return null;
   const hold = asked.match(HOLD_QUESTION);
   const are = asked.match(ARE_YOU_QUESTION);
   const rest = (s: string) => s.replace(/[?.!\s]+$/, "");
@@ -837,14 +858,15 @@ export function closedAnswer(question: string, answer: string): { held: boolean;
  * A short chat answer read with the question it replies to, as one statement the evidence rules can read: a bare "No"
  * to "Do you hold a California RDH license?" reads "I do not hold a California RDH license", a bare "Yes" reads "I hold
  * a California RDH license" (`closedAnswer`). A yes or no to any other closed question reads as the question followed by
- * the answer. Anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null, so it stays too short
- * to count. Pure; exported for the scorecard and the tests.
+ * the answer. A yes or no to a question that asks them to name something (`asksOpenly`: "Which certifications do you
+ * hold …?") says nothing, and anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null, so it
+ * stays too short to count. Pure; exported for the scorecard and the tests.
  */
 export function answerInContext(question: string, answer: string): string | null {
+  if (asksOpenly(question)) return null;
   const closed = closedAnswer(question, answer);
   if (closed) return closed.statement;
-  const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
-  return YES_ANSWER.test(a) || NO_ANSWER.test(a) ? `${lastQuestionOf(question)} ${answer.trim()}` : null;
+  return yesOrNo(answer) ? `${lastQuestionOf(question)} ${answer.trim()}` : null;
 }
 
 /**

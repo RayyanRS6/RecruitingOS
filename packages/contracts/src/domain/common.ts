@@ -82,6 +82,25 @@ export const EvidenceSource = z.enum([
 ]);
 export type EvidenceSource = z.infer<typeof EvidenceSource>;
 
+/** Where a quote is from, in the app's own words, for the sources a quote of the candidate's is checked against. */
+const QUOTE_FROM: Partial<Record<EvidenceSource, string>> = {
+  resume: "from the résumé",
+  application: "from the application",
+  candidate_statement: "from the application",
+  screen: "in the AI interview",
+  recruiter_note: "from the recruiter's call notes",
+};
+
+/**
+ * A quote with where it is from after it, `"…", from the résumé`, as the interviewer's brief shows each must-have's
+ * quote on the sheet and in the email (the second review of the live-test fixes, 12 November 2026): a résumé line never
+ * reads as the candidate's words in the AI interview. Just the quote for a source with no such words.
+ */
+export function quoteWithSource(quote: string, source: string | null | undefined): string {
+  const from = source ? QUOTE_FROM[source as EvidenceSource] : undefined;
+  return from ? `"${quote}", ${from}` : `"${quote}"`;
+}
+
 /**
  * A claim must point at where it came from. Quotes are verified against the source text in code.
  * `confidence` and `context` (date, role, employer) let the reader judge the evidence, not just find it (docs/FOUNDER-CONTEXT.md §10).

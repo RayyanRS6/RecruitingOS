@@ -66,6 +66,8 @@ const HEADLINES: Record<string, string> = {
   "applications.closed": "A role stopped taking new applications",
   "applications.reopened": "A role is taking applications again",
   "recruiter.resolved": "Your ITS recruiter answered your request",
+  // Recruiting OS closed a request on its own (a stopped step ITS ran again finished): no recruiter answered it (17 November 2026).
+  "recruiter.request_closed": "A request to ITS was closed",
   "recruiter.posting_not_done": "ITS could not finish a job board task",
   "recruiter.claimed": "An ITS recruiter now has access to your hiring",
   "recruiter.access_granted": "An ITS recruiter now has access to your hiring",

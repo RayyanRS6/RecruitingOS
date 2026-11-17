@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "../nav";
 import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Skeleton } from "@ros/ui";
-import { formatPayRange } from "@ros/contracts";
+import { formatPayRange, skillsCountedAsMustHaves } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
 import { AskRecruiter } from "../components/AskRecruiter";
@@ -14,7 +14,7 @@ import { outdatedBoardsLine } from "../publishing";
 import { payShownLabel } from "../role-words";
 import { REASON_WORD } from "./new-role/rules";
 import { CLOSABLE, defaultCloseOutcome, jobTabFrom, jobTabHref, jobTabs, type JobPageTab } from "../role-status";
-import { MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
+import { COUNTS_AS_MUST_HAVE, MUST_HAVES_SCORE_LINE, SCORE_WEIGHTS_LINE, checkedInLabel, editorFocusFrom, importanceLabel, type EditorFocus } from "../skills-form";
 import { SAFETY_NET_NOTE } from "../talent-list";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { AfterApproval } from "./AfterApproval";
@@ -180,6 +180,8 @@ export function RoleDetail() {
   // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
   const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!current && applicants > 0;
   const visibleTab: JobPageTab = tabItems.some((o) => o.id === tab) ? tab : "job";
+  // the skills the score counts as the must-have of the same name ("Counts as the must-have" on the Scoring tab)
+  const asMustHave = new Set(visibleTab === "scoring" && p ? skillsCountedAsMustHaves(p).map((c) => c.key) : []);
 
   return (
     <div className="stack gap-5">
@@ -287,7 +289,8 @@ export function RoleDetail() {
                   {editPacket ? <div className="row mt-4"><Button size="sm" icon="edit" onClick={() => openEditor("must-haves")}>Change the must-haves</Button></div> : null}
                 </Card>
                 <Card title="What we look for">
-                  <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
+                  {/* a skill the score counts as the must-have of the same name is tagged so, not by an importance that moves no score */}
+                  <ul className={ROWS}>{p.competencies.map((c) => <li key={c.key} className={cn(ROW, "grid gap-1")}><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong>{c.name}</strong> <span className="sbar-tag">{asMustHave.has(c.key) ? COUNTS_AS_MUST_HAVE : importanceLabel(c)}</span> <Chip>{checkedInLabel(c.evaluatedIn)}</Chip></span><span className="small muted">{c.definition}</span></li>)}</ul>
                   {/* Kept visible for everyone, not only in the editor: how the levels weigh in the match score and the
                       fairness rule (not shown yet is never read as a no). e2e match-panel.spec.ts reads it here. */}
                   <p className="small muted mt-4">{SCORE_WEIGHTS_LINE}</p>

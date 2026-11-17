@@ -1,5 +1,5 @@
 import { titleMidSentence, type OfferedSlot, type RolePacket } from "@ros/contracts";
-import { buildIcs, disclosureLine, formatInZone, groupSlotsByDay } from "@ros/core";
+import { buildIcs, disclosureLine, formatInZone, groupSlotsByDay, zoneShortName } from "@ros/core";
 import type { Queryable, interviews } from "@ros/db";
 import type { Integrations, SendResult } from "@ros/integrations";
 import { deliver, type MessageInput } from "./coordinator";
@@ -82,7 +82,7 @@ export function slotsOfferedMessage(input: InterviewMessageInput & { note?: Invi
 
 ${opening}${invitationNoteText(input.note)}
 
-Pick a time that works for you (times shown in ${input.candidateTimezone}; you can change the time zone on the page):
+Pick a time that works for you (times shown in ${zoneShortName(input.candidateTimezone)}; you can change the time zone on the page):
 ${slotsText(interview.offeredSlots, input.candidateTimezone)}
 
 Choose here: ${scheduleUrl(input.appBaseUrl, interview)}

@@ -11,7 +11,7 @@ import { toast } from "../../toast";
 import { Link } from "../../nav";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { SetTimeForm } from "../../components/SetTimeForm";
-import { useCompanyCheck, useCompanyTimezone } from "../../components/use-company-check";
+import { useCompanyCalendar, useCompanyCheck, useCompanyTimezone } from "../../components/use-company-check";
 import { defaultInterviewers } from "../../interview-defaults";
 import { candidateEmailLine, clashKey, defaultDuration, freshForm, interviewNeedingTime, meetingLinkFor, placeKindFor, type SetTimeForm as SetTimeFormState } from "../../interview-time";
 import { interviewDraftLine } from "../../hiring";
@@ -112,10 +112,13 @@ function decisionHint(a: ApplicationDetail): { policy: ApplicationDetail["declin
 /**
  * What a decline says before the click (founder decisions B6 and D-03 A): private now, any interview it calls off, and
  * the day the standard message goes by itself if nobody tells them first, in short lines; the whole of it (how the
- * candidate will hear under the company's settings, each interview by name and time) one click away.
+ * candidate will hear under the company's settings, each interview by name and time) one click away. The day is counted
+ * on the company's calendar and its contact days, as the daily check counts it (live test, 12 November 2026), and for
+ * someone locked by the date they were promised if that comes first.
  */
 export function DeclineNotice({ a, interviews, eligibility = false }: { a: ApplicationDetail; interviews?: readonly InterviewRef[]; eligibility?: boolean }) {
-  const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews });
+  const { timeZone, workDays } = useCompanyCalendar();
+  const lines = declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays, person: a });
   return (
     <Alert tone="caution">
       <div className="grid gap-2">
@@ -167,7 +170,8 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   const [note, setNote] = useState("");
   useDraft("decline-note", note);
   const first = useFocusOnMount<HTMLSelectElement>();
-  const act = useCandidateAction(a.id, roleId, () => onClose());
+  // the toast after the click says what DeclineNotice said before it, for someone locked too
+  const act = useCandidateAction(a.id, roleId, () => onClose(), a);
   const interviews = activeInterviews(a.interviews);
   return (
     <Card needsYou lift title="Not moving forward" className={STEP}>
@@ -419,10 +423,12 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
   const [form, setForm] = useState<OutcomeForm>({ outcome: a.stage === "offer_sent" ? "offer_declined_externally" : "candidate_withdrew", reason: DECLINE_REASONS[0][0], note: "", confirming: false });
   useDraft("outcome-note", form.note);
   const first = useFocusOnMount<HTMLSelectElement>();
+  // "No hire"'s line before the click counts the safety net's day on the company's calendar and contact days (live test, 12 November 2026)
+  const { timeZone, workDays } = useCompanyCalendar();
   const record = useMutation({
-    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, reason: form.outcome === "employer_declined" ? form.reason : undefined, note: form.note.trim() || undefined }),
+    mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage" | "untoldFallbackOn">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, reason: form.outcome === "employer_declined" ? form.reason : undefined, note: form.note.trim() || undefined }),
     onSuccess: async (r) => {
-      const t = outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
+      const t = outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a);
       toast(t.title, t.detail);
       onClose();
       await refresh();
@@ -452,7 +458,7 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
             <DeclineNotice a={a} interviews={activeInterviews(a.interviews)} />
           </> : null}
           {/* "No hire" is a private decision too (they move to the talent pool untold): the safety net is said (D-03 A). */}
-          {form.outcome === "no_hire" ? <p className="small muted">Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) })}</p> : null}
+          {form.outcome === "no_hire" ? <p className="small muted">Private: nothing is sent to them now. {safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays, a)}</p> : null}
           <Field label="Note (kept internally, optional)" htmlFor="oc-note"><input id="oc-note" className="input" value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           {form.confirming ? (
             <Alert tone="caution"><div className="row justify-between"><span>Record this outcome under your name? It is audited and can only be corrected by an administrator.</span><span className="row"><Button size="sm" variant="primary" loading={record.isPending} onClick={() => record.mutate()}>Yes, record it</Button><Button size="sm" variant="quiet" onClick={() => setForm({ ...form, confirming: false })}>No</Button></span></div></Alert>
@@ -626,10 +632,10 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
   const [note, setNote] = useState("");
   useDraft("decision-note", note);
   const record = useMutation({
-    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage">>(`/api/v1/applications/${a.id}/decision`, body),
+    mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage" | "untoldFallbackOn">>(`/api/v1/applications/${a.id}/decision`, body),
     onSuccess: async (r, body) => {
       // the safety net's way under the company's settings (D-03 A): the answer's own word, else what this panel knows
-      const t = decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
+      const t = decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a);
       toast(t.title, t.detail);
       setDecision(null);
       setNote("");
@@ -685,7 +691,7 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
   const [note, setNote] = useState("");
   useDraft("eligibility-override", overrideNote);
   useDraft("eligibility-note", note);
-  const act = useCandidateAction(a.id, roleId, () => setConfirming(false));
+  const act = useCandidateAction(a.id, roleId, () => setConfirming(false), a);
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
   const blocked = (x: ApplicationDetail["allowedActions"][number]) => a.blockedReasons[x] ?? "Not available at this step.";
   return (

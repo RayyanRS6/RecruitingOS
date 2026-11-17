@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { RolePacket } from "@ros/contracts";
 import { addBusinessHours, isPostingTask } from "@ros/core";
-import { SCORECARD_READINGS } from "@ros/agents";
+import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
 import { and, eq } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, policies, recruiterEscalations, screens, workflowRuns, companies } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, policies, recruiterEscalations, screens, workflowRuns, companies, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -414,7 +415,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
    * The candidate starts the AI interview on the web, answers until it ends, checks the answers and presses Send (the
    * chat that comes with the application, 20 Oct 2026); the screen workflow then writes the scorecard and makes its suggestion.
    */
-  const finishScreen = async (applicationId: string) => {
+  const finishScreen = async (applicationId: string, answers: Record<string, string> = SCREEN_ANSWERS) => {
     const { token } = await screenOf(applicationId);
     expect((await form(`/c/screen/${token}/start`, {})).status).toBe(302);
     for (let i = 0; i < 30; i++) {
@@ -425,7 +426,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
         expect((await form(`/c/screen/${token}/submit`, {})).status).toBe(302);
         continue;
       }
-      const res = await form(`/c/screen/${token}`, { message: SCREEN_ANSWERS[scr.progress.currentQuestionKey ?? ""] ?? "Yes, that works for me: at Harbor Dental I see eight patients a day, do perio charting and use Dentrix." });
+      const res = await form(`/c/screen/${token}`, { message: answers[scr.progress.currentQuestionKey ?? ""] ?? "Yes, that works for me: at Harbor Dental I see eight patients a day, do perio charting and use Dentrix." });
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).not.toMatch(/error=/);
     }
@@ -570,5 +571,37 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(row.evidence).toMatchObject({ needsCloserLook: true, inconsistent: true });
     expect(row.evidence.reason).toContain("but its AI review says Weak match");
     expect(row.stageLabel).toBe("Needs a closer look");
+  });
+
+  /**
+   * The live test of 12 November 2026 and the second review of its fixes: a concern the scorecard writes with nothing
+   * quoted, about a must-have the résumé shows, is the AI interview's silence only when it never asked about it. Every
+   * concern is stored as written; where the team reads them, one about the licence the AI interview asked about stays,
+   * even when the tapped "No" it rests on is too short to quote.
+   */
+  it("a scorecard keeps every concern it wrote, and one about a must-have the AI interview asked about is never read as its silence", async () => {
+    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
+    const packet = role.currentPacket.packet;
+    const licence = packet.requirements.mustHaves.find((m) => /licen/i.test(m.text))!;
+    const notDiscussed = `${licence.text} was not discussed in the AI interview.`;
+    const notActive = "RDH license is not active in this state";
+    for (let i = 0; i < SCORECARD_READINGS; i++) container.fake!.scriptNext("screen.assess", { overall: "potential", confidence: "medium", summary: "Answered every question.", strengths: [], concerns: [{ claim: notDiscussed, evidence: { source: "screen" } }, { claim: notActive, evidence: { source: "screen", quote: "No" } }, { claim: "Sees eight patients a day", evidence: { source: "screen", quote: "I see eight patients a day" } }], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], questionFindings: [], compensationExpectation: { withinRange: "unknown" }, availability: { matchesSchedule: "unknown" }, eligibilityConfirmations: [], recommendation: "interview", rationale: "Scripted." });
+    const a = await apply({ first: "Yara", last: "Shown", email: "yara.shown@example.com", resume: "Yara Shown\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPerio charting, Dentrix" });
+    // the AI interview asks the licence question, and she answers it "No"
+    await finishScreen(a.id, { ...SCREEN_ANSWERS, license_confirm: "No" });
+    container.fake!.clearScripts();
+    // the résumé's AI review shows the licence on a checked quote
+    const [resume] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, a.id), eq(assessments.kind, "triage")));
+    expect(resume!.result.requirementFindings.find((f) => f.requirementKey === licence.key)).toMatchObject({ met: "yes", evidence: { quote: "RDH license CA active" } });
+    expect((await screenOf(a.id)).transcript.some((t) => t.role === "assistant" && t.questionKey === "license_confirm" && t.content.includes("RDH license"))).toBe(true);
+    // stored as the readings wrote them, the "No" too short to quote on its own
+    const [card] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, a.id), eq(assessments.kind, "screen")));
+    expect(card!.result.concerns).toEqual([{ claim: notDiscussed, evidence: { source: "screen", unquoted: true } }, { claim: notActive, evidence: { source: "screen", unquoted: true } }, { claim: "Sees eight patients a day", evidence: { source: "screen", quote: "I see eight patients a day" } }]);
+    // the candidate's page and the interviewer's brief keep every one: the AI interview asked about the licence
+    const detail = (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { assessments: Array<{ kind: string; result: { concerns: Array<{ claim: string }> } }> };
+    expect(detail.assessments[0]!.kind).toBe("screen");
+    expect(detail.assessments[0]!.result.concerns.map((c) => c.claim)).toEqual([notDiscussed, notActive, "Sees eight patients a day"]);
+    const brief = await withTenant(container.db, await companyIdOf(), (tx) => composeInterviewerBrief(tx, { applicationId: a.id, candidateFirstName: "Yara", packet, roundKey: packet.interviews.plan[0]!.key }));
+    expect(brief!.concerns.map((c) => c.claim)).toEqual(expect.arrayContaining([notDiscussed, notActive, "Sees eight patients a day"]));
   });
 });

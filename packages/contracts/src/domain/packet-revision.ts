@@ -161,7 +161,8 @@ export type CompanyQuestionRefusal = { list: "quick" | "written"; index: number;
 /* The requirements check before approval (C16): suggestions only, never a score, nothing changes until a person taps. */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-export const RequirementCheckKind = z.enum(["unprovable", "trait_as_skill", "duplicate", "proxy", "max_years"]);
+/** `rules_out`: a must-have or nice-to-have worded as what rules someone out ("No active California RDA license"). */
+export const RequirementCheckKind = z.enum(["unprovable", "trait_as_skill", "duplicate", "proxy", "max_years", "rules_out"]);
 export type RequirementCheckKind = z.infer<typeof RequirementCheckKind>;
 
 export const REQUIREMENT_CHECK_TITLE: Readonly<Record<RequirementCheckKind, string>> = {
@@ -170,6 +171,7 @@ export const REQUIREMENT_CHECK_TITLE: Readonly<Record<RequirementCheckKind, stri
   duplicate: "Said twice",
   proxy: "May shut people out unfairly",
   max_years: "A cap on experience",
+  rules_out: "Reads as what rules someone out",
 };
 
 /** One tap that fixes a suggestion: take the item out, reword it, or ask about it in the interview instead. */
@@ -189,9 +191,21 @@ export type RequirementSuggestion = {
 };
 
 export type RequirementsCheck = {
-  /** What the check ran on ("v3", or the draft's fingerprint); fixes are applied only to that same packet. */
+  /** What the check ran on ("v3", or a fingerprint of what it reads in the draft); fixes are applied only to that same packet. */
   base: string;
   version: number | null;
   suggestions: RequirementSuggestion[];
   summary: string;
 };
+
+/**
+ * What the requirements check and its fixes read in a packet: the requirements, the public description, the screening
+ * questions, what the interview looks for (a fix can move a must-have there, up to eight), the warning signs (named by
+ * their place in the list) and the deal-breakers in the owner's words (a must-have in their very words is turned round in
+ * one tap). A draft's check is based on these alone, by the server and by the page, so an answer that brings the draft's
+ * other parts up to date by rule (why you are hiring, who interviews, pay) never makes it stale, and one that changes its
+ * deal-breakers asks for the check again (review of the live-test fixes, 12 Nov 2026).
+ */
+export function requirementsCheckReads(packet: { requirements: unknown; description: { publicJobDescription: string }; screening: { questions: unknown }; competencies: unknown; evaluation?: { redFlags?: unknown }; preferences?: { dealBreakersInTheirWords?: unknown } }) {
+  return { requirements: packet.requirements, description: packet.description.publicJobDescription, screening: packet.screening.questions, competencies: packet.competencies, redFlags: packet.evaluation?.redFlags ?? [], dealBreakers: packet.preferences?.dealBreakersInTheirWords ?? [] };
+}

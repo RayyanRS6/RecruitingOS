@@ -12,7 +12,7 @@ import { TODAY_REFRESH } from "../today";
 import { toast } from "../toast";
 import { useAskRole } from "./use-ask-role";
 
-const STATE_TONE: Record<RequestState, Tone> = { waiting: "caution", working: "accent", answered: "good", cancelled: "neutral" };
+const STATE_TONE: Record<RequestState, Tone> = { waiting: "caution", working: "accent", answered: "good", closed: "neutral", cancelled: "neutral" };
 const MINE = ["escalations", "mine"] as const;
 
 /**
@@ -39,7 +39,7 @@ export function RecruiterRequests() {
     document.getElementById(`request-${linked}`)?.scrollIntoView({ block: "start" });
   }, [linked, linkedHere, linkedOlder]);
   if (!who.ready || !who.mayAsk || !rows.length) return null;
-  const open = current.filter((r) => ["waiting", "working"].includes(requestState(r.status))).length;
+  const open = current.filter((r) => ["waiting", "working"].includes(requestState(r))).length;
   return (
     <div id="recruiter-requests">
       <Card title="Your recruiter requests" aside={open ? <Pill size="sm" tone="accent">{open} open</Pill> : null}>
@@ -86,7 +86,7 @@ function RequestThread({ thread }: { thread: RecruiterRequestView["thread"] }) {
 
 function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: boolean; staff: boolean }) {
   const qc = useQueryClient();
-  const state = requestState(r.status);
+  const state = requestState(r);
   const may = requestActions(r, { staff });
   const answer = latestAnswer(r.thread);
   const [expanded, setExpanded] = useState(linked);
@@ -125,7 +125,10 @@ function RequestItem({ r, linked, staff }: { r: RecruiterRequestView; linked: bo
           <p className="small text-ink-2">{threadHeading(answer)}</p>
           <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{answer.body}</p>
         </div>
-      ) : <p className="small mt-2 whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{r.question}</p>}
+      ) : (
+        // One Recruiting OS closed on its own shows why it closed, its line on the thread, never as an answer.
+        <p className="small mt-2 whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{answer && state === "closed" ? answer.body : r.question}</p>
+      )}
       {said ? <div className="mt-3"><Alert tone="info">{said}</Alert></div> : null}
       <div className="row mt-3 gap-1.5">
         {r.locked ? null : <Button size="sm" variant="quiet" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide the conversation" : `Show the conversation (${r.thread.length})`}</Button>}

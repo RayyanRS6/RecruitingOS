@@ -78,6 +78,8 @@ describe("what a customer may read about a plan", () => {
     expect(AI_HELP_LINE.turn).toBe("Your plan's AI help is used up. Your draft is saved. Upgrade to keep going.");
     expect(AI_HELP_LINE.draft).toBe("Your plan's AI help is used up. Everything you confirmed is kept. Upgrade to write the draft.");
     expect(AI_HELP_LINE.revise).toBe("Your plan's AI help is used up. Nothing was changed. You can still make the change in the editor.");
+    // a draft names no editor: its Edit changes the answers, and writing it again with them needs AI help too (live test, 12 Nov 2026)
+    expect(AI_HELP_LINE.reviseDraft).toBe("Your plan's AI help is used up. Nothing was changed.");
     expect(AI_HELP_LINE.about).toBe("Your plan's AI help is used up. You can write this text yourself; it shows the same way.");
   });
 
@@ -87,6 +89,8 @@ describe("what a customer may read about a plan", () => {
       expect(line).toMatch(/try again in a few minutes/i);
       expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b|used up|upgrade|recruiter/i);
     }
+    expect(AI_HELP_BUSY_LINE.revise).toBe("Your plan's AI help is finishing other work. Nothing was changed. Try again in a few minutes, or make the change in the editor.");
+    expect(AI_HELP_BUSY_LINE.reviseDraft).toBe("Your plan's AI help is finishing other work. Nothing was changed. Try again in a few minutes.");
   });
 
   it("says when a monthly credit starts again, and only then", () => {
@@ -115,8 +119,9 @@ describe("what a customer may read about a plan", () => {
     expect(aiHelpLine("draftTooBig", ultra)).toBe(`Your plan's AI help is nearly used up, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`);
     expect(aiHelpLine("newJob", ultra)).toBe(`Your plan's AI help is used up. ${way}`);
     expect(aiHelpLine("newJobTooBig", ultra)).toBe(`Your plan's AI help is nearly used up, and a new job needs more than is left. ${way}`);
-    // the editor and their own text need no plan above theirs
+    // the editor and their own text need no plan above theirs, and a draft's change by chat says only that nothing changed
     expect(aiHelpLine("revise", ultra)).toBe(AI_HELP_LINE.revise);
+    expect(aiHelpLine("reviseDraft", ultra)).toBe(AI_HELP_LINE.reviseDraft);
     expect(aiHelpLine("about", ultra)).toBe(AI_HELP_LINE.about);
     expect(aiHelpLine("newJob", { planKey: "ultra" })).toBe("Your plan's AI help is used up. Talk with ITS about your plan.");
     for (const key of Object.keys(AI_HELP_LINE) as Array<keyof typeof AI_HELP_LINE>) {

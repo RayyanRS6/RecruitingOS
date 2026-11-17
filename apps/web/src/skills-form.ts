@@ -1,4 +1,4 @@
-import { IMPORTANCE_LABEL, IMPORTANCE_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, type Importance } from "@ros/contracts";
+import { IMPORTANCE_LABEL, IMPORTANCE_WEIGHT, MISSING_MUST_HAVE_CAP, importanceOf, skillsCountedAsMustHaves, type Importance } from "@ros/contracts";
 import type { RolePacket } from "./api/client";
 
 /**
@@ -149,6 +149,23 @@ export const MUST_HAVES_SCORE_LINE = `Must-haves count the most in each applican
 /** A skill's importance in words (Essential, Important, Helpful): the one a person picked, or the one its weight stands for. */
 export function importanceLabel(c: { weight: number; importance?: Importance | null }): string {
   return IMPORTANCE_LABEL[importanceOf(c)];
+}
+
+/**
+ * The status of a skill named as a must-have the AI interview confirms (`skillsCountedAsMustHaves` in the contracts): the
+ * match score counts it once, as that must-have (the second review of the live-test fixes, 12 November 2026). The Scoring
+ * tab tags it so instead of its importance, and the editor says so under "How much it counts", whose picker stays: its
+ * importance still holds a Strong reading their own words go against for a person.
+ */
+export const COUNTS_AS_MUST_HAVE = "Counts as the must-have";
+
+/**
+ * Which of the editor's skill rows count as a must-have, read from its must-have rows as they are now, so the words follow
+ * a must-have renamed, removed or its "AI interview" tick changed before anything is saved.
+ */
+export function rowsCountedAsMustHaves(rows: readonly SkillRow[], mustHaves: ReadonlyArray<{ text: string; evidencedBy: readonly string[] }>): boolean[] {
+  const counted = new Set(skillsCountedAsMustHaves({ requirements: { mustHaves }, competencies: rows }));
+  return rows.map((r) => counted.has(r));
 }
 
 /** Where a skill is checked, in words. */

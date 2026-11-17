@@ -1,4 +1,4 @@
-import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
+import { IMPORTANCE_LABEL, MISSING_MUST_HAVE_CAP, TERMINAL_STAGES, type ApplicationStage, type BoardPlacement, type Importance, type MatchCriterion, type MatchScore, type MustHaveSummary, type OwnerStage, type ReadingVersion } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
 import type { ApplicationDetail } from "../../api/client";
 import { READING, scoreBasis } from "../../talent-list";
@@ -20,6 +20,12 @@ export const NO_REVIEW_LINE = "No match score: the AI review could not be made, 
 
 /** The verdict's line when AI never reads their résumé: our email with the AI notice did not reach an emailed-in applicant (known-bugs row 16). */
 export const NO_AI_NOTICE_LINE = "No match score: our email with the AI notice did not reach them, so the assistant does not read their résumé.";
+
+/**
+ * The verdict's line for someone decided before any AI review (declined while held on an eligibility answer, moved to the
+ * talent pool, withdrawn or hired): no review comes for them, so none is promised (live test, 12 November 2026).
+ */
+export const NO_REVIEW_DECIDED_LINE = "No match score: no AI review was made before the decision.";
 
 /** What GET /applications/:id carries since Wave F; an older answer leaves it out, and the panel then shows nothing for it. */
 type ScoredDetail = { matchScore?: MatchScore | null; readingVersion?: ReadingVersion | null; mustHaves?: MustHaveSummary | null; placement?: BoardPlacement | null };
@@ -114,7 +120,8 @@ export function skillLabels(a: Pick<ApplicationDetail, "packetLabels">): Labelle
 /**
  * What the match card shows: nothing for an answer from before the score existed (`hidden`), a line when there is no
  * reading yet (`unread`) or when the reading does not speak to any requirement (`nothing`), otherwise the score. A review
- * that will not come by itself (`noReading`, 10 November 2026) is said as it is, never as one a minute or two away.
+ * that will not come by itself (`noReading`, 10 November 2026), or that never came before the decision, is said as it is,
+ * never as one a minute or two away.
  */
 export type MatchCardState = { kind: "hidden" } | { kind: "unread"; text: string } | { kind: "nothing"; text: string; m: MatchScore } | { kind: "scored"; score: number; m: MatchScore };
 
@@ -122,6 +129,7 @@ export function matchCardState(a: ApplicationDetail): MatchCardState {
   const m = matchOf(a);
   if (m === undefined) return { kind: "hidden" };
   if (!m && a.noReading) return { kind: "unread", text: a.noReading === "no_ai_notice" ? NO_AI_NOTICE_LINE : NO_REVIEW_LINE };
+  if (!m && !a.assessments.length && TERMINAL_STAGES.has(a.stage as ApplicationStage)) return { kind: "unread", text: NO_REVIEW_DECIDED_LINE };
   if (!m) return { kind: "unread", text: a.assessments.length ? "No match score yet: there is no AI review of this application against the job's requirements." : a.stage === "ineligible" ? "No match score yet. It comes from the AI review, which starts once someone keeps them in." : "No match score yet. It comes from the AI review, which usually comes a minute or two after they apply." };
   if (m.score === null) return { kind: "nothing", text: m.coverage.words, m };
   return { kind: "scored", score: m.score, m };

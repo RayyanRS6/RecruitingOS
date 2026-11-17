@@ -6,7 +6,7 @@ import { Alert, Button, Card, Chip, ScoreBadge, type ScoreBarItem, ScoreBars } f
 import type { ApplicationDetail } from "../../api/client";
 import { CLOSER_LOOK_LABEL, LOW_CONFIDENCE_LABEL, LOW_CONFIDENCE_TEXT, closerLook } from "../../evidence";
 import { overallLabel } from "./assessment";
-import { resumeOnlyChip } from "../../talent-list";
+import { noScoreWords, resumeOnlyChip } from "../../talent-list";
 import { firstSentence, notReadYetWords } from "./helpers";
 import { MATCH_PROMISE, MATCH_TITLE, NO_REVIEW_LINE, basisLine, cappedLine, confidenceChip, coverageLine, fitWord, leftOut, matchBars, matchCardState, missingMustHaves, nextStepActions, quoteSummary, suggestedStepOf, verdictLine, versionNote, type MatchBar, type NextStepAction } from "./match-view";
 import { CARD, QUOTE, Why } from "./why";
@@ -52,11 +52,13 @@ export function MatchVerdict({ a, children }: { a: ApplicationDetail; children?:
   // R20-9: a number with no AI interview in it yet says so beside it, the full label on hover; never with the line above,
   // which says it in full (the panel's header keeps its own chip on every section)
   const resumeOnly = m && !basis ? resumeOnlyChip(m) : null;
+  // No number: "No score" for someone decided before any reading, as on the Candidates list and in Compare, else "No score yet"
+  const noScore = noScoreWords(a.stage, !!m || a.assessments.length > 0);
   return (
     <Card title={MATCH_TITLE} className={CARD}>
       {/* the number in display type, like the figures on Home's stat tiles, with its one verdict word */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {state.kind === "scored" ? <ScoreBadge score={state.score} size="lg" showBand={!fit} /> : fallback ? <Chip tone={fallback.overall === "strong" ? "good" : fallback.overall === "weak" ? "caution" : "accent"}>{overallLabel(fallback.overall)}</Chip> : <ScoreBadge score={null} />}
+        {state.kind === "scored" ? <ScoreBadge score={state.score} size="lg" showBand={!fit} /> : fallback ? <Chip tone={fallback.overall === "strong" ? "good" : fallback.overall === "weak" ? "caution" : "accent"}>{overallLabel(fallback.overall)}</Chip> : <ScoreBadge score={null} none={noScore} />}
         {fit ? <Chip tone={fit.tone}>{fit.label}</Chip> : null}
         {resumeOnly ? <span title={resumeOnly.title}><Chip tone="neutral">{resumeOnly.label}</Chip></span> : null}
         {confidence ? <span title={confidence.title}><Chip tone={confidence.tone}>{confidence.label}</Chip></span> : fallback ? <Chip tone={fallback.confidence === "low" ? "caution" : "neutral"}>{fallback.confidence} confidence</Chip> : null}

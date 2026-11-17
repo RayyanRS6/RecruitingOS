@@ -9,7 +9,7 @@ export * from "./prompts/packet-revise";
 export * from "./prompts/company-about";
 export * from "./prompts/message-line";
 export * from "./prompts/resume";
-export { FakeProvider, type FakeHandler } from "./providers/fake";
+export { FakeProvider, type FakeFailure, type FakeHandler } from "./providers/fake";
 export * from "./prompts/triage";
 export * from "./prompts/screen";
 export * from "./prompts/writeup";

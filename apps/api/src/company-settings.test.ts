@@ -106,6 +106,14 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect(badHours.status).toBe(400);
       const badLogo = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { logoUrl: "http://insecure.example/logo.png" } });
       expect(badLogo.status).toBe(400);
+      // a time zone the server does not know, as when the company is made: the days and hours are counted in it (the second
+      // review of the live-test fixes, 12 November 2026, #30 and #37: one stored made every private decision fail)
+      for (const timezone of ["Pacific", "Pacific Time"]) {
+        const badZone = await json(owner, "PATCH", "/api/v1/companies/current", { timezone });
+        expect(badZone.status, timezone).toBe(400);
+        expect(await errorCode(badZone)).toBe("invalid_request");
+      }
+      expect((await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)))[0].timezone).toBe("America/Chicago");
       // what the job pages say about the company has its own routes, where a person approves it (plan D10)
       for (const settings of [{ about: { text: "We are great." } }, { logo: { file: "x.png" } }, { hiringContact: { email: "jobs@settings.test" } }]) {
         const r = await json(owner, "PATCH", "/api/v1/companies/current", { settings });

@@ -52,6 +52,28 @@ export const PlaybookRole = z.object({
 });
 export type PlaybookRole = z.infer<typeof PlaybookRole>;
 
+/**
+ * A playbook question that is the owner's call: every place's expectation is optional, so it goes on the form only when
+ * the owner requires it (the Dental Assistant's RDA licence; live test, 12 November 2026). The quick start offers it
+ * unticked and the draft's prompt marks it so.
+ */
+export function ownersCall(rule: { expectationByJurisdiction?: Record<string, Record<string, unknown>> }): boolean {
+  const places = Object.values(rule.expectationByJurisdiction ?? {});
+  return places.length > 0 && places.every((x) => x?.optional === true);
+}
+
+/** "(ask only when the owner requires it)", the draft prompt's mark on such a question, or any "(ask only when …)". */
+const ASK_ONLY_WHEN = /\s*\(\s*ask only when\b[^)]*\)/gi;
+
+/**
+ * Words a model wrote, without the owner's-call mark it was shown (or any "(ask only when …)"): an instruction for the
+ * AI, never words for the owner or a candidate. Taken out of the job builder's card options, the answers stored from
+ * them, and the draft's questions (review of the live-test fixes, 12 Nov 2026).
+ */
+export function withoutOwnersCallMark(text: string): string {
+  return text.search(ASK_ONLY_WHEN) < 0 ? text : text.replace(ASK_ONLY_WHEN, "").trim();
+}
+
 export const Playbook = z.object({
   vertical: z.string(),
   version: z.number().int().min(1),

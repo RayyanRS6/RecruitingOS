@@ -199,6 +199,35 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(t).toContain("I told them myself");
   });
 
+  // Live test, 12 November 2026: after "Decline now" on someone held, the card promised a review "a minute or two" away
+  it("someone declined on an eligibility answer before any AI review is never promised one", () => {
+    const question = "Do you hold a current radiation safety / x-ray certification and CPR/BLS?";
+    const held = detail({ ...declined, rejectReason: "eligibility", matchScore: null, assessments: [], eligibility: { passed: false, failedRules: [{ key: "xray_bls", question, reason: `answered no to: ${question}` }], unverifiable: [] } });
+    const html = panel(client([held]));
+    const t = text(html);
+    expect(t).toContain("No match score: no AI review was made before the decision.");
+    expect(t).not.toContain("a minute or two");
+    expect(t).not.toContain("starts once someone keeps them in");
+    // the badge above that line says it too: no score is coming (review of the live-test fixes, #57)
+    expect(html).toContain('<span class="score none">No score</span>');
+    expect(t).not.toContain("No score yet");
+    // someone still in process with no reading yet keeps "No score yet"
+    expect(panel(client([detail({ matchScore: null, assessments: [] })]))).toContain('<span class="score none">No score yet</span>');
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#57): Compare still read "No AI review yet" for someone decided before one
+  it("Compare words someone decided before any AI review the same way: no score, no AI review, never 'yet'", () => {
+    const cand = (id: string, name: string, stage: string) => ({ applicationId: id, name, stage, stageLabel: stage, group: "not_moving_forward", mustHaves: {}, competencies: {}, screen: null, resume: null, unknownCount: 0, open: `/roles/r1/talent?open=${id}`, score: null, notes: [] });
+    const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [], competencies: [], max: 5, reminder: "People decide.", candidates: [cand("a1", "Maria Reyes", "rejected"), cand("a2", "Luis Ortega", "triaged")] };
+    const html = render(client([]), createElement(CompareTable, { data: data as never }));
+    const column = (n: number) => html.slice(html.indexOf("Match score</th>")).split("<td>")[n + 1].split("</td>")[0];
+    expect(column(0)).toContain('<span class="score none sm">No score</span>');
+    expect(text(column(0))).toContain("No AI review");
+    expect(text(column(0))).not.toContain("yet");
+    expect(column(1)).toContain('<span class="score none sm">No score yet</span>');
+    expect(text(column(1))).toContain("No AI review yet");
+  });
+
   it("under 'Ask me first' the safety net brings in a recruiter instead, and sends nothing", () => {
     expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/If nobody tells Maria first, an ITS recruiter is brought in on \w+day, \w+ \d{1,2}\. Nothing is sent by itself\./);
   });
@@ -213,6 +242,33 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(html).toMatch(/<details class="more"[^>]*><summary>What happens next<\/summary>/);
     expect(t).toContain("Not moving forward is your decision, recorded with your reason.");
     expect(t).toContain("Confirm: not moving forward");
+  });
+
+  // Live test, 12 November 2026 (L5): Wednesday evening in Los Angeles is already Thursday in Pakistan, where the lead read it
+  it("before the click the safety net's day is counted on the company's calendar, whatever the reader's clock", () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-12T04:00:00.000Z") });
+    try {
+      const company: [unknown[], unknown] = [["company"], { settings: {}, timezone: "America/Los_Angeles" }];
+      const decline = text(panel(client([detail({ allowedActions: ["reject"] })], [company]), { step: "decline" }));
+      expect(decline).toContain("If nobody tells them first, the standard message goes by itself on Wednesday, November 18.");
+      // the close card's line too
+      const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }], counts: {} };
+      const close = text(render(client([], [[["applications", "r1"], apps], company]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
+      expect(close).toContain("If nobody tells them first, the closing message goes by itself on Wednesday, November 18 (or an ITS recruiter is brought in, if your settings say so).");
+      // a company that contacts candidates on Mondays, Wednesdays and Fridays: its contact days, as the daily check and the
+      // toast after the click count them (the second review of the live-test fixes, #11)
+      const fewerDays: [unknown[], unknown] = [["company"], { settings: { businessHours: { days: [1, 3, 5], start: "09:00", end: "17:00" } }, timezone: "America/Los_Angeles" }];
+      expect(text(panel(client([detail({ allowedActions: ["reject"] })], [fewerDays]), { step: "decline" }))).toContain("If nobody tells them first, the standard message goes by itself on Monday, November 23.");
+      expect(text(render(client([], [[["applications", "r1"], apps], fewerDays]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })))).toContain("the closing message goes by itself on Monday, November 23 (or an ITS recruiter");
+      // the "not told yet" card: the day the API names comes on the company's calendar, never at noon on the reader's clock (#28, #36)
+      const named = detail({ ...declined, untoldFallbackOn: "2026-11-18" });
+      vi.setSystemTime(new Date("2026-11-18T07:00:00.000Z")); // 11 PM on Tuesday the 17th in Los Angeles
+      expect(text(panel(client([named], [company])))).toContain("If nobody tells Maria first, the standard message goes by itself on Wednesday, November 18.");
+      vi.setSystemTime(new Date("2026-11-18T09:00:00.000Z")); // 1 AM on Wednesday the 18th there
+      expect(text(panel(client([named], [company])))).toContain("5 working days have passed: the standard message goes to Maria with the next daily check, unless you act now.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a waiting approval names the chosen wording and the personal line to the approver", () => {

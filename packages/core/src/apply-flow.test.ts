@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ScreenProgress } from "@ros/contracts";
+import { CHAT_WRAP_QUESTION, FOCUS_KEY_PREFIX, FOCUS_QUESTION_WORDS, type ScreenProgress } from "@ros/contracts";
 import { APPLY_FLOW_FALLBACK, CHAT_GAP_LIMIT, CHAT_WRAP_KEY, buildChatPlan, chatItemSettled, chatMoveStays, chatNextMove, isStillApplying, resolveApplyMode, saysNotDone, screeningFunnel, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, type FunnelScreen } from "./apply-flow";
 import { chatCounter } from "./apply-questions";
 import { canTransition } from "./stages";
@@ -116,7 +116,8 @@ describe("tap answers (plan E12)", () => {
   it("works out the format from the question's kind and wording; skills and examples are always typed", () => {
     expect(tapFormatFor({ kind: "compensation", question: "What pay range are you looking for?" }, comp)).toEqual({ kind: "pay_range", basis: "hourly", currency: "USD" });
     expect(tapFormatFor({ kind: "eligibility", question: "Is your RDH license active in California?" }, comp)).toEqual({ kind: "yes_no" });
-    expect(tapFormatFor({ kind: "eligibility", question: "Tell us about your license." }, comp)).toEqual({ kind: "yes_no" });
+    // its kind alone never gives the buttons: this asks for their own words (live test, 12 November 2026)
+    expect(tapFormatFor({ kind: "eligibility", question: "Tell us about your license." }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "availability", question: "Which days of the week can you work?" }, comp)).toMatchObject({ kind: "days" });
     expect(tapFormatFor({ kind: "availability", question: "When could you start?" }, comp)).toEqual({ kind: "start_date" });
     expect(tapFormatFor({ kind: "availability", question: "Which days and hours are you available, and when could you start?" }, comp)).toBeNull();
@@ -124,6 +125,74 @@ describe("tap answers (plan E12)", () => {
     expect(tapFormatFor({ kind: "logistics", question: "How far is your commute?" }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "skills", question: "Do you use Dentrix?" }, comp)).toBeNull();
     expect(tapFormatFor({ kind: "behavioral", question: "Tell me about a hard moment with a patient." }, comp)).toBeNull();
+  });
+
+  // Live test, 12 November 2026: "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?" came
+  // with Yes and No, because every eligibility question got them whatever it asked.
+  it("offers Yes and No only where the words ask yes or no, never for a question that asks them to name or list", () => {
+    const typed = [
+      "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?",
+      "Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?",
+      "Can you tell us which state licensed you?",
+      "Could you list the certificates you hold?",
+      "Can you explain your license status?",
+      "Can you share your license number?",
+      "Do you know who issued your license?",
+      "Please confirm your license is active.",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+    const tapped = ["Do you currently hold an active California RDA license?", "Is your RDH license active in the state this office is in?", "Can you lift 25 pounds safely?"];
+    for (const question of tapped) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toEqual({ kind: "yes_no" });
+    // the same for availability and logistics questions; days, a start date and pay keep their own taps
+    expect(tapFormatFor({ kind: "logistics", question: "Can you tell us how you would get to Irvine?" }, comp)).toBeNull();
+    expect(tapFormatFor({ kind: "availability", question: "Are you available on Saturdays?" }, comp)).toEqual({ kind: "yes_no" });
+    expect(tapFormatFor({ kind: "availability", question: "Which days of the week can you work?" }, comp)).toMatchObject({ kind: "days" });
+  });
+
+  // The review of the live-test fixes (12 November 2026): the playbooks' licence questions, which the quick start offers in
+  // the same words, end with a "where" that only says which state is meant, and lost their buttons when asked in the AI
+  // interview; a saved hygienist job's old "…state and whether it is currently active?" kept them, and a bare Yes says
+  // neither.
+  it("a relative clause after a noun asks nothing open, while 'whether' does", () => {
+    const tapped = [
+      "Do you hold an active dental hygiene (RDH) license in the state where this office is located?",
+      "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?",
+      "Do you hold an active dental license (DDS/DMD) in the state where this office is located?",
+      "Is your RDH license active in the state this office is in?",
+      "Can you get to the office where you would work by 8 AM?",
+      "Are you able to commute to the office where you would work?",
+    ];
+    for (const question of tapped) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toEqual({ kind: "yes_no" });
+    expect(tapFormatFor({ kind: "logistics", question: "Are you able to commute to the office where you would work?" }, comp)).toEqual({ kind: "yes_no" });
+    const typed = [
+      "Which certifications do you hold, such as x-ray, coronal polishing, RDA or BLS?",
+      "Which certifications do you hold (x-ray, coronal polishing, RDA, BLS)?",
+      "Can you confirm your RDH license state and whether it is currently active?",
+      "Can you confirm whether your license is active?",
+      "Do you know who issued your license?",
+      // a second question after the clause is still read
+      "Do you hold a license in the state where this office is located, and which number is it?",
+      "Do you hold a license in the state where this office is located and which number is it?",
+      // a wh-word after a preposition asks which
+      "Do you have a preference for which days you work?",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+  });
+
+  // The second look at that fix: a clause with no in, at, on, to, near or within before it is what the question asks
+  // (which state, which date, which days), and for these kinds a tap is the whole answer, which nothing asks again.
+  it("a relative clause the question asks for keeps the text box", () => {
+    const typed = [
+      "Can you confirm the state where you are licensed?",
+      "Could you name the state where you hold your RDH license?",
+      "Can you confirm the date when your license expires?",
+      "Can you confirm the state where you hold your license and the date when it expires?",
+    ];
+    for (const question of typed) expect(tapFormatFor({ kind: "eligibility", question }, comp), question).toBeNull();
+    expect(tapFormatFor({ kind: "availability", question: "Are there any days when you cannot work?" }, comp)).toBeNull();
+    expect(tapFormatFor({ kind: "logistics", question: "Is there a time when you would need to leave early?" }, comp)).toBeNull();
+    // one that only places the noun still asks nothing open
+    expect(tapFormatFor({ kind: "availability", question: "Can you work on the days when the office is busiest?" }, comp)).toEqual({ kind: "yes_no" });
   });
 
   it("records a tap as fixed words, and refuses one that does not fit the question", () => {
@@ -194,5 +263,36 @@ describe("how the conversation goes for a role (plan E13)", () => {
     // finished on a recruiter's call: the candidate never sent anything, so it is not timed
     const byCall = screeningFunnel([...rows, { status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(50), progress: progress({ completedBy: "recruiter_call" }), transcript: said(0) }], questions);
     expect(byCall).toMatchObject({ finished: 3, medianMinutes: 9 });
+  });
+
+  // Left out by the repair of the interviewer's brief (9ef60ca): a skip is kept under the key the chat asked it by, so a
+  // must-have's gap question and the closing question read as their keys in the role's figures.
+  it("names each skipped question as the chat asked it: a must-have's by its words, the closing one by the closing question, one nothing names in plain words", () => {
+    const sent = (declined: string[]): FunnelScreen => ({ status: "completed", invitedVia: "apply", startedAt: at(0), completedAt: at(8), progress: progress({ submittedAt: at(8), declined }), transcript: said(0) });
+    const f = screeningFunnel([sent(["mh_1_active_ca_rdh_license", CHAT_WRAP_KEY]), sent(["mh_1_active_ca_rdh_license", "wq_shift_swaps", "pay"])], questions, [{ key: "mh_1_active_ca_rdh_license", text: "Active California RDH license" }]);
+    expect(f.skipped).toEqual([
+      { key: "mh_1_active_ca_rdh_license", question: "Active California RDH license", count: 2 },
+      { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, count: 1 },
+      { key: "wq_shift_swaps", question: "Shift swaps", count: 1 },
+      { key: "pay", question: "What range?", count: 1 },
+    ]);
+    // without the job's must-haves, a must-have's key reads in plain words too
+    expect(screeningFunnel([sent(["mh_1_active_ca_rdh_license"])], questions).skipped).toEqual([{ key: "mh_1_active_ca_rdh_license", question: "Active ca rdh license", count: 1 }]);
+  });
+
+  // Left out by "Answers named in words" (b80608a): the résumé reading's open questions a screen starts with ("Ask about
+  // this in a screen") are keyed unknown_1, unknown_2… on every screen, each candidate's own, and the figures read
+  // "Unknown 1": one row for different people's different questions, named by the key.
+  it("counts the résumé reading's open questions people skipped as one row, under a plain name, once a person", () => {
+    const sent = (declined: string[]): FunnelScreen => ({ status: "completed", invitedVia: null, startedAt: at(0), completedAt: at(8), progress: progress({ submittedAt: at(8), declined }), transcript: said(0) });
+    // two people each skipped their own first open question; the second also skipped another one, and the pay question
+    const notSent: FunnelScreen = { status: "unfinished", invitedVia: null, startedAt: at(0), completedAt: null, progress: progress({ declined: ["unknown_1"] }), transcript: said(0) };
+    const f = screeningFunnel([sent(["unknown_1"]), sent(["unknown_1", "unknown_2", "pay"]), notSent], questions);
+    expect(f.skipped).toEqual([
+      { key: FOCUS_KEY_PREFIX, question: FOCUS_QUESTION_WORDS, count: 2 },
+      { key: "pay", question: "What range?", count: 1 },
+    ]);
+    expect(f.skipped.map((s) => s.question).join(" ")).not.toMatch(/unknown|_|\d/i);
+    expect(FOCUS_QUESTION_WORDS).toBe("An open question from the AI review of the résumé");
   });
 });

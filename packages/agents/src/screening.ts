@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { CHAT_SECTION_LABEL, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, type Actor, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_SECTION_LABEL, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, scoredSkill, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -385,8 +385,11 @@ export function chatFactsOf(packet: RolePacket, app: Pick<ApplicationRow, "extra
   return chatFactsWithKept(facts, Array.isArray(answers.kept) ? answers.kept : []);
 }
 
-/** The closing question, in code's words (the model may say it its own way, with the first name). */
-export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hiring team to know before we finish?";
+/**
+ * The closing question, in code's words (the model may say it its own way, with the first name). Its words live in
+ * @ros/contracts beside its key, so every reader names the closing answer by them (`answerKeyWords`).
+ */
+export { CHAT_WRAP_QUESTION } from "@ros/contracts";
 /** Said when "No" settles an item as not known: calm, and never a guess about what they can do. */
 export const CHAT_CALM_LINE = "Understood, thanks for saying so.";
 /** The question the code asks when the model's follow-up has none: one push, the analog, the smaller version. */
@@ -445,11 +448,18 @@ function ladderApplies(kind: "gap" | "written", q: Pick<ScreeningQuestion, "kind
 
 /** Words that say what a line is about ("Do you have experience with...?" says nothing): the same list the scorecard uses. */
 function sameTopic(a: string, b: string): boolean {
-  const wa = new Set(topicWords(a));
-  const wb = new Set(topicWords(b));
-  if (!wa.size || !wb.size) return false;
-  const shared = [...wa].filter((w) => wb.has(w)).length;
-  return shared >= Math.min(2, wa.size);
+  return sharesTopic(new Set(topicWords(a)), new Set(topicWords(b)));
+}
+
+/**
+ * Whether a line is about a subject, by their topic words: two in common, or the subject's only one. The rule the chat's
+ * gaps use for the form's answers (`sameTopic`) and the scorecard's concerns for what the chat asked
+ * (`withoutResumeShownConcerns`).
+ */
+function sharesTopic(subject: ReadonlySet<string>, line: ReadonlySet<string>): boolean {
+  if (!subject.size || !line.size) return false;
+  const shared = [...subject].filter((w) => line.has(w)).length;
+  return shared >= Math.min(2, subject.size);
 }
 
 /**
@@ -1904,6 +1914,10 @@ export function scorecardInput(ctx: ScreenContext, identity: ScoringIdentity): {
  * A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries. Every run is
  * linked to the one the stored scorecard keeps (`linkReadingRuns`). The readings ask the AI credit together: with no room
  * for all of them none is made, and the `screen` run waits for credit.
+ *
+ * Every concern the readings wrote is stored, so the stored scorecard is the record (the data export reads it). The
+ * team reads them without the AI interview's silence about what the résumé shows (`withoutResumeShownConcerns`), where
+ * a scorecard's concerns are shown, never here (the second review of the live-test fixes, 12 November 2026).
  */
 export async function assessScreen(db: Db, ai: AiRuntime, input: { companyId: string; screenId: string; workflowRunId?: string | null }): Promise<RunOutcome<ScreenAssessment>> {
   const b = await withTenant(db, input.companyId, (q) => loadScreenBundle(q, input.screenId));
@@ -2013,6 +2027,99 @@ const PLAIN_WORDS = new Set(["the", "and", "you", "your", "are", "have", "has", 
 const topicWords = (s: string): string[] => (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 2 && !PLAIN_WORDS.has(w));
 /** What a finding or a question is about, for the scorecard: `topicWords`, with "licence" and "license" one word (a packet may spell it either way). */
 const findingWords = (s: string): string[] => topicWords(s.replace(/licen[cs]/gi, "licens"));
+
+/** A word and its plural as one ("crowns" and "crown", "therapies" and "therapy", "boxes" and "box"); "status" and "basis" are not plurals. */
+const singular = (w: string): string => (w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : /(?:ss|ch|sh|x|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") && !/(?:ss|us|is)$/.test(w) ? w.slice(0, -1) : w);
+/**
+ * The words of a line as the scorecard's concerns are read (`withoutResumeShownConcerns` only): `findingWords`, with
+ * x-ray (xray, x-rays), radiograph, radiography and radiographic one word, as "licence" and "license" are, and a plural
+ * one word with its singular. `findingWords` itself is unchanged: the quote and licence rules read it.
+ */
+const concernWords = (s: string): string[] => findingWords(s.replace(/\bx[\s-]?rays?\b/gi, " radiography ").replace(/\bradiograph(?:s|y|ic)?\b/gi, " radiography ")).map(singular).filter((w) => !PLAIN_WORDS.has(w));
+/** The parts of a requirement's name: "Digital radiography and intraoral scanning" is "Digital radiography" and "intraoral scanning" (split on "and", "&", "/" and ","). */
+const nameParts = (name: string): string[] => name.split(/\s*(?:\band\b|&|\/|,)\s*/i).filter((p) => p.trim());
+/** A requirement's name without the note in brackets at its end: "Local anesthesia certification (state-dependent)" is "Local anesthesia certification". */
+const bareName = (name: string): string => name.replace(/\s*\([^()]*\)\s*$/, "").trim() || name;
+
+/**
+ * The scorecard as the team reads it: without the concerns that are only the AI interview's silence about what the résumé
+ * already shows (the live test, 12 November 2026: "Digital radiography work is not described" sat under Concerns beside
+ * the breakdown's "Shown, from the AI review of the résumé"; the chat asks no gap question about what the résumé shows,
+ * `chatGaps`). A concern goes only when all of these hold:
+ * - it has nothing checked quoted (one quoting the chat or a recruiter's note always stays);
+ * - it names a must-have the résumé reading shows met, or a skill it shows evidenced, each on a checked quote, read with
+ *   `concernWords` (a plural, x-ray and radiography as one word) and without a note in brackets at the end of the name
+ *   (`bareName`): every topic word of the name, anywhere in it; or every topic word of one part of the name
+ *   (`nameParts`) of two words or more, side by side and in that order ("Open Dental", never "this dental office is
+ *   open"); or the one word of a part with another word of the same name, when no line of the chat holds a word the
+ *   concern shares with the name ("Impression and crown work" for "Impressions and provisional crowns"). A concern
+ *   sharing one word with it stays;
+ * - the conversation the scorecard read (`chat`: the lines the team may see, `teamScreenView`) never asked about that
+ *   must-have or skill: no assistant line or recruiter's note is about its whole name by the topic-word rule the chat's
+ *   gaps use (`sharesTopic`) or, for a licence, certificate or permit (`credentialMustHaves`), names it by a word that
+ *   says which it is ("RDA" in the Dental Assistant's "Which certifications do you hold (x-ray, coronal polishing, RDA,
+ *   BLS)?" for "Active California RDA license"); and no question asked is that must-have's gap or a question about that
+ *   skill (its `competencyKey`). "Is your RDH license active in the state this office is in?" asked the hygienist's
+ *   licence, so "RDH license is not active in this state" stays, though the tapped "No" it rests on is too short to quote,
+ *   and so does the Dental Assistant's concern resting on a "None" the evidence rules took off the finding too;
+ * - the scorecard's own finding for it quotes nothing.
+ * Read where a scorecard's concerns are shown (the candidate's page, the interviewer's brief, the board card's gap line),
+ * with the newest scorecard and the newest résumé reading, never when it is stored: the stored scorecard keeps every
+ * concern (the second review of the live-test fixes, 12 November 2026). With nothing left out, the same scorecard.
+ */
+export function withoutResumeShownConcerns<T extends Pick<ScreenAssessment, "concerns"> & Partial<Pick<ScreenAssessment, "requirementFindings" | "competencyFindings">>>(card: T, resume: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings"> | null | undefined, packet: Pick<RolePacket, "requirements" | "competencies"> & Partial<Pick<RolePacket, "screening">>, chat: ReadonlyArray<ChatLine>): T {
+  if (!resume || !card.concerns?.length) return card;
+  const checked = (e: { quote?: string; unquoted?: boolean } | undefined) => !!e?.quote?.trim() && !e.unquoted;
+  const met = new Set((resume.requirementFindings ?? []).filter((f) => f.met === "yes" && checked(f.evidence)).map((f) => f.requirementKey));
+  const evidenced = new Set((resume.competencyFindings ?? []).filter((f) => f.finding === "evidenced" && checked(f.evidence)).map((f) => f.competencyKey));
+  // the scorecard's own finding quoting something: the candidate spoke to it in the chat
+  const quotesMust = new Set((card.requirementFindings ?? []).filter((f) => f.evidence?.quote?.trim()).map((f) => f.requirementKey));
+  const quotesSkill = new Set((card.competencyFindings ?? []).filter((f) => f.evidence?.quote?.trim()).map((f) => f.competencyKey));
+  // what the conversation asked: its lines, the keys of the questions asked, and the skill each of those is about
+  const skillOf = new Map((packet.screening?.questions ?? []).flatMap((q) => (q.competencyKey ? [[q.key, q.competencyKey] as const] : [])));
+  const lines: Array<Set<string>> = [];
+  const askedKeys = new Set<string>();
+  const askedSkills = new Set<string>();
+  for (const t of chat) {
+    if (t.role !== "assistant" && t.role !== "recruiter") continue;
+    lines.push(new Set(concernWords(t.content)));
+    if (!t.questionKey) continue;
+    askedKeys.add(t.questionKey);
+    const skill = skillOf.get(t.questionKey);
+    if (skill) askedSkills.add(skill);
+  }
+  // A subject's words: its whole name, for what the chat asked (`all`), with the words that say which credential it is
+  // (`which`: "california" and "rda" of "Active California RDA license"); its name without a note in brackets, whole and
+  // in its parts, for what a concern names.
+  const credentials = credentialMustHaves(packet);
+  const named = (name: string, credential = false) => {
+    const all = concernWords(name);
+    const bare = bareName(name);
+    return { all: new Set(all), which: credential ? all.filter((w) => !CREDENTIAL_GENERIC.has(w)) : [], whole: concernWords(bare), parts: nameParts(bare).map(concernWords) };
+  };
+  const asked = (s: ReturnType<typeof named>) => lines.some((line) => sharesTopic(s.all, line) || s.which.some((w) => line.has(w)));
+  const subjects = [
+    ...packet.requirements.mustHaves.filter((m) => met.has(m.key) && !quotesMust.has(m.key) && !askedKeys.has(m.key)).map((m) => named(m.text, credentials.has(m.key))),
+    ...packet.competencies.filter((c) => evidenced.has(c.key) && !quotesSkill.has(c.key) && !askedSkills.has(c.key)).map((c) => named(c.name)),
+  ].filter((s) => s.whole.length > 0 && !asked(s));
+  if (!subjects.length) return card;
+  const inChat = (w: string) => lines.some((line) => line.has(w));
+  const silence = (c: ScreenAssessment["concerns"][number]) => {
+    if (checked(c.evidence)) return false;
+    const words = concernWords(c.claim);
+    const said = new Set(words);
+    // a part of two words or more: its words side by side and in that order ("Open Dental", never "dental office is open")
+    const together = (part: string[]) => words.some((_, i) => part.every((w, j) => words[i + j] === w));
+    // a part of one word: with another word of the same name beside it, and no word it shares with the name in any line of the chat
+    const alone = (s: ReturnType<typeof named>, word: string) => {
+      const shared = s.whole.filter((w) => said.has(w));
+      return shared.includes(word) && shared.some((w) => w !== word) && !shared.some(inChat);
+    };
+    return subjects.some((s) => s.whole.every((w) => said.has(w)) || s.parts.some((p) => (p.length > 1 ? together(p) : p.length === 1 && alone(s, p[0]!))));
+  };
+  const concerns = card.concerns.filter((c) => !silence(c));
+  return concerns.length === card.concerns.length ? card : { ...card, concerns };
+}
 
 /**
  * A short quote read with the question it answers (`answerInContext`), for the evidence rules: only when the quote is
@@ -2255,7 +2362,9 @@ export function settledScreenRecommendation(reading: ScreenAssessment, packet: P
   const screened = packet.requirements.mustHaves.filter((m) => m.evidencedBy.includes("screen"));
   const musts = screened.every((m) => reading.requirementFindings.some((f) => f.requirementKey === m.key && f.met === "yes" && shownByQuote(f.evidence)));
   const notMet = reading.requirementFindings.some((f) => f.met === "no" && shownByQuote(f.evidence));
-  const skills = packet.competencies.filter(scoredSkill);
+  // the skills the match score counts: a skill named as a must-have the chat was to confirm is that must-have (the live
+  // test, 12 November 2026); beside one it was not, the skill is all that holds the answer, so it counts (the second review)
+  const skills = skillsInScore(packet);
   const shown = skills.filter((c) => reading.competencyFindings.some((f) => f.competencyKey === c.key && f.finding === "evidenced" && shownByQuote(f.evidence))).length;
   const most = shown * 2 > skills.length;
   const fits = reading.compensationExpectation.withinRange !== "above" && reading.availability.matchesSchedule !== "no" && reading.availability.matchesSchedule !== "partially";

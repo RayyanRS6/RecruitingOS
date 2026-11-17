@@ -99,4 +99,25 @@ describe("a request's thread as the team reads it", () => {
     expect(escalationThread(request, [], null, { forRecruiter: true })[0]).not.toHaveProperty("raisedBy");
     expect(escalationThread({ ...request, requestedBy: { kind: "recruiter", id: "r1", name: "Kai" } }, [], null)[0]).not.toHaveProperty("raisedBy");
   });
+
+  // The review of the live-test fixes (17 November 2026): Recruiting OS closes a request nobody needs any more (a stopped
+  // step ITS ran again, a held application a person decided), and its own answer read "Recruiting OS answered" under "Closed"
+  it("marks what Recruiting OS wrote itself, its answer when it closed the request and its note, and nothing a person wrote", () => {
+    const system = { kind: "system" as const, id: "workflow:retry", name: "Recruiting OS" };
+    const closed = escalationThread({ ...request, resolution: "ITS ran the stopped step again and it finished. Nothing more is needed from you.", resolvedAt: "2026-10-06T10:00:00.000Z" }, [
+      { ...msg("m1", "recruiter", "reply", "Someone has now decided about this application, so nothing more is needed.", "2026-10-05T18:00:00.000Z", "Recruiting OS"), author: system },
+      msg("m2", "recruiter", "answer", "Interview her.", "2026-10-05T20:00:00.000Z", "Kai Recruiter"),
+      msg("m3", "customer", "reopen", "That did not cover the evening shift.", "2026-10-06T08:00:00.000Z", "Dana Owner"),
+      { ...msg("m4", "recruiter", "answer", "ITS ran the stopped step again and it finished. Nothing more is needed from you.", "2026-10-06T10:00:00.000Z", "Recruiting OS"), author: system },
+    ], null);
+    expect(closed.map((e) => [e.kind, e.by, e.raisedBy ?? null])).toEqual([
+      ["question", "Dana Owner", null],
+      ["reply", "Recruiting OS", "system"],
+      ["answer", "Kai Recruiter", null],
+      ["reopen", "Dana Owner", null],
+      ["answer", "Recruiting OS", "system"],
+    ]);
+    // the recruiter reads it the same way
+    expect(escalationThread({ ...request }, [{ ...msg("m4", "recruiter", "answer", "Closed.", "2026-10-06T10:00:00.000Z", "Recruiting OS"), author: system }], null, { forRecruiter: true })[1].raisedBy).toBe("system");
+  });
 });

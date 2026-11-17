@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, usePlan } from "./helpers";
+import { companyDay, createCompanyThroughTheForm, expectAccessible, signIn, skipWithoutFakeSignIn, usePlan } from "./helpers";
 
 /**
  * Approving and publishing (plan Wave D) in a real browser, with the fake AI provider: the approval card opens the job
@@ -62,8 +62,7 @@ test("approve a role, see where it is going, share it and give it a closing date
   await expect(page.locator("#share").getByText(/visits?$/).first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "Where it is posted" })).toBeVisible();
   const closing = page.locator("#closing-date");
-  const lastDay = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
-  await closing.getByLabel("Last day to apply").fill(lastDay);
+  await closing.getByLabel("Last day to apply").fill(companyDay(30));
   await closing.getByRole("button", { name: "Save the date" }).click();
   await expect(page.getByRole("status").filter({ hasText: /Applications close at the end of/ })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/Apply by /).first()).toBeVisible();

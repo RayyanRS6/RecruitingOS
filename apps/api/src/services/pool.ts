@@ -1,6 +1,7 @@
 import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import { BOARD_COLUMN_LABEL, BoardColumn, MATCH_FIT_LABEL, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchFit, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { BOARD_COLUMN_LABEL, BoardColumn, MATCH_FIT_LABEL, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchFit, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry } from "@ros/contracts";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, isRecruiterNoteEntry, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, screenAnswersSent, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { withoutResumeShownConcerns } from "@ros/agents";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
@@ -36,6 +37,45 @@ export function shownReadings<A extends Pick<AppRow, "latestAssessmentId">>(app:
   const left = own.filter((x) => !hidden.has(x.id));
   const latestAssessmentId = app.latestAssessmentId && hidden.has(app.latestAssessmentId) ? (left[0]?.id ?? null) : app.latestAssessmentId;
   return { app: { ...app, latestAssessmentId }, assessments: left };
+}
+
+/** The lines of a conversation a scorecard read that say what it asked (`withoutResumeShownConcerns`). */
+export type ScorecardChat = ReadonlyArray<Pick<ScreenTranscriptEntry, "role" | "content"> & Partial<Pick<ScreenTranscriptEntry, "questionKey">>>;
+
+/**
+ * A person's readings with the newest scorecard's concerns as the team reads them: without those that are only the AI
+ * interview's silence about what the newest résumé reading shows (`withoutResumeShownConcerns` in @ros/agents), the
+ * must-haves and skills named by that reading's version of the role (`fallback` when it is gone), and what the
+ * conversation the scorecard read asked by the scorecard's id (`chats`; none on record, nothing asked). One rule for the
+ * candidate's page (`GET /applications/:id`) and the board (`loadPool`). The stored rows are never rewritten: the data
+ * export is the record (the second review of the live-test fixes, 12 November 2026).
+ */
+export function concernsAsRead(own: readonly AssessmentRow[], input: { packets: ReadonlyMap<number, RolePacket>; fallback: RolePacket | null; chats: ReadonlyMap<string, ScorecardChat> }): AssessmentRow[] {
+  const { resume, screen } = readingPair(own);
+  const packet = resume ? input.packets.get(resume.packetVersion) ?? input.fallback : null;
+  if (!screen || !resume || !packet) return [...own];
+  const result = withoutResumeShownConcerns(screen.result, resume.result, packet, input.chats.get(screen.id) ?? []);
+  return result === screen.result ? [...own] : own.map((r) => (r.id === screen.id ? { ...r, result } : r));
+}
+
+/** The newest scorecard whose concerns `concernsAsRead` may read otherwise: one beside a résumé reading with a concern that quotes nothing. */
+function scorecardToRead(own: readonly AssessmentRow[]): string[] {
+  const { resume, screen } = readingPair(own);
+  return screen && resume && (screen.result.concerns ?? []).some((c) => !c.evidence?.quote?.trim() || c.evidence.unquoted) ? [screen.id] : [];
+}
+
+/**
+ * What the conversation each scorecard read asked, by the scorecard's id, for `concernsAsRead`: its assistant's lines and
+ * a recruiter's call notes, and only the notes when the candidate did not send it (`teamScreenView`). One query, for
+ * the few scorecards given, and only those lines of their transcripts.
+ */
+export async function scorecardChats(tx: Tx, scorecardIds: readonly string[]): Promise<Map<string, ScorecardChat>> {
+  if (!scorecardIds.length) return new Map();
+  const rows = await tx
+    .select({ assessmentId: screens.assessmentId, status: screens.status, completedBy: sql<ScreenProgress["completedBy"] | null>`${screens.progress}->>'completedBy'`, lines: sql<ScreenTranscriptEntry[]>`coalesce(jsonb_path_query_array(${screens.transcript}, '$[*] ? (@.role == "assistant" || @.role == "recruiter")'), '[]'::jsonb)` })
+    .from(screens)
+    .where(inArray(screens.assessmentId, [...scorecardIds]));
+  return new Map(rows.flatMap((r) => (r.assessmentId ? [[r.assessmentId, screenAnswersSent({ status: r.status, progress: { completedBy: r.completedBy ?? undefined } }) ? r.lines : r.lines.filter(isRecruiterNoteEntry)] as const] : [])));
 }
 
 /** A person's latest reading in brief, for counts over many people. */
@@ -202,8 +242,12 @@ export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Te
   const automatic = new Set(invites.filter((e) => (e.payload as { invitedBy?: unknown }).invitedBy === "system").map((e) => e.subjectId));
   const ivs = await tx.select({ applicationId: interviews.applicationId, status: interviews.status }).from(interviews).where(inArray(interviews.applicationId, appIds));
   const waiting = new Set((await tx.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), eq(approvalRequests.actionType, "application.recommend_interview"), eq(approvalRequests.status, "pending")))).map((r) => r.applicationId));
-  const rows = apps.map((loaded): PoolRow => {
-    const { app, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden);
+  const shown = apps.map((loaded) => shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hidden));
+  // The card's gap line falls back to the latest reading's first concern: the newest scorecard's concerns as the
+  // candidate's page reads them (`concernsAsRead`), with what each conversation asked, for the few that need it.
+  const chats = await scorecardChats(tx, shown.flatMap((s) => scorecardToRead(s.assessments)));
+  const rows = shown.map(({ app, assessments: read }): PoolRow => {
+    const own = concernsAsRead(read, { packets: byVersion, fallback: byVersion.get(app.packetVersion) ?? current, chats });
     const doc = docs.find((d) => d.id === app.resumeDocumentId);
     const mark = marks.get(app.id) ?? null;
     const ownScreens = scr.filter((s) => s.applicationId === app.id);

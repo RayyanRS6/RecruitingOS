@@ -9,7 +9,7 @@ import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { moveRow } from "../new-role/packet-form";
 import {
-  APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, LOOK_FOR_USE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE,
+  APPLICANT_QUESTIONS_LEDE, FAIRNESS_LINE, HOLDS_FOR_DECISION, LOOK_FOR_USE, QUICK_HINT, QUICK_KINDS, SCREENING_FALLBACK_LINE,
   eligibilityList, newQuickRow, newWrittenRow, questionsOf, questionsPayload, questionsProblem, quickAnswerWords, quickRowsFrom, refusalsByRow, withKind, writtenList, writtenRowsFrom, writtenSource,
   type PacketWithQuestions, type QuickKind, type QuickRow, type WrittenRow,
 } from "./applicant-questions";
@@ -55,7 +55,7 @@ export function ApplicantQuestions(props: {
                   {eligibility.map((e, i) => (
                     <li key={e.key} className={QUESTION_ROW}>
                       <span className="ordinal mt-px">{i + 1}</span>
-                      <span className="min-w-0 flex-1"><span className="mr-1">{e.question}</span> <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">A "no" holds it for your decision</Chip> : null}</span>
+                      <span className="min-w-0 flex-1"><span className="mr-1">{e.question}</span> <Chip>Yes or no</Chip> {e.holds ? <Chip tone="needs">{HOLDS_FOR_DECISION}</Chip> : null}</span>
                     </li>
                   ))}
                   {quick.map((q, i) => (

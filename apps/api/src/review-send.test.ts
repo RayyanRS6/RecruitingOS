@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket, ScreenWriteup } from "@ros/contracts";
 import { CHAT_WRAP_QUESTION, WRITEUP_NOT_GIVEN_NOTE } from "@ros/agents";
-import { CHAT_WRAP_KEY, applicationAnswerSentences } from "@ros/core";
+import { CHAT_WRAP_KEY, applicationAnswerSentences, entitlements } from "@ros/core";
 import { aiRuns, applications, candidates, companies, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -332,5 +332,67 @@ describe("Review & send", () => {
     // the application row is untouched by any of it
     const [appRow] = await container.db.select().from(applications).where(eq(applications.id, scr.applicationId));
     expect(JSON.stringify(appRow.answers)).not.toContain("Monday to Thursday suits me");
+  });
+
+  // Added with the shared names for answers (b80608a) and kept as a guard only. The page and the write-up read the
+  // conversation's own version of the job, which no change to the job alters (the next case), so the page's questions
+  // name every written-up answer. This case makes the one state where they would not, by rewriting the approved version
+  // in place, which the product never does.
+  it("would name a written-up answer the page's questions no longer named in plain words, never by its key (a state only an in-place edit of an approved version makes)", async () => {
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const why = { key: "wq_why", question: "Why would you like to work at a small practice?", required: true };
+    const swaps = { key: "wq_shift_swaps", question: "Are you happy to swap a shift now and then?", required: true };
+    await container.db.update(rolePackets).set({ packet: { ...pv.packet, companyQuestions: { quick: [], written: [why, swaps] } } }).where(eq(rolePackets.id, pv.id));
+    // a sixth applicant, past the Free plan's five a job
+    await entitlements.applyPlan(container.db, role.companyId, "basic");
+    const t = await apply({ first: "Ines", last: "Vale", email: "ines.vale@example.com" });
+    await answerAll(t);
+    await post(`/c/screen/${t}/review`);
+    expect(((await screenOf(t)).progress.writeup as ScreenWriteup).answers.map((a) => a.questionKey)).toEqual(["wq_why", "wq_shift_swaps"]);
+    // the approved version itself rewritten in place without that question, which nothing in the product does
+    await container.db.update(rolePackets).set({ packet: { ...pv.packet, companyQuestions: { quick: [], written: [why] } } }).where(eq(rolePackets.id, pv.id));
+    const base = `/c/screen/${t}`;
+    const html = await page(base);
+    expect(html).toContain('<li class="answer" id="w-wq_shift_swaps"><div class="answer-head"><p class="answer-q">2. Shift swaps</p>');
+    expect(html).not.toMatch(/<p class="answer-q">[^<]*_/);
+    expect(await page(`${base}/answers/wq_shift_swaps`)).toContain('<h1 class="question" id="question">Shift swaps</h1>');
+  });
+
+  // What happens when the company takes a written question off the job after an answer to it was written up: the job
+  // gets a new version, as with every change to it, and the application stays on its own, so Review & send asks it as before.
+  it("a written question taken off the job after the write-up still reads in the company's words: the application keeps its version of the job", async () => {
+    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
+    await entitlements.applyPlan(container.db, role.companyId, "basic");
+    type Saved = { version: number; outcome: string; packet: RolePacket };
+    const newest = async () => ((await (await json("GET", `/api/v1/roles/${roleId}/packets`)).json()) as Array<{ version: number }>)[0].version;
+    const put = async (written: Array<{ key?: string; question: string }>): Promise<Saved> => {
+      const r = await json("PUT", `/api/v1/roles/${roleId}/company-questions`, { baseVersion: await newest(), written });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return (await r.json()) as Saved;
+    };
+    const why = "Why would you like to work at a small practice?";
+    const swaps = "Are you happy to swap a shift now and then?";
+    const asked = await put([{ question: why }, { question: swaps }]);
+    expect(asked.outcome).toBe("approved_current");
+    const [whyKey, swapsKey] = (asked.packet.companyQuestions?.written ?? []).map((w) => w.key);
+    expect(swapsKey).toMatch(/^wq_/);
+    const t = await apply({ first: "Lena", last: "Moss", email: "lena.moss@example.com" });
+    await answerAll(t);
+    await post(`/c/screen/${t}/review`);
+    const scr = await screenOf(t);
+    expect((scr.progress.writeup as ScreenWriteup).answers.map((a) => a.questionKey)).toEqual([whyKey, swapsKey]);
+    // the owner takes the question off the job: a new version, the job's own from now on
+    const after = await put([{ key: whyKey, question: why }]);
+    expect(after).toMatchObject({ version: asked.version + 1, outcome: "approved_current" });
+    expect((after.packet.companyQuestions?.written ?? []).map((w) => w.key)).toEqual([whyKey]);
+    expect((await container.db.select().from(roles).where(eq(roles.id, roleId)))[0].currentPacketVersion).toBe(after.version);
+    expect((await container.db.select().from(applications).where(eq(applications.id, scr.applicationId)))[0].packetVersion).toBe(asked.version);
+    // Review & send and the answer's own page ask it as the company wrote it, never by its key
+    const base = `/c/screen/${t}`;
+    const html = await page(base);
+    expect(html).toContain(`<li class="answer" id="w-${swapsKey}"><div class="answer-head"><p class="answer-q">2. ${swaps}</p>`);
+    expect(html).not.toMatch(/<p class="answer-q">[^<]*_/);
+    expect(await page(`${base}/answers/${swapsKey}`)).toContain(`<h1 class="question" id="question">${swaps}</h1>`);
   });
 });

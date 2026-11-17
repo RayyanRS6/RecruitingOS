@@ -8,7 +8,7 @@ import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, applicationScopeGuard, isCanonicalId, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
-import { TERMINAL_STAGES } from "../services/application-actions";
+import { TERMINAL_STAGES, untoldFallbackDayOf } from "../services/application-actions";
 import { cancelInterviewInTx, candidateHeardOf } from "../services/interview-cancel";
 import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, NO_HOURS, OPEN_INTERVIEW, bookingFields, candidateEmailStates, candidateNoticeOfBooking, createApprovedInterview, placeOnInterview, refuseClash, refuseClosedRole, slotFromPerson } from "../services/interview-create";
 import { exitCleanup } from "../services/exit-cleanup";
@@ -643,8 +643,9 @@ applicationInterviewRoutes.get("/:id/interview-draft", requireTenant, async (c) 
  * recorded on the newest interview that is over and still undecided, so a second decision never overwrites the first
  * one's, and a "not moving forward" is filed privately like every decline (founder decision B6): the decision is not sent
  * until a person sends the decision message. `candidateNotice` ("not_told") and `dispositionSent` (false) say so on the
- * page. An interview still to come is called off, and a candidate who held a booked time or was offered times is told
- * at once, with no reason, that it is off (`interviewOffNotes`). "Hired" is the hire sheet (plan H1): the outcome
+ * page, and `untoldFallbackOn` names the day the safety net acts, the card's day. An interview still to come is called
+ * off, and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off
+ * (`interviewOffNotes`). "Hired" is the hire sheet (plan H1): the outcome
  * service records it with the start date (`hireDate`, and `offerAcceptedAt` if given), for those who record outcomes,
  * and the answer carries the backups to keep warm and closing the role (`hire`).
  */
@@ -672,6 +673,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let candidateNotice: CandidateNotice | undefined;
     let interviewsCancelled = 0;
     let interviewOffNotes = 0;
+    let untoldFallbackOn: string | null = null;
     let hired: { outcomeId: string; roleId: string; hire: HireFollowUp } | null = null;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
@@ -685,6 +687,9 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
       candidateNotice = "not_told";
       dispositionSent = false;
       stage = "rejected";
+      // The day the safety net acts on it, the day the "not told yet" card names (live test, 12 November 2026).
+      const [fresh] = await tx.select().from(applications).where(eq(applications.id, app.id)).limit(1);
+      untoldFallbackOn = fresh ? await untoldFallbackDayOf(tx, fresh, container.engine.clock()) : null;
     } else if (body.decision === "finalist") {
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "finalist", by: t.role, actor, reason: body.note ?? "finalist after interview" });
       stage = "finalist";
@@ -717,7 +722,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last.id, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT, ...(interviewsCancelled ? { interviewsEnded: interviewsCancelled } : {}) } : {}) }, hired };
+    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes, ...(untoldFallbackOn ? { untoldFallbackOn } : {}) }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT, ...(interviewsCancelled ? { interviewsEnded: interviewsCancelled } : {}) } : {}) }, hired };
   });
   if (result.hired) await tellRecruiterAboutOutcome(container, t.companyId, result.hired.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} recorded a hire (offer accepted outside the platform).`, `outcome:${result.hired.outcomeId}`);
   await container.kick();

@@ -15,6 +15,23 @@ export function dayKey(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/**
+ * Today as YYYY-MM-DD on the company's calendar once its time zone is known, the reader's own until then: the days the
+ * offer and the hire are recorded on are the company's (the API checks them against its today).
+ */
+function todayOf(now: Date, timeZone: string | null | undefined): string {
+  return timeZone ? todayIn(timeZone, now) : dayKey(now);
+}
+
+/**
+ * The day a moment (an ISO time) fell on, as YYYY-MM-DD, on the same calendar as `todayOf`: the company's once its time
+ * zone is known, the reader's own until then, never the UTC date (11 PM in Los Angeles is already the next day in UTC).
+ */
+function dayOf(at: string, timeZone: string | null | undefined): string {
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? at.slice(0, 10) : todayOf(d, timeZone);
+}
+
 /** "Monday, November 3": a plain day (YYYY-MM-DD) as people say it, read as that day wherever the reader is. */
 export function plainDayWords(day: string): string {
   const d = new Date(`${day.slice(0, 10)}T12:00:00`);
@@ -30,7 +47,7 @@ export function plainDayWords(day: string): string {
  * company's day (the API checks against it), the reader's own until the company's time zone is known.
  */
 export function offerDateBounds(timeZone: string | null, now: Date = new Date()): { max: string; initial: string } {
-  const today = timeZone ? todayIn(timeZone, now) : dayKey(now);
+  const today = todayOf(now, timeZone);
   return { max: today, initial: today };
 }
 
@@ -44,11 +61,14 @@ export function offerMadeToast(firstName: string): ToastParts {
   return { title: "Offer recorded.", detail: `Nothing was sent to ${firstName}. When they answer, record it on their page: they accepted, or they declined.` };
 }
 
-/** When the offer was made: the day recorded with it (the `offer.created` fact), else the day they moved to Offer. */
-export function offerMadeOn(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt">): string {
+/**
+ * When the offer was made: the day recorded with it (the newest `offer.created` fact), else the day they moved to Offer,
+ * on the company's calendar (`timeZone`; the reader's own until it has loaded), as the list's row counts it.
+ */
+export function offerMadeOn(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt">, timeZone: string | null = null): string {
   const e = [...a.timeline].filter((x) => x.type === "offer.created").sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt))[0];
   const made = typeof e?.payload.madeOn === "string" ? e.payload.madeOn : null;
-  return made ?? a.stageChangedAt.slice(0, 10);
+  return made ?? dayOf(a.stageChangedAt, timeZone);
 }
 
 /** The private note recorded with the offer, if any. */
@@ -58,28 +78,37 @@ export function offerNote(a: Pick<ApplicationDetail, "timeline">): string | null
 }
 
 const DAY = 86_400_000;
-const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 
-/** "today", "yesterday", "3 days ago": how long since a plain day, in the reader's calendar. */
-export function daysAgoWords(day: string, now: Date = new Date()): string {
-  const then = new Date(`${day.slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(then.getTime())) return "";
-  const n = Math.round((startOfDay(now) - startOfDay(then)) / DAY);
+/**
+ * "today", "yesterday", "3 days ago": how long since a plain day. Counted on the company's calendar when its zone is
+ * known, because the offer's day is the company's (the date field and the API both use it), else on the reader's. The
+ * live test of 12 November 2026 read "(yesterday)" in Pakistan for an offer made that day in Los Angeles.
+ */
+export function daysAgoWords(day: string, now: Date = new Date(), timeZone: string | null = null): string {
+  const n = Math.round((Date.parse(`${todayOf(now, timeZone)}T00:00:00Z`) - Date.parse(`${day.slice(0, 10)}T00:00:00Z`)) / DAY);
+  if (Number.isNaN(n)) return "";
   return n <= 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`;
 }
 
 /** The card while an offer waits on the candidate's answer (the "waiting on the candidate" group, plan H2). */
-export function waitingOnCandidateText(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt" | "candidate">, now: Date = new Date()): string {
-  const made = offerMadeOn(a);
+export function waitingOnCandidateText(a: Pick<ApplicationDetail, "timeline" | "stageChangedAt" | "candidate">, now: Date = new Date(), timeZone: string | null = null): string {
+  const made = offerMadeOn(a, timeZone);
   const first = a.candidate.firstName || "the candidate";
-  return `You recorded an offer made on ${plainDayWords(made)} (${daysAgoWords(made, now)}). The next move is ${first}'s. When they answer, record it here; nothing is sent to them either way.`;
+  return `You recorded an offer made on ${plainDayWords(made)} (${daysAgoWords(made, now, timeZone)}). The next move is ${first}'s. When they answer, record it here; nothing is sent to them either way.`;
 }
 
-/** The row's line for someone waiting on their answer to an offer: "Offer made: waiting on their answer 3 days". */
-export function waitingOnCandidateRow(a: Pick<ApplicationSummary, "group" | "daysInStage">): string | null {
+/**
+ * The row's line for someone waiting on their answer to an offer: "Offer made yesterday: waiting on their answer". The same
+ * day as the card on their panel (`waitingOnCandidateText`): the offer's own day, counted on the company's calendar
+ * (review of the live-test fixes, 12 November 2026: the row counted whole 24 hours since the stage changed, so it read
+ * "today" all the next morning, and never knew a day recorded as earlier). Without the offer's day (an older answer), the
+ * day they moved to Offer on the company's calendar, as the card does without the offer's fact (the second look at that
+ * fix: both read the UTC date, so a move at 11 PM in Los Angeles said "today" all the next day).
+ */
+export function waitingOnCandidateRow(a: Pick<ApplicationSummary, "group" | "stageChangedAt" | "offerMadeOn">, now: Date = new Date(), timeZone: string | null = null): string | null {
   if (a.group !== "waiting_on_candidate") return null;
-  if (a.daysInStage <= 0) return "Offer made today: waiting on their answer";
-  return `Offer made: waiting on their answer ${a.daysInStage} ${a.daysInStage === 1 ? "day" : "days"}`;
+  const ago = daysAgoWords(a.offerMadeOn ?? dayOf(a.stageChangedAt, timeZone), now, timeZone);
+  return ago ? `Offer made ${ago}: waiting on their answer` : "Offer made: waiting on their answer";
 }
 
 /** The toast after recording that they declined the offer (or withdrew): private, like every outcome. */
@@ -109,10 +138,11 @@ export function hireToast(input: { name: string; startDate: string | null; inter
 
 /**
  * A start date before today (a hire recorded after they started): Home's "keep your backups warm" card is kept through
- * the start day itself and gone after it, so nothing would remind anyone. Read in the reader's own calendar.
+ * the start day itself and gone after it, so nothing would remind anyone. Today is the company's day once its time zone
+ * is known, as for the offer's day (live test, 12 November 2026), the reader's own until then.
  */
-export function hireStarted(startDate: string | null | undefined, now: Date = new Date()): boolean {
-  return !!startDate && startDate.slice(0, 10) < dayKey(now);
+export function hireStarted(startDate: string | null | undefined, now: Date = new Date(), timeZone: string | null = null): boolean {
+  return !!startDate && startDate.slice(0, 10) < todayOf(now, timeZone);
 }
 
 /**
@@ -122,11 +152,11 @@ export function hireStarted(startDate: string | null | undefined, now: Date = ne
  * plainly, without promising one. With nobody to keep warm (only people who applied are still in process, never
  * interviewed or shortlisted) but a role that can still be closed, leaving it open is offered too, saying what Home does:
  * the sheet is never only "Close it now" (found by the whole-hire walk, 9 November 2026). `keepsBackups`: there are
- * backups, so the choice keeps them warm.
+ * backups, so the choice keeps them warm. `timeZone`: the company's, which says whether the start date has passed.
  */
-export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = new Date()): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null; keepsBackups: boolean; started: boolean } {
+export function hireFollowUpView(hire: HireFollowUp, name: string, now: Date = new Date(), timeZone: string | null = null): { startLine: string; backupsLine: string | null; people: HireFollowUp["backups"]["people"]; mayClose: boolean; closeWords: string | null; keepWarmWords: string | null; keepsBackups: boolean; started: boolean } {
   const start = hire.startDate ? plainDayWords(hire.startDate) : null;
-  const started = hireStarted(hire.startDate, now);
+  const started = hireStarted(hire.startDate, now, timeZone);
   const n = hire.backups.count;
   const backupsLine = n ? `${n === 1 ? "1 other person is" : `${n} other people are`} still in the running:` : null;
   // Home's "Close this job?" asks from the day after the start date until the job is closed.
@@ -157,8 +187,8 @@ export function recordedOutcomeLine(o: { recordedBy: { name?: string }; recorded
 }
 
 /** The toast after "Keep them warm" (or "Leave it open": once the start date has passed, or with nobody to keep warm, `backups` 0). */
-export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date(), backups = 1): ToastParts {
-  if (hireStarted(startDate, now)) return { title: "The job stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." };
+export function keepWarmToast(name: string, startDate: string | null, now: Date = new Date(), backups = 1, timeZone: string | null = null): ToastParts {
+  if (hireStarted(startDate, now, timeZone)) return { title: "The job stays open.", detail: "Nobody was told anything. Home asks you to close it until you do." };
   if (!backups) return { title: "The job stays open.", detail: `Nobody was told anything. After ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}, Home asks you to close it.` };
   return { title: "The job stays open.", detail: `Nobody was told anything. Home reminds you about your backups until ${name} starts${startDate ? ` on ${plainDayWords(startDate)}` : ""}.` };
 }

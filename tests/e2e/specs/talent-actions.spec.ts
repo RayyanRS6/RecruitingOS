@@ -9,10 +9,16 @@ import { createCompanyThroughTheForm, expectAccessible, seedRoleAndApplicant, si
  */
 const run = Date.now().toString(36);
 
+/** The day a toast names for the safety net: "Wednesday, November 18". */
+const SAFETY_NET_DAY = /goes by itself on (\w+day, \w+ \d{1,2})\./;
+
 test.describe("the candidate panel's choices", () => {
   skipWithoutFakeSignIn();
   // the waiting room opens every interview after 40 to 90 seconds at least (Q14), so seeding an applicant takes longer
   test.slow();
+  // The reader is in Pakistan and the company in Los Angeles, as in the live test of 12 November 2026 (L5): for much of the
+  // day the reader's calendar is a day ahead, and the toast and the card must still name the same day.
+  test.use({ timezoneId: "Asia/Karachi" });
   test("hold with a date, a private decline, the decision message sent after a preview, and the eligibility 'Decline now'", async ({ page, baseURL }) => {
     await page.goto("/login");
     await signIn(page, { email: `dana+${run}@talentactions.test`, name: "Dana Whitfield", provider: "google" });
@@ -53,12 +59,17 @@ test.describe("the candidate panel's choices", () => {
     await expect(maria.getByText(/It is private: nothing is sent to the candidate now\./)).toBeVisible();
     await expectAccessible(page, "candidate panel with the private decline step");
     await maria.getByRole("button", { name: "Confirm: not moving forward" }).click();
-    await expect(page.getByRole("status").filter({ hasText: /Moved to Not moving forward\..*Private: the candidate was not told\./ })).toBeVisible();
+    const declined = page.getByRole("status").filter({ hasText: /Moved to Not moving forward\..*Private: the candidate was not told\./ });
+    await expect(declined).toBeVisible();
+    // the day the toast names for the safety net (the second review of the live-test fixes, #18)
+    const mariaDay = SAFETY_NET_DAY.exec((await declined.textContent()) ?? "")?.[1];
+    expect(mariaDay, "the toast names the safety net's day").toBeTruthy();
 
-    // Telling them is a separate act (founder decisions B6, Q27, Q28): the card says when the safety net acts; the Send
-    // screen offers the approved wordings and a personal line, checked before anything goes; the exact message; then Send
+    // Telling them is a separate act (founder decisions B6, Q27, Q28): the card says when the safety net acts, the day the
+    // toast named; the Send screen offers the approved wordings and a personal line, checked before anything goes; the
+    // exact message; then Send
     await expect(maria.getByRole("heading", { name: "Maria has not been told yet" })).toBeVisible({ timeout: 30_000 });
-    await expect(maria.getByText(/^If nobody tells Maria first, the standard message goes by itself on \w+day, /)).toBeVisible();
+    await expect(maria.getByText(new RegExp(`^If nobody tells Maria first, the standard message goes by itself on ${mariaDay}\\.$`))).toBeVisible();
     await maria.getByRole("button", { name: "Send message" }).click();
     await expect(maria.getByText("What Maria gets")).toBeVisible({ timeout: 30_000 });
     await expect(maria.getByText(/It goes when you press Send, after \d+ seconds in which you can still undo it\./)).toBeVisible();
@@ -109,9 +120,14 @@ test.describe("the candidate panel's choices", () => {
     await expectAccessible(page, "candidate panel with the eligibility decline confirm step");
     await ana.getByRole("button", { name: "Confirm decline" }).click();
     // Maria's decision message may still be in its Undo window: a plain toast waits until that one's Undo ends
-    await expect(page.getByRole("status").filter({ hasText: /Moved to Not moving forward\./ })).toBeVisible({ timeout: 45_000 });
+    const anaDeclined = page.getByRole("status").filter({ hasText: /Moved to Not moving forward\./ });
+    await expect(anaDeclined).toBeVisible({ timeout: 45_000 });
+    const anaDay = SAFETY_NET_DAY.exec((await anaDeclined.textContent()) ?? "")?.[1];
+    expect(anaDay, "the toast names the safety net's day").toBeTruthy();
     await expect(ana.getByRole("heading", { name: "Declined on an eligibility answer" })).toBeVisible({ timeout: 30_000 });
     await expect(ana.getByRole("heading", { name: "Ana has not been told yet" })).toBeVisible();
+    // the live test's own path: her card names the day her toast named
+    await expect(ana.getByText(new RegExp(`^If nobody tells Ana first, the standard message goes by itself on ${anaDay}\\.$`))).toBeVisible();
   });
 
   test("'Stop this AI interview' takes back an invitation the candidate has not started, after a confirmation (plan A7)", async ({ page, baseURL }) => {

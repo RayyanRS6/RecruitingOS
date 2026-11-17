@@ -54,9 +54,10 @@ test.describe("making a job", () => {
     await expect(page.getByRole("status").filter({ hasText: "The draft is written." })).toBeVisible({ timeout: 90_000 });
     await expect(page.getByRole("heading", { name: "What you'll do" })).toBeVisible();
 
-    // what the draft still leaves open (who interviews, who decides) comes as more cards, answered the same way; the draft
-    // then says it is behind the answers and offers "Write it again with them". Ask for approval waits for all of it. Each
-    // pass takes whichever of those the page offers, as a person would.
+    // what the draft still leaves open (who interviews, who decides) comes as more cards, answered the same way: answers
+    // about the team (and why you are hiring) go into the draft at once, while one its words come from makes it say it is
+    // behind the answers and offer "Write it again with them". Ask for approval waits for all of it. Each pass takes
+    // whichever of those the page offers, as a person would.
     const again = page.getByRole("button", { name: "Write it again with them" });
     await expect(async () => {
       if ((await ask.getAttribute("aria-disabled")) === "true") {

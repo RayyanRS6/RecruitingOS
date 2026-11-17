@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
 import { audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
 import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
@@ -49,16 +49,41 @@ export async function recordOfferMade(tx: Tx, input: { app: App; by: MembershipR
 }
 
 /**
- * The candidate's answer to an offer made outside the app, once a person records the outcome: accepted with a hire,
- * declined when they turned it down or withdrew, withdrawn when the team ended it (declined them, or no hire). Nothing
- * when no such offer is open.
+ * The day the offer each person at Offer waits on was made (`made_on`), by application, for the Talent list's row: it says
+ * the same day as the candidate panel's card, which reads the newest `offer.created` fact, written with the newest offer
+ * (review of the live-test fixes, 12 November 2026: the row counted 24 hours since the stage changed, and said "today" the
+ * next morning). The newest offer whatever its state: an answer recorded at Offer and then taken back before they were
+ * told, or voided by an administrator, puts them back at Offer, waiting on that offer again ("made" since 17 November
+ * 2026; one taken back or voided before then left it settled: withdrawn, declined, accepted), and no newer one can be
+ * recorded while they are there (the second look at that fix). None when the newest has no day, as the card then says
+ * the day they moved to Offer. Only people at Offer are passed in; one query for the whole list.
  */
-export async function settleOutsideOffer(tx: Tx, input: { applicationId: string; companyId: string; outcome: string; actor: Actor; now: Date }): Promise<string | null> {
+export async function openOfferDays(tx: Tx, applicationIds: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!applicationIds.length) return out;
+  const rows = await tx.select({ applicationId: offers.applicationId, madeOn: offers.madeOn }).from(offers).where(inArray(offers.applicationId, [...applicationIds])).orderBy(desc(offers.createdAt));
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (seen.has(r.applicationId)) continue;
+    seen.add(r.applicationId);
+    if (r.madeOn) out.set(r.applicationId, r.madeOn);
+  }
+  return out;
+}
+
+/**
+ * The candidate's answer to an offer made outside the app, once a person records the outcome: accepted with a hire,
+ * declined when they turned it down or withdrew, withdrawn when the team ended it (declined them, or no hire), with the
+ * day the offer was made, which the outcome's answer names (`offerMadeOn`). Nothing when no such offer is open. An answer
+ * that no longer stands, taken back before they were told or voided by an administrator, puts the offer it settled back
+ * to "made" (`reopenOfferSettledBy` in @ros/core, from the offer fact written here), so the next answer settles it again.
+ */
+export async function settleOutsideOffer(tx: Tx, input: { applicationId: string; companyId: string; outcome: string; actor: Actor; now: Date }): Promise<{ status: string; madeOn: string | null } | null> {
   const status = input.outcome === "hired_externally" ? "accepted" : ["offer_declined_externally", "candidate_withdrew"].includes(input.outcome) ? "declined" : "withdrawn";
-  const [row] = await tx.update(offers).set({ status, respondedAt: input.now.toISOString() }).where(and(eq(offers.applicationId, input.applicationId), eq(offers.madeOutside, true), eq(offers.status, "made"))).returning({ id: offers.id });
+  const [row] = await tx.update(offers).set({ status, respondedAt: input.now.toISOString() }).where(and(eq(offers.applicationId, input.applicationId), eq(offers.madeOutside, true), eq(offers.status, "made"))).returning({ id: offers.id, madeOn: offers.madeOn });
   if (!row) return null;
   await emit(tx, { type: status === "accepted" ? "offer.accepted" : status === "declined" ? "offer.declined" : "offer.rescinded", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.applicationId }, payload: { offerId: row.id, madeOutside: true, recordedOutsidePlatform: true, outcome: input.outcome } });
-  return status;
+  return { status, madeOn: row.madeOn };
 }
 
 /** Tells the ITS recruiter working on this role or candidate about an outcome. Names the role, never the candidate. */

@@ -10,7 +10,7 @@ import { toast } from "../../toast";
 import { Composer } from "./Composer";
 import { SuggestionCard } from "./DraftPanel";
 import { ProposalCard } from "./ProposalCard";
-import { CHANGE_REQUEST_MAX, asksBack, checkSignature, refinePaths } from "./refine-api";
+import { CHANGE_REQUEST_MAX, checkSignature, nothingToConfirm, refinePaths, replyWords } from "./refine-api";
 import { errorWords } from "./rules";
 
 /**
@@ -26,7 +26,8 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
   const paths = refinePaths({ kind: "role", roleId });
   const [text, setText] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
-  const [question, setQuestion] = useState<string | null>(null);
+  /** The assistant's reply when nothing needs to change (a question back, or why nothing needs doing): nothing to confirm. */
+  const [reply, setReply] = useState<string | null>(null);
   const [proposal, setProposal] = useState<PacketRevisionProposal | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -36,8 +37,8 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
   const check = useQuery({ queryKey: ["role-check", roleId, checkSignature(packet)], queryFn: () => api.get<RequirementsCheck>(paths.check), retry: false, staleTime: Number.POSITIVE_INFINITY });
   const revise = useMutation({
     mutationFn: (message: string) => api.post<PacketRevisionProposal>(paths.revise, { message }),
-    onMutate: (message) => { setAsked(message); setQuestion(null); setProblem(null); setProposal(null); setText(""); },
-    onSuccess: (r) => (asksBack(r) ? setQuestion(r.question) : setProposal(r)),
+    onMutate: (message) => { setAsked(message); setReply(null); setProblem(null); setProposal(null); setText(""); },
+    onSuccess: (r) => (nothingToConfirm(r) ? setReply(replyWords(r)) : setProposal(r)),
     onError: (err, message) => { setText(message); setAsked(null); setProblem(errorWords(err)); },
   });
   const confirm = useMutation({
@@ -85,7 +86,7 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
         {/* what was asked, as the person's own message; then the assistant at work, as the conversation shows it */}
         {asked ? <p className="bubble user max-w-[min(68ch,88%)] rounded-2xl rounded-tr-md text-[14px] motion-safe:animate-enter">You asked: "{asked}"</p> : null}
         {revise.isPending ? <p className="inline-flex items-center gap-2.5 text-[13px] text-ink-3 motion-safe:animate-fade"><span className="dots" aria-hidden="true"><i /><i /><i /></span>Working out the change…</p> : null}
-        {question ? <Alert tone="info">{question}</Alert> : null}
+        {reply ? <Alert tone="info">{reply}</Alert> : null}
         {proposal ? <ProposalCard proposal={proposal} onConfirm={() => confirm.mutate(proposal)} onKeep={() => keepAsIs.mutate(proposal)} confirming={confirm.isPending} keeping={keepAsIs.isPending} /> : null}
         {problem ? <Alert tone="critical">{problem}</Alert> : null}
         <Composer value={text} onChange={setText} onSend={(t) => revise.mutate(t)} sending={revise.isPending} disabled={!!proposal} changeMax={CHANGE_REQUEST_MAX} label="Ask for a change to this role" placeholder="Ask me to change anything: make it warmer, drop the weekend requirement…" />

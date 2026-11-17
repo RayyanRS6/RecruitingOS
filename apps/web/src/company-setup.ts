@@ -1,4 +1,5 @@
 import type { SignupRequest } from "@ros/contracts";
+import { zoneWords } from "./publishing";
 
 /**
  * The sign-up form's choices, kept out of the page so they can be tested: the business types, which of them have a
@@ -80,16 +81,29 @@ export function verticalHint(vertical: string): string {
     : "We do not have a hiring guide for this kind of business yet. Your jobs are drafted from what you tell the assistant and public pay data.";
 }
 
-/** The time zones we offer. Interview times and the hours candidates may be texted are worked out in the one chosen. */
-export const ZONE_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "America/New_York", label: "Eastern time (New York)" },
-  { value: "America/Chicago", label: "Central time (Chicago)" },
-  { value: "America/Denver", label: "Mountain time (Denver)" },
-  { value: "America/Phoenix", label: "Arizona (no daylight saving)" },
-  { value: "America/Los_Angeles", label: "Pacific time (Los Angeles)" },
-  { value: "America/Anchorage", label: "Alaska time (Anchorage)" },
-  { value: "Pacific/Honolulu", label: "Hawaii time (Honolulu)" },
+/**
+ * The time zones we offer. Interview times and the hours candidates may be texted are worked out in the one chosen.
+ * `label` is the sign-up form's own words; `short` is how a screen names it beside a time ("Time (Pacific time)").
+ */
+export const ZONE_CHOICES: ReadonlyArray<{ value: string; label: string; short: string }> = [
+  { value: "America/New_York", label: "Eastern time (New York)", short: "Eastern time" },
+  { value: "America/Chicago", label: "Central time (Chicago)", short: "Central time" },
+  { value: "America/Denver", label: "Mountain time (Denver)", short: "Mountain time" },
+  { value: "America/Phoenix", label: "Arizona (no daylight saving)", short: "Arizona time" },
+  { value: "America/Los_Angeles", label: "Pacific time (Los Angeles)", short: "Pacific time" },
+  { value: "America/Anchorage", label: "Alaska time (Anchorage)", short: "Alaska time" },
+  { value: "Pacific/Honolulu", label: "Hawaii time (Honolulu)", short: "Hawaii time" },
 ];
+
+/**
+ * A zone in the sign-up form's words, never its id ("America/Los_Angeles" read as raw text on the owner's screens: live
+ * test, 12 November 2026): its `label` ("Pacific time (Los Angeles)") where a zone is chosen or stated, its `short` name
+ * beside a time. A zone the form does not offer reads as the browser names it ("Eastern Time"), else as it is stored.
+ */
+export function zoneName(zone: string, form: "label" | "short" = "label"): string {
+  const offered = ZONE_CHOICES.find((z) => z.value === zone);
+  return offered ? offered[form] : zoneWords(zone);
+}
 
 /** Minutes ahead of UTC in a zone at a moment; NaN for a name the browser does not know. */
 function offsetMinutes(zone: string, at: Date): number {

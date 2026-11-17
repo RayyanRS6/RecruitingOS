@@ -64,7 +64,7 @@ describe("Set a date and time on a candidate's panel", () => {
     expect(html).toMatch(/<section class="card needs-you lift grid gap-3 p-5 sm:p-6 \[&amp;&gt;\.card-title\]:mb-0"><div class="card-title"><h2>Set a date and time<\/h2><\/div>/);
     // native controls, the company's zone named beside the time, the round's own length chosen
     expect(html).toMatch(/<label for="iv-date">Date<\/label><input id="iv-date" class="input" type="date" min="\d{4}-\d{2}-\d{2}" value=""\/>/);
-    expect(html).toContain('<label for="iv-time">Time (America/Chicago)</label><input id="iv-time" class="input" type="time" value=""/>');
+    expect(html).toContain('<label for="iv-time">Time (Central time)</label><input id="iv-time" class="input" type="time" value=""/>');
     expect(html).toContain('<option value="30" selected="">30 minutes</option>');
     expect(html).toMatch(/<legend class="small muted mb-2">Where<\/legend>/);
     expect(html).toContain('<label class="option-row"><input type="radio" name="iv-place" checked="" value="link"/><span class="min-w-0">Video link</span></label>');
@@ -111,7 +111,8 @@ describe("the form once filled in", () => {
 
   it("says the time back on the company's clock, by name, and wakes the button", () => {
     const t = form({});
-    expect(t).toContain("Tuesday, November 12, 2030 at 2:30 PM, America/Chicago");
+    expect(t).toContain("Tuesday, November 12, 2030 at 2:30 PM, Central time");
+    expect(t).not.toContain("America/Chicago");
     expect(t).toContain("Book and email Maria");
     expect(t).not.toContain("Choose a date");
   });
@@ -211,7 +212,9 @@ describe("the Interviews page", () => {
     const t = text(html);
     expect(t).toContain("No time yet");
     expect(html).toMatch(/<section class="card needs-you sm:p-5"><div class="card-title"><h2>Set the date and time<\/h2><\/div><form class="grid gap-3" novalidate="">/i);
-    expect(html).toContain('<label for="set-iv1-time">Time (America/Chicago)</label>');
+    expect(html).toContain('<label for="set-iv1-time">Time (Central time)</label>');
+    // no time yet: the details say so, with no zone after it
+    expect(t).toContain("When not yet Length");
     expect(t).toContain("Book and email Maria");
     // Change it: only Cancel here; the old way not offered with nobody's hours
     expect(t).toContain("Cancel interview");
@@ -226,6 +229,9 @@ describe("the Interviews page", () => {
     const booked = base({ status: "scheduled", startsAt: "2030-11-12T20:30:00.000Z", endsAt: "2030-11-12T21:00:00.000Z", format: "onsite", selectedSlot: { id: "x", startsAt: "2030-11-12T20:30:00.000Z", endsAt: "2030-11-12T21:00:00.000Z", interviewerUserIds: ["u1"], source: "person", address: "120 Main Street, Tustin" }, participants: [{ userId: "u1", name: "Dana Whitfield", email: "dana@bright.test", status: "confirmed" }] });
     const t = text(page(booked));
     expect(t).toContain("Scheduled");
+    // the zone by name beside the time, never its id (live test, 12 November 2026)
+    expect(t).toContain("When Tue, Nov 12, 2:30 PM (Central time)");
+    expect(t).not.toContain("America/Chicago");
     expect(t).toContain("Where 120 Main Street, Tustin");
     expect(t).toContain("Move it");
     expect(t).toContain("Cancel interview");
@@ -237,6 +243,17 @@ describe("the Interviews page", () => {
     expect(failed).toContain("The email to Maria could not be delivered. Tell them yourself.");
     const noEmail = text(page({ ...booked, candidateEmail: "no_email" }));
     expect(noEmail).toContain("There is no email address on file: tell them yourself.");
+  });
+
+  // Review of the live-test fixes, 12 November 2026 (#59): with times out, nothing on the sheet said which clock they are on
+  it("times on offer: the card names the zone they are on, once, by its name; the details still say 'not yet' with none", () => {
+    const html = page(base({ status: "scheduling", offeredSlots: slots }));
+    const t = text(html);
+    expect(t).toContain("Waiting on the candidate");
+    expect(html).toContain("<h2>Times offered to the candidate (Central time)</h2>");
+    expect(t.match(/Book this for them/g)).toHaveLength(3);
+    expect(t).toContain("When not yet Length");
+    expect(t).not.toContain("America/Chicago");
   });
 
   it("times that lapsed get the form too, while it is their newest interview", () => {
@@ -251,6 +268,28 @@ describe("the Interviews page", () => {
     const t = text(page(base({ status: "cancelled", cancelReason: "Clash" })));
     expect(t).toContain("Interview again? This interview was cancelled. Set a new date and time");
     expect(t).not.toMatch(/approve a new interview|fresh times go out/i);
+  });
+
+  it("the brief says a skill checked only in your own interviews is for this interview, never 'not assessed yet' (live test, 12 November 2026), and where each must-have's quote is from", () => {
+    const skill = (key: string, name: string, evaluatedIn: string, finding: string | null = null) => ({ key, name, definition: `${name} defined.`, indicators: [], finding, note: null, evaluatedIn });
+    const mustHaves = [
+      { key: "mh_dr", text: "Digital radiography", met: "yes", quote: "Bitewing X-rays with digital sensors", source: "resume", aboutPay: false },
+      { key: "mh_sat", text: "Saturdays", met: "yes", quote: "Yes, every other Saturday", source: "screen", aboutPay: false },
+      { key: "mh_cpr", text: "CPR card", met: "partially", quote: null, source: "resume", aboutPay: false },
+    ];
+    const brief = { candidateFirstName: "Maria", round: { key: "r1", title: "Working interview", purpose: "See the work.", durationMinutes: 30, format: "video" }, competencies: [skill("software", "Practice software", "interview"), skill("chairside", "Chairside skill", "both"), skill("patients", "Patient care", "both", "evidenced")], questions: [], mustHaves, strengths: [], concerns: [], screen: null, pay: null, includesPay: true };
+    const t = text(page(base({ brief })));
+    expect(t).toContain("Practice software : Practice software defined. for this interview");
+    expect(t).not.toContain("Practice software defined. not assessed yet");
+    // a skill the AI reviews read keeps its words: nothing found yet, or what was found
+    expect(t).toContain("Chairside skill : Chairside skill defined. not assessed yet");
+    expect(t).toContain("Patient care : Patient care defined. seen");
+    expect(t).toContain('Digital radiography met "Bitewing X-rays with digital sensors"');
+    // the second review of the live-test fixes (#16): each quote says where it is from, as the email does; no quote, no words
+    expect(t).toContain('Digital radiography met "Bitewing X-rays with digital sensors", from the résumé');
+    expect(t).toContain('Saturdays met "Yes, every other Saturday", in the AI interview');
+    expect(t).toContain("CPR card partly met");
+    expect(t.match(/from the résumé/g)).toHaveLength(1);
   });
 });
 

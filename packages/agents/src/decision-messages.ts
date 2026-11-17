@@ -5,7 +5,7 @@ import { applications, approvalRequests, candidates, communications, companies, 
 import type { Integrations } from "@ros/integrations";
 import { CLOSE_OUT_TEMPLATE, dispositionMessage, sendCloseOutNote, sendDisposition, sendStillReviewingNote, type CancelledInterview, type PersonalLine } from "./coordinator";
 import { HELD_REASON } from "./outbox";
-import { UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, workingDayRulesFor, workingDaysSince } from "./orchestrator";
+import { UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, untoldFallbackDue, workingDayRulesFor } from "./orchestrator";
 
 /**
  * Telling candidates a private decision (founder decision B6; plan Wave G). Everything that writes the decision message,
@@ -239,17 +239,17 @@ export async function queueClosingMessages(q: Queryable, integrations: Integrati
 }
 
 /**
- * The closing message for one person past the plan's candidates per job (the plans of 5 November 2026, Rule 2): the role_closed
- * wording, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Its key is
- * one per application, so nobody gets it twice, and the fact on the record means nobody tries again if it could not go. Nothing
- * goes to the team and nobody is brought in. Sent by itself at five working days (`runUntoldSafetyNet`), when a person sends
- * the closing message for the others (`tellLockedOfClose`), or by a change of plan about to open them, so they are opened as
- * told (`unlockApplicants`). True when it is on its way.
+ * The decision message by itself for one person past the plan's candidates per job (the plans of 5 November 2026, Rule 2), in
+ * `wording`, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Nothing
+ * goes to the team and nobody is brought in, and the fact on the record means nobody tries again if it could not go. True
+ * when it is on its way. The closing message for someone a closed job left in its talent pool (`tellOneLockedOfClose`), or
+ * the standard wording of the decision (`defaultWording`) for someone ITS decided about under a grant, on a job still open
+ * or not, once the safety net's day comes (`runUntoldSafetyNet`; known bug 141).
  */
-export async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
+export async function tellOneLocked(q: Queryable, integrations: Integrations, input: { app: App; wording: DecisionWording; statusBaseUrl: string; now: Date }): Promise<boolean> {
   const { app } = input;
   const decisionAt = new Date(app.rejectedAt ?? app.stageChangedAt).toISOString();
-  const r = await queueDecisionMessage(q, integrations, { app, actor: CANDIDATE_LOCK_ACTOR, wording: "role_closed", statusBaseUrl: input.statusBaseUrl, now: input.now }).catch((e: unknown) => {
+  const r = await queueDecisionMessage(q, integrations, { app, actor: CANDIDATE_LOCK_ACTOR, wording: input.wording, statusBaseUrl: input.statusBaseUrl, now: input.now }).catch((e: unknown) => {
     if (e instanceof DecisionMessageError && (e.code === "already_told" || e.code === "not_decided")) return null;
     throw e;
   });
@@ -257,6 +257,16 @@ export async function tellOneLockedOfClose(q: Queryable, integrations: Integrati
   const went = r.notice === "queued" || r.notice === "held";
   await emit(q, { type: "application.untold_fallback", companyId: app.companyId, actor: CANDIDATE_LOCK_ACTOR, subject: { type: "application", id: app.id }, payload: { action: went ? "sent" : "not_sent", decisionAt, communicationId: r.communicationId, wording: r.wording, locked: true } });
   return went;
+}
+
+/**
+ * The closing message for one person past the plan's candidates per job (Rule 2), through `tellOneLocked`: the role_closed
+ * wording. Its key is one per application, so nobody gets it twice. Sent by itself on the safety net's day
+ * (`runUntoldSafetyNet`), when a person sends the closing message for the others (`tellLockedOfClose`), or by a change of plan
+ * about to open them, so they are opened as told (`unlockApplicants`). True when it is on its way.
+ */
+export async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
+  return tellOneLocked(q, integrations, { ...input, wording: "role_closed" });
 }
 
 /** Everyone locked this closed role left untold hears when a person tells the others: nobody waits five days for the same news. Returns how many. */
@@ -276,19 +286,23 @@ export type SafetyNetDeps = { integrations: Integrations; statusBaseUrl: string;
 export type SafetyNetResult = { applicationId: string; action: "sent" | "recruiter" };
 
 /**
- * Q27: a decision nobody has told the candidate about five working days after it was made (Monday to Friday in the
- * company's time zone, holidays left out). Under "Do it" for `disposition.send` the standard message goes out by
- * itself through the same gate and wording as a person's Send, and the team is told who got it. When the settings ask
- * for approval, keep decisions with a person, or an ITS recruiter is running the role, nothing is sent: a recruiter is
- * brought in, one request per role, to make sure they are told. Someone with no email address on file brings in a
- * recruiter too. Once per decision (recorded as `application.untold_fallback` with when the decision was made). Someone
- * whose details were deleted at their request is never written to, and nobody is asked to reach them. Someone a change of
- * plan just opened counts from then: until then the team could not tell them.
+ * Q27: a decision nobody has told the candidate about by the fifth working day after it was made (Monday to Friday in the
+ * company's time zone, its contact days, holidays left out). It is due on that day by the company's calendar, the day the
+ * toast and the "not told yet" card name, whatever hour the daily check runs (`untoldFallbackDue`). Under "Do it" for
+ * `disposition.send` the standard message goes out by itself through the same gate and wording as a person's Send, and
+ * the team is told who got it. When the settings ask for approval, keep decisions with a person, or an ITS recruiter is
+ * running the role, nothing is sent: a recruiter is brought in, one request per role, to make sure they are told. Someone
+ * with no email address on file brings in a recruiter too. Once per decision (recorded as `application.untold_fallback`
+ * with when the decision was made). Someone whose details were deleted at their request is never written to, and nobody is
+ * asked to reach them. Someone a change of plan just opened counts from then: until then the team could not tell them.
  *
- * Someone locked (the plans of 5 November 2026, Rule 2) can only be here because their job closed: the closing message goes
- * by itself whatever the settings say, because the team cannot tell them, with no name to the team and no recruiter. They were
- * promised a date when they applied, and a job closing does not move it, so they are due by then too: from the last day before
- * it, as the close-out note would have gone, or at five working days if that comes first.
+ * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself whatever the settings say, because the team cannot
+ * tell them, with no name to the team and no recruiter: the closing message when their job closed and left them in its talent
+ * pool, and the standard wording of the decision when ITS decided about them under a grant, on a job still open or not
+ * (known bug 141: nothing ever told them). They were promised a date when they applied, and a decision or a job closing does
+ * not move it, so they are due by then too: from the day before it by the company's calendar (29 days after they applied, as
+ * the close-out note goes), whatever hour the daily check runs, or on the fifth working day if that comes first. The day the
+ * answer, the toast and the card name is that day (`untoldFallbackDay`).
  */
 export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, companyId: string): Promise<SafetyNetResult[]> {
   const untold = (await q.select({ app: applications }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.companyId, companyId), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt)))).map((r) => r.app);
@@ -296,8 +310,8 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
   const rules = await workingDayRulesFor(q, companyId, deps.now);
   const decidedAt = (a: App) => new Date(a.rejectedAt ?? a.stageChangedAt).toISOString();
   const unlocks = await unlockedAtFor(q, untold.map((a) => a.id));
-  const promiseFallsDue = (a: App) => !!a.lockedAt && deps.now.getTime() - Date.parse(a.createdAt) >= CLOSE_OUT_SENDS_FROM_DAYS * 86_400_000;
-  const due = untold.filter((a) => promiseFallsDue(a) || workingDaysSince(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, 60, rules) >= UNTOLD_SEND_WORKING_DAYS);
+  // Someone locked by the date they were promised too, on the company's calendar like the fifth working day.
+  const due = untold.filter((a) => untoldFallbackDue(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, rules, a));
   if (!due.length) return [];
   const waiting = await decisionsWaitingApproval(q, due.map((a) => a.id));
   const handled = new Set((await q.select({ subjectId: events.subjectId, at: sql<string>`${events.payload}->>'decisionAt'` }).from(events).where(and(eq(events.type, "application.untold_fallback"), inArray(events.subjectId, due.map((a) => a.id))))).map((e) => `${e.subjectId}|${e.at}`));
@@ -307,8 +321,10 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
   if (lockedOnes.length) {
     const closed = new Set((await q.select({ id: roles.id }).from(roles).where(and(inArray(roles.id, [...new Set(lockedOnes.map((a) => a.roleId))]), eq(roles.status, "closed")))).map((r) => r.id));
     for (const app of lockedOnes) {
-      if (app.stage !== "talent_pool" || !closed.has(app.roleId)) continue;
-      if (await tellOneLockedOfClose(q, deps.integrations, { app, statusBaseUrl: deps.statusBaseUrl, now: deps.now })) results.push({ applicationId: app.id, action: "sent" });
+      // The closing message to someone a closed job left in its talent pool; the standard wording of the decision to anyone
+      // else (ITS's decline or talent pool under a grant), never the closing message on a job that has not closed.
+      const wording = defaultWording(app, { status: closed.has(app.roleId) ? "closed" : "open" });
+      if (await tellOneLocked(q, deps.integrations, { app, wording, statusBaseUrl: deps.statusBaseUrl, now: deps.now })) results.push({ applicationId: app.id, action: "sent" });
     }
   }
   const byRole = new Map<string, { sent: App[]; recruiter: Array<{ app: App; why: string }> }>();

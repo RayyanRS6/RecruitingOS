@@ -188,10 +188,20 @@ describe("the Candidates page", () => {
     expect(none.match(/Clear filters/g)).toHaveLength(1);
   });
 
-  it("shows 'No score yet' on a row nothing could be judged for", () => {
+  it("shows 'No score yet' on a row nothing could be judged for yet, and 'No score' for someone decided before any reading", () => {
+    // Luis was declined before any AI review, and none will come for him: never "yet" (review of the live-test fixes, #57)
     nav.search = "ownerStage=not_moving_forward";
     const html = render(client([]), createElement(People));
-    expect(html).toContain('<span class="score-slot"><span class="score none sm">No score yet</span></span>');
+    expect(html).toContain('<span class="score-slot"><span class="score none sm">No score</span></span>');
+    expect(html).not.toContain("No score yet");
+    // someone still in process with no reading yet keeps "No score yet", beside him
+    nav.search = "";
+    const qc = client([]);
+    const ivy = { ...maria, id: "a3", candidate: { id: "c3", name: "Ivy Chen", email: "ivy@example.com", phone: null, locationText: null }, assessment: null, score: null };
+    qc.setQueryData(["applications", "r1"], { applications: [ivy, luis], counts });
+    const both = render(qc, createElement(People));
+    expect(both).toContain('<span class="score-slot"><span class="score none sm">No score yet</span></span>');
+    expect(both).toContain('<span class="score-slot"><span class="score none sm">No score</span></span>');
   });
 
   it("says on a row what the score rests on, and when the reading was made against an earlier version of the role", () => {

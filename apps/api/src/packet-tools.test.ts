@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { packetFingerprint, storeDraftPacket } from "@ros/agents";
 import { entitlements } from "@ros/core";
 import type { DraftRolePacket, IntakeSessionView, JobPreview, PacketDiff, PacketRevisionProposal, RequirementsCheck, RolePacket } from "@ros/contracts";
-import { aiRuns, companies, events, rolePackets } from "@ros/db";
+import { aiRuns, companies, events, intakeSessions, rolePackets } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { putOnInterview, signInAs, useLaterApplyFlow, useOneVisitApplyFlow } from "./test-helpers";
@@ -32,6 +32,14 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
   const versions = async () => read<Array<{ version: number; status: string; source: string; changeSummary: string; createdBy: { id: string }; packet: RolePacket }>>(await json(owner, "GET", `/api/v1/roles/${roleId}/packets`));
   const newest = async () => (await versions())[0];
   const meId = async (cookie: string) => (await read<{ user: { id: string } }>(await json(cookie, "GET", "/api/v1/auth/me"))).user.id;
+  /** The packet.revise runs asked with these words. */
+  const revisionRuns = async (request: string) => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "packet.revise"))).filter((x) => (x.inputRef as { request?: string }).request === request);
+  /** Those runs as the first try and the fresh one, which names the first (`retryOf`). */
+  const triesOf = async (request: string) => {
+    const runs = await revisionRuns(request);
+    const again = runs.filter((x) => (x.inputRef as { retryOf?: string }).retryOf);
+    return { runs, first: runs.find((x) => !(x.inputRef as { retryOf?: string }).retryOf), again };
+  };
   const MESSAGE = "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 
   beforeAll(async () => {
@@ -152,9 +160,45 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const r = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: "Add a must-have: Eaglesoft experience" });
       expect(r.status).toBe(502);
       expect(await errorOf(r)).toMatchObject({ code: "ai_failed", message: expect.stringMatching(/Nothing was changed/) });
+      // an outage is not asked again here: one run, as it ended
+      expect((await revisionRuns("Add a must-have: Eaglesoft experience")).map((x) => x.status)).toEqual(["error"]);
       container.fake!.clearScripts();
       const tooLong = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: "x".repeat(2_001) });
       expect(await errorOf(tooLong)).toMatchObject({ code: "message_too_long", message: expect.stringMatching(/2,000 characters/) });
+    });
+
+    // The live test of 12 Nov 2026: "no valid output (unconstrained): the reply holds no JSON object", and the same words
+    // sent again worked.
+    it("a reply with no usable answer is asked for once more, afresh; a second one fails plainly, naming no editor", async () => {
+      container.fake!.failNext("packet.revise", "unusable");
+      const once = "Make the messages more direct";
+      const r = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: once });
+      expect(r.status).toBe(200);
+      const proposal = await read<PacketRevisionProposal>(r);
+      expect(proposal.sections).toEqual(["communication"]);
+      // the first run keeps its row as it ended (Console > Problems lists it); the second names it, and the proposal is the second's
+      const tries = await triesOf(once);
+      expect(tries.runs).toHaveLength(2);
+      expect(tries.first).toMatchObject({ status: "invalid_output", error: "no valid output (unconstrained): the reply holds no JSON object" });
+      expect(tries.again).toEqual([expect.objectContaining({ status: "ok", inputRef: expect.objectContaining({ target: "draft", sessionId: draftId, request: once, retryOf: tries.first!.id }) })]);
+      expect(proposal.revisionId).toBe(tries.again[0].id);
+      const applied = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions/${proposal.revisionId}/apply`);
+      expect(applied.status).toBe(201);
+      expect((await read<{ draft: DraftRolePacket }>(applied)).draft.communication.tone).toBe("direct");
+      // twice: nothing changed, and the way on is to try again or bring in a recruiter (the builder's button), never the editor
+      container.fake!.failNext("packet.revise", "unusable");
+      container.fake!.failNext("packet.revise", "unusable");
+      const twice = "Make the messages warmer";
+      const failed = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: twice });
+      expect(failed.status).toBe(502);
+      const error = await errorOf(failed);
+      expect(error).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again, or bring in a recruiter." });
+      expect(error.message).not.toMatch(/editor/);
+      // asked twice and no more
+      const both = await triesOf(twice);
+      expect(both.runs.map((x) => x.status)).toEqual(["invalid_output", "invalid_output"]);
+      expect(both.again.map((x) => (x.inputRef as { retryOf?: string }).retryOf)).toEqual([both.first!.id]);
+      container.fake!.clearScripts();
     });
 
     it("the requirements check suggests, and only a tapped fix changes the draft (C16)", async () => {
@@ -175,6 +219,188 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       expect(out.draft.competencies.some((c) => c.definition === "Team player with a positive attitude" && c.evaluatedIn === "interview")).toBe(true);
       expect(out.check.suggestions.some((x) => x.kind === "trait_as_skill")).toBe(false);
       expect((await container.db.select().from(events).where(and(eq(events.type, "packet.check_applied"), eq(events.subjectId, draftId)))).length).toBe(1);
+      // the fix goes into the answers too: the must-have moved to the interview is no longer one of them
+      expect((await session(draftId)).facts.mustHaves).not.toContain("Team player with a positive attitude");
+    });
+
+    // The live test of 12 Nov 2026: writing the draft again brought back the words a change by chat had fixed.
+    it("a change confirmed on the draft goes into the answers too, so writing it again keeps it; one taken out stays out", async () => {
+      const id = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE }))).session.id;
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`)).status).toBe(200);
+      const confirm = async (message: string) => {
+        const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message }));
+        expect(p.sections.length).toBeGreaterThan(0);
+        expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+        return session(id);
+      };
+      const added = await confirm("Add a must-have: Dentrix experience");
+      expect(added.facts.mustHaves).toContain("Dentrix experience");
+      // kept in the answers, so writing it again loses nothing, and "Write it again" has nothing to warn about (review of
+      // the live-test fixes, 12 Nov 2026)
+      expect(added.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0 });
+      const moved = await confirm("Change the schedule to Tuesday to Saturday, 7 to 4");
+      expect(moved.facts.schedule).toBe("Tuesday to Saturday, 7 to 4");
+      expect(moved.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0 });
+      // writing it again keeps both
+      const again = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      expect(again.draft.requirements.mustHaves.map((m) => m.text)).toContain("Dentrix experience");
+      expect(again.draft.identity.schedule).toBe("Tuesday to Saturday, 7 to 4");
+      // taken out by chat: held out of what the assistant sends back, so a later turn does not bring it back
+      const taken = await confirm("Take out Dentrix experience");
+      expect(taken.facts.mustHaves).not.toContain("Dentrix experience");
+      expect(taken.readiness.draftOutOfDate).toBe(false);
+      const [row] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, id));
+      expect((row.serverState as { removed: Array<{ field: string; value: string }> }).removed).toContainEqual({ field: "mustHaves", value: "Dentrix experience" });
+      const turned = await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/messages`, { message: "Must-haves: Dentrix experience" }));
+      expect(turned.session.facts.mustHaves).not.toContain("Dentrix experience");
+      expect(turned.session.readiness.draftEdits).toBe(0);
+      // a change writing it again would lose is counted, and "Write it again" says so first
+      const direct = await confirm("Make the messages more direct");
+      expect(direct.readiness.draftEdits).toBe(1);
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+    });
+
+    /** A new draft from MESSAGE, written. */
+    const writtenDraft = async () => {
+      const id = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE }))).session.id;
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`)).status).toBe(200);
+      return id;
+    };
+    const answer = async (id: string, patch: unknown) => (await read<{ session: IntakeSessionView }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/answers`, { patch, reply: false }))).session;
+
+    // Review of the live-test fixes, 12 Nov 2026 (#4, #27): the reason is set on the draft by rule from the answers, so a
+    // change of it by chat was shown, confirmed and toasted "Change saved", then put back.
+    it("why you are hiring, changed by chat on a draft, goes into the answers, so it stays", async () => {
+      const id = await writtenDraft();
+      const grown = await answer(id, { set: { reason: "growth" } });
+      expect(grown.facts.reason).toBe("growth");
+      expect(grown.draft!.business.reason).toBe("growth");
+      container.fake!.scriptNext("packet.revise", { summary: "I changed why you are hiring: you are replacing Maria, who leaves in December.", changes: { business: { ...grown.draft!.business, reason: "replacement", reasonDetail: "Maria leaves in December" } }, notChanged: [] });
+      const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Actually we are replacing Maria, who leaves in December." }));
+      expect(p.sections).toEqual(["business"]);
+      expect(p.diff.sections.flatMap((s) => s.changes.map((c) => [c.label, c.before, c.after]))).toContainEqual(["Why you are hiring", "The team is growing", "Replacing someone who left"]);
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+      const after = await session(id);
+      expect(after.facts).toMatchObject({ reason: "replacement", reasonDetail: "Maria leaves in December" });
+      expect(after.draft!.business).toMatchObject({ reason: "replacement", reasonDetail: "Maria leaves in December" });
+      // set on the draft by rule: nothing to write again, and nothing a rewrite would lose
+      expect(after.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0 });
+      // the next answer brings the draft up to date by rule, and the reason stays
+      const later = await answer(id, { set: { decisionMakerUserId: managerId } });
+      expect(later.draft!.business).toMatchObject({ reason: "replacement", reasonDetail: "Maria leaves in December" });
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+    });
+
+    // Review of the live-test fixes, 12 Nov 2026 (#5, #30): the first fix after answering "Why are you hiring?" was refused.
+    it("a requirements check stays good after an answer set on the draft by rule; a change to what it reads makes it stale", async () => {
+      const id = await writtenDraft();
+      const trait = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Add a must-have: Team player with a positive attitude" }));
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${trait.revisionId}/apply`)).status).toBe(201);
+      const before = (await session(id)).draft!;
+      const check = await read<RequirementsCheck>(await json(owner, "GET", `/api/v1/intake/sessions/${id}/requirements-check`));
+      const move = check.suggestions.find((x) => x.kind === "trait_as_skill")!.fixes.find((f) => f.op === "to_interview")!;
+      // the reason card's answer moves the draft by rule, though not what the check reads
+      const answered = await answer(id, { set: { reason: "growth" } });
+      expect(answered.draft!.business.reason).toBe("growth");
+      expect(packetFingerprint(answered.draft)).not.toBe(packetFingerprint(before));
+      const r = await json(owner, "POST", `/api/v1/intake/sessions/${id}/requirements-check/apply`, { base: check.base, fixIds: [move.id] });
+      expect(r.status).toBe(201);
+      expect((await read<{ applied: string[] }>(r)).applied).toEqual(['Moved "Team player with a positive attitude" to the interview.']);
+      // a must-have added since is something the check reads: the check from before it is stale
+      const recheck = await read<RequirementsCheck>(await json(owner, "GET", `/api/v1/intake/sessions/${id}/requirements-check`));
+      const dentrix = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Add a must-have: Dentrix experience" }));
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${dentrix.revisionId}/apply`)).status).toBe(201);
+      expect((await errorOf(await json(owner, "POST", `/api/v1/intake/sessions/${id}/requirements-check/apply`, { base: recheck.base, fixIds: ["duplicate:mustHaves:mh_x:remove"] }))).code).toBe("stale_check");
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+    });
+
+    // Review of the live-test fixes, 12 Nov 2026 (#7, #13, #29, #38): the reply said "I changed..." and then "Not done".
+    it("on a draft, a request to stop a question holding anyone changes nothing, and the reply never says it was done", async () => {
+      const id = await writtenDraft();
+      const draft = (await session(id)).draft!;
+      expect(draft.requirements.eligibility.length).toBeGreaterThan(0);
+      container.fake!.scriptNext("packet.revise", { summary: "I changed the schedule question so a no no longer holds the application.", changes: { requirements: { ...draft.requirements, eligibility: draft.requirements.eligibility.map((e) => ({ ...e, knockout: false })) } }, notChanged: [] });
+      const r = await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Keep the schedule question but don't hold anyone who says no." });
+      expect(r.status).toBe(200);
+      const p = await read<PacketRevisionProposal>(r);
+      expect(p.sections).toEqual([]);
+      expect(p.summary).toBe("Nothing was changed.");
+      expect(p.notChanged).toEqual([{ request: "Stop a question on the form from holding anyone", reason: 'On a draft, a "no" to a question on the form always holds the application for your decision. To ask it without holding anyone, ask for it in the AI interview instead.' }]);
+      expect((await errorOf(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`))).code).toBe("nothing_to_apply");
+      expect((await session(id)).draft).toEqual(draft);
+      // who decides is changed with Edit beside the draft, which has no "editor"
+      const decider = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Make Hank the one who decides" }));
+      expect(decider.sections).toEqual([]);
+      expect(decider.notChanged.map((n) => n.reason)).toEqual(["Who makes the final decision is chosen from your team with Edit beside the draft."]);
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+    });
+
+    // Review of the live-test fixes, 12 Nov 2026 (#28, #69): with the draft behind answers that held six, a seventh added
+    // by chat was stored last and dropped by every later read, with no word to anyone.
+    it("a seventh must-have by chat is refused plainly, and nothing is saved until one is taken out", async () => {
+      const id = await writtenDraft();
+      const drafted = (await session(id)).facts.mustHaves;
+      const more = ["Perio charting", "Local anesthesia permit", "Eaglesoft experience", "Ultrasonic scaling", "Patient education", "Sealants"].slice(0, 6 - drafted.length);
+      const six = await answer(id, { add: more.map((value) => ({ field: "mustHaves", value })) });
+      expect(six.facts.mustHaves).toHaveLength(6);
+      expect(six.readiness.draftOutOfDate).toBe(true);
+      const before = six.draft!;
+      const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message: "Add a must-have: Dentrix experience" }));
+      expect(p.sections).toEqual(["requirements"]);
+      const refused = await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`);
+      expect(refused.status).toBe(400);
+      expect(await errorOf(refused)).toMatchObject({ code: "too_many_must_haves", message: "Your answers already have six must-haves, the most a job can have. Take one out with Edit beside the draft, then try this change again." });
+      const still = await session(id);
+      expect(still.facts.mustHaves).toEqual(six.facts.mustHaves);
+      expect(still.draft).toEqual(before);
+      const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, p.revisionId));
+      expect(run.finalOutcome).toBeNull();
+      // one taken out on Edit, the same change is saved, the seventh never stored
+      await answer(id, { remove: [{ field: "mustHaves", value: more.at(-1)! }] });
+      expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+      const kept = await session(id);
+      expect(kept.facts.mustHaves).toHaveLength(6);
+      expect(kept.facts.mustHaves).toContain("Dentrix experience");
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+    });
+
+    // Review of the change-by-chat fix, 13 Nov 2026: with the draft behind the answers, a must-have the draft words as the
+    // requirement, taken out by chat, stayed in the answers as the owner typed it and was not counted, so "Write it again"
+    // brought it back with no warning.
+    it("behind the answers, a must-have taken out by chat leaves them in the owner's words too, or Write it again warns first", async () => {
+      const texts = (d: DraftRolePacket) => d.requirements.mustHaves.map((m) => m.text);
+      const confirm = async (id: string, message: string) => {
+        const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions`, { message }));
+        expect(p.sections).toEqual(["requirements"]);
+        expect((await json(owner, "POST", `/api/v1/intake/sessions/${id}/revisions/${p.revisionId}/apply`)).status).toBe(201);
+        return session(id);
+      };
+      const id = await writtenDraft();
+      await answer(id, { add: [{ field: "mustHaves", value: "No active California RDA license" }] });
+      const written = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      // the draft words it as the requirement (intake.compile v6)
+      expect(texts(written.draft)).toContain("Active California RDA license");
+      const moved = await answer(id, { set: { locationText: "Tustin, CA" } });
+      expect(moved.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 0 });
+      const taken = await confirm(id, "Take out Active California RDA license");
+      expect(taken.facts.mustHaves).not.toContain("No active California RDA license");
+      expect(taken.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 0 });
+      // so writing it again keeps it out
+      const again = await read<{ draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${id}/draft`));
+      expect(texts(again.draft)).not.toContain("Active California RDA license");
+      await json(owner, "POST", `/api/v1/intake/sessions/${id}/abandon`);
+      // with no must-have of the owner's, the draft has the hiring guide's, and writing it again drafts them again: taking
+      // one out by chat is counted, so "Write it again" asks first
+      const guided = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE.replace(" Must-haves: active CA RDH license.", "") }))).session.id;
+      const fromGuide = await read<{ session: IntakeSessionView; draft: DraftRolePacket }>(await json(owner, "POST", `/api/v1/intake/sessions/${guided}/draft`));
+      expect(fromGuide.session.facts.mustHaves).toEqual([]);
+      expect(texts(fromGuide.draft).length).toBeGreaterThan(1);
+      await answer(guided, { set: { locationText: "Tustin, CA" } });
+      const counted = await confirm(guided, `Take out ${texts(fromGuide.draft)[0]}`);
+      expect(texts(counted.draft!)).not.toContain(texts(fromGuide.draft)[0]);
+      expect(counted.facts.mustHaves).toEqual([]);
+      expect(counted.readiness).toMatchObject({ draftOutOfDate: true, draftEdits: 1 });
+      await json(owner, "POST", `/api/v1/intake/sessions/${guided}/abandon`);
     });
   });
 
@@ -310,6 +536,38 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const runs = await container.db.select().from(aiRuns).where(and(eq(aiRuns.task, "packet.revise"), eq(aiRuns.status, "ok")));
       const fromDraft = runs.find((x) => (x.inputRef as { target?: string }).target === "draft" && !x.finalOutcome)!;
       expect((await errorOf(await json(owner, "POST", `/api/v1/roles/${roleId}/revisions/${fromDraft.id}/apply`))).code).toBe("revision_not_found");
+    });
+
+    it("on a saved role too, a reply with no usable answer is asked for once more, afresh; twice, the editor is the way on", async () => {
+      container.fake!.failNext("packet.revise", "unusable");
+      const once = "Make the messages more formal for this job";
+      const r = await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: once });
+      expect(r.status).toBe(200);
+      const proposal = await read<PacketRevisionProposal>(r);
+      expect(proposal.sections).toEqual(["communication"]);
+      const tries = await triesOf(once);
+      expect(tries.first).toMatchObject({ status: "invalid_output" });
+      expect(tries.again).toEqual([expect.objectContaining({ status: "ok", inputRef: expect.objectContaining({ target: "role", roleId, retryOf: tries.first!.id }) })]);
+      expect(proposal.revisionId).toBe(tries.again[0].id);
+      container.fake!.failNext("packet.revise", "unusable");
+      container.fake!.failNext("packet.revise", "unusable");
+      const failed = await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make the messages warmer for this job" });
+      expect(failed.status).toBe(502);
+      expect(await errorOf(failed)).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor." });
+      container.fake!.clearScripts();
+    });
+
+    // Review of the live-test fixes, 12 Nov 2026 (#7): a reply never says a change was made that the server put back.
+    it("a proposal whose every part the server puts back says that nothing was changed, on a saved job too", async () => {
+      const base = await newest();
+      expect(base.packet.preferences.decisionMakerUserId).not.toBe(ownerId);
+      container.fake!.scriptNext("packet.revise", { summary: "I made you the one who decides.", changes: { preferences: { ...base.packet.preferences, decisionMakerUserId: ownerId } }, notChanged: [] });
+      const p = await read<PacketRevisionProposal>(await json(owner, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make me the one who decides" }));
+      expect(p.sections).toEqual([]);
+      expect(p.summary).toBe("Nothing was changed.");
+      expect(p.notChanged).toEqual([{ request: "Change who makes the final decision", reason: "Who makes the final decision is chosen from your team in the editor." }]);
+      expect((await errorOf(await json(owner, "POST", `/api/v1/roles/${roleId}/revisions/${p.revisionId}/apply`))).code).toBe("nothing_to_apply");
+      expect((await newest()).version).toBe(base.version);
     });
 
     it("the requirements check on the role: suggestions only, a tapped fix saves a new version", async () => {

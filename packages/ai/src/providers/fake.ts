@@ -2,6 +2,9 @@ import type { AiProvider, StructuredRequest, StructuredResult } from "../types";
 
 export type FakeHandler = (req: StructuredRequest<unknown>) => unknown | Promise<unknown>;
 
+/** The failures a test can queue (`failNext`). */
+export type FakeFailure = "invalid" | "refused" | "throw" | "unusable";
+
 /**
  * Deterministic test adapter. Handlers are registered per task by the agents package
  * (`registerFakeHandlers`) so unit tests, the scenario test, and evals run without a model.
@@ -11,7 +14,7 @@ export type FakeHandler = (req: StructuredRequest<unknown>) => unknown | Promise
 export class FakeProvider implements AiProvider {
   readonly id = "fake";
   private handlers = new Map<string, FakeHandler>();
-  private failures: Array<{ task: string; kind: "invalid" | "refused" | "throw" }> = [];
+  private failures: Array<{ task: string; kind: FakeFailure }> = [];
   private scripted: Array<{ task: string; output: unknown }> = [];
   public calls: Array<{ task: string; model: string; promptKey: string; promptVersion: number }> = [];
 
@@ -19,8 +22,12 @@ export class FakeProvider implements AiProvider {
     this.handlers.set(task, handler);
   }
 
-  /** Queue a one-time failure for the next call of `task` (used by failure-injection tests). */
-  failNext(task: string, kind: "invalid" | "refused" | "throw" = "invalid"): void {
+  /**
+   * Queue a one-time failure for the next call of `task` (used by failure-injection tests). "invalid" is retried by the
+   * runner itself; "unusable" is what the real provider answers once its own correction turn failed too (live test, 12
+   * Nov 2026: "no valid output (unconstrained): the reply holds no JSON object"), marked final, so the runner stops there.
+   */
+  failNext(task: string, kind: FakeFailure = "invalid"): void {
     this.failures.push({ task, kind });
   }
 
@@ -48,6 +55,7 @@ export class FakeProvider implements AiProvider {
       const [f] = this.failures.splice(idx, 1);
       if (f.kind === "throw") throw new Error("fake provider outage");
       if (f.kind === "refused") return { kind: "refused", reason: "fake refusal", model, usage, latencyMs: 1 };
+      if (f.kind === "unusable") return { kind: "invalid", error: "no valid output (unconstrained): the reply holds no JSON object", model, usage, latencyMs: 1, rawText: "I made the change you asked for.", final: true };
       return { kind: "invalid", error: "fake invalid output", model, usage, latencyMs: 1, rawText: "{" };
     }
     const scriptedIdx = this.scripted.findIndex((s) => s.task === req.task);

@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
+import { HOLD_DECIDED } from "@ros/core";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { useLaterApplyFlow } from "./test-helpers";
@@ -335,6 +336,9 @@ describe("Slice 1 API", () => {
     const [anaRow] = await container.db.select().from(applications).where(eq(applications.id, ana.id));
     expect(anaRow.stage).toBe("rejected");
     expect(anaRow.rejectReason).toBe("eligibility");
+    // the recruiter's review of the hold needs nothing more once a person decided (review of the live-test fixes, #16)
+    const settled = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
+    expect(settled.filter((e) => e.kind === "review").map((e) => [e.status, e.resolution])).toEqual([["resolved", HOLD_DECIDED]]);
     outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
     expect(await (await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });

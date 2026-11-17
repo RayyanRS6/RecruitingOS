@@ -140,7 +140,11 @@ describe("interview scheduling", () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('name="slotId"');
-    expect(html).toContain("America/New York");
+    // the zone they chose is the one shown, named in the times email's words, never by its id (LT-15)
+    expect(html).toContain("Times are shown in <strong>Eastern time</strong>.");
+    expect(html).toContain('<option value="America/New_York" selected="">Eastern time</option>');
+    expect(html).not.toContain("America/New York");
+    expect(html).not.toMatch(/>(America|Pacific)\//);
     // The zone's abbreviation on the first offered day: EDT in summer, EST from November to March.
     const zoneAbbr = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "short" }).formatToParts(new Date(row.offeredSlots[0].startsAt)).find((p) => p.type === "timeZoneName")?.value;
     expect(zoneAbbr).toMatch(/^E[DS]T$/);

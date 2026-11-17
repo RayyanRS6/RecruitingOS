@@ -1,3 +1,4 @@
+import { answerKeyWords } from "@ros/contracts";
 import type { ApplicationDetail, EvidenceRef } from "./api/client";
 
 /**
@@ -101,6 +102,14 @@ export function openScreenOf(a: ApplicationDetail): ApplicationDetail["screens"]
  */
 export function screenQuestionText(a: Pick<ApplicationDetail, "packetLabels" | "screens">, key: string): string | null {
   return a.packetLabels.questions.find((q) => q.key === key)?.question ?? a.packetLabels.written?.find((w) => w.key === key)?.question ?? a.screens.flatMap((s) => s.progress.focusQuestions ?? []).find((f) => f.key === key)?.question ?? null;
+}
+
+/**
+ * What an answer in the AI review is named by: its question (`screenQuestionText`), else the closing question, a
+ * must-have's words for its gap question, or any other key in plain words (`answerKeyWords`), never the key.
+ */
+export function screenAnswerQuestion(a: Pick<ApplicationDetail, "packetLabels" | "screens">, key: string): string {
+  return screenQuestionText(a, key) ?? answerKeyWords(key, a.packetLabels.mustHaves);
 }
 
 /**

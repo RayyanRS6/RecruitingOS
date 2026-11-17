@@ -134,12 +134,13 @@ export function EvidenceChip(props: { source: string }) {
 
 /**
  * The match score as "91/100", green from 70, amber from 55, grey below (helpers.ts SCORE_BANDS). A screen reader hears
- * "Match score 91 out of 100". With no score yet it says so in words instead of showing a number.
+ * "Match score 91 out of 100". With no score it says so in words instead of showing a number: `none`, else "No score yet"
+ * (a screen that knows none will come says "No score": someone decided before any AI review).
  */
-export function ScoreBadge(props: { score: number | null | undefined; size?: "sm" | "md" | "lg"; showBand?: boolean }) {
+export function ScoreBadge(props: { score: number | null | undefined; size?: "sm" | "md" | "lg"; showBand?: boolean; none?: string }) {
   const s = scoreBand(props.score);
   const size = props.size === "sm" || props.size === "lg" ? props.size : undefined;
-  if (!s) return <span className={cx("score", "none", size)}>No score yet</span>;
+  if (!s) return <span className={cx("score", "none", size)}>{props.none ?? "No score yet"}</span>;
   const label = scoreLabel(s.score);
   const badge = (
     <span className={cx("score", size !== "lg" && s.tone, size)} title={label}>

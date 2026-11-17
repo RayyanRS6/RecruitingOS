@@ -160,9 +160,10 @@ export async function roleScreeningFunnel(tx: Tx, roleId: string): Promise<Scree
   const [role] = await tx.select({ version: roles.currentPacketVersion }).from(roles).where(eq(roles.id, roleId)).limit(1);
   const [pv] = role?.version ? await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.version))).limit(1) : [];
   // A chat that asked the company's written questions (Wave S7 in the visit; S8 by text or from an emailed link) keeps
-  // its skips under their keys: named in the company's words too (`writtenQuestionsOf`, never what it looks for).
+  // its skips under their keys: named in the company's words too (`writtenQuestionsOf`, never what it looks for). A
+  // must-have's gap question is named by the must-have, the closing one by the closing question (`answerKeyWords`).
   const named = pv ? [...pv.packet.screening.questions, ...writtenQuestionsOf(pv.packet)].map((q) => ({ key: q.key, question: q.question })) : [];
-  return screeningFunnel([...latest.values()], named);
+  return screeningFunnel([...latest.values()], named, pv?.packet.requirements.mustHaves ?? []);
 }
 
 /** What "No AI interview yet" reads of a screen (`aiInterviewOf`), with its status and how it was offered. */

@@ -139,6 +139,46 @@ export type ChatPlan = z.infer<typeof ChatPlan>;
 /** What the chat's header shows (founder decision S7-3): "2 of 4 required · Required questions"; never the questions in advance. */
 export type ChatCounter = { done: number; required: number; section: ChatSection; label: string };
 
+/**
+ * The chat's closing question ("Wrapping up"): asked after every item, in code's words, and never an item of the plan
+ * (it is not counted). Its answer is the candidate's own words like any other, kept under this key.
+ */
+export const CHAT_WRAP_KEY = "wrap_up";
+/** The closing question, in code's words (the model may say it its own way, with the first name). */
+export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hiring team to know before we finish?";
+
+/** A key's machine prefix: a must-have's (`mh_1_`), a company's written question's (`wq_`), an older question's (`q_`, `sq_`). */
+const KEY_PREFIX = /^(?:mh_\d+_|wq_|q_|sq_)/;
+
+/**
+ * The keys of the résumé reading's open questions a screen starts with ("Ask about this in a screen":
+ * `progress.focusQuestions`, keyed `unknown_1`, `unknown_2`, …). Each screen's are its own candidate's, so the same key
+ * is another question on another screen, and the key says nothing of the words.
+ */
+export const FOCUS_KEY_PREFIX = "unknown_";
+/**
+ * The plain name of such an open question where its own words are not at hand: in the role's figures, where everyone's
+ * open questions are one row (`screeningFunnel`), and wherever a reader no longer holds the question.
+ */
+export const FOCUS_QUESTION_WORDS = "An open question from the AI review of the résumé";
+
+/**
+ * What an AI interview answer is named by where the reader's own questions do not name its key (the interviewer's brief
+ * and its email, the AI review on the candidate panel, the role's figures, Review & send): the closing answer by the
+ * closing question; a must-have's gap answer, kept under the must-have's key, by the must-have's own words; an open
+ * question from the résumé reading by its plain name (`FOCUS_QUESTION_WORDS`); any other key in plain words without its
+ * machine prefix ("wq_shift_swaps": "Shift swaps"). Never a key, never an underscore (the last round of the live-test
+ * fixes, 17 November 2026).
+ */
+export function answerKeyWords(key: string, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): string {
+  if (key === CHAT_WRAP_KEY) return CHAT_WRAP_QUESTION;
+  const must = mustHaves.find((m) => m.key === key)?.text.trim();
+  if (must) return must;
+  if (key.startsWith(FOCUS_KEY_PREFIX)) return FOCUS_QUESTION_WORDS;
+  const words = (key.replace(KEY_PREFIX, "") || key).replace(/_+/g, " ").trim();
+  return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "";
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* (c) The write-up per written question (`ScreenProgress.writeup`)                                              */
 /* ------------------------------------------------------------------------------------------------------------ */

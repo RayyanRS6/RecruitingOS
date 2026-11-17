@@ -3,7 +3,7 @@ import { and, eq, like } from "drizzle-orm";
 import type { ActiveMark, ApplicationStage, StageMove } from "@ros/contracts";
 import { anonymizeCandidate, correctOutcome, emit, entitlements, exportCandidateData, openFollowUp, suppressAddress, transition } from "@ros/core";
 import { detectStuckRoles, handleEmailEvent, retryCommunication, runInterventionLadder, runUntoldSafetyNet, sweepStaleSending, workingDaysSince } from "@ros/agents";
-import { applicationMarks, applications, approvalRequests, candidates, communications, events, interviews, notifications, policies, randomToken, users, withPlatform, withTenant } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, auditRecords, candidates, communications, events, interviews, notifications, policies, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -213,6 +213,9 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(await application(id)).toMatchObject({ stage: "screen_complete", rejectedAt: null, rejectReason: null, rejectNote: null });
       const override = (await container.db.select().from(events).where(and(eq(events.type, "human.override"), eq(events.subjectId, id)))).find((e) => e.payload.action === "undo_decision");
       expect(override?.payload).toMatchObject({ from: "rejected", to: "screen_complete" });
+      // a decline made with the button records no outcome, so taking it back marks none and audits none
+      expect(override?.payload).not.toHaveProperty("outcomeId");
+      expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "outcome.taken_back"))).filter((a) => a.target?.id === id)).toEqual([]);
       // a week on, nobody is chased and nothing goes: they are no longer a decision
       const net = await withTenant(container.db, companyId, (tx) => runUntoldSafetyNet(tx, { integrations: container.integrations, statusBaseUrl: "http://localhost:3000", now: new Date(Date.now() + 10 * DAY), actor: { kind: "system", id: "untold_safety_net" } }, companyId));
       expect(net.map((x) => x.applicationId)).not.toContain(id);

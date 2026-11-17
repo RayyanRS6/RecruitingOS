@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
 import { ConfirmBoardUpdated, CreateEscalation, DecideApproval, EscalationEstimateQuery, EscalationReply, LOCKED_REQUEST_LINE, NO_WORK_WHILE_LOCKED, PLAN_REQUEST_EXPERTISE, PLAN_REQUEST_OPEN_LINE, PLAN_REQUEST_SUMMARY, RecordPostingUrl, ReopenEscalation, ResolveEscalation, VerifyPosting, type Actor, type CandidateNotice, type EscalationScope, type InterviewDraft, type RecruiterRequestView } from "@ros/contracts";
-import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
+import { BOARD_NAME, ESCALATION_ACCESS_DAYS, POSTING_STATE_LABEL, POSTING_TASK_KINDS, activeStaffGrant, addEscalationReply, applicationLocked, assertCan, audit, can, companyHasLocked, raiseAlert, businessMinutesBetween, confirmBoardRemoved, confirmBoardUpdated, createEscalation, deadlineWords, describeHours, emit, endStaffGrant, entitlements, escalationReplyBy, escalationThread, grantStaffAccess, hiddenAmong, isBoardChannel, isPlanRequest, isPostingTask, limitGrantAfterResolution, loadBusinessCalendar, mayDecideApproval, notify, openPlanRequests, plainRequestText, postingTaskLabel, postingTaskWorkDone, queueOrder, recordEscalationAnswer, recordStaffAccess, reopenEscalation, requestOrigin, servedSummary, showsOldVersion, slaBusinessHours, toEscalationPreview, transition, withoutSentimentWords, withoutUnsentInContext, zoneShortName, type EscalationPreview, type EscalationRow, type PostingState } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, escalationMessages, events, memberships, postings, recruiterEscalations, rolePackets, roles, screens, staffAccessGrants, users, withPlatform, withTenant, type Db, type Tx } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import { confirmPostingByHand, postingTaskDetail, queuePostingCheck, recordBoardAddress } from "./postings";
@@ -287,11 +287,16 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
     const hidden = await hiddenAmong(tx, t, appIds);
     const ids = rows.filter((r) => !r.applicationId || !hidden.has(r.applicationId)).map((r) => r.id);
     const messages = ids.length ? await tx.select().from(escalationMessages).where(inArray(escalationMessages.escalationId, ids)) : [];
+    // Who wrote each resolved request's newest answer, also on one about someone locked, whose thread stays with ITS:
+    // Recruiting OS closes a request nobody needs any more on its own (17 November 2026), and no recruiter answered that.
+    const resolved = rows.filter((r) => r.status === "resolved").map((r) => r.id);
+    const answers = resolved.length ? await tx.select({ escalationId: escalationMessages.escalationId, author: escalationMessages.author, createdAt: escalationMessages.createdAt }).from(escalationMessages).where(and(inArray(escalationMessages.escalationId, resolved), eq(escalationMessages.kind, "answer"))) : [];
+    const answeredBy = new Map(answers.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)).map((m) => [m.escalationId, m.author.kind]));
     const roleIds = [...new Set(rows.map((r) => r.roleId).filter((x): x is string => !!x))];
     const titles = new Map((roleIds.length ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, roleIds)) : []).map((r) => [r.id, r.title]));
     const named = appIds.filter((id) => !hidden.has(id));
     const people = new Map((named.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName, anonymizedAt: candidates.anonymizedAt }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, named)) : []).map((p) => [p.id, p.anonymizedAt ? null : `${p.firstName} ${p.lastName}`.trim() || null]));
-    return { rows, messages, titles, people, hidden };
+    return { rows, messages, titles, people, hidden, answeredBy };
   });
   const names = await recruiterNames(container.db, found.rows.map((r) => r.assignedToUserId));
   return c.json(found.rows.map((row): RecruiterRequestView => {
@@ -299,14 +304,16 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
     // request from before 13 October 2026 in plain words, never the technical error; and one Recruiting OS raised says so.
     const r = { ...row, question: withoutSentimentWords(plainRequestText(row.question, row.requestedBy.kind)), summary: servedSummary(row) };
     const own = found.messages.filter((m) => m.escalationId === r.id);
-    const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter")?.author.name ?? null;
+    // A person at ITS, never Recruiting OS's own line on the recruiter's side (a closed hold, a stopped step run again).
+    const recruiterName = r.assignedToUserId ? names.get(r.assignedToUserId) ?? null : [...own].reverse().find((m) => m.side === "recruiter" && m.author.kind !== "system")?.author.name ?? null;
+    const closedBy = r.status === "resolved" && found.answeredBy.get(r.id) === "system" ? { closedBy: "system" as const } : {};
     if (r.applicationId && found.hidden.has(r.applicationId)) {
       return {
         id: r.id, kind: r.kind, status: r.status, urgency: r.urgency, summary: r.summary, question: LOCKED_REQUEST_LINE,
         scope: "application", roleId: r.roleId, roleTitle: r.roleId ? found.titles.get(r.roleId) ?? null : null, applicationId: null, candidateName: null,
         askedBy: askedByOf(r.requestedBy, t.userId),
         createdAt: r.createdAt, slaDueAt: r.slaDueAt, firstResponseAt: r.firstResponseAt, resolvedAt: r.resolvedAt, resolution: null, accessExpiresAt: r.accessExpiresAt,
-        recruiterName, reopenedCount: 0, thread: [], locked: true,
+        recruiterName, reopenedCount: 0, thread: [], locked: true, ...closedBy,
       };
     }
     return {
@@ -315,7 +322,7 @@ escalationRoutes.get("/mine", requireTenant, async (c) => {
       askedBy: askedByOf(r.requestedBy, t.userId),
       createdAt: r.createdAt, slaDueAt: r.slaDueAt, firstResponseAt: r.firstResponseAt, resolvedAt: r.resolvedAt, resolution: r.resolution, accessExpiresAt: r.accessExpiresAt,
       recruiterName, reopenedCount: own.filter((m) => m.kind === "reopen").length, thread: escalationThread(r, own, recruiterName),
-      ...(isPlanRequest(r) ? { topic: "plan" as const } : {}),
+      ...(isPlanRequest(r) ? { topic: "plan" as const } : {}), ...closedBy,
     };
   }));
 });
@@ -409,11 +416,12 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   });
   const calendar = await loadBusinessCalendar(container.db, now);
   const due = deadlineWords(new Date(done.slaDueAt), calendar);
+  // Both subjects name ITS's zone in words after the time, as the queue email does, never by its id (LT-15).
   if (done.recruiter && done.grant) {
     const sent = await container.integrations.email.send({
       to: done.recruiter.email,
       from: mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress),
-      subject: `[${e.kind}] A customer reopened a request you answered: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
+      subject: `[${e.kind}] A customer reopened a request you answered: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${zoneShortName(calendar.timeZone)})`,
       text: `The customer says your answer did not solve it, and the request is yours again. Your access is back until ${new Date(done.grant.expiresAt).toLocaleDateString("en-US")}. Read why in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
       idempotencyKey: `escalation-reopen:${done.messageId}`,
       tags: { template: "escalation_reopened" },
@@ -425,7 +433,7 @@ escalationRoutes.post("/mine/:id/reopen", requireTenant, async (c) => {
   // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
   await sendToIts(container, {
     companyId: t.companyId,
-    subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${calendar.timeZone})`,
+    subject: `[${e.kind}] ${e.urgency} urgency, reopened: respond by ${new Date(done.slaDueAt).toLocaleString("en-US", { timeZone: calendar.timeZone })} (${zoneShortName(calendar.timeZone)})`,
     text: `A customer reopened a request: the answer did not solve it.\n\nCategory: ${e.kind}\nUrgency: ${e.urgency}\nNeeds: ${e.requiredExpertise}\nSummary: ${servedSummary(e)}\n\nAccept it in the queue to open the full request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`,
     idempotencyKey: `escalation-reopen:${done.messageId}`,
     template: "escalation",

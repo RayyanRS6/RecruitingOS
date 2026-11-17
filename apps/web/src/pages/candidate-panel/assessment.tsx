@@ -9,7 +9,7 @@ import { toast } from "../../toast";
 import { AI_HELP_UPGRADE_QUESTION, sureBeside } from "@ros/contracts";
 import { AskRecruiter } from "../../components/AskRecruiter";
 import { Upgrade } from "../../components/Upgrade";
-import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenQuestionText } from "../../evidence";
+import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenAnswerQuestion } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
 import { actionToast } from "../../talent-actions";
 import { ASSISTANT_NOTE_LABEL, chatGapLines, recChip, writeupLines, writeupSummary, type PanelQuestion, type WriteupLine } from "./helpers";
@@ -220,7 +220,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const mustHave = (key: string) => labels.mustHaves.find((m) => m.key === key)?.text ?? key.replace(/^mh_\d+_/, "").replace(/_/g, " ");
   const competency = (key: string) => labels.competencies.find((c) => c.key === key)?.name ?? key.replace(/_/g, " ");
   const skills = skillLabels({ packetLabels: labels });
-  const question = (key: string) => screenQuestionText(detail, key) ?? key.replace(/_/g, " ");
+  const question = (key: string) => screenAnswerQuestion(detail, key);
   // The reading the "closer look" check was made on carries the mark (plan A8): the résumé's while it waits for review,
   // the screen's once the screen is complete; with the reason when the reading disagrees with its own findings.
   const triage = kind === "triage";
