@@ -272,6 +272,22 @@ describe("the private decline step", () => {
     expect(declineSummary("sends", { hasEmail: true, now: new Date("2026-12-09T23:00:00.000Z"), timeZone: LA, person: pia })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 9.");
   });
 
+  // Left out by the second look at the safety-net day fix (d2a6ef4): nothing goes to someone locked with no address on file
+  // and nobody is brought in, as their card now says (17 November 2026)
+  it("before the click, someone locked with no email address on file reads that no message goes, as on their card", () => {
+    const LA = "America/Los_Angeles";
+    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
+    const wed = new Date("2026-11-25T23:00:00.000Z");
+    const none = "No message goes: no email address on file.";
+    expect(declineSummary("sends", { hasEmail: false, now: wed, timeZone: LA, person: pia })).toEqual(["Private: nothing is sent to them now.", none]);
+    // "No hire" passes the same person
+    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, wed, undefined, LA, undefined, pia)).toBe(none);
+    // with an address it still goes by itself; anyone else with none still brings in a recruiter
+    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: pia })[1]).toBe("If nobody tells them first, the standard message goes by itself on Tuesday, December 1.");
+    expect(declineSummary("sends", { hasEmail: false, now: wed, timeZone: LA, person: { lockedAt: null, createdAt: pia.createdAt } })[1]).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, December 2. Nothing is sent by itself.");
+    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, wed, undefined, LA)).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, December 2. Nothing is sent by itself.");
+  });
+
   // Second review of the live-test fixes, 12 November 2026 (#18): a toast built from part of the answer would fall back to the
   // reader's own count and bring the live test's two days back, and no browser run would see it
   it("every toast after a decision gets the whole answer, and every line before the click reads the company's calendar", () => {

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
-  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, lockedSafetyNetDay, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
+  LOCKED_NO_EMAIL_LINE, PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, lockedSafetyNetDay, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
   safetyNetLine, safetyNetPromise, safetyNetShort, safetyNetWorkDays, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
   HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
@@ -209,6 +209,28 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
     const on = safetyNetDate(decided, 5, LA);
     expect(lockedSafetyNetDay(on, { lockedAt: null, createdAt: pia.createdAt }, new Date(decided), LA)).toBe(on);
     expect(lockedSafetyNetDay(null, pia, new Date(decided), LA)).toBeNull();
+  });
+
+  // Left out by the second look at the safety-net day fix (d2a6ef4): someone locked is told by itself or not at all, so with no
+  // address on file nothing goes to them and nobody is brought in, while their card said an ITS recruiter is (17 November 2026)
+  it("for someone locked with no email address on file, says no message goes, before the day, after it and once the check has run", () => {
+    const LA = "America/Los_Angeles";
+    const none = "No message goes: no email address on file.";
+    const a = { ...base, lockedAt: "2026-09-30T15:00:00.000Z", untoldFallbackOn: "2026-10-12", candidate: { ...base.candidate, email: null } };
+    expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe(none);
+    expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-13T12:00:00.000Z"), timeZone: LA })).toBe(none);
+    expect(safetyNetLine({ a: { ...a, untoldFallbackOn: null }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z") })).toBe(none);
+    // the daily check found nobody to send it to: nothing went, and nobody was brought in
+    const checked = { ...a, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-10-12T14:00:00.000Z", actor: { kind: "system", id: "candidate_lock" }, payload: { action: "not_sent", locked: true } }] };
+    expect(safetyNetActed(checked.timeline)).toBeNull();
+    expect(safetyNetLine({ a: checked, waitingApproval: false, timeZone: LA })).toBe(none);
+    expect(LOCKED_NO_EMAIL_LINE).toBe(none);
+    // the line before the click says the same for them
+    expect(safetyNetShort({ policy: "sends", hasEmail: false, locked: true, on: namedDay("2026-10-12") })).toBe(none);
+    // someone locked with an address, and anyone else with none, read as before
+    expect(safetyNetLine({ a: { ...a, candidate: base.candidate }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Monday, October 12.");
+    expect(safetyNetLine({ a: { ...a, lockedAt: null }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, an ITS recruiter is brought in on Monday, October 12. Nothing is sent by itself.");
+    expect(safetyNetShort({ policy: "sends", hasEmail: false, on: namedDay("2026-10-12") })).toBe("If nobody tells them first, an ITS recruiter is brought in on Monday, October 12. Nothing is sent by itself.");
   });
 
   it("says, in one short line, on which day the standard message goes by itself if nobody tells them first (D-03 A)", () => {

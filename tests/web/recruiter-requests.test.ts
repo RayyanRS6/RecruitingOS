@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EscalationThreadEntry, RecruiterRequestView } from "../../packages/contracts/src/api";
 import { hasChoice, loosens, looseningQuestion, splitRules } from "../../apps/web/src/ai-rules";
 import { presetOf } from "../../apps/web/src/recruiter-access";
-import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_CALL_NOTES_HINT, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, NOTES_TAB_CALL_HINT, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, callNotesButton, callNotesHint, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
+import { CALL_NOTES_HINT, CANDIDATE_ASKED_FOR_PERSON, LOCKED_ANSWER_LABEL, LOCKED_CALL_NOTES_HINT, LOCKED_NOTE_TOAST, LOCKED_RESOLVED_TOAST, NOTES_TAB_CALL_HINT, RECENT_DAYS, RECRUITER_ASKS_OVER_CHIP, callNotesButton, callNotesHint, aboutWords, askedByWords, draftFactLines, latestAnswer, pickedUpWords, queueThreadHeading, recruiterAsksLine, reopenHint, replyByWords, requestActions, requestState, requestStateWords, splitRequests, threadHeading, workspaceHref } from "../../apps/web/src/recruiter-requests";
 import { canAskRecruiter } from "../../apps/web/src/roles";
 
 /**
@@ -34,7 +34,7 @@ describe("the list's order", () => {
   });
 
   it("names each state in plain words", () => {
-    expect(["open", "claimed", "in_progress", "resolved", "cancelled", "anything"].map(requestState)).toEqual(["waiting", "working", "working", "answered", "cancelled", "waiting"]);
+    expect(["open", "claimed", "in_progress", "resolved", "cancelled", "anything"].map((status) => requestState({ status }))).toEqual(["waiting", "working", "working", "answered", "cancelled", "waiting"]);
   });
 });
 
@@ -61,6 +61,31 @@ describe("the words on each request", () => {
     expect(pickedUpWords(req({}))).toBe("Not picked up yet");
     expect(pickedUpWords(req({ status: "claimed", recruiterName: "Kai Recruiter" }))).toBe("Picked up by Kai Recruiter (ITS recruiter)");
     expect(pickedUpWords(req({ status: "resolved" }))).toBeNull();
+  });
+
+  // The second look at the taps and kept-in fix (LT-23) closes a request by itself once nothing more is needed: a held
+  // application a person decided, when they decide or with the hourly check, or a stopped step ITS ran again. The History
+  // says "The request to ITS was closed"; this list still said "Answered" (17 November 2026).
+  it("a request Recruiting OS closed on its own reads Closed with its day, never Answered, and can still be reopened", () => {
+    const at = "2026-10-08T10:00:00.000Z";
+    const closed = req({ status: "resolved", resolvedAt: at, closedBy: "system", askedBy: { kind: "system", name: null } });
+    const answered = req({ status: "resolved", resolvedAt: at, recruiterName: "Kai Recruiter" });
+    expect(requestState(closed)).toBe("closed");
+    expect(requestStateWords(closed)).toBe("Closed");
+    expect(replyByWords(closed, NOW)).toMatch(/^Closed \w{3}, Oct \d{1,2}, \d{1,2}:\d{2}/);
+    expect(replyByWords(closed, NOW)).toBe(replyByWords(answered, NOW).replace(/^Answered /, "Closed "));
+    expect(replyByWords({ ...closed, resolvedAt: null }, NOW)).toBe("Closed");
+    // nobody at ITS picked it up, and "This didn't solve it" still asks ITS again, as the API allows
+    expect(pickedUpWords(closed)).toBeNull();
+    expect(requestActions(closed, { staff: false })).toEqual({ note: false, reopen: true });
+    expect(requestActions({ ...closed, locked: true }, { staff: false })).toEqual({ note: false, reopen: false });
+    // with the closed ones in the list's order, by when they closed
+    expect(splitRequests([answered, { ...closed, id: "closed", resolvedAt: "2026-10-08T12:00:00.000Z" }], NOW).current.map((r) => r.id)).toEqual(["closed", "e"]);
+    // a recruiter's answer, and an answer from an API without the field, read as before
+    expect(requestState(answered)).toBe("answered");
+    expect(requestStateWords(answered)).toBe("Answered");
+    expect(replyByWords(answered, NOW)).toMatch(/^Answered /);
+    expect(pickedUpWords(answered)).toBe("Picked up by Kai Recruiter (ITS recruiter)");
   });
 
   it("the conversation's headings, on Today and in the queue, and the newest answer shown in full", () => {

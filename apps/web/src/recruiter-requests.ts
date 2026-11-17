@@ -6,23 +6,28 @@ import type { EscalationThreadEntry, RecruiterRequestView } from "@ros/contracts
  * components/RecruiterRequests.tsx; the API is GET /api/v1/escalations/mine.
  */
 
-/** An answered or cancelled request stays in the list this many days; older ones fold under "Older requests". */
+/** An answered, closed or cancelled request stays in the list this many days; older ones fold under "Older requests". */
 export const RECENT_DAYS = 14;
 
-export type RequestState = "waiting" | "working" | "answered" | "cancelled";
+export type RequestState = "waiting" | "working" | "answered" | "closed" | "cancelled";
 
-export function requestState(status: string): RequestState {
-  if (status === "resolved") return "answered";
-  if (status === "cancelled") return "cancelled";
-  if (status === "claimed" || status === "in_progress") return "working";
+/**
+ * A request's state. One Recruiting OS closed on its own (`closedBy: "system"`: a held application a person decided, or a
+ * stopped step ITS ran again) is closed, never answered: no recruiter answered it (17 November 2026; the History says "The
+ * request to ITS was closed", LT-23).
+ */
+export function requestState(r: Pick<RecruiterRequestView, "status"> & Partial<Pick<RecruiterRequestView, "closedBy">>): RequestState {
+  if (r.status === "resolved") return r.closedBy === "system" ? "closed" : "answered";
+  if (r.status === "cancelled") return "cancelled";
+  if (r.status === "claimed" || r.status === "in_progress") return "working";
   return "waiting";
 }
 
-export const STATE_WORDS: Record<RequestState, string> = { waiting: "Waiting for a recruiter", working: "A recruiter is on it", answered: "Answered", cancelled: "Cancelled" };
+export const STATE_WORDS: Record<RequestState, string> = { waiting: "Waiting for a recruiter", working: "A recruiter is on it", answered: "Answered", closed: "Closed", cancelled: "Cancelled" };
 
 /** A request's state on the team's list. A talk about the plan is with ITS: no recruiter is working on their hiring. */
-export function requestStateWords(r: Pick<RecruiterRequestView, "status"> & Partial<Pick<RecruiterRequestView, "topic">>): string {
-  const state = requestState(r.status);
+export function requestStateWords(r: Pick<RecruiterRequestView, "status"> & Partial<Pick<RecruiterRequestView, "topic" | "closedBy">>): string {
+  const state = requestState(r);
   if (r.topic === "plan" && state === "waiting") return "Waiting for ITS";
   if (r.topic === "plan" && state === "working") return "ITS is on it";
   return STATE_WORDS[state];
@@ -32,12 +37,12 @@ const closedAt = (r: RecruiterRequestView) => Date.parse(r.resolvedAt ?? r.creat
 const dueAt = (r: RecruiterRequestView) => (r.slaDueAt ? Date.parse(r.slaDueAt) : Number.POSITIVE_INFINITY);
 
 /**
- * The order the list reads in: open requests first, the soonest reply-by time on top; then the ones answered (or
- * cancelled) in the last RECENT_DAYS days, newest first. Anything older goes under "Older requests".
+ * The order the list reads in: open requests first, the soonest reply-by time on top; then the ones answered, closed or
+ * cancelled in the last RECENT_DAYS days, newest first. Anything older goes under "Older requests".
  */
 export function splitRequests(rows: readonly RecruiterRequestView[], now: Date): { current: RecruiterRequestView[]; older: RecruiterRequestView[] } {
-  const open = rows.filter((r) => ["waiting", "working"].includes(requestState(r.status))).sort((a, b) => dueAt(a) - dueAt(b) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  const closed = rows.filter((r) => !["waiting", "working"].includes(requestState(r.status))).sort((a, b) => closedAt(b) - closedAt(a));
+  const open = rows.filter((r) => ["waiting", "working"].includes(requestState(r))).sort((a, b) => dueAt(a) - dueAt(b) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  const closed = rows.filter((r) => !["waiting", "working"].includes(requestState(r))).sort((a, b) => closedAt(b) - closedAt(a));
   const since = now.getTime() - RECENT_DAYS * 86_400_000;
   return { current: [...open, ...closed.filter((r) => closedAt(r) >= since)], older: closed.filter((r) => closedAt(r) < since) };
 }
@@ -62,10 +67,10 @@ export function askedByWords(a: RecruiterRequestView["askedBy"]): string {
 
 const when = (iso: string) => new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-/** The time line: when the reply is due, that the time has passed, or when it was answered. */
-export function replyByWords(r: Pick<RecruiterRequestView, "status" | "slaDueAt" | "resolvedAt">, now: Date): string {
-  const state = requestState(r.status);
-  if (state === "answered") return r.resolvedAt ? `Answered ${when(r.resolvedAt)}` : "Answered";
+/** The time line: when the reply is due, that the time has passed, or when it was answered (or closed). */
+export function replyByWords(r: Pick<RecruiterRequestView, "status" | "slaDueAt" | "resolvedAt"> & Partial<Pick<RecruiterRequestView, "closedBy">>, now: Date): string {
+  const state = requestState(r);
+  if (state === "answered" || state === "closed") return r.resolvedAt ? `${STATE_WORDS[state]} ${when(r.resolvedAt)}` : STATE_WORDS[state];
   if (state === "cancelled") return "Cancelled";
   if (!r.slaDueAt) return "No reply-by time";
   return Date.parse(r.slaDueAt) < now.getTime() ? `The reply-by time (${when(r.slaDueAt)}) has passed` : `Reply by ${when(r.slaDueAt)}`;
@@ -74,7 +79,7 @@ export function replyByWords(r: Pick<RecruiterRequestView, "status" | "slaDueAt"
 /** Who picked it up, or that nobody has yet. */
 export function pickedUpWords(r: Pick<RecruiterRequestView, "status" | "recruiterName">): string | null {
   if (r.recruiterName) return `Picked up by ${r.recruiterName} (ITS recruiter)`;
-  return requestState(r.status) === "waiting" ? "Not picked up yet" : null;
+  return requestState(r) === "waiting" ? "Not picked up yet" : null;
 }
 
 /** Over a request nobody on the team raised (`raisedBy`, 15 October 2026): Recruiting OS on its own, or a candidate. */
@@ -202,14 +207,15 @@ export function latestAnswer(thread: readonly EscalationThreadEntry[]): Escalati
 }
 
 /**
- * What a person may do with a request now: add a note while it is open, reopen it once answered. An ITS recruiter
- * inside the company does neither here; they answer from the recruiter queue.
+ * What a person may do with a request now: add a note while it is open, reopen it once answered, or once Recruiting OS
+ * closed it (the API reopens any resolved request). An ITS recruiter inside the company does neither here; they answer
+ * from the recruiter queue.
  */
-export function requestActions(r: Pick<RecruiterRequestView, "status" | "locked">, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
+export function requestActions(r: Pick<RecruiterRequestView, "status" | "locked"> & Partial<Pick<RecruiterRequestView, "closedBy">>, opts: { staff: boolean }): { note: boolean; reopen: boolean } {
   // About someone the team cannot read (Rule 3): it stays with ITS, and the API refuses both.
   if (opts.staff || r.locked) return { note: false, reopen: false };
-  const s = requestState(r.status);
-  return { note: s === "waiting" || s === "working", reopen: s === "answered" };
+  const s = requestState(r);
+  return { note: s === "waiting" || s === "working", reopen: s === "answered" || s === "closed" };
 }
 
 /** The shortest reason a reopening takes (the API refuses less): the recruiter needs to know what is still missing. */

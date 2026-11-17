@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
+import type { RecruiterRequestView } from "@ros/contracts";
 import { RETRIED_RUN_FINISHED, createDataRequest, createEscalation, openHumanReview } from "@ros/core";
 import { adminAlerts, applications, candidates, escalationMessages, events, notifications, randomToken, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { WorkflowDefinition } from "@ros/workflows";
@@ -235,6 +236,10 @@ describe("what a recruiter request covers, and saying so", () => {
     const told = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "recruiter.resolved")))).filter((n) => n.action?.href === `/?request=${first.escalationId}`);
     expect(told.length).toBeGreaterThanOrEqual(1);
     expect(told[0]).toMatchObject({ title: "A stopped step is working again", body: RETRIED_RUN_FINISHED });
+    // Home's list reads it as closed by the system, which nobody at ITS answered or picked up (17 November 2026: it said
+    // "Answered", and "Picked up by Recruiting OS (ITS recruiter)" from the system's line on the recruiter's side)
+    const mine = async () => (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as RecruiterRequestView[];
+    expect((await mine()).find((r) => r.id === first.escalationId)).toMatchObject({ status: "resolved", closedBy: "system", recruiterName: null });
     // a recruiter already has the next one: it stays theirs to resolve, with the same line as a note on its thread
     const second = await startRun();
     expect((await json(recruiter, "POST", `/api/v1/escalations/${second.escalationId}/claim`, {})).status).toBe(200);
@@ -242,6 +247,11 @@ describe("what a recruiter request covers, and saying so", () => {
     expect((await request(second.escalationId)).status).toBe("claimed");
     const thread = await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, second.escalationId));
     expect(thread.map((m) => m.body)).toContain(RETRIED_RUN_FINISHED);
+    // once they answer it, it reads as their answer, with their name, the system's note on its thread notwithstanding
+    expect((await json(recruiter, "POST", `/api/v1/escalations/${second.escalationId}/resolve`, { resolution: "Checked: the step finished and the role is fine." })).status).toBe(200);
+    const answered = (await mine()).find((r) => r.id === second.escalationId);
+    expect(answered).toMatchObject({ status: "resolved", recruiterName: "Kai Recruiter" });
+    expect(answered).not.toHaveProperty("closedBy");
   });
 
   it("a request for a person's review with nothing attached goes to ITS administrators, not to a company-wide recruiter", async () => {

@@ -31,12 +31,12 @@ type LockedPerson = { lockedAt?: string | null; createdAt?: string | null };
  * the answer says: after the decision, the day the answer names, so the toast and the card agree (live test, 12 November
  * 2026); before it, or in an older answer, the day counted from `now` as the daily check counts it, on the company's
  * calendar when its `timeZone` is known and on its contact days (`workDays`), and for someone locked (`person`) by the
- * date they were promised if that comes first (`lockedSafetyNetDay`).
+ * date they were promised if that comes first (`lockedSafetyNetDay`), or, with no address on file, that no message goes.
  */
 export function safetyNetAfterDecision(r: DecisionMessageHint, now: Date = new Date(), what?: string, timeZone?: string | null, workDays?: readonly number[] | null, person: LockedPerson = {}): string {
   const m = r.decisionMessage ?? null;
   const on = r.untoldFallbackOn ? namedDay(r.untoldFallbackOn) : lockedSafetyNetDay(safetyNetDate(now.toISOString(), undefined, timeZone, workDays), person, now, timeZone);
-  return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on, what });
+  return safetyNetShort({ policy: m?.policy ?? null, hasEmail: m ? !!m.to : null, on, what, locked: !!person.lockedAt });
 }
 /** A message saved in the outbox of a company ITS has not confirmed yet (founder decision B7): it is not on its way yet. */
 export const HELD_FOR_CHECK = "The message is saved and goes to the candidate as soon as ITS confirms your company; they have not been told yet.";
@@ -283,8 +283,9 @@ export function declineConfirmText(policy: DeclineMessagePolicy, input: { hasEma
  * The short lines a decline step shows before the click (founder decisions B6 and D-03 A): private now, any interview it
  * calls off, and the day the standard message goes by itself if nobody tells them first (or the day an ITS recruiter is
  * brought in, under the company's settings), counted on the company's calendar when its `timeZone` is known, on its
- * contact days (`workDays`), and for someone locked (`person`) by the date they were promised if that comes first. The
- * whole of `declineConfirmText` sits one click away under it.
+ * contact days (`workDays`), and for someone locked (`person`) by the date they were promised if that comes first, or,
+ * with no address on file, that no message goes, as their card says. The whole of `declineConfirmText` sits one click
+ * away under it.
  */
 export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: boolean; interviews?: readonly InterviewRef[]; now?: Date; timeZone?: string | null; workDays?: readonly number[] | null; person?: LockedPerson }): string[] {
   const known = (input.interviews ?? []).filter(candidateKnowsOf);
@@ -292,7 +293,7 @@ export function declineSummary(policy: DeclineMessagePolicy, input: { hasEmail: 
     : `Private: the decision is not sent now. ${known.length === 1 ? "Their interview is" : `Their ${known.length} interviews are`} called off, and they get a short note saying so.`;
   const now = input.now ?? new Date();
   const on = lockedSafetyNetDay(safetyNetDate(now.toISOString(), undefined, input.timeZone, input.workDays), input.person ?? {}, now, input.timeZone);
-  return [lead, safetyNetShort({ policy, hasEmail: input.hasEmail, on })];
+  return [lead, safetyNetShort({ policy, hasEmail: input.hasEmail, on, locked: !!input.person?.lockedAt })];
 }
 
 /**

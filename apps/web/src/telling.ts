@@ -218,13 +218,21 @@ export function dayWords(d: Date): string {
 }
 
 /**
+ * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself or not at all (`tellOneLocked`): with no email
+ * address on file nothing goes to them and nobody is brought in, whatever the day (17 November 2026). Only ITS reads it.
+ */
+export const LOCKED_NO_EMAIL_LINE = "No message goes: no email address on file.";
+
+/**
  * The safety net in one short line (founder decision D-03 A, 14 Oct 2026), said wherever a decision is called private:
  * the day the standard message goes by itself if nobody tells them first or, under settings that keep these messages
  * with a person (or with no address on file), the day an ITS recruiter is brought in instead. `on` is that day when it
  * is known (`safetyNetDate`, or the day the API names); without it the line says "after 5 working days". With the
- * setting unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message.
+ * setting unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message. Someone
+ * `locked` with no address reads `LOCKED_NO_EMAIL_LINE`.
  */
-export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string }): string {
+export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string; locked?: boolean }): string {
+  if (input.locked && input.hasEmail === false) return LOCKED_NO_EMAIL_LINE;
   const who = input.who?.trim() || "them";
   const what = input.what ?? "the standard message";
   const when = input.on && !Number.isNaN(input.on.getTime()) ? `on ${dayWords(input.on)}` : `after ${SAFETY_NET_WORKING_DAYS} working days`;
@@ -251,7 +259,7 @@ export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "s
  * company's; without it, the reader's own calendar (the second review of the live-test fixes, 12 November 2026: a reader
  * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles). For
  * someone locked the day can come sooner, by the date they were promised (`untoldFallbackDay`), so the line says only
- * that the message goes with the next daily check.
+ * that the message goes with the next daily check; with no address on file, that no message goes (`LOCKED_NO_EMAIL_LINE`).
  */
 export function safetyNetLine(input: {
   a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null; lockedAt?: string | null };
@@ -265,6 +273,7 @@ export function safetyNetLine(input: {
   const companyDay = input.timeZone ? dayIn(input.timeZone) : null;
   const acted = safetyNetActed(a.timeline);
   if (acted?.action === "recruiter") return `An ITS recruiter was brought in on ${dayWords(companyDay ? namedDay(companyDay(new Date(acted.at))) : new Date(acted.at))} to make sure ${name ?? "they"} ${name ? "is" : "are"} told. You can still send the message or record it.`;
+  if (a.lockedAt && !a.candidate.email) return LOCKED_NO_EMAIL_LINE;
   const decided = a.rejectedAt ?? a.stageChangedAt;
   const on = a.untoldFallbackOn ? namedDay(a.untoldFallbackOn) : safetyNetDate(decided);
   if (!on || Number.isNaN(on.getTime())) return null;

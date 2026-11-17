@@ -901,10 +901,19 @@ describe("every applicant's AI interview, in one email", () => {
       expect((await act(vic.id, { action: "reject", reason: "eligibility" })).status).toBe(200);
       const [vicAsk] = await requestsOf(vic.id);
       expect([vicAsk.status, vicAsk.resolution]).toEqual(["resolved", HOLD_DECIDED]);
+      // Home's list reads both as closed by the system, which no recruiter answered or picked up (17 November 2026); one
+      // still open, and the recruiter's, carry nothing of the kind
+      type Mine = { id: string; status: string; recruiterName: string | null; closedBy?: string };
+      const mine = async () => (await (await json("GET", "/api/v1/escalations/mine")).json()) as Mine[];
+      const listed = await mine();
+      for (const id of [umaAsk.id, vicAsk.id]) expect(listed.find((r) => r.id === id), id).toMatchObject({ status: "resolved", closedBy: "system", recruiterName: null });
+      for (const id of [xiaAsk.id, (await requestsOf(wes.id))[0].id]) expect(listed.find((r) => r.id === id), id).not.toHaveProperty("closedBy");
       // "This didn't solve it": the team asks ITS again about someone decided, and the next hour leaves that to ITS
       const reopened = await json("POST", `/api/v1/escalations/mine/${vicAsk.id}/reopen`, { note: "Please call them about their licence anyway." });
       expect(reopened.status, await reopened.clone().text()).toBe(200);
       expect((await requestsOf(vic.id)).map((e) => e.status)).toEqual(["open"]);
+      expect((await mine()).find((r) => r.id === vicAsk.id)).toMatchObject({ status: "open", recruiterName: null });
+      expect((await mine()).find((r) => r.id === vicAsk.id)).not.toHaveProperty("closedBy");
       expect((await runHourlyChecks(container.db, new Date(BASE + offset + 2 * HOUR), { workerInline: true })).holdRequestsClosed).toBe(0);
       expect((await requestsOf(vic.id)).map((e) => e.status)).toEqual(["open"]);
     });

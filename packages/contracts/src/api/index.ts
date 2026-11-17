@@ -480,6 +480,11 @@ export type RecruiterRequestView = {
   locked?: boolean;
   /** A talk about the plan itself: it gives ITS no access to anything, so nothing on the page speaks of access. */
   topic?: "plan";
+  /**
+   * "system" when Recruiting OS closed it on its own, with no recruiter answering: a held application a person decided, or a
+   * stopped step ITS ran again (its newest answer is the system's). Home says "Closed", never "Answered" (17 November 2026).
+   */
+  closedBy?: "system";
 };
 
 // Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.
