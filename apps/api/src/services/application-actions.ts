@@ -765,9 +765,9 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       assertCan(t.role, "application.reject");
       const to = reopensAt(facts);
       if (!to) throw new HttpError(409, "not_allowed", stateReason("undo_decision", facts));
-      // A decision recorded as an outcome ("No hire", "We declined") is taken back with it: its record no longer counts, and
-      // the offer it settled at Offer waits on them again, so their next answer settles it (17 November 2026). Before the
-      // move below, which would be their last.
+      // A decision recorded as an outcome ("No hire", "We declined") is taken back with it: its record no longer counts
+      // (audited `outcome.taken_back`), and the offer it settled at Offer waits on them again, so their next answer settles
+      // it (17 November 2026). Before the move below, which would be their last.
       const taken = await takeBackOutcome(tx, { applicationId: app.id, actor, now });
       // On the engine's clock: it decides whether a promised set's day is still ahead (`restoreFollowUpAfterUndo`).
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to, by, actor, reason: "decision taken back before the candidate was told", undoDecision: true, payload: { undo: true, note: body.note ?? null }, now });

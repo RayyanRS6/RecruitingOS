@@ -17,7 +17,7 @@ const ACTIVE_STAGES = new Set<ApplicationStage>(["applied", "received", "ineligi
  * platform never generates, approves or transmits an offer, and this module holds no payroll, tax, identity, banking or
  * onboarding data. Every record names the person who recorded it and can only be corrected by an audited administrator
  * action that leaves the original row in place, or taken back with its decision before the candidate was told
- * (`takeBackOutcome`), which keeps the row too.
+ * (`takeBackOutcome`, audited too), which keeps the row too.
  */
 export type ApplicationOutcome = "hired_externally" | "candidate_withdrew" | "employer_declined" | "offer_declined_externally" | "no_hire";
 export type RoleOutcome = "filled" | "filled_outside_platform" | "role_cancelled" | "no_hire";
@@ -275,9 +275,11 @@ export async function reopenOfferSettledBy(q: Queryable, answer: Pick<OutcomeRow
  * `undo_decision` in apps/api), called before the take back moves them. Its record is kept, marked taken back by the person
  * (`correctedAt`, `correctedBy`, `TAKEN_BACK_REASON`) with no correction after it, so the role report and its applicant list
  * no longer count it, the same answer can be recorded again, and ITS has nothing left to correct; and the offer it settled
- * at Offer waits on them again (`reopenOfferSettledBy`), so the next answer settles it (17 November 2026). The answer is the
- * one recorded with their last move, as an administrator's correction may have changed it since; a decision made with the
- * decline button records none, and then nothing changes.
+ * at Offer waits on them again (`reopenOfferSettledBy`), so the next answer settles it (17 November 2026). The marking is
+ * audited `outcome.taken_back` in the same transaction, with the person, `TAKEN_BACK_REASON` and the offer put back, as
+ * every other change to an outcome record is, so the team's audit history and ITS read it (the review of that fix). The
+ * answer is the one recorded with their last move, as an administrator's correction may have changed it since; a decision
+ * made with the decline button records none, and then nothing changes and nothing is audited.
  */
 export async function takeBackOutcome(q: Queryable, input: { applicationId: string; actor: Actor; now: Date }): Promise<{ outcomeId: string | null; offerId: string | null }> {
   const none = { outcomeId: null, offerId: null };
@@ -295,8 +297,11 @@ export async function takeBackOutcome(q: Queryable, input: { applicationId: stri
     [answer] = await q.select().from(hiringOutcomes).where(eq(hiringOutcomes.correctionOf, answer.id)).limit(1);
   }
   if (!answer || answer.correctedAt || answer.applicationId !== input.applicationId || !DECISION_STAGES.includes(OUTCOME_STAGE[answer.outcome as ApplicationOutcome])) return none;
-  await q.update(hiringOutcomes).set({ correctedAt: input.now.toISOString(), correctedBy: input.actor, correctionReason: TAKEN_BACK_REASON }).where(and(eq(hiringOutcomes.id, answer.id), isNull(hiringOutcomes.correctedAt)));
-  return { outcomeId: answer.id, offerId: await reopenOfferSettledBy(q, answer) };
+  const [marked] = await q.update(hiringOutcomes).set({ correctedAt: input.now.toISOString(), correctedBy: input.actor, correctionReason: TAKEN_BACK_REASON }).where(and(eq(hiringOutcomes.id, answer.id), isNull(hiringOutcomes.correctedAt))).returning({ id: hiringOutcomes.id });
+  if (!marked) return none;
+  const offerId = await reopenOfferSettledBy(q, answer);
+  await audit(q, { companyId: answer.companyId, actor: input.actor, action: "outcome.taken_back", target: { type: "application", id: input.applicationId }, reason: TAKEN_BACK_REASON, details: { outcomeId: answer.id, outcome: answer.outcome, ...(offerId ? { reopenedOfferId: offerId } : {}) } });
+  return { outcomeId: answer.id, offerId };
 }
 
 export async function listOutcomes(q: Queryable, where: { companyId: string; applicationId?: string; roleId?: string }, limit = 50): Promise<OutcomeRow[]> {

@@ -13,7 +13,7 @@ export const CUSTOMER_AUDIT_ACTIONS: readonly string[] = [
   // the rules and the company
   "policy.changed", "notice.changed", "company.updated", "company.verified", "company.unverified", "company.access_accepted", "company.access_declined", "company.access_removed", "plan.changed",
   // candidates, outcomes and exports
-  "candidate.viewed", "candidate.exported", "outcome.recorded", "outcome.corrected", "role.outcome_recorded",
+  "candidate.viewed", "candidate.exported", "outcome.recorded", "outcome.corrected", "outcome.taken_back", "role.outcome_recorded",
   "export.created", "report.exported", "audit.exported",
   // interviews a person booked for the candidate
   "interview.booked_on_behalf",
@@ -66,6 +66,7 @@ export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reas
     case "interview.booked_on_behalf": return r.reason === "a person set the date and time" ? `${who} set an interview's date and time${d.moved === true ? ", moving a booked time" : ""}.` : `${who} booked an interview time on the candidate's behalf${r.reason ? ` (${r.reason.replace(/^booked on the candidate's behalf:\s*/, "")})` : ""}.`;
     case "outcome.recorded": return `${who} recorded an outcome: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "recorded"}.`;
     case "outcome.corrected": return `${who} corrected a recorded outcome${r.reason ? `: ${r.reason}` : ""}.`;
+    case "outcome.taken_back": return `${who} took back a recorded outcome before the candidate was told: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "recorded"}.`;
     case "role.outcome_recorded": return `${who} closed a role: ${OUTCOME_WORDS[str(d.outcome) ?? ""] ?? str(d.outcome) ?? "closed"}.`;
     case "export.created": return `${who} exported data.`;
     case "report.exported": return `${who} downloaded the ${str(d.kind) === "summary" ? "role report summary" : "applicant list"} for a role${num(d.rows) !== null ? ` (${num(d.rows)} rows)` : ""}.`;

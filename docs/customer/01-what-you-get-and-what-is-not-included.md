@@ -146,7 +146,7 @@ Every company is on one plan, and ITS sets it. A new company starts on **Free**,
 
 - Your team records what happened with each candidate: hired, declined an outside offer, withdrew, declined by you, or no hire. Closing a role is a separate decision with its own outcome.
 - Candidates who were still active stay in your talent pool when a role closes, unless they asked not to be kept. Anyone locked is not kept.
-- Outcome records carry the name of the person who recorded them. Only an ITS administrator can correct one, and the original is kept.
+- Outcome records carry the name of the person who recorded them. Only an ITS administrator can correct one, and the original is kept. A decline or a no hire your team takes back before the candidate was told keeps its record, marked taken back, and the audit history shows who took it back.
 
 ## What is not included in release 1
 

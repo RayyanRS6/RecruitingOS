@@ -300,7 +300,7 @@ The product never makes or sends an offer. When something happens outside the pr
 - **We declined the candidate**, with a reason (only for people who may decline candidates; the step says what the candidate will get under your settings)
 - **No hire for this candidate**
 
-Press **Continue**, then **Yes, record it**. The record carries your name. Only an ITS administrator can correct it, and the original is kept. Nothing about an outcome is sent to the candidate; an interview they had booked or times they were offered are called off with a short note saying only that it is off, once an email about it had reached them (not one that waited for the ITS check, could not be delivered, or bounced back).
+Press **Continue**, then **Yes, record it**. The record carries your name. Only an ITS administrator can correct it, and the original is kept. A decline or a no hire taken back before the candidate was told (**Take back this decision**) keeps its record, marked taken back, and the audit history shows who took it back. Nothing about an outcome is sent to the candidate; an interview they had booked or times they were offered are called off with a short note saying only that it is off, once an email about it had reached them (not one that waited for the ITS check, could not be delivered, or bounced back).
 
 **Team notes.** Each person on the hiring team can keep one private note on a candidate. Owners, admins, hiring managers, HR and an ITS recruiter you brought in read every note; an interviewer writes and reads only their own, on someone they interviewed. Notes are never shown to the candidate and never given to the AI assistant; a deletion request empties them.
 
