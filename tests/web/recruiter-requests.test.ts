@@ -102,6 +102,21 @@ describe("the words on each request", () => {
     expect(latestAnswer(thread.slice(0, 1))).toBeNull();
   });
 
+  // The review of the live-test fixes (17 November 2026): opened from the notice, a request Recruiting OS closed showed
+  // "Closed" over "Recruiting OS answered"; its answer and its note say what Recruiting OS did, on Home and in the queue
+  it("Recruiting OS's own answer reads that it closed the request, never that it answered; its note reads as it wrote it", () => {
+    const closed: EscalationThreadEntry = { id: "a", side: "recruiter", kind: "answer", body: "ITS ran the stopped step again and it finished. Nothing more is needed from you.", by: "Recruiting OS", at: "2026-11-17T15:04:00.000Z", raisedBy: "system" };
+    expect(threadHeading(closed)).toBe("Recruiting OS closed it");
+    expect(queueThreadHeading(closed)).toBe("Recruiting OS closed it");
+    expect(threadHeading(closed)).not.toMatch(/answered/);
+    const note: EscalationThreadEntry = { ...closed, id: "n", kind: "reply", body: "Someone has now decided about this application, so nothing more is needed." };
+    expect(threadHeading(note)).toBe("Recruiting OS wrote");
+    expect(queueThreadHeading(note)).toBe("Recruiting OS wrote");
+    // a recruiter's answer reads as before, and so does one that names nobody
+    expect(threadHeading({ ...closed, raisedBy: undefined, by: "Kai" })).toBe("Kai answered");
+    expect(threadHeading({ ...closed, raisedBy: undefined, by: null })).toBe("The recruiter answered");
+  });
+
   it("a request Recruiting OS or a candidate raised says so over its question, never \"The customer asked\" (15 October 2026)", () => {
     const question = { id: "q", side: "customer" as const, kind: "question" as const, body: "Processing this application stopped after 4 tries and needs a person to take over.", by: null, at: "2026-10-15T10:00:00.000Z" };
     expect(queueThreadHeading({ ...question, raisedBy: "system" })).toBe("Raised automatically by Recruiting OS");

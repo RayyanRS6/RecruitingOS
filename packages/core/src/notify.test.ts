@@ -192,6 +192,19 @@ describe("the words of an email alert", () => {
     expect(alertHeadline("whatever.else")).toBe("There is news about your account");
   });
 
+  // The review of the live-test fixes (17 November 2026): a stopped step ITS ran again closed its request with no recruiter
+  // answering, and the email said "Your ITS recruiter answered your request" while Home said "Closed"
+  it("says a request Recruiting OS closed on its own was closed, never that a recruiter answered, in the recruiter group", () => {
+    const email = renderAlertEmail({ kind: "recruiter.request_closed", recipientName: "Dana Whitfield", companyName: "Harbor Dental Group", roleTitle: null, link: "https://app.example.test/?request=e1", appBaseUrl: "https://app.example.test" });
+    expect(email.subject).toBe("A request to ITS was closed");
+    expect(email.text).toContain("A request to ITS was closed.");
+    expect(`${email.subject} ${email.text}`).not.toMatch(/answered/);
+    expect(resolveNotifyCadence("recruiter.request_closed", {})).toEqual({ group: "recruiter", cadence: "immediate", always: false, emailNow: true });
+    expect(email.text).toContain('You get emails about "Your ITS recruiter" as they happen.');
+    // a recruiter's own answer reads as before
+    expect(alertHeadline("recruiter.resolved")).toBe("Your ITS recruiter answered your request");
+  });
+
   it("links only into the app", () => {
     expect(alertLink("https://app.example.test/", "/interviews/x")).toBe("https://app.example.test/interviews/x");
     expect(alertLink("https://app.example.test", "https://elsewhere.example/phish")).toBe("https://app.example.test/updates");

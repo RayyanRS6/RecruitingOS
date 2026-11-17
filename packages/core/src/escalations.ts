@@ -231,9 +231,10 @@ const RETRY_ACTOR: Actor = { kind: "system", id: "workflow:retry", name: "Recrui
  * A run that stopped raised a request (`workflow_runs.escalation_id`, packages/workflows engine.ts failForGood); ITS
  * pressed Retry and the run has now finished. A request nobody has picked up yet is answered and closed with
  * RETRIED_RUN_FINISHED, so the team is not left waiting on work that is done and the queue no longer shows it; the
- * owners and whoever asked are told, as for any answer. A request a recruiter has already accepted stays theirs to
- * resolve: it gets the same line as a note on its thread. Anything else (answered, cancelled) is left as it is. Runs in
- * the company's transaction; no access was granted on an open request, so there is none to end.
+ * owners and whoever asked are told it closed, under a kind of its own (`recruiter.request_closed`), so neither the
+ * notice nor its email says a recruiter answered: none did (17 November 2026). A request a recruiter has already
+ * accepted stays theirs to resolve: it gets the same line as a note on its thread. Anything else (answered, cancelled)
+ * is left as it is. Runs in the company's transaction; no access was granted on an open request, so there is none to end.
  */
 export async function settleRetriedRunRequest(q: Queryable, input: { escalationId: string; companyId: string; now: Date }): Promise<"resolved" | "noted" | null> {
   const [e] = await q.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.id, input.escalationId), eq(recruiterEscalations.companyId, input.companyId))).limit(1).for("update");
@@ -249,7 +250,7 @@ export async function settleRetriedRunRequest(q: Queryable, input: { escalationI
   await emit(q, { type: "recruiter.resolved", companyId: e.companyId, actor: RETRY_ACTOR, subject: { type: "escalation", id: e.id }, payload: { resolution: RETRIED_RUN_FINISHED, minutesSpent: null, responseMinutes: null, retriedRun: true } });
   const owners = await q.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, e.companyId), eq(memberships.role, "owner"), eq(memberships.status, "active")));
   const readers = [...new Set([...(e.requestedBy.kind === "user" ? [e.requestedBy.id] : []), ...owners.map((m) => m.userId)])];
-  await notify(q, { companyId: e.companyId, kind: "recruiter.resolved", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "Read the answer", href: `/?request=${e.id}` }, userIds: readers });
+  await notify(q, { companyId: e.companyId, kind: "recruiter.request_closed", title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "See the request", href: `/?request=${e.id}` }, userIds: readers });
   return "resolved";
 }
 
@@ -419,7 +420,9 @@ async function recruiterWhoCanReturn(q: Queryable, e: EscalationRow): Promise<{ 
  * answered before the thread existed (migration 0029) shows its one answer. For the recruiter (`forRecruiter`), the
  * customer's side carries no names: the names of the company's team stay with the company, as the queue screen says.
  * A request nobody on the team raised says who did on its question (`raisedBy`: Recruiting OS on its own, or a
- * candidate), so neither side reads it as the customer asking (15 October 2026).
+ * candidate), so neither side reads it as the customer asking (15 October 2026). An entry Recruiting OS wrote itself (its
+ * answer when it closed the request, or its note) says so too (`raisedBy: "system"`), so nobody reads it as a recruiter
+ * answering (17 November 2026).
  */
 export function escalationThread(
   e: Pick<EscalationRow, "id" | "question" | "createdAt" | "requestedBy" | "resolution" | "resolvedAt"> & Partial<Pick<EscalationRow, "kind" | "summary" | "roleId" | "applicationId">>,
@@ -435,7 +438,7 @@ export function escalationThread(
   if (origin === "system" || origin === "candidate") question.raisedBy = origin;
   const out: EscalationThreadEntry[] = [question];
   const ordered = [...messages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : {}) });
+  for (const m of ordered) out.push({ id: m.id, side: m.side, kind: m.kind, body: m.body, by: named(m.side, m.author.name), at: m.createdAt, ...(m.author.kind === "candidate" ? { raisedBy: "candidate" as const } : m.author.kind === "system" ? { raisedBy: "system" as const } : {}) });
   if (e.resolution && !ordered.some((m) => m.kind === "answer")) out.push({ id: `${e.id}:answer`, side: "recruiter", kind: "answer", body: e.resolution, by: recruiterName, at: e.resolvedAt ?? e.createdAt });
   return out;
 }

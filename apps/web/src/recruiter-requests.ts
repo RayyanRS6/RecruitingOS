@@ -88,11 +88,14 @@ const RAISED_BY_WORDS: Record<NonNullable<EscalationThreadEntry["raisedBy"]>, st
   candidate: "A candidate asked for a person",
 };
 
+/** Over the answer Recruiting OS wrote when it closed a request on its own (`raisedBy: "system"`): nobody answered it. */
+export const SYSTEM_CLOSED_HEADING = "Recruiting OS closed it";
+
 /** The heading over one entry of the conversation. */
 export function threadHeading(entry: EscalationThreadEntry): string {
   switch (entry.kind) {
     case "question": return entry.raisedBy ? RAISED_BY_WORDS[entry.raisedBy] : entry.by ? `${entry.by} asked` : "The request";
-    case "answer": return `${entry.by ?? "The recruiter"} answered`;
+    case "answer": return entry.raisedBy === "system" ? SYSTEM_CLOSED_HEADING : `${entry.by ?? "The recruiter"} answered`;
     case "reopen": return `${entry.by ?? "Your team"} reopened it`;
     // The candidate the request is about wrote back: the line says so, and their words stay on the application's own thread.
     default: return entry.raisedBy === "candidate" ? "The candidate wrote back" : entry.side === "recruiter" ? `${entry.by ?? "The recruiter"} wrote` : `${entry.by ?? "Your team"} added a note`;

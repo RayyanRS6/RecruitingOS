@@ -23,8 +23,11 @@ export const PRIVATE_DECISION = "Private: the candidate was not told.";
  */
 type DecisionMessageHint = { decisionMessage?: { policy: DeclineMessagePolicy; to: string | null } | null; untoldFallbackOn?: string | null };
 
-/** Who a decision before the click is about, as far as the safety net's day goes: someone locked was promised a date. */
-type LockedPerson = { lockedAt?: string | null; createdAt?: string | null };
+/**
+ * Who a decision is about, as far as the safety net goes: someone locked was promised a date, and with no address on file
+ * nothing goes to them and nobody is brought in. The panel passes the person before the click and to the toast after it.
+ */
+export type LockedPerson = { lockedAt?: string | null; createdAt?: string | null };
 
 /**
  * The safety net said when a decision is filed (founder decision D-03 A), in the way the company's settings run it when
@@ -83,10 +86,11 @@ export function interviewsOffText(cancelled: number | undefined, toldOff?: numbe
 
 /**
  * A decision's second line: the private sentence while nothing went (always, since B6), the interviews it called off,
- * and the day the standard message goes by itself if nobody tells them first; else what became of the message.
+ * and the day the standard message goes by itself if nobody tells them first, or for someone locked (`person`) with no
+ * address on file that no message goes, as the line before the click and their card say; else what became of the message.
  */
-function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date): string {
-  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}`;
+function decisionDetail(r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date, person: LockedPerson = {}): string {
+  if (!r.candidateNotice || r.candidateNotice === "not_told") return r.dispositionSent ? noticeText("queued") : `${PRIVATE_DECISION}${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now, undefined, undefined, undefined, person)}`;
   return noticeText(r.candidateNotice);
 }
 
@@ -95,11 +99,14 @@ export function holdDay(remindAt: string): string {
   return new Date(remindAt).toLocaleDateString("en-US", { month: "long", day: "numeric" });
 }
 
-/** The toast after a choice on the candidate panel or a row (POST /applications/:id/actions). */
-export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date()): ToastParts {
+/**
+ * The toast after a choice on the candidate panel or a row (POST /applications/:id/actions). `person`: who it is about,
+ * when the page knows (the panel), so someone locked with no address reads that no message goes (17 November 2026).
+ */
+export function actionToast(action: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "next" | "talentPoolOptOut" | "mark" | "ownerStage" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date(), person: LockedPerson = {}): ToastParts {
   switch (action) {
     case "reject":
-      return { title: "Moved to Not moving forward.", detail: decisionDetail(r, now) };
+      return { title: "Moved to Not moving forward.", detail: decisionDetail(r, now, person) };
     case "hold":
     case "set_mark":
       if (r.mark?.mark === "on_hold") return { title: r.mark.remindAt ? `On hold until ${holdDay(r.mark.remindAt)}.` : "On hold.", detail: `They come back to your Home page then. ${NOT_TOLD}` };
@@ -111,8 +118,8 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
     case "move_to_talent_pool":
       // The person's own "don't keep me for future roles" stands (Wave 0 item 0.11); the page says so instead of "added".
       return r.talentPoolOptOut
-        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` }
-        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now)}` };
+        ? { title: "Moved out of this role.", detail: `They asked not to be kept for future roles, so they are not in your talent pool and nobody will contact them about other openings. The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now, undefined, undefined, undefined, person)}` }
+        : { title: "Added to your talent pool.", detail: `The candidate was not told.${interviewsOffText(r.interviewsCancelled, r.interviewOffNotes)} ${safetyNetAfterDecision(r, now, undefined, undefined, undefined, person)}` };
     case "invite_screen":
       return { title: r.next ?? "A new AI interview link is on its way." };
     case "ask_in_screen":
@@ -140,17 +147,20 @@ export function actionToast(action: string, r: Pick<ActionResult, "candidateNoti
   }
 }
 
-/** The toast after "How did the interview go?" (POST /applications/:id/decision). */
-export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint & { nextRoundKey?: string | null }, now: Date = new Date()): ToastParts {
+/** The toast after "How did the interview go?" (POST /applications/:id/decision); `person` as for `actionToast`. */
+export function decisionToast(decision: "next_round" | "finalist" | "not_moving_forward", r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint & { nextRoundKey?: string | null }, now: Date = new Date(), person: LockedPerson = {}): ToastParts {
   if (decision === "finalist") return { title: "Marked as a finalist.", detail: "The candidate was not told." };
   if (decision === "next_round") return { title: r.nextRoundKey ? "Next round." : "Next round recorded.", detail: r.nextRoundKey ? "Set its date and time below." : undefined };
-  return { title: "Recorded: not moving forward.", detail: decisionDetail(r, now) };
+  return { title: "Recorded: not moving forward.", detail: decisionDetail(r, now, person) };
 }
 
-/** The toast after "Record what happened" (POST /applications/:id/outcome); the team's own decisions are private. */
-export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date()): ToastParts {
+/**
+ * The toast after "Record what happened" (POST /applications/:id/outcome); the team's own decisions are private.
+ * `person` as for `actionToast`.
+ */
+export function outcomeToast(outcome: string, r: Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes"> & DecisionMessageHint, now: Date = new Date(), person: LockedPerson = {}): ToastParts {
   if (outcome === "hired_externally") return { title: "Hire recorded with your name." };
-  if (outcome === "employer_declined" || outcome === "no_hire") return { title: "Outcome recorded with your name.", detail: decisionDetail(r, now) };
+  if (outcome === "employer_declined" || outcome === "no_hire") return { title: "Outcome recorded with your name.", detail: decisionDetail(r, now, person) };
   return { title: "Outcome recorded with your name." };
 }
 

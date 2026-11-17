@@ -903,10 +903,12 @@ describe("every applicant's AI interview, in one email", () => {
       expect([vicAsk.status, vicAsk.resolution]).toEqual(["resolved", HOLD_DECIDED]);
       // Home's list reads both as closed by the system, which no recruiter answered or picked up (17 November 2026); one
       // still open, and the recruiter's, carry nothing of the kind
-      type Mine = { id: string; status: string; recruiterName: string | null; closedBy?: string };
+      type Mine = { id: string; status: string; recruiterName: string | null; closedBy?: string; thread: Array<{ kind: string; body: string; raisedBy?: string }> };
       const mine = async () => (await (await json("GET", "/api/v1/escalations/mine")).json()) as Mine[];
       const listed = await mine();
       for (const id of [umaAsk.id, vicAsk.id]) expect(listed.find((r) => r.id === id), id).toMatchObject({ status: "resolved", closedBy: "system", recruiterName: null });
+      // and their conversations mark the system's own answer, which Home heads "Recruiting OS closed it", never "answered"
+      for (const id of [umaAsk.id, vicAsk.id]) expect(listed.find((r) => r.id === id)?.thread.filter((m) => m.kind === "answer"), id).toEqual([expect.objectContaining({ body: HOLD_DECIDED, raisedBy: "system" })]);
       for (const id of [xiaAsk.id, (await requestsOf(wes.id))[0].id]) expect(listed.find((r) => r.id === id), id).not.toHaveProperty("closedBy");
       // "This didn't solve it": the team asks ITS again about someone decided, and the next hour leaves that to ITS
       const reopened = await json("POST", `/api/v1/escalations/mine/${vicAsk.id}/reopen`, { note: "Please call them about their licence anyway." });

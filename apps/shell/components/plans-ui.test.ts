@@ -514,7 +514,8 @@ describe("the team's list of requests", () => {
       askedBy: { kind: "system", name: null }, createdAt: daysAgo(4), slaDueAt: daysAgo(1), firstResponseAt: null, resolvedAt: daysAgo(0), resolution: decided, accessExpiresAt: null, recruiterName: null, reopenedCount: 0, closedBy: "system",
       thread: [
         { id: "e2:question", side: "customer", kind: "question", body: question, by: null, at: daysAgo(4), raisedBy: "system" },
-        { id: "m1", side: "recruiter", kind: "answer", body: decided, by: "Recruiting OS", at: daysAgo(0) },
+        // the API marks the line Recruiting OS wrote itself (17 November 2026)
+        { id: "m1", side: "recruiter", kind: "answer", body: decided, by: "Recruiting OS", at: daysAgo(0), raisedBy: "system" },
       ],
     };
     const html = render(client([[["escalations", "mine"], [row]]]), createElement(RecruiterRequests));
@@ -527,10 +528,20 @@ describe("the team's list of requests", () => {
     expect(words).not.toMatch(/Answered|Recruiting OS answered|Picked up/);
     // the team can still say it did not solve it
     expect(words).toContain("This didn't solve it");
+    // Opened from a notice (?request=<id>), the conversation shows, and Recruiting OS's own line says it closed the request:
+    // it read "Recruiting OS answered" under "Closed" (the review of the live-test fixes, 17 November 2026)
+    nav.search = "request=e2";
+    const opened = text(render(client([[["escalations", "mine"], [row]]]), createElement(RecruiterRequests)));
+    expect(opened).toContain("Hide the conversation");
+    expect(opened).toContain("Raised automatically by Recruiting OS · ");
+    expect(opened).toContain("Recruiting OS closed it · ");
+    expect(opened).not.toMatch(/Answered|Recruiting OS answered|The recruiter answered|Picked up/);
     // a recruiter's answer keeps its box, heading and state
-    const answered = text(render(client([[["escalations", "mine"], [{ ...row, closedBy: undefined, recruiterName: "Kai Recruiter", thread: [row.thread[0], { ...row.thread[1], body: "Call her about the licence.", by: "Kai Recruiter" }] }]]]), createElement(RecruiterRequests)));
+    const answered = text(render(client([[["escalations", "mine"], [{ ...row, closedBy: undefined, recruiterName: "Kai Recruiter", thread: [row.thread[0], { ...row.thread[1], body: "Call her about the licence.", by: "Kai Recruiter", raisedBy: undefined }] }]]]), createElement(RecruiterRequests)));
     expect(answered).toContain("Kai Recruiter answered Call her about the licence.");
     expect(answered).toMatch(/· Answered .* · Picked up by Kai Recruiter \(ITS recruiter\)/);
+    // and in the open conversation too
+    expect(answered).toContain("Kai Recruiter answered · ");
   });
 });
 

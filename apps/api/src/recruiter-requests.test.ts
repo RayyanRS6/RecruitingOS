@@ -233,13 +233,20 @@ describe("what a recruiter request covers, and saying so", () => {
     expect(await request(first.escalationId)).toMatchObject({ status: "open" });
     await retry(first.runId);
     expect(await request(first.escalationId)).toMatchObject({ status: "resolved", resolution: RETRIED_RUN_FINISHED });
-    const told = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "recruiter.resolved")))).filter((n) => n.action?.href === `/?request=${first.escalationId}`);
+    // under a kind of its own, whose email says the request closed, and a link to see it: no recruiter answered it, and the
+    // notice read "Read the answer" with the email "Your ITS recruiter answered your request" (17 November 2026)
+    const notices = (kind: string) => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, kind)));
+    const told = (await notices("recruiter.request_closed")).filter((n) => n.action?.href === `/?request=${first.escalationId}`);
     expect(told.length).toBeGreaterThanOrEqual(1);
-    expect(told[0]).toMatchObject({ title: "A stopped step is working again", body: RETRIED_RUN_FINISHED });
+    for (const n of told) expect(n).toMatchObject({ title: "A stopped step is working again", body: RETRIED_RUN_FINISHED, action: { label: "See the request", href: `/?request=${first.escalationId}` } });
+    expect((await notices("recruiter.resolved")).filter((n) => n.action?.href === `/?request=${first.escalationId}`)).toEqual([]);
     // Home's list reads it as closed by the system, which nobody at ITS answered or picked up (17 November 2026: it said
     // "Answered", and "Picked up by Recruiting OS (ITS recruiter)" from the system's line on the recruiter's side)
     const mine = async () => (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as RecruiterRequestView[];
-    expect((await mine()).find((r) => r.id === first.escalationId)).toMatchObject({ status: "resolved", closedBy: "system", recruiterName: null });
+    const closed = (await mine()).find((r) => r.id === first.escalationId);
+    expect(closed).toMatchObject({ status: "resolved", closedBy: "system", recruiterName: null });
+    // and its conversation marks the system's own answer, which Home heads "Recruiting OS closed it"
+    expect(closed?.thread.filter((m) => m.kind === "answer")).toEqual([expect.objectContaining({ side: "recruiter", body: RETRIED_RUN_FINISHED, by: "Recruiting OS", raisedBy: "system" })]);
     // a recruiter already has the next one: it stays theirs to resolve, with the same line as a note on its thread
     const second = await startRun();
     expect((await json(recruiter, "POST", `/api/v1/escalations/${second.escalationId}/claim`, {})).status).toBe(200);
@@ -252,6 +259,12 @@ describe("what a recruiter request covers, and saying so", () => {
     const answered = (await mine()).find((r) => r.id === second.escalationId);
     expect(answered).toMatchObject({ status: "resolved", recruiterName: "Kai Recruiter" });
     expect(answered).not.toHaveProperty("closedBy");
+    // the system's note is marked as its own, the recruiter's answer is not
+    expect(answered?.thread.find((m) => m.body === RETRIED_RUN_FINISHED)).toMatchObject({ kind: "reply", side: "recruiter", raisedBy: "system" });
+    const theirs = answered?.thread.filter((m) => m.kind === "answer") ?? [];
+    expect(theirs).toHaveLength(1);
+    expect(theirs[0]).toMatchObject({ side: "recruiter", body: "Checked: the step finished and the role is fine." });
+    expect(theirs[0]).not.toHaveProperty("raisedBy");
   });
 
   it("a request for a person's review with nothing attached goes to ITS administrators, not to a company-wide recruiter", async () => {

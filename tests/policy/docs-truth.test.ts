@@ -98,6 +98,33 @@ describe("the fairness runbook", () => {
       expect(runIt, id).toContain(`\`${value}\``);
     }
   });
+
+  /**
+   * The review of the live-test fixes (17 November 2026): the decisions register's row, the runbook's table and the release
+   * checklist said the button runs only the résumé and scoring checks, though it has offered the screening chat since Wave S7
+   * and the job builder since the live test. Someone working through the checklist would never press it with `screen,chat`,
+   * which must pass on the real model before any real candidate.
+   */
+  it("the release checklist, the decisions register and the runbook's table name every Which tests choice the button offers", () => {
+    const yml = read(".github/workflows/fairness.yml").replace(/\r\n/g, "\n");
+    const tests = yml.slice(yml.indexOf("\n      tests:\n"), yml.indexOf("\n      screening_model:\n"));
+    const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(tests)?.[1] ?? "[]");
+    expect(choices).toEqual(expect.arrayContaining(["resume,triage", "screen,chat", "intake,packet.revise"]));
+    const checklist = read("docs/regression-checklist.md").replace(/\r\n/g, "\n");
+    const at = checklist.indexOf("- [ ] **The fairness test button.**");
+    expect(at).toBeGreaterThan(-1);
+    const button = checklist.slice(at, checklist.indexOf("\n- [ ] **", at + 1));
+    // in backticks, so `resume,triage` is never satisfied by `resume,triage,screen,chat`
+    for (const choice of choices) expect(button, choice).toContain(`\`${choice}\``);
+    expect(checklist).not.toMatch(/runs the résumé and reading suites|runs only the résumé|Not covered by the button: the screening/);
+    const register = read("docs/workflow-decisions.md").split("\n").find((l) => l.startsWith('| A "Run fairness tests" GitHub Actions button on the real model |')) ?? "";
+    expect(register).not.toBe("");
+    for (const choice of choices) expect(register, choice).toContain(`\`${choice}\``);
+    expect(register).not.toMatch(/does not run the screening-chat tests/);
+    const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
+    const checks = runbook.slice(runbook.indexOf("## What it checks"), runbook.indexOf("## Set it up once"));
+    for (const rowName of ["| Twin CVs |", "| Screening chat |", "| Job builder |"]) expect(checks, rowName).toContain(rowName);
+  });
 });
 
 describe("the API contracts", () => {

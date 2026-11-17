@@ -170,7 +170,8 @@ function DeclineStep({ a, roleId, onClose }: { a: ApplicationDetail; roleId: str
   const [note, setNote] = useState("");
   useDraft("decline-note", note);
   const first = useFocusOnMount<HTMLSelectElement>();
-  const act = useCandidateAction(a.id, roleId, () => onClose());
+  // the toast after the click says what DeclineNotice said before it, for someone locked too
+  const act = useCandidateAction(a.id, roleId, () => onClose(), a);
   const interviews = activeInterviews(a.interviews);
   return (
     <Card needsYou lift title="Not moving forward" className={STEP}>
@@ -427,7 +428,7 @@ function OutcomeStep({ a, roleId, onClose, onHire }: { a: ApplicationDetail; rol
   const record = useMutation({
     mutationFn: () => api.post<{ roleStillOpen: boolean; roleId: string } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage" | "untoldFallbackOn">>(`/api/v1/applications/${a.id}/outcome`, { outcome: form.outcome, confirm: true, reason: form.outcome === "employer_declined" ? form.reason : undefined, note: form.note.trim() || undefined }),
     onSuccess: async (r) => {
-      const t = outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
+      const t = outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a);
       toast(t.title, t.detail);
       onClose();
       await refresh();
@@ -634,7 +635,7 @@ function DecisionCard({ a, roleId, myRole, onNextRound, onSameRound, onHire, onN
     mutationFn: (body: { decision: "next_round" | "finalist" | "not_moving_forward"; reason?: string; note?: string }) => api.post<{ stage: string; nextRoundKey: string | null } & Pick<ActionResult, "candidateNotice" | "dispositionSent" | "interviewsCancelled" | "interviewOffNotes" | "decisionMessage" | "untoldFallbackOn">>(`/api/v1/applications/${a.id}/decision`, body),
     onSuccess: async (r, body) => {
       // the safety net's way under the company's settings (D-03 A): the answer's own word, else what this panel knows
-      const t = decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) });
+      const t = decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a);
       toast(t.title, t.detail);
       setDecision(null);
       setNote("");
@@ -690,7 +691,7 @@ function EligibilityCard({ a, roleId }: { a: ApplicationDetail; roleId: string }
   const [note, setNote] = useState("");
   useDraft("eligibility-override", overrideNote);
   useDraft("eligibility-note", note);
-  const act = useCandidateAction(a.id, roleId, () => setConfirming(false));
+  const act = useCandidateAction(a.id, roleId, () => setConfirming(false), a);
   const can = (x: ApplicationDetail["allowedActions"][number]) => a.allowedActions.includes(x);
   const blocked = (x: ApplicationDetail["allowedActions"][number]) => a.blockedReasons[x] ?? "Not available at this step.";
   return (
