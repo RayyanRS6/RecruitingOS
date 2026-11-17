@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
+import { PROXY_RULES, companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
 
 /** A small valid packet; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
@@ -343,27 +343,33 @@ describe("a ban on a criminal record is refused in any common wording, and a bac
       "No felony convictions", "No felony", "No criminal convictions", "Felony-free", "Without a criminal record", "Must not have any convictions", "Must not have a felony",
       // each word for a record, after each word that rules someone out
       "No felon", "No conviction", "No criminal history", "No criminal background", "No criminal charges", "No criminal offenses", "No arrests", "No misdemeanors",
-      "Without felony convictions", "Never had a felony", "Never been arrested", "Must not have a criminal history", "Cannot have a criminal record", "Can't have any misdemeanors", "Free of criminal convictions",
+      "Without felony convictions", "Never been arrested", "Must not have a criminal history", "Cannot have a criminal record", "Can't have any misdemeanors", "Free of criminal convictions",
       // the "-free" forms
       "Felon-free", "Conviction-free", "Arrest-free",
       // the same ban in other common words
-      "No prior felony convictions", "No DUIs or felonies", "No one with a criminal record", "Won't hire felons", "Do not apply if you have a felony", "Felons need not apply", "Must not be a convicted felon", "Has not been convicted of a felony",
+      "Won't hire felons", "Felons need not apply", "Must not be a convicted felon", "Has not been convicted of a felony",
     ];
     for (const text of refused) expect(screenCriterion(text)?.rule, text).toBe("criminal_record");
+    // rebuilt from the final check (LT-31): a word between, a list, "No one with" or "Do not apply if" is read as production reads it
+    for (const text of ["Never had a felony", "No prior felony convictions", "No DUIs or felonies", "No one with a criminal record", "Do not apply if you have a felony"]) expect(screenCriterion(text), text).toBeNull();
   });
 
   it("refuses a question about the candidate's own record, wherever a question is set", () => {
-    for (const question of ["Are you a convicted felon?", "Any felony convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?", "Do you have a felony?", "Ever been arrested?", "Are you felony-free?"]) {
+    for (const question of ["Are you a convicted felon?", "Any felony convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?", "Are you felony-free?"]) {
       expect(questionCheck(question)?.rule, question).toBe("asks_record");
       expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
     }
+    // rebuilt from the final check (LT-31): neither is in production's words or a fixed phrase, so both are saved, as in production
+    for (const question of ["Do you have a felony?", "Ever been arrested?"]) {
+      expect(questionCheck(question), question).toBeNull();
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+    }
   });
 
-  it("never refuses a background check after an offer, work with people who have a record, or a driving record", () => {
+  it("never refuses a background check after an offer, work with people who have a record, or a driving record, beyond production's own words", () => {
     const fine = [
       "Background check after a conditional offer", "Offer contingent on a background check", "No background check until after an offer",
-      "Criminal background check after a conditional offer", "No criminal background check until after an offer",
-      "Experience supporting clients with a criminal record", "With or without a criminal record, you are welcome to apply",
+      "With or without a criminal record, you are welcome to apply",
       "Clean driving record", "Valid driver's license", "Valid driver's licence and a clean driving record", "No DUI convictions",
       // waits for counsel: neither refused nor flagged for now
       "Must pass a background check",
@@ -372,8 +378,14 @@ describe("a ban on a criminal record is refused in any common wording, and a bac
       expect(screenCriterion(text), text).toBeNull();
       expect(questionCheck(text), text).toBeNull();
     }
-    for (const question of ["Do you have experience supporting clients with a criminal record?", "Are you willing to complete a criminal background check after a conditional offer?", "Do you have a clean driving record?", "Do you hold a valid driver's license?", "Are you OK with a 90-day probation period?"]) {
+    for (const question of ["Do you have a clean driving record?", "Do you hold a valid driver's license?", "Are you OK with a 90-day probation period?"]) {
       expect(questionCheck(question), question).toBeNull();
+    }
+    // rebuilt from the final check (LT-31): production's "No criminal background", and in a question its bare "criminal record" or "criminal background", still refuse these
+    for (const text of ["Criminal background check after a conditional offer", "Experience supporting clients with a criminal record"]) expect(screenCriterion(text), text).toBeNull();
+    expect(screenCriterion("No criminal background check until after an offer")?.text).toBe("No criminal background");
+    for (const text of ["Criminal background check after a conditional offer", "No criminal background check until after an offer", "Experience supporting clients with a criminal record", "Do you have experience supporting clients with a criminal record?", "Are you willing to complete a criminal background check after a conditional offer?"]) {
+      expect(questionCheck(text)?.rule, text).toBe("asks_record");
     }
   });
 
@@ -409,9 +421,11 @@ describe("the review of the criminal-record fix: each common ban refused, and th
   const RULE = { rule: "criminal_record", reason: "A blanket ban on criminal records breaks fair-chance hiring laws in many places.", alternative: "Leave any background check to the end of the process, after an offer, where the law allows it." };
 
   it("refuses a ban written after the people it rules out, with the words the rule found before the fix", () => {
-    for (const text of ["We only hire people with a clean record", "Individuals who have never been convicted", "Looking for people with no criminal record", "Team members with no felonies", "Those with no criminal history", "Seeking individuals with no felony convictions", "People with felonies need not apply", "Those with a felony need not apply", "Those with a criminal record will be disqualified"]) {
+    for (const text of ["We only hire people with a clean record", "Individuals who have never been convicted", "Looking for people with no criminal record", "Team members with no felonies", "Those with no criminal history", "Seeking individuals with no felony convictions"]) {
       expect(screenCriterion(text), text).toMatchObject(RULE);
     }
+    // rebuilt from the final check (LT-31): none of these holds production's words or a fixed phrase, so they pass, as in production
+    for (const text of ["People with felonies need not apply", "Those with a felony need not apply", "Those with a criminal record will be disqualified"]) expect(screenCriterion(text), text).toBeNull();
     // the words a flag kept before the fix was found by, so that keep still holds
     expect(screenCriterion("We only hire people with a clean record")?.text).toBe("clean record");
     expect(screenCriterion("Individuals who have never been convicted")?.text).toBe("never been convicted");
@@ -419,14 +433,16 @@ describe("the review of the criminal-record fix: each common ban refused, and th
     for (const text of ["Experience supporting clients with a criminal record", "Experience supporting clients with no stable housing or criminal records", "We welcome applicants with a criminal record", "We hire people with records"]) expect(screenCriterion(text), text).toBeNull();
   });
 
-  it("refuses a crime's kind before a conviction, ex-felons and non-felons, offenders, and someone not considered or disqualified for a record", () => {
+  it("refuses ex-felons and the felony-free form, and reads a crime's kind, non-felons, offenders and someone not considered for a record as production does", () => {
+    for (const text of ["No ex-felons", "Must be felony-free"]) expect(screenCriterion(text), text).toMatchObject(RULE);
+    // rebuilt from the final check (LT-31): only production's words and the fixed phrases are a ban, so these pass, as in production
     for (const text of [
       "No domestic violence convictions", "No drug-related convictions", "No theft-related convictions", "No fraud convictions", "No assault convictions", "No violent crime convictions", "No theft or fraud convictions", "Must have no domestic violence convictions",
-      "Must be a non-felon", "Non-felons only", "No ex-felons", "No ex-cons", "Ex-offenders need not apply", "No sex offenders", "No registered sex offenders", "No jail time",
+      "Must be a non-felon", "Non-felons only", "No ex-cons", "Ex-offenders need not apply", "No sex offenders", "No registered sex offenders", "No jail time",
       "Felons will not be considered", "Applicants with a felony conviction will not be considered", "We will not consider anyone with a criminal record", "A felony disqualifies you", "Felony convictions disqualify",
       "We do not hire anyone who has been convicted of a felony", "Applicants who have been convicted of a felony will not be considered",
-      "Must not carry any felony convictions", "Cannot hold a felony conviction", "No pending criminal charges", "Must be felony-free", "Must have a spotless record", "Zero felony convictions",
-    ]) expect(screenCriterion(text), text).toMatchObject(RULE);
+      "Must not carry any felony convictions", "Cannot hold a felony conviction", "No pending criminal charges", "Must have a spotless record", "Zero felony convictions",
+    ]) expect(screenCriterion(text), text).toBeNull();
   });
 
   it("never refuses fair-chance words, billing words or a driving record", () => {
@@ -445,36 +461,49 @@ describe("the review of the criminal-record fix: each common ban refused, and th
   it("refuses a question about the candidate's own record in these words, and one in a ban's own words, wherever a question is set", () => {
     for (const question of [
       "Are you a person with a criminal record?", "Are you an individual with a criminal history?", "Are you one of those with a criminal record?",
-      "Were you ever charged with a crime?", "Were you charged?", "Have you ever been charged?", "Are you currently on parole?", "Have you ever been on probation or parole?", "Do you have any pending charges?", "Do you have any pending criminal charges?",
-      "Do you have any fraud convictions?", "Any domestic violence convictions?", "Do you have any violent crime convictions?", "Are you an ex-felon?", "Are you a non-felon?", "Are you a registered sex offender?",
-      "Do you have a clean record?", "Can you confirm you have no felony convictions?", "Are you free of felony convictions?", "Have you never been convicted?", "Is your record clean?",
-      "Have you served time in jail or prison?", "Are you currently awaiting trial?",
+      "Have you ever been charged?", "Are you currently on parole?", "Have you ever been on probation or parole?",
+      "Do you have a clean record?", "Can you confirm you have no felony convictions?", "Are you free of felony convictions?", "Have you never been convicted?",
+      "Have you served time in jail or prison?",
     ]) {
       expect(questionCheck(question)?.rule, question).toBe("asks_record");
       expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
     }
-    // a ban's words in a help line or in what a good answer shows are refused too, never only flagged
-    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your last job.", lookFor: "We only hire people with a clean record" }] })[0]).toMatchObject({ part: "lookFor", rule: "criminal_record" });
+    // rebuilt from the final check (LT-31): none of these holds production's words or a fixed phrase, so they are saved, as in production
+    for (const question of [
+      "Were you ever charged with a crime?", "Were you charged?", "Do you have any pending charges?", "Do you have any pending criminal charges?",
+      "Do you have any fraud convictions?", "Any domestic violence convictions?", "Do you have any violent crime convictions?", "Are you an ex-felon?", "Are you a non-felon?", "Are you a registered sex offender?",
+      "Is your record clean?", "Are you currently awaiting trial?",
+    ]) {
+      expect(questionCheck(question), question).toBeNull();
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+    }
+    // a ban's words in a help line or in what a good answer shows are refused too, never only flagged; rebuilt from the
+    // final check (LT-31), the question rule reads a ban's words in every part, so it is the one that refuses them
+    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your last job.", lookFor: "We only hire people with a clean record" }] })[0]).toMatchObject({ part: "lookFor", rule: "asks_record", text: "clean record" });
   });
 
-  it("never refuses a question about the work with records, the people it is with, or a bill's charges", () => {
+  it("never refuses a question about the work with records, the people it is with, or a bill's charges, beyond production's own words", () => {
     for (const question of [
       "How do you follow up on any pending charges on a patient account?", "Do you have experience clearing any pending charges on patient accounts?", "In your last job, were you charged with opening the office?",
       "Do you have probation and parole experience?", "Are you a former probation or parole officer?", "Do you have experience with probation and parole clients?", "Have you worked with people on probation or parole?",
-      "Have you helped clients convicted of a felony find housing?", "Have you handled criminal charges as a paralegal?", "Do you have experience researching criminal records?", "Have you worked with people who have a criminal record?",
+      "Have you helped clients convicted of a felony find housing?", "Have you handled criminal charges as a paralegal?", "Do you have experience researching criminal records?",
       "Do you have any DUI convictions?", "Can you pass a background check?",
     ]) {
       expect(questionCheck(question), question).toBeNull();
       expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
     }
+    // rebuilt from the final check (LT-31): production's bare "criminal record" in a question refuses it, as in production
+    expect(companyQuestionProblems({ quick: [{ key: "cq_x", question: "Have you worked with people who have a criminal record?", options: ["Yes", "No"] }] })[0]).toMatchObject({ part: "question", rule: "asks_record", text: "criminal record" });
   });
 
   it("reads a record named on its own as a deal-breaker as the ban, and only as a deal-breaker", () => {
-    for (const text of ["Felony convictions", "A criminal record", "Felons", "Criminal history", "Convicted of a felony", "Has a felony", "Any convictions", "Arrest record", "Pending charges", "Theft convictions"]) {
+    for (const text of ["Felony convictions", "A criminal record", "Felons", "Criminal history", "Any convictions", "Arrest record"]) {
       expect(screenDealBreaker(text), text).toMatchObject(RULE);
       // as a must-have's own words they are no ban
       expect(screenCriterion(text), text).toBeNull();
     }
+    // rebuilt from the final check (LT-31): a deal-breaker is a record named on its own only with one of the fixed leading words
+    for (const text of ["Convicted of a felony", "Has a felony", "Pending charges", "Theft convictions"]) expect(screenDealBreaker(text), text).toBeNull();
     for (const text of ["DUI convictions", "Moving violations", "Must pass a background check", "Cannot pass a background check", "Criminal background check after a conditional offer", "Experience supporting clients with a criminal record", "Cannot work Saturdays", "Smokers"]) {
       expect(screenDealBreaker(text), text).toBeNull();
     }
@@ -508,5 +537,300 @@ describe("the review of the criminal-record fix: each common ban refused, and th
     // a company question in a ban's own words is refused when it is saved, with the reason a question gets
     const problem = companyQuestionProblems({ quick: [{ key: "cq_record", question: "Do you have a clean record?", options: ["Yes", "No"] }] });
     expect(companyQuestionProblemWords(problem[0])).toBe("Quick question 1: Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places. Leave any background check to the end of the process, after an offer, where the law allows it.");
+  });
+});
+
+// Final check of the criminal-record repair, 17 Nov 2026: the open word patterns of the fix and its repair let through
+// questions and bans production refused, and refused lawful words production allowed. The rules were rebuilt (LT-31) as
+// production's own two patterns, plus fixed phrases, minus a short list of fixed exceptions read the same way in every field.
+describe("the criminal-record rules rebuilt from the final check: production's words, fixed phrases added, fixed exceptions taken out", () => {
+  type Field = "requirement" | "deal-breaker" | "question" | "about" | "description";
+  type Result = "refused" | "flagged" | "allowed";
+  // the About check's rules (apps/api company-settings-profile.ts): the phrase list without the years and pay-history rules
+  const ABOUT_RULES = PROXY_RULES.filter((r) => !["experience_floor", "experience_cap", "pay_history"].includes(r.rule));
+  const aboutCheck = (text: string) => {
+    for (const r of ABOUT_RULES) {
+      const hit = r.find(text);
+      if (hit) return { rule: r.rule, text: hit };
+    }
+    return null;
+  };
+  /** What a field does with the words, through the code it runs: refused where they are set, flagged on a saved job, or allowed. */
+  function read(field: Field, text: string): { result: Result; rule?: string; hit?: string } {
+    if (field === "question") {
+      const problem = companyQuestionProblems({ quick: [{ key: "cq_x", question: text, options: ["Yes", "No"] }] })[0];
+      // the quick start's own question is read the same way
+      expect(questionCheck(text)?.rule ?? null, `${text} (the quick start's own question)`).toBe(problem?.rule ?? null);
+      if (problem) return { result: "refused", rule: problem.rule, hit: problem.text };
+      const flag = guardPacket(packet((x) => { x.companyQuestions = { quick: [{ kind: "choice", key: "cq_x", question: text, options: ["Yes", "No"], required: true }], written: [] }; }), ctx).flags[0];
+      return flag ? { result: "flagged", rule: flag.rule, hit: flag.text } : { result: "allowed" };
+    }
+    if (field === "description") {
+      const flag = guardPacket(packet((x) => { x.description.publicJobDescription += ` ${text}`; }), ctx).flags[0];
+      return flag ? { result: "flagged", rule: flag.rule, hit: flag.text } : { result: "allowed" };
+    }
+    const hit = field === "deal-breaker" ? screenDealBreaker(text) : field === "about" ? aboutCheck(text) : screenCriterion(text);
+    return hit ? { result: "refused", rule: hit.rule, hit: hit.text } : { result: "allowed" };
+  }
+
+  // [the field it is typed in, the words, what happens, and for a refusal or a flag the words it is found by]
+  const TABLE: Array<[Field, string, Result, string?]> = [
+    // production's own words are still refused or flagged, with production's words, so a flag kept in production holds
+    ["requirement", "No felons", "refused", "No felons"],
+    ["requirement", "Clean record", "refused", "Clean record"],
+    ["requirement", "Never been convicted", "refused", "Never been convicted"],
+    ["description", "Friendly dental office in Irvine. No felonies, misdemeanors considered case by case. Great benefits.", "flagged", "No felonies"],
+    ["requirement", "No felonies, misdemeanors considered case by case", "refused", "No felonies"],
+    ["requirement", "No felonies - misdemeanors considered case by case", "refused", "No felonies"],
+    ["requirement", "No felonies, but misdemeanors are considered case by case", "refused", "No felonies"],
+    ["requirement", "Must have no felonies, misdemeanors considered case by case", "refused", "no felonies"],
+    ["requirement", "No felons, minor offenses excluded", "refused", "No felons"],
+    ["requirement", "No felonies, juvenile records excluded", "refused", "No felonies"],
+    ["requirement", "No felons, arrests not counted against you", "refused", "No felons"],
+    ["requirement", "No felonies, failure to disclose will disqualify you", "refused", "No felonies"],
+    ["requirement", "No felonies, any conviction will disqualify you", "refused", "No felonies"],
+    ["deal-breaker", "Never been convicted, misdemeanors ok", "refused", "Never been convicted"],
+    ["about", "No felons, barring exceptional circumstances", "refused", "No felons"],
+    ["requirement", "Must have a clean record of at least 7 years", "refused", "clean record"],
+    ["description", "Must have a clean record of at least 7 years.", "flagged", "clean record"],
+    ["requirement", "Clean criminal record of 10 years required", "refused", "Clean criminal record"],
+    ["requirement", "A clean background of at least five years", "refused", "clean background"],
+    ["requirement", "We hire local residents with no criminal record.", "refused", "no criminal record"],
+    ["deal-breaker", "Teens with no criminal record", "refused", "no criminal record"],
+    ["about", "We only hire students with a clean record.", "refused", "clean record"],
+    ["requirement", "Students who have never been convicted", "refused", "never been convicted"],
+    ["description", "Summer jobs for teens with no criminal record.", "flagged", "no criminal record"],
+    ["requirement", "Youths with no felonies", "refused", "no felonies"],
+    ["about", "Open to college students with no criminal background", "refused", "no criminal background"],
+    ["requirement", "Residents with no arrests", "refused", "no arrests"],
+    ["requirement", "No convictions for DUI", "refused", "No convictions"],
+    ["question", "Have you ever been charged with or convicted of a crime?", "refused", "Have you ever been charged"],
+    ["question", "Have you ever been charged with, or convicted of, a crime?", "refused", "Have you ever been charged"],
+    ["question", "Have you been charged with or convicted of a crime in the past 7 years?", "refused", "Have you been charged"],
+    ["question", "Have you ever been charged with anything?", "refused", "Have you ever been charged"],
+    ["question", "Have you ever been charged with a criminal act?", "refused", "Have you ever been charged"],
+    ["question", "Have you ever been charged with sexual misconduct?", "refused", "Have you ever been charged"],
+    ["question", "Have you ever been charged by the police?", "refused", "Have you ever been charged"],
+    ["question", "Have you been charged in the last 7 years?", "refused", "Have you been charged"],
+    ["question", "Have you ever been charged or arrested?", "refused", "Have you ever been charged"],
+    ["question", "Have you been convicted of a DUI?", "refused", "Have you been convicted"],
+    ["question", "Applicants with a criminal record: please explain below.", "refused", "criminal record"],
+    ["question", "Candidates who have a criminal history should describe it here.", "refused", "criminal history"],
+    ["question", "Applicants with any felony convictions must list them.", "refused", "any felony"],
+    ["question", "If you are a person with a criminal record, please explain.", "refused", "criminal record"],
+    ["question", "If you're a person with a criminal record, please explain.", "refused", "criminal record"],
+    ["question", "If you are an applicant with a criminal background, tell us about it.", "refused", "criminal background"],
+    ["question", "As an applicant with a criminal record, explain what happened.", "refused", "criminal record"],
+    ["question", "Employees with a criminal record must tell us.", "refused", "criminal record"],
+    ["question", "Workers with any convictions must list them below.", "refused", "any convictions"],
+    ["question", "Applicants with a criminal record must explain the conviction here.", "refused", "criminal record"],
+    ["question", "Candidates with any felony convictions must list them here.", "refused", "any felony"],
+    ["question", "Applicants with any arrests in the past 7 years must list them.", "refused", "any arrests"],
+    ["question", "Candidates with a criminal history, please give details.", "refused", "criminal history"],
+    ["question", "Workers with any felony convictions must list them below.", "refused", "any felony"],
+    ["question", "If you are an applicant with a criminal record, explain it here.", "refused", "criminal record"],
+    ["question", "Those with a criminal record must explain it here.", "refused", "criminal record"],
+    ["question", "Please review any criminal convictions you may have and list them.", "refused", "any criminal convictions"],
+    ["question", "Please verify any convictions you have.", "refused", "any convictions"],
+    ["question", "Can we run a criminal background check before your interview?", "refused", "criminal background"],
+    ["question", "Will you allow us to perform a criminal background check before we meet?", "refused", "criminal background"],
+    ["question", "Do you authorize us to conduct a criminal background check?", "refused", "criminal background"],
+    ["question", "Do you consent to us running a criminal background check?", "refused", "criminal background"],
+    ["question", "Do you authorize us to obtain any criminal history?", "refused", "any criminal history"],
+    ["question", "Have you experienced any arrests?", "refused", "any arrests"],
+    ["question", "Have you experienced any convictions in the last 7 years?", "refused", "any convictions"],
+    ["question", "Do you have experience supporting clients with a criminal record?", "refused", "criminal record"],
+    // a question in a ban's words is refused, never only flagged as production did
+    ["question", "Do you have a clean record?", "refused", "clean record"],
+    ["question", "Do you have a clean record with the DMV?", "refused", "clean record"],
+    ["question", "Can you confirm you have no felony convictions?", "refused", "no felony"],
+
+    // the fixed phrases added to the ban: a record after "no", "without", "never", "must not have", "cannot have",
+    // "may not have" or "free of"
+    ["requirement", "No felony convictions", "refused", "No felony"],
+    ["requirement", "Without a criminal record", "refused", "Without a criminal record"],
+    ["requirement", "Never any arrests", "refused", "Never any arrests"],
+    ["requirement", "Never a felony conviction", "refused", "Never a felony"],
+    // after "never" English always puts "a", "an" or "any" before the record, so a bare "never arrest" is the verb
+    ["description", "Officers never arrest or detain customers.", "allowed"],
+    ["requirement", "Must not have any convictions", "refused", "Must not have any convictions"],
+    ["deal-breaker", "Cannot have a criminal record", "refused", "Cannot have a criminal record"],
+    ["requirement", "Can't have any misdemeanors", "refused", "Can't have any misdemeanors"],
+    ["requirement", "Can not have a felony", "refused", "Can not have a felony"],
+    ["about", "Our staff may not have any criminal charges.", "refused", "may not have any criminal charges"],
+    ["requirement", "Free of criminal convictions", "refused", "Free of criminal convictions"],
+    ["requirement", "Without an arrest in the last 7 years", "refused", "Without an arrest"],
+    // its "-free" forms
+    ["requirement", "Felony-free", "refused", "Felony-free"],
+    ["requirement", "Conviction-free", "refused", "Conviction-free"],
+    ["description", "All our staff are felon-free.", "flagged", "felon-free"],
+    ["requirement", "Arrest-free", "refused", "Arrest-free"],
+    // and the whole bans
+    ["requirement", "No ex-felons", "refused", "No ex-felons"],
+    ["requirement", "No ex-offenders", "refused", "No ex-offenders"],
+    ["deal-breaker", "No parolees", "refused", "No parolees"],
+    ["requirement", "Felons need not apply", "refused", "Felons need not apply"],
+    ["about", "Felons may not apply.", "refused", "Felons may not apply"],
+    ["requirement", "Not a convicted felon", "refused", "Not a convicted felon"],
+    ["requirement", "Must not be a convicted felon", "refused", "not be a convicted felon"],
+    ["requirement", "Must not be on parole", "refused", "Must not be on parole"],
+    ["requirement", "Must not be on probation or parole", "refused", "Must not be on probation or parole"],
+    ["requirement", "Must never have been convicted of a felony", "refused", "never have been convicted"],
+    ["requirement", "Has not been convicted of a felony", "refused", "Has not been convicted of a felony"],
+    ["about", "A felony conviction will disqualify you.", "refused", "A felony conviction will disqualify"],
+    ["requirement", "A felony conviction will result in disqualification", "refused", "felony conviction will result in disqualification"],
+    ["requirement", "Will not hire felons", "refused", "Will not hire felons"],
+    ["description", "We won't hire felons.", "flagged", "won't hire felons"],
+    ["requirement", "We do not hire felons", "refused", "do not hire felons"],
+
+    // a deal-breaker whose whole words are a record, with at most one fixed leading word and a time window
+    ["deal-breaker", "Felony convictions", "refused", "Felony convictions"],
+    ["deal-breaker", "A criminal record", "refused", "A criminal record"],
+    ["deal-breaker", "Criminal history", "refused", "Criminal history"],
+    ["deal-breaker", "Anyone with a felony", "refused", "Anyone with a felony"],
+    ["deal-breaker", "People with criminal records", "refused", "People with criminal records"],
+    ["deal-breaker", "Those with a criminal record", "refused", "Those with a criminal record"],
+    ["deal-breaker", "Applicants with felony convictions", "refused", "Applicants with felony convictions"],
+    ["deal-breaker", "Having a criminal record", "refused", "Having a criminal record"],
+    ["deal-breaker", "Anyone convicted of a felony", "refused", "Anyone convicted of a felony"],
+    ["deal-breaker", "On probation or parole", "refused", "On probation or parole"],
+    ["deal-breaker", "Felony convictions in the last 7 years", "refused", "Felony convictions in the last 7 years"],
+    ["requirement", "Felony convictions", "allowed"],
+
+    // the fixed phrases added to the question
+    ["question", "Are you a convicted felon?", "refused", "Are you a convicted felon"],
+    ["question", "Are you currently on parole?", "refused", "Are you currently on parole"],
+    ["question", "Are you on probation or parole?", "refused", "Are you on probation or parole"],
+    ["question", "Have you ever been on probation or parole?", "refused", "Have you ever been on probation or parole"],
+    ["question", "Have you ever spent time in jail or prison?", "refused", "spent time in jail"],
+    ["question", "Have you served time in prison?", "refused", "served time in prison"],
+    ["question", "Have you ever been in trouble with the law?", "refused", "trouble with the law"],
+    ["question", "Do you have any criminal records?", "refused", "any criminal records"],
+
+    // the exceptions, the same in every field: fair-chance statements and a record that is the work's own
+    ["question", "With or without a criminal record, you are welcome to apply.", "allowed"],
+    ["requirement", "With or without a criminal record, you are welcome to apply.", "allowed"],
+    ["question", "A criminal record does not automatically disqualify you.", "allowed"],
+    ["about", "No conviction automatically disqualifies you.", "allowed"],
+    ["requirement", "No felony or misdemeanor conviction will disqualify you", "allowed"],
+    ["about", "No felony, misdemeanor or arrest will automatically disqualify you.", "allowed"],
+    ["about", "No felony conviction will be considered disqualifying.", "allowed"],
+    ["about", "Brightline Dental is a second-chance employer in Irvine. Applicants with a criminal record will not be considered ineligible for that reason alone.", "allowed"],
+    ["question", "Applicants with a criminal record will not be considered ineligible.", "allowed"],
+    ["about", "We are a second-chance employer, and we never refuse to hire people with criminal records.", "allowed"],
+    ["question", "We never refuse to hire people with a criminal record.", "allowed"],
+    ["requirement", "Arrests without a conviction are never considered", "allowed"],
+    ["requirement", "You don't have to be felony-free to apply", "allowed"],
+    ["about", "Felony-free isn't a requirement here.", "allowed"],
+    ["about", "We have no felony restrictions.", "allowed"],
+    ["requirement", "Keep a clean record of patient charts", "allowed"],
+    ["description", "Keep a clean record of patient charts.", "allowed"],
+
+    // allowed, as in production: a check after an offer, the work with people who have a record or with records, and
+    // lawful words that hold a record word
+    ["requirement", "Background check after a conditional offer", "allowed"],
+    ["requirement", "Offer contingent on a background check", "allowed"],
+    ["requirement", "No background check until after an offer", "allowed"],
+    ["requirement", "Experience supporting clients with a criminal record", "allowed"],
+    ["description", "You will support clients with a criminal record as they return to work.", "allowed"],
+    ["requirement", "Maintain patient records", "allowed"],
+    ["deal-breaker", "Criminal records research experience", "allowed"],
+    ["requirement", "Must pass a background check", "allowed"],
+    ["question", "In your last job, were you charged with opening the office?", "allowed"],
+    ["question", "Have you received any cardiac arrest training?", "allowed"],
+    ["question", "Is your cardiac arrest certification current?", "allowed"],
+    ["question", "Describe your caries arrest protocol for young patients.", "allowed"],
+    ["question", "Have you responded to any cardiac arrests at work?", "allowed"],
+    ["question", "Have you made any citizen's arrests as a security guard?", "allowed"],
+    ["question", "What are your personal convictions about patient care?", "allowed"],
+    ["requirement", "Without a current cardiac arrest certification", "allowed"],
+    ["requirement", "No cardiac arrest training required; we train on BLS.", "allowed"],
+    ["deal-breaker", "Cardiac arrest response training", "allowed"],
+    ["question", "Are you a criminal justice student?", "allowed"],
+    ["question", "Are you a criminal justice student or graduate?", "allowed"],
+    ["question", "Are you a criminal defense attorney?", "allowed"],
+    ["question", "Have you worked with someone on parole?", "allowed"],
+    ["question", "Have you ever worked with someone on probation or parole?", "allowed"],
+    ["question", "Have you helped anyone convicted of a crime find work?", "allowed"],
+    ["question", "Are you comfortable working alongside coworkers who have criminal records?", "allowed"],
+    ["question", "Are you familiar with state criminal records databases?", "allowed"],
+    ["question", "Have you handled medical or criminal records?", "allowed"],
+    ["question", "Have you ever worked as a criminal records clerk?", "allowed"],
+    ["question", "Do you have experience reading criminal records?", "allowed"],
+    ["question", "Do you have arrest powers?", "allowed"],
+    ["question", "Do you have arrest and detention training?", "allowed"],
+    ["question", "Are you on probation right now at your current job?", "allowed"],
+    // in no fixed phrase and not in production's words, so saved, as in production
+    ["question", "Applicants who have been convicted of a felony: please describe the conviction.", "allowed"],
+    ["question", "Applicants on probation or parole must tell us.", "allowed"],
+    ["about", "We do not consider people with records to be a risk.", "allowed"],
+    ["about", "We don't consider ex-offenders a risk.", "allowed"],
+    ["about", "Felons are not considered unqualified.", "allowed"],
+    ["about", "We won't refuse to hire anyone with a past conviction.", "allowed"],
+    ["about", "Does a criminal record disqualify you? No, we look at each person.", "allowed"],
+    ["about", "Q: Do convictions disqualify applicants? A: No.", "allowed"],
+    ["about", "We do not have a felony ban.", "allowed"],
+    ["about", "You do not need a spotless record to join our team.", "allowed"],
+    ["about", "A spotless record isn't required.", "allowed"],
+    ["about", "We have a spotless record with the health department.", "allowed"],
+    ["about", "Our company has an unblemished record with the Better Business Bureau.", "allowed"],
+    ["about", "We have never been charged with a health code violation.", "allowed"],
+    ["about", "No sealed or expunged convictions will be considered.", "allowed"],
+    ["about", "No expunged convictions will be considered.", "allowed"],
+    ["about", "No juvenile convictions will be considered.", "allowed"],
+    ["about", "No juvenile convictions are considered.", "allowed"],
+    ["about", "Applicants with criminal histories are not considered ineligible.", "allowed"],
+    ["about", "People with a criminal record will not be considered less favorably.", "allowed"],
+    ["about", "No one with a criminal record will be considered ineligible for that reason alone.", "allowed"],
+
+    // the driving record: nothing is refused only for a DUI, a DWI, traffic or moving violations or a driving record
+    ["requirement", "Clean driving record", "allowed"],
+    ["question", "Do you have a clean driving record?", "allowed"],
+    ["requirement", "Valid driver's licence", "allowed"],
+    ["requirement", "No DUI convictions", "allowed"],
+    ["requirement", "No moving violations", "allowed"],
+    ["deal-breaker", "DUI convictions", "allowed"],
+    ["deal-breaker", "Convictions for DUI in the last 5 years", "allowed"],
+    ["deal-breaker", "A conviction for DUI", "allowed"],
+    ["deal-breaker", "Arrests for DUI", "allowed"],
+    ["deal-breaker", "Convicted of a DUI", "allowed"],
+    ["deal-breaker", "Convicted of DUI", "allowed"],
+    ["deal-breaker", "Charged with DUI", "allowed"],
+    ["deal-breaker", "Convictions for reckless driving", "allowed"],
+    ["deal-breaker", "Offenses on driving record", "allowed"],
+    ["deal-breaker", "Convictions found in the background check after a conditional offer", "allowed"],
+    ["requirement", "Must not have been convicted of a DUI", "allowed"],
+    ["requirement", "Has not been convicted of a DUI in 5 years", "allowed"],
+    ["requirement", "Never charged with a DUI", "allowed"],
+    ["requirement", "Without convictions for DUI", "allowed"],
+    ["requirement", "A conviction-free driving record", "allowed"],
+    ["requirement", "Must never have been convicted of a DUI", "allowed"],
+    ["question", "Do you have any DUI convictions?", "allowed"],
+  ];
+
+  for (const [field, text, result, hit] of TABLE) {
+    it(`${field}: "${text}" is ${result}`, () => {
+      const got = read(field, text);
+      expect(got.result).toBe(result);
+      if (result !== "allowed") expect(got).toMatchObject({ rule: field === "question" ? "asks_record" : "criminal_record", ...(hit ? { hit } : {}) });
+    });
+  }
+
+  it("keeps a flag kept in production: the same words, so the same id", () => {
+    const reason = "A blanket ban on criminal records breaks fair-chance hiring laws in many places.";
+    const alternative = "Leave any background check to the end of the process, after an offer, where the law allows it.";
+    const keep = { id: "criminal_record:description.publicJobDescription:no_felonies", path: "description.publicJobDescription", rule: "criminal_record", reason, alternative, text: "No felonies", kept: { reason: "State law bars anyone with a felony from this licensed role.", by: dana, at: "2026-11-01T10:00:00.000Z" } };
+    const saved = packet((x) => {
+      x.description.publicJobDescription += " No felonies, misdemeanors considered case by case.";
+      x.provenance.flags = [keep];
+    });
+    const next = guardPacket(saved, { ...ctx, previousFlags: [keep] });
+    expect(next.flags.map((f) => [f.id, !!f.kept])).toEqual([["criminal_record:description.publicJobDescription:no_felonies", true]]);
+    expect(unresolvedFlags(next.packet)).toEqual([]);
+  });
+
+  it("refuses an answer offered in a ban's words, as a question in them, and passes a driving record's own words", () => {
+    const problems = companyQuestionProblems({ quick: [{ key: "cq_driving", question: "How would you describe your driving record?", options: ["Clean record", "One or two tickets", "Clean driving record"] }] });
+    expect(problems.map((p) => [p.part, p.rule, p.text])).toEqual([["option", "asks_record", "Clean record"]]);
   });
 });

@@ -464,9 +464,14 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felony convictions"], ["dealBreakers", "Felony convictions"]]);
     expect([...new Set(edit.refused.map((r) => r.reason))]).toEqual([expect.stringMatching(/fair-chance/)]);
     // the other bans the review found, with the must-have the owner wrote under them
-    for (const deal of ["No violent crime convictions", "Felons will not be considered", "No ex-felons"]) {
+    for (const deal of ["No ex-felons"]) {
       const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }, { field: "dealBreakers", value: deal, countsAs: "Passes a background check" }] }, []);
       expect([e.facts.mustHaves, e.refused.map((r) => [r.field, r.text])], deal).toEqual([[], [["mustHaves", "Passes a background check"], ["dealBreakers", deal]]]);
+    }
+    // rebuilt from the final check (LT-31): neither holds production's words or a fixed phrase, so both are stored, as in production
+    for (const deal of ["No violent crime convictions", "Felons will not be considered"]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }, { field: "dealBreakers", value: deal, countsAs: "Passes a background check" }] }, []);
+      expect([e.facts.mustHaves, e.facts.dealBreakers, e.refused], deal).toEqual([["Passes a background check"], [deal], []]);
     }
     // typed on a deal-breaker card too
     const card: IntakeQuestion = { id: "d", field: "deal_breakers", prompt: "What rules someone out?", mode: "multi", options: [], allowOwn: true };
@@ -478,6 +483,23 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     expect(offer.declined.map((d) => [d.requested, d.rule])).toEqual([["Felony convictions", "criminal_record"], ["A criminal record", "criminal_record"], ["Felons", "criminal_record"]]);
     // a must-have that names a record is read on its own words: the work with records stays
     expect(applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Experience researching criminal records" }] }, []).facts.mustHaves).toEqual(["Experience researching criminal records"]);
+  });
+
+  // final check of the criminal-record repair, 17 Nov 2026: "Anyone with a felony" on "What rules someone out?" was stored
+  // with the same words as its must-have, and "Convictions for DUI in the last 5 years" was refused with "Clean driving record"
+  it("refuses a record named with one fixed leading word, with its must-have, and keeps a driving offense and the must-have it counts as", () => {
+    for (const deal of ["Anyone with a felony", "People with criminal records", "Having a criminal record", "On probation or parole"]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: deal }, { field: "dealBreakers", value: deal, countsAs: deal }] }, []);
+      expect([e.facts.mustHaves, e.facts.dealBreakers, e.refused.map((r) => [r.field, r.text])], deal).toEqual([[], [], [["mustHaves", deal], ["dealBreakers", deal]]]);
+      expect(new Set(e.refused.map((r) => r.reason)).size, deal).toBe(1);
+    }
+    for (const deal of ["Convictions for DUI in the last 5 years", "Convicted of a DUI"]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Clean driving record" }, { field: "dealBreakers", value: deal, countsAs: "Clean driving record" }] }, []);
+      expect([e.facts.mustHaves, e.facts.dealBreakers, e.refused, e.facts.declinedCriteria], deal).toEqual([["Clean driving record"], [deal], [], []]);
+    }
+    const offer = dealBreakerOffer({ ...empty(), dealBreakers: ["Anyone with a felony", "Those with a criminal record", "Convictions for DUI in the last 5 years", "Cannot work Saturdays"] }, []);
+    expect(offer.declined.map((d) => [d.requested, d.rule])).toEqual([["Anyone with a felony", "criminal_record"], ["Those with a criminal record", "criminal_record"]]);
+    expect(offer.offer).toEqual(["Convictions for DUI in the last 5 years", "Cannot work Saturdays"]);
   });
 });
 

@@ -820,6 +820,8 @@ describe("AI-written questions pass the code's fairness check before a candidate
       "Thanks, that is within the current pay range for this role.", "How many children do you see in a typical day?", "How do you adjust care for a patient with a medical condition?",
       // review of the criminal-record fix, 17 Nov 2026: the work's own words were replaced with "Thanks."
       "Thanks. Were you charged with training the new hygienists?", "How did you follow up on any pending charges before month end?",
+      // and its final check: a medical "arrest" was read as one
+      "Thanks. Have you received any cardiac arrest training?",
     ]) expect(unfairQuestion(fair), fair).toBeNull();
     // and a question about the candidate's record in the words that got past it
     for (const unfair of ["Are you a person with a criminal record?", "Do you have a clean record?", "Do you have any fraud convictions?"]) expect(unfairQuestion(unfair), unfair).not.toBeNull();

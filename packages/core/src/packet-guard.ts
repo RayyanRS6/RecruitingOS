@@ -50,208 +50,103 @@ function findExperienceFloor(text: string): string | null {
 }
 
 /**
- * A criminal record as a requirement or a question names it: a felony or a felon, a conviction, an arrest, a misdemeanor,
- * criminals, a criminal record, history, background, conviction, charge, offense or past, and a police, arrest,
- * conviction, prison or jail record, in any number. Never a driving record: "Clean driving record", "No DUI
- * convictions" and "No moving violations" pass, as a driving job may ask for one. Pending charges alone are a bill's
- * ("End each day with no pending charges"); pending criminal charges are a record.
+ * A criminal record (LT-31, rebuilt from the final check, 17 Nov 2026). Production's two rules are kept as they were, so
+ * what production refused or flagged still is. Each gets a short list of fixed phrases added, and a short list of fixed
+ * exceptions, the same in every field, is taken out of both. A wording holds one of these phrases or it does not: no gap
+ * of any words, and no list of the people or of the work around it.
  */
-const RECORD_WORDS = String.raw`felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminals|criminal[\s-]+(?:records?|history|histories|backgrounds?|convictions?|charges?|offen[cs]es?|past)|(?:police|arrest|conviction|prison|jail)[\s-]+records?`;
-const RECORD = `(?:${RECORD_WORDS})`;
+
+/** Production's ban, as it was: "No felons", "No criminal record", "No convictions", "Clean record", "Never been convicted". */
+const PRODUCTION_BAN = /\bno (?:felons?|felonies|criminal (?:records?|history|backgrounds?)|convictions?|arrests?)\b|\bclean (?:criminal )?(?:record|background)\b|\bnever (?:been )?(?:arrested|convicted)\b/gi;
+/** Production's question, as it was: "Have you ever been convicted?", "Any felony convictions?", "Do you have a criminal record?". */
+const PRODUCTION_QUESTION = /\bhave you (?:ever )?been (?:arrested|convicted|charged|in (?:jail|prison))\b|\b(?:your|any)\s+(?:criminal (?:record|history|background|convictions?)|arrests?|convictions?|felon(?:y|ies))\b|\bcriminal (?:record|history|background)\b|\bare you a felon\b/gi;
+
+/** The records an added ban names: a felony or a felon, a conviction, a misdemeanor, an arrest, and "criminal" with record, history, background, conviction, charge or offense. */
+const RECORD_WORDS = String.raw`felon(?:y|ies|s)?|convictions?|misdemeanou?rs?|arrests?|criminal\s+(?:records?|history|backgrounds?|convictions?|charges?|offen[cs]es?)`;
 /**
- * In a ban, the people a record names, offenses and time served too ("No ex-cons", "No sex offenders", "No violent
- * offenses", "No jail time").
+ * A driving offense right after an added phrase is the driving record, which no addition refuses ("Without convictions
+ * for DUI", "A conviction-free driving record"). Production's own words stay as they were ("No convictions for DUI").
  */
-const EX_PEOPLE = String.raw`ex[\s-]?(?:felons?|cons?|convicts?|offenders?)`;
-const BAN_WORDS = String.raw`${RECORD_WORDS}|${EX_PEOPLE}|offenders?|offen[cs]es|(?:jail|prison)[\s-]+(?:time|sentences?)|incarcerations?`;
-const BAN_RECORD = `(?:${BAN_WORDS})`;
-/** A driving offense, which is the driving record ("No DUI convictions", "No reckless driving convictions"). */
-const DRIVING = String.raw`(?:dui|dwi|owi|ovi|traffic|moving|driving|motoring|speeding|parking|vehicular)s?`;
-/**
- * Words that never say what kind of record it is: joining words, a ban on asking or a check, and the work itself ("No
- * experience with offenders needed", "No blanket ban on convictions", "No questions about convictions"). A word ending
- * in "-ing" is the work too ("researching criminal records"), unless it names a crime or says the record is pending.
- */
-const NOT_A_KIND = String.raw`(?:a|an|the|any|some|on|for|about|of|in|into|over|regarding|because|due|to|from|with|by|before|after|until|than|that|which|who|or|and|nor|not|no|never|is|are|was|were|be|been|will|would|ban|bans|bar|bars|blanket|questions?|inquir\w*|penalt\w*|discriminat\w*|checks?|screenings?|experience\w*|knowledge|work|works|jobs?|roles?|skills?|training|history|records?|background)`;
-const CRIME_ING = String.raw`(?:shoplift|traffick|kidnapp|stalk|gambl|launder|smuggl|poach|carjack|hack|trespass|loiter|racketeer|counterfeit|deal|pend|outstand)ing`;
-/** One word saying what kind of record it is ("prior", "violent", "drug-related", "domestic violence"). */
-const KIND = String.raw`(?:(?!${DRIVING}\b)(?!${NOT_A_KIND}\b)(?!(?!${CRIME_ING}\b)[a-z'’]*ing\b)[a-z'’]+[\s-]+)`;
-/**
- * What a ban may put before it, as few words as will do: "any", "a history of", a list ("No DUIs or felonies") and up to
- * three words saying the kind ("prior", "violent crime", "drug-related", "domestic violence"). Matching as little as it
- * can keeps the words of a flag found before, and so its keep.
- */
-const RECORD_LEAD_IN = String.raw`(?:(?:a|an|any)\s+)?(?:(?:history|record)\s+of\s+(?:(?:a|an|any)\s+)?)?(?:[\w'’-]+(?:\s+[\w'’-]+)??(?:\s+or|\s+and|\s*,|\s*/)\s+){0,2}?${KIND}{0,3}?`;
-/**
- * A check, a search, questions or a requirement about it come next, which is no ban ("No criminal background check until
- * after an offer", "We do not have a criminal record requirement").
- */
-const NOT_A_CHECK = String.raw`(?!(?:[\s-]+(?:felon\w*|convictions?|criminal|arrests?|history|histories|records?|backgrounds?)){0,2}[\s-]+(?:checks?|checking|screenings?|search(?:es)?|reports?|questions?|inquir\w*|box(?:es)?|requirements?|polic(?:y|ies))\b)`;
-/**
- * Words after a record, or after the rest of a list of them, that say it counts against nobody ("No conviction
- * automatically disqualifies you", "No felony or misdemeanor conviction will disqualify you", "No one with a record is
- * turned away", "No arrest is held against you", "No degree, convictions considered case by case").
- */
-const NOT_A_BAN_TAIL = String.raw`(?:(?:\s+(?:or|and)|\s*,)?(?:\s+[\w'’-]+){1,3}?)?[\s,]+(?:(?:will|would|shall|does|do|is|are|can|may|gets?)\s+(?:(?:not|never|ever)\s+)?)?(?:be\s+)?(?:automatically\s+)?(?:disqualif\w*|bars?\b|barring|(?:held|counted|used)\s+against|turned\s+away|excluded|rejected|considered\s+(?:case[\s-]+by[\s-]+case|individually|on\s+(?:a|an)\s+(?:case|individual)))`;
-const NOT_A_BAN_AFTER = `(?!${NOT_A_BAN_TAIL})`;
-const NOT = String.raw`(?:\s+not|n['’]?t)`;
-const SOMEONE = String.raw`(?:anyone|anybody|someone|people|persons?|applicants?|candidates?|individuals?|those|workers?|employees?)`;
-const IF_YOU_HAVE = String.raw`(?:please\s+)?do${NOT}\s+apply\s+if\s+you(?:\s+(?:have|had)|['’]ve)(?:\s+(?:got|gotten))?`;
-const DONE_TO = String.raw`(?:arrested|convicted|charged\s+with|incarcerated|imprisoned|jailed|found\s+guilty|in\s+(?:jail|prison)|to\s+(?:jail|prison))`;
-/**
- * What was done to someone for a record, with what it was for ("convicted of a felony", "charged with a crime",
- * "arrested"), unless it then counts against nobody ("No one convicted of a felony will be automatically disqualified").
- */
-const DONE_FOR_WHAT = String.raw`\s+(?:(?:of|for)\s+)?(?:(?:a|an|any)\s+)?${KIND}{0,3}?(?:${BAN_WORDS}|crimes?)\b`;
-const DONE_FOR = String.raw`${DONE_TO}(?!(?:${DONE_FOR_WHAT})?${NOT_A_BAN_TAIL})(?:${DONE_FOR_WHAT})?\b`;
-/**
- * Nobody, or nobody hired, of whom a record comes next: "No one with a record", "Won't hire felons" (a bare "record"
- * only after "with" or "who have", so "No candidate record is linked" and "nobody records a decision" are no ban).
- */
-const RULED_OUT = String.raw`(?:no(?:body|\s+one|\s+${SOMEONE})|(?:won['’]?t|will\s+not|do${NOT}|does${NOT}|cannot|can\s+not|can['’]?t|never|not|refuse\s+to)\s+(?:hire|hiring|accept|accepting|employ|employing|take|taking)(?:\s+${SOMEONE})?)`;
-/** Someone who was convicted, arrested or jailed ("anyone convicted of a felony", "people who have been arrested"). */
-const DONE_TO_SOMEONE = String.raw`(?:who\s+(?:have|has|had)\s+(?:ever\s+)?been\s+|(?:ever\s+)?)${DONE_FOR}`;
-/** Someone ruled out who is named for a record ("Felons will not be considered", "Applicants with a felony conviction…"). */
-const RECORD_PEOPLE = String.raw`(?:${EX_PEOPLE}|felons|offenders|criminals|${SOMEONE}\s+(?:(?:with|who\s+(?:have|has|had))\s+${RECORD_LEAD_IN}(?:${BAN_WORDS}|records?(?![\s-]+of\b))\b${NOT_A_CHECK}|${DONE_TO_SOMEONE}))`;
+const NOT_DRIVING = String.raw`(?![\s-]+(?:(?:for|of|involving|on|in)\s+)?(?:(?:a|an|any|your|their|the)\s+)?(?:dui|dwi|owi|ovi|(?:drunk|reckless|impaired)[\s-]+driving|driving|traffic|moving[\s-]+violations?|speeding|mvr|motor[\s-]+vehicles?)s?\b)`;
+
+/** The phrases added to the ban, read wherever the ban is (requirements, deal-breakers, the description, About text, a question's help line and answers). */
+const BAN_PHRASES = [
+  // a record after "no", "without", "never", "must not have", "cannot have", "may not have" or "free of", with "a", "an" or
+  // "any" where English needs one: "No felony convictions", "Without a criminal record", "Must not have any convictions";
+  // after "never" it always does ("Never a felony"), so "Officers never arrest anyone" is the verb
+  String.raw`\b(?:(?:no|without|must\s+not\s+have|cannot\s+have|can['’]t\s+have|can\s+not\s+have|may\s+not\s+have|free\s+of)\s+(?:(?:a|an|any)\s+)?|never\s+(?:a|an|any)\s+)(?:${RECORD_WORDS})\b${NOT_DRIVING}`,
+  // the "-free" forms: "Felony-free", "Conviction-free"
+  String.raw`\b(?:felony|felon|conviction|arrest)[\s-]+free\b${NOT_DRIVING}`,
+  // and these whole bans
+  String.raw`\bno\s+(?:ex[\s-]?felons?|ex[\s-]?offenders?|parolees?)\b`,
+  String.raw`\bfelons\s+(?:need\s+not|needn['’]t|may\s+not)\s+apply\b`,
+  String.raw`\bnot\s+(?:be\s+)?a\s+convicted\s+felon\b`,
+  String.raw`\bmust\s+not\s+be\s+on\s+(?:probation\s+or\s+)?parole\b`,
+  String.raw`\bnever\s+have\s+been\s+convicted\b${NOT_DRIVING}`,
+  String.raw`\bhas(?:\s+not|n['’]t)\s+been\s+convicted\s+of\s+a\s+felony\b`,
+  String.raw`\b(?:a|any)\s+felony\s+conviction\s+will\s+disqualify\b`,
+  String.raw`\bfelony\s+conviction\s+will\s+result\s+in\s+disqualification\b`,
+  String.raw`\b(?:will\s+not|won['’]t|do\s+not|don['’]t)\s+hire\s+felons\b`,
+];
+
+/** The phrases added to the question ("Are you a convicted felon?", "Are you on probation or parole?", "Have you ever spent time in jail?"). */
+const QUESTION_PHRASES = [
+  String.raw`\bare\s+you\s+a\s+convicted\s+felon\b`,
+  String.raw`\bare\s+you\s+(?:currently\s+)?on\s+parole\b`,
+  String.raw`\b(?:are\s+you|have\s+you\s+(?:ever\s+)?been)\s+(?:currently\s+)?on\s+probation\s+or\s+parole\b`,
+  String.raw`\b(?:spent|served)\s+time\s+in\s+(?:jail|prison)\b`,
+  String.raw`\btrouble\s+with\s+the\s+law\b`,
+  String.raw`\bany\s+criminal\s+records\b`,
+];
+
+/** A record in a few fixed words, as an exception or a deal-breaker names it ("a criminal record", "felony convictions", "probation or parole"). */
+const A_RECORD = String.raw`(?:(?:a|an|any)\s+)?(?:felony\s+(?:convictions?|records?|charges?)|misdemeanou?r\s+(?:convictions?|charges?)|criminal\s+(?:records?|histor(?:y|ies)|backgrounds?|convictions?|charges?|offen[cs]es?)|(?:arrest|conviction)\s+records?|convicted\s+felons?|felon(?:y|ies|s)?|convictions?|misdemeanou?rs?|arrests?|probation\s+or\s+parole|parole(?:\s+or\s+probation)?)`;
 
 /**
- * A blanket ban on a criminal record, in any common wording (review of the live-test fixes, 17 Nov 2026: "No felony
- * convictions" and "Felony-free" were stored, and of that fix: "No fraud convictions", "No ex-felons" and "Felons will
- * not be considered" still were): what names one after no, without, never, must not have, cannot have, free of, must not
- * carry or cannot hold ("No felony", "Without a criminal record", "Must not have any convictions", "No domestic violence
- * convictions"); "never convicted" and the like; a non-felon; its "-free" forms; someone ruled out for one ("No one with a
- * criminal record", "Won't hire felons", "We will not consider anyone with a criminal record", "Do not apply if you have
- * a felony", "Felons need not apply", "Felons will not be considered", "A felony disqualifies you"); and a "clean
- * record". Never what holds a record against nobody ("We do not hold a criminal record against anyone"), a background
- * check after an offer, or "Must pass a background check", which waits for counsel.
+ * The exceptions, the same in every field: a match inside one of these is no ban and asks about nothing. Fair-chance
+ * statements ("With or without a criminal record", "A criminal record does not disqualify you", "No conviction
+ * automatically disqualifies you", also for a list of records ending in "or", "…will not be considered ineligible", "We
+ * never refuse to hire people with criminal records", and three that an added phrase would refuse: "Arrests without a
+ * conviction are never considered", "You don't have to be felony-free to apply", "No felony restrictions"), and a record
+ * that is the work's own ("Keep a clean record of patient charts").
  */
-const CRIMINAL_RECORD_BAN = new RegExp(
-  [
-    String.raw`\b(?:no|zero|without|free\s+(?:of|from)|never\s+(?:had|having|been|committed|received)|(?:must|may|should|shall|will|do|does|did)${NOT}\s+have|won['’]?t\s+have|(?:cannot|can\s+not|can['’]?t)\s+have)\s+${RECORD_LEAD_IN}${BAN_RECORD}\b${NOT_A_CHECK}${NOT_A_BAN_AFTER}`,
-    String.raw`\b(?:(?:must|may|should|shall|will|do|does|did)${NOT}|won['’]?t|cannot|can\s+not|can['’]?t)\s+(?:hold|carry)\s+${RECORD_LEAD_IN}${BAN_RECORD}\b${NOT_A_CHECK}(?![^.?!;]*\bagainst\b)`,
-    String.raw`\b(?:${RULED_OUT}\s+(?:with|who\s+(?:have|has|had))|${IF_YOU_HAVE})\s+${RECORD_LEAD_IN}(?:${BAN_WORDS}|records?(?![\s-]+of\b))\b${NOT_A_CHECK}${NOT_A_BAN_AFTER}(?![^.?!;]*\binto\s+(?:account|consideration)\b)`,
-    String.raw`\b${RULED_OUT}\s+${RECORD_LEAD_IN}${BAN_RECORD}\b${NOT_A_CHECK}${NOT_A_BAN_AFTER}(?![^.?!;]*\binto\s+(?:account|consideration)\b)`,
-    String.raw`\b${RULED_OUT}\s+${DONE_TO_SOMEONE}`,
-    String.raw`\b(?:won['’]?t|will\s+not|do${NOT}|does${NOT}|cannot|can\s+not|can['’]?t|never|not|refuse\s+to)\s+consider(?:ing)?\s+${RECORD_PEOPLE}`,
-    String.raw`\b${RECORD_PEOPLE}\s+(?:(?:will|would|shall|are|is|may)\s+(?:not|never)|won['’]?t|cannot|can\s+not|can['’]?t|aren['’]?t|isn['’]?t)\s+(?:be\s+)?(?:considered|hired|accepted|employed|eligible)\b`,
-    String.raw`\b(?:never|(?:has|have|had)${NOT}|(?:must|may|should|shall|will|do|does|did)${NOT}\s+have|won['’]?t\s+have|(?:cannot|can\s+not|can['’]?t)\s+have|${IF_YOU_HAVE})\s+(?:(?:ever|once)\s+)?(?:been\s+)?${DONE_TO}\b`,
-    String.raw`\b(?:not|never|cannot|can\s+not|can['’]?t)\s+(?:be\s+|been\s+)?(?:an?\s+(?:convicted\s+)?(?:felon|criminal)|(?:convicted\s+)?felons?)\b`,
-    String.raw`\bnon[\s-]?felons?\b`,
-    String.raw`\b(?:felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminal[\s-]+records?)[\s-]+free\b(?!\s+(?:is|are)\s+not\s+(?:required|needed|necessary)\b)`,
-    String.raw`\b(?:${BAN_WORDS}|records?)\s+(?:need\s+not|needn['’]?t|should\s+not|shouldn['’]?t|(?:please\s+)?(?:do\s+not|don['’]?t))\s+apply\b`,
-    String.raw`\b${BAN_RECORD}\s+(?:will|would|shall|is|are)\s+(?:be\s+)?(?:an?\s+)?(?:automatic(?:ally)?\s+)?disqualif\w*`,
-    String.raw`(?:^|[.;:!?]\s+|\b(?:a|an|any)\s+)${RECORD_LEAD_IN}${BAN_RECORD}\s+(?:automatically\s+)?disqualif(?:y|ies)\b`,
-    String.raw`\b(?:clean|spotless|unblemished)\s+(?:criminal\s+(?:records?|history|backgrounds?)|record|background)\b(?![\s-]+of\b)`,
-  ].join("|"),
-  "gi",
-);
+const EXCEPTIONS = [
+  String.raw`\bwith\s+or\s+without\s+${A_RECORD}`,
+  String.raw`\b${A_RECORD}\s+(?:does\s+not|doesn['’]t|do\s+not|don['’]t|will\s+not|won['’]t)\s+(?:automatically\s+)?disqualify\b`,
+  String.raw`\bno\s+${A_RECORD}(?:(?:\s*,\s*${A_RECORD})*,?\s+(?:or|and|nor)\s+${A_RECORD})?\s+(?:(?:will|shall)\s+)?(?:be\s+(?:considered\s+)?)?(?:automatically\s+)?disqualif(?:y|ies|ying)\b`,
+  String.raw`\b${A_RECORD}\s+(?:will\s+not|won['’]t)\s+be\s+considered\s+ineligible\b`,
+  String.raw`\bnever\s+refuse\s+to\s+hire\s+people\s+with\s+${A_RECORD}`,
+  String.raw`\barrests?\s+without\s+(?:a\s+)?convictions?\b`,
+  String.raw`\b(?:do\s+not|don['’]t|does\s+not|doesn['’]t|need\s+not|needn['’]t)\s+(?:have\s+to\s+|need\s+to\s+)?be\s+(?:felony|felon|conviction|arrest)[\s-]+free\b`,
+  String.raw`\b(?:felony|felon|conviction|arrest)[\s-]+free\s+(?:is\s+not|isn['’]t)\s+(?:a\s+requirement|required|needed|necessary)\b`,
+  String.raw`\bno\s+felony\s+(?:bans?|restrictions?|exclusions?)\b`,
+  String.raw`\bclean\s+records?\s+of\s+patient\s+charts\b`,
+];
 
-/**
- * A crime someone is charged with ("Were you ever charged with a crime?", "…with theft?"), never the work ("Were you
- * charged with opening the office?", "…with fraud prevention?").
- */
-const CRIME = String.raw`(?:crimes?|felon(?:y|ies)|misdemeanou?rs?|(?:criminal\s+)?offen[cs]es?|theft|fraud|assault|battery|burglary|robbery|larceny|embezzlement|possession|vandalism|trespass\w*|arson|forgery|murder|manslaughter|homicide|rape|abuse|harassment|stalking|kidnapping|trafficking|shoplifting|violence)\b(?![\s-]+(?:prevention|reporting|training|cases?|claims?|investigations?|programs?|polic(?:y|ies)|compliance|awareness|files?|records?|reports?)\b)`;
-/** "Charged" with a crime, or with nothing after it ("Were you charged?"), or "charged or convicted". */
-const CHARGED = String.raw`charged(?:\s+with\s+(?:(?:a|an|any)\s+)?${KIND}{0,2}?${CRIME}|\s+or\s+convicted\b|(?=\s*(?:[?.!;,]|$)))`;
-const DONE_TO_THEM = String.raw`(?:arrested|convicted|${CHARGED}|incarcerated|imprisoned|jailed|found\s+guilty|in\s+(?:jail|prison)|to\s+(?:jail|prison))`;
+// Global, so read with `matchAll` only (never `.test` or `.exec`, which would move `lastIndex`).
+const ADDED_BAN = new RegExp(BAN_PHRASES.join("|"), "gi");
+const ADDED_QUESTION = new RegExp(QUESTION_PHRASES.join("|"), "gi");
+const NOT_A_BAN = EXCEPTIONS.map((p) => new RegExp(p, "gi"));
 
-/**
- * A question about the candidate's own record, in the same words ("Are you a convicted felon?", "Any felony
- * convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?", "Do you have any fraud
- * convictions?", "Are you an ex-felon?", "Do you have any pending charges?", "Is your record clean?"); a question in a
- * ban's own words is one too (`asks_record`). A background check after an offer is not asked about this way, and a
- * question about the people the work is with, or about the work ("Do you have experience researching criminal
- * records?", "In your last job, were you charged with opening the office?", "Do you have probation and parole
- * experience?"), passes (`firstOwnRecord`).
- */
-const ASKS_ABOUT_RECORD = new RegExp(
-  [
-    String.raw`\b(?:have\s+you\s+(?:ever\s+)?|ever\s+)been\s+${DONE_TO_THEM}\b`,
-    String.raw`\bwere\s+you\s+(?:ever\s+)?(?:arrested|convicted|${CHARGED}|incarcerated|imprisoned|jailed|found\s+guilty)\b`,
-    String.raw`\b(?:have|had)\s+you\s+(?:ever\s+)?(?:committed|had|got|gotten|received)\s+(?:(?:a|an|any)\s+)?${KIND}{0,3}?(?:crimes?|offen[cs]es|${RECORD_WORDS})\b`,
-    String.raw`\bdo\s+you\s+have\s+(?:(?:a|an|any)\s+)?${KIND}{0,3}?(?:offen[cs]es|${RECORD_WORDS})\b`,
-    String.raw`\b(?:your|any)\s+${KIND}{0,3}?${RECORD}\b`,
-    String.raw`\bcriminal[\s-]+(?:records?|history|histories|backgrounds?|convictions?|charges?|offen[cs]es?|past)\b`,
-    String.raw`\bare\s+you\s+(?:an?\s+)?(?:(?:registered|convicted)\s+)?(?:(?:ex|non)[\s-]?(?:felon|offender|con|convict)|(?:sex\s+)?offender|felon|criminal|convict)\b`,
-    String.raw`\bare\s+you\s+(?:currently\s+|now\s+)?on\s+(?:probation|parole)\b(?![\s-]+(?:at|in|with|from|during|for)\b)`,
-    String.raw`\bon\s+(?:probation\s+(?:or|and|/)\s+parole|parole(?:\s+(?:or|and|/)\s+probation)?)\b`,
-    String.raw`\bconvicted\s+(?:of|for)\s+(?:(?:a|an|any)\s+)?${KIND}{0,2}?${CRIME}`,
-    String.raw`\b(?:felon(?:y|ies|s)?|convictions?|arrests?|misdemeanou?rs?|criminal[\s-]+records?)[\s-]+free\b`,
-    String.raw`\b(?:pleaded|pled)\s+(?:guilty|no\s+contest|nolo\s+contendere)\b`,
-    String.raw`\b(?:do|did)\s+you\s+have\s+(?:any\s+)?(?:pending|open|outstanding)\s+(?:criminal\s+)?charges?\b(?!\s+(?:on|to|for|in|at|from|with)\b)|\bcharges?\s+pending\s+against\s+you\b`,
-    String.raw`\b(?:are|were)\s+you\s+(?:currently\s+|now\s+)?(?:awaiting|facing)\s+(?:trial|sentencing|charges)\b|\b(?:have|had)\s+you\s+(?:ever\s+)?served\s+(?:time|a\s+(?:jail|prison)\s+sentence)\b`,
-    String.raw`\bis\s+your\s+(?:criminal\s+)?record\s+(?:clean|spotless|clear)\b`,
-  ].join("|"),
-  "gi",
-);
-
-/**
- * Words just before a match that make it no ban and no question about the candidate's record: a record welcomed either
- * way ("With or without a criminal record"), an arrest that is not one ("Arrests without a conviction are never
- * considered"), a "-free" said not to be needed ("You don't have to be felony-free to apply"), and nobody with one ("No
- * one with a criminal record will be automatically disqualified", where "No one with a criminal record" alone is a ban).
- */
-const HELD_EITHER_WAY = /\bwith\s+or\s+(?:without\s+(?:(?:an?|any)\s+)?)?$|\b(?:arrests?|charges?)\s+$|\b(?:(?:do|does|need)\s+not|don['’]?t|doesn['’]?t|needn['’]?t)\s+(?:(?:have|need)\s+to\s+)?be\s+$|\bnot\s+(?:required|necessary|needed)\s+to\s+be\s+$|\bno(?:body|\s+one)\s+(?:with|who\s+(?:have|has|had)|(?:who\s+(?:have|has|had)\s+(?:ever\s+)?been\s+)?(?:arrested|convicted|charged)(?:\s+(?:of|for|with))?)\s+(?:(?:an?|any|prior|past|previous)\s+)*$/i;
-/**
- * The people the work is with, just before words that would be a ban ("Experience supporting clients with no stable
- * housing or criminal records"): never "people", "individuals", "those" or "members", whom a ban names ("We only hire
- * people with a clean record").
- */
-const SERVED = String.raw`(?:clients?|patients?|residents?|youths?|teens?|juveniles?|students?|families|participants?|customers?|populations?|inmates?|parolees?|probationers?)\s+`;
-const SERVED_WITH = new RegExp(String.raw`\b${SERVED}(?:with|who\s+(?:have|has|had))\s+(?:(?:an?|any|prior|past|previous)\s+)*$`, "i");
-/** Anyone else a question can be about ("Have you worked with people who have a criminal record?", "clients on parole"). */
-const PEOPLE = String.raw`(?:clients?|patients?|people|persons?|individuals?|residents?|youths?|teens?|juveniles?|adults?|students?|families|members?|participants?|customers?|those|others|populations?|inmates?|parolees?|tenants?|defendants?|employees?|workers?|staff|applicants?|candidates?|offenders?|victims?)\s+`;
-const PEOPLE_WITH = new RegExp(String.raw`\b${PEOPLE}(?:(?:with|who\s+(?:have|has|had))\s+(?:(?:an?|any|prior|past|previous)\s+)*|(?:who\s+(?:are|were)\s+)?(?:currently\s+)?(?:on|under)\s+)$`, "i");
-/** The same people just before what was done to them ("clients on parole", "clients convicted of a felony"). */
-const PEOPLE_JUST_BEFORE = new RegExp(String.raw`\b${PEOPLE}(?:who\s+(?:are|were|have\s+been|has\s+been|had\s+been)\s+)?(?:currently\s+|recently\s+|ever\s+|once\s+)?$`, "i");
-const DONE_TO_START = /^(?:on|convicted|arrested|charged|incarcerated|imprisoned|jailed)\b/i;
-/** …unless those people are the candidate ("Are you a person with a criminal record?", "Are you one of those with a felony?"). */
-const THE_CANDIDATE = new RegExp(String.raw`\b(?:are|were)\s+you\s+(?:(?:a|an|one\s+of(?:\s+(?:the|those|these))?|among(?:\s+(?:the|those|these))?)\s+)?(?:${PEOPLE})+(?:(?:with|who|that)\b[^?.!;]*)?$`, "i");
-/** The work done with records just before a match ("Have you handled criminal charges?", "experience researching criminal records"). */
-const WORK_ON_RECORDS = /\b(?:research\w*|handl\w*|process\w*|review\w*|retriev\w*|search\w*|pull\w*|expung\w*|seal\w*|defend\w*|prosecut\w*|investigat\w*|fil(?:e|es|ed|ing)|track\w*|manag\w*|verif\w*|order\w*|obtain\w*|request\w*|interpret\w*|run|ran|running|conduct\w*|perform\w*|(?:work(?:s|ed|ing)?|familiar|experience[ds]?|knowledge|trained|skilled))(?:\s+(?:on|with|in|of|for))?\s+(?:(?:the|a|an|any|their)\s+)?$/i;
-/**
- * A check right after a match, put after an offer in the same sentence ("…a criminal background check after a
- * conditional offer?", "Offer contingent on a criminal background check"): in a question, no asking about the record.
- */
-const A_CHECK = /^(?:[\s-]+(?:felon\w*|convictions?|criminal|arrests?|history|histories|records?|backgrounds?)){0,2}[\s-]+(?:checks?|screenings?)\b/i;
-/** After a list, a record said to be welcome starts words of its own ("No experience needed, felons welcome"). */
-const WELCOME_AFTER = /^[\s,]*(?:(?:are|is)\s+)?(?:welcome\w*|accepted|considered|ok|okay|fine|encouraged|friendly|allowed|eligible)\b/i;
-/** "No" before a record that disqualifies: none does ("No felony or misdemeanor conviction will disqualify you"). */
-const NONE_BEFORE = /\b(?:no|nor|not\s+(?:every|all|any|a|one)|never\s+(?:a|an|any))\s+(?:[\w'’]+(?:\s*,\s*|\s+|-)){0,4}$/i;
-const OFFER_AFTER = /^[^.?!;]*\b(?:after|following|once|upon|until)\b[^.?!;]*\boffers?\b/i;
-const OFFER_BEFORE = /\b(?:(?:after|following|once|upon)\b[^.?!;]*\boffers?|offers?\b[^.?!;]*\b(?:contingent|conditional|subject|dependent))\b[^.?!;]*$/i;
-
-/**
- * The first match of `pattern` (a global regex) about the candidate's own record, or null. In a requirement (`ban`)
- * each match is a ban in its own words, so only the people the work is with come before one that is not (`SERVED_WITH`;
- * review of the criminal-record fix, 17 Nov 2026: "We only hire people with a clean record" passed). In a question, the
- * words may be about anyone the question names but the candidate, or about the work done with records, and a check may
- * be put after an offer.
- */
-function firstOwnRecord(pattern: RegExp, reading: "ban" | "question"): (text: string) => string | null {
-  return (text) => {
-    for (const m of text.matchAll(pattern)) {
-      const at = m.index ?? 0;
-      // the words just before it are what count: the sentence it is in, at most
-      const before = text.slice(Math.max(0, at - 400), at);
-      if (HELD_EITHER_WAY.test(before) || (m[0].includes(",") && WELCOME_AFTER.test(text.slice(at + m[0].length))) || (/disqualif/i.test(m[0]) && NONE_BEFORE.test(before))) continue;
-      if (reading === "ban") {
-        if (SERVED_WITH.test(before)) continue;
-      } else {
-        const theirs = !THE_CANDIDATE.test(before) && (PEOPLE_WITH.test(before) || (DONE_TO_START.test(m[0]) && PEOPLE_JUST_BEFORE.test(before)));
-        if (theirs || (!/^(?:you|your)\b/i.test(m[0]) && WORK_ON_RECORDS.test(before))) continue;
-        const after = text.slice(at + m[0].length);
-        const check = after.match(A_CHECK);
-        if (check && (OFFER_AFTER.test(after.slice(check[0].length)) || OFFER_BEFORE.test(before))) continue;
-      }
-      return m[0].replace(/^[.;:!?]\s+/, "");
-    }
-    return null;
-  };
+/** The first match of `pattern` that is not inside an exception, or null. Matches come left to right, so the exceptions are read once, in order. */
+function firstOutsideExceptions(pattern: RegExp, text: string): string | null {
+  let spans: Array<[number, number]> | null = null;
+  let next = 0;
+  // how far the exceptions that start at or before this match reach
+  let reach = -1;
+  for (const m of text.matchAll(pattern)) {
+    const from = m.index ?? 0;
+    if (!spans) spans = NOT_A_BAN.flatMap((x) => Array.from(text.matchAll(x), (e): [number, number] => [e.index ?? 0, (e.index ?? 0) + e[0].length])).sort((a, b) => a[0] - b[0]);
+    while (next < spans.length && spans[next][0] <= from) reach = Math.max(reach, spans[next++][1]);
+    if (from + m[0].length > reach) return m[0];
+  }
+  return null;
 }
 
-const asksAboutRecord = firstOwnRecord(ASKS_ABOUT_RECORD, "question");
-const asksInBanWords = firstOwnRecord(CRIMINAL_RECORD_BAN, "question");
+/** A ban: in production's words first, so a flag kept in production keeps its words and so its keep, then in an added phrase. */
+const findBan = (text: string): string | null => firstOutsideExceptions(PRODUCTION_BAN, text) ?? firstOutsideExceptions(ADDED_BAN, text);
+/** A question about the record, the same way; one in a ban's own words asks about it too ("Do you have a clean record?"). */
+const findRecordQuestion = (text: string): string | null => firstOutsideExceptions(PRODUCTION_QUESTION, text) ?? firstOutsideExceptions(ADDED_QUESTION, text) ?? findBan(text);
 
 /** The deterministic phrase list (C1). Each rule says why in plain words and offers the lawful way to get at the real need. */
 export const PROXY_RULES: readonly ProxyRule[] = [
@@ -314,7 +209,7 @@ export const PROXY_RULES: readonly ProxyRule[] = [
     rule: "criminal_record",
     reason: "A blanket ban on criminal records breaks fair-chance hiring laws in many places.",
     alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
-    find: firstOwnRecord(CRIMINAL_RECORD_BAN, "ban"),
+    find: findBan,
   },
   {
     rule: "experience_cap",
@@ -345,18 +240,23 @@ export function screenCriterion(text: string): CriterionCheck | null {
   return null;
 }
 
+/** At most one of these before a record named as a deal-breaker ("Anyone with a felony", "Having a criminal record"). */
+const NAMED_AFTER = String.raw`(?:having|anyone\s+with|people\s+with|those\s+with|applicants\s+with|anyone\s+convicted\s+of|on)\s+`;
+/** And at most a time window after it ("Felony convictions in the last 7 years", "Arrests within 10 years"). */
+const NUMBER = String.raw`(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)`;
+const TIME_WINDOW = String.raw`(?:(?:in|within|during|over)\s+)?(?:the\s+)?(?:last|past|previous)\s+(?:${NUMBER}\s+)?(?:years?|yrs?|months?)|within\s+${NUMBER}\s+(?:years?|yrs?|months?)`;
 /**
- * A record named on its own at the start of the words ("Felony convictions", "A criminal record", "Felons", "Has a
- * felony", "Convicted of a felony", "Arrest record", "Pending charges"): as a deal-breaker, what rules someone out, so
- * the ban itself (review of the criminal-record fix, 17 Nov 2026: it was stored and offered back as the must-have
- * "Felony convictions"). A check is no record ("Criminal background check after a conditional offer", "Cannot pass a
- * background check"), nor is the work ("Experience supporting clients with a criminal record") or a driving record ("DUI
- * convictions", "Moving violations").
+ * A deal-breaker whose whole words are a record ("Felony convictions", "A criminal record", "Criminal history", "Anyone
+ * with a felony", "People with criminal records", "Anyone convicted of a felony", "On probation or parole", "Felony
+ * convictions in the last 7 years"), read on its trimmed words: as the answer to "What rules someone out?", the ban
+ * itself (review of the criminal-record fix, 17 Nov 2026: it was stored and offered back as the must-have "Felony
+ * convictions"). Never a driving record ("DUI convictions", "Convictions for DUI in the last 5 years"), a check
+ * ("Criminal background check after a conditional offer", "Cannot pass a background check") or the work.
  */
-const RECORD_NAMED = new RegExp(String.raw`^\s*(?:(?:has|have|had|got|gotten|received|committed)\s+(?:(?:ever\s+)?been\s+)?)?(?:${RECORD_LEAD_IN}(?:${BAN_WORDS}|crimes?|(?:pending|open|outstanding)[\s-]+charges?)\b${NOT_A_CHECK}|(?:ever\s+)?(?:been\s+)?${DONE_TO}\b)`, "i");
+const RECORD_NAMED = new RegExp(String.raw`^(?:${NAMED_AFTER})?${A_RECORD}(?:\s+(?:${TIME_WINDOW}))?[.!]?$`, "i");
 
 /** The phrase list as it reads a deal-breaker: a record named on its own is the ban too, in all its words (`RECORD_NAMED`). */
-const DEAL_BREAKER_RULES: readonly ProxyRule[] = PROXY_RULES.map((r) => (r.rule === "criminal_record" ? { ...r, find: (text: string) => r.find(text) ?? (RECORD_NAMED.test(text) ? text.trim() : null) } : r));
+const DEAL_BREAKER_RULES: readonly ProxyRule[] = PROXY_RULES.map((r) => (r.rule === "criminal_record" ? { ...r, find: (text: string) => r.find(text) ?? (RECORD_NAMED.test(text.trim()) ? text.trim() : null) } : r));
 
 /**
  * The fairness check for one deal-breaker (the quick start's "What rules someone out?", the panel, a card, one the job
@@ -376,8 +276,9 @@ export function screenDealBreaker(text: string): CriterionCheck | null {
  * requirements ("male only", "no kids"); these read questions ("What is your gender?", "Do you have children?"). A
  * question that breaks one is refused when it is set, never kept with a reason: there is no lawful reason to ask it on an
  * application. Each says why in plain words and offers the lawful way to the real need. The patterns ask about the
- * candidate ("your age", "are you married"), so "Experience caring for patients with disabilities", "Experience
- * supporting clients with a criminal record" or "Are you at least 18?" (a legal minimum age) pass.
+ * candidate ("your age", "are you married"), so "Experience caring for patients with disabilities", "Have you worked with
+ * someone on parole?" or "Are you at least 18?" (a legal minimum age) pass. A bare "criminal record" in a question is
+ * refused, as in production, even about the people the work is with.
  */
 export const PROTECTED_QUESTION_RULES: readonly ProxyRule[] = [
   {
@@ -434,7 +335,7 @@ export const PROTECTED_QUESTION_RULES: readonly ProxyRule[] = [
     alternative: "Leave any background check to the end of the process, after an offer, where the law allows it.",
     // a question in a ban's own words asks about the record too ("Do you have a clean record?", "Can you confirm you have
     // no felony convictions?"): refused where it is set, never kept with a reason (review of the criminal-record fix)
-    find: (text) => asksAboutRecord(text) ?? asksInBanWords(text),
+    find: findRecordQuestion,
   },
   {
     rule: "asks_pay_history",
