@@ -455,6 +455,30 @@ describe("deal-breakers offered back as must-haves (plan C17, founder decision Q
     // the same must-have with no deal-breaker it counts as is read on its own words, which wait for counsel
     expect(applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }] }, []).facts.mustHaves).toEqual(["Passes a background check"]);
   });
+
+  // review of the criminal-record fix, 17 Nov 2026: "Felony convictions" as a deal-breaker passed, so the quick start stored
+  // it and the must-have it counts as, and the builder's card offered it back as a must-have
+  it("refuses a record named on its own as a deal-breaker, with the must-have it counts as, and never offers it", () => {
+    const edit = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Felony convictions" }, { field: "mustHaves", value: "Active RDH license" }, { field: "dealBreakers", value: "Felony convictions", countsAs: "Felony convictions" }] }, []);
+    expect([edit.facts.mustHaves, edit.facts.dealBreakers]).toEqual([["Active RDH license"], []]);
+    expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felony convictions"], ["dealBreakers", "Felony convictions"]]);
+    expect([...new Set(edit.refused.map((r) => r.reason))]).toEqual([expect.stringMatching(/fair-chance/)]);
+    // the other bans the review found, with the must-have the owner wrote under them
+    for (const deal of ["No violent crime convictions", "Felons will not be considered", "No ex-felons"]) {
+      const e = applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Passes a background check" }, { field: "dealBreakers", value: deal, countsAs: "Passes a background check" }] }, []);
+      expect([e.facts.mustHaves, e.refused.map((r) => [r.field, r.text])], deal).toEqual([[], [["mustHaves", "Passes a background check"], ["dealBreakers", deal]]]);
+    }
+    // typed on a deal-breaker card too
+    const card: IntakeQuestion = { id: "d", field: "deal_breakers", prompt: "What rules someone out?", mode: "multi", options: [], allowOwn: true };
+    const typed = applyAnswers(empty(), [card], [{ questionId: "d", selected: [], own: ["A criminal record", "Cannot work Saturdays"], skipped: false }], []);
+    expect([typed.facts.dealBreakers, typed.refused.map((r) => r.text)]).toEqual([["Cannot work Saturdays"], ["A criminal record"]]);
+    // read from the chat, it is declined and never offered on the deal-breaker card, while a driving record is offered
+    const offer = dealBreakerOffer({ ...empty(), dealBreakers: ["Felony convictions", "A criminal record", "Felons", "DUI convictions"] }, []);
+    expect(offer.offer).toEqual(["DUI convictions"]);
+    expect(offer.declined.map((d) => [d.requested, d.rule])).toEqual([["Felony convictions", "criminal_record"], ["A criminal record", "criminal_record"], ["Felons", "criminal_record"]]);
+    // a must-have that names a record is read on its own words: the work with records stays
+    expect(applyFactsPatch(empty(), { add: [{ field: "mustHaves", value: "Experience researching criminal records" }] }, []).facts.mustHaves).toEqual(["Experience researching criminal records"]);
+  });
 });
 
 describe("hire again: the facts a new draft starts from (plan C14, review of the live-test fixes, 12 Nov 2026)", () => {

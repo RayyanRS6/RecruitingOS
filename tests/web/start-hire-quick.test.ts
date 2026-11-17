@@ -356,6 +356,19 @@ describe("the fairness check covers the must-have a deal-breaker counts as (revi
     // unticked, it counts as no must-have, and says none
     expect(quickStartPatch(filled({ dealBreakers: ["No felons"], dealBreakersPrivate: ["No felons"] }), "dental", { mustHaves: [] }).add).toContainEqual({ field: "dealBreakers", value: "No felons" });
   });
+
+  // review of the criminal-record fix, 17 Nov 2026: "Felony convictions" on "What rules someone out?" was stored, with the
+  // same words as the must-have it counts as
+  it("refuses a record named on its own as a deal-breaker, with the must-have it counts as", () => {
+    const a = filled({ dealBreakers: ["Felony convictions"] });
+    const patch = IntakeFactsPatch.parse(quickStartPatch(a, "dental", { mustHaves: [] }));
+    expect(patch.add).toContainEqual({ field: "dealBreakers", value: "Felony convictions", countsAs: "Felony convictions" });
+    const edit = applyFactsPatch(normalizeFacts({}), patch, []);
+    expect(edit.facts.mustHaves).toEqual(["Digital radiography and intraoral scanning", "At least 3 years of relevant experience"]);
+    expect(edit.facts.dealBreakers).toEqual([]);
+    expect(edit.refused.map((r) => [r.field, r.text])).toEqual([["mustHaves", "Felony convictions"], ["dealBreakers", "Felony convictions"]]);
+    expect(new Set(edit.refused.map((r) => r.reason)).size).toBe(1);
+  });
 });
 
 describe("a question that is the owner's call (live test, 12 Nov 2026)", () => {

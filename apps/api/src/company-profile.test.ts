@@ -107,6 +107,8 @@ describe("the company's public profile: the text about it, its logo, the contact
       expect(err.message).toMatch(/young and energetic team|digital natives/);
       expect(err.message).toContain("Age, and wording that stands in for age, cannot be a hiring requirement.");
       expect((await json(owner, "POST", "/api/v1/companies/current/about/approve", { text: "Too short." })).status).toBe(400);
+      // a second-chance welcome is no ban on a criminal record (review of the criminal-record fix, 17 Nov 2026)
+      expect((await json(owner, "POST", "/api/v1/companies/current/about/approve", { text: "We are a second-chance employer in Irvine, and we do not hold a criminal record against anyone who wants to work." })).status).toBe(200);
       // a fact about the business that mentions years is fine
       expect((await json(owner, "POST", "/api/v1/companies/current/about/approve", { text: "Harbor Dental has cared for families in Irvine for over 20 years of experience in general dentistry." })).status).toBe(200);
     });

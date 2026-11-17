@@ -3,7 +3,7 @@ import {
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
   type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal, type IntakeServerState, type PayOrigin, type RolePacket,
 } from "@ros/contracts";
-import { openFlagsMessage, questionCheck, screenCriterion, normalizeCriterion, unresolvedFlags, type CriterionCheck } from "./packet-guard";
+import { openFlagsMessage, questionCheck, screenCriterion, screenDealBreaker, normalizeCriterion, unresolvedFlags, type CriterionCheck } from "./packet-guard";
 
 /**
  * The job builder's rules that need no model and no database (Wave C: C2, C6, C7, C8, C14, C17): what is still missing,
@@ -455,13 +455,19 @@ function emptyEdit(facts: IntakeFacts): FactsEdit {
 const QUESTION_FIELDS: ReadonlySet<string> = new Set(["eligibility", "eligibilityNotes", "screening_questions", "screeningQuestions"]);
 
 /**
+ * The deal-breakers, on a card and in an edit: read as what rules someone out, so a record named on its own ("Felony
+ * convictions") is refused too (`screenDealBreaker`; review of the criminal-record fix, 17 Nov 2026).
+ */
+const DEAL_BREAKER_FIELDS: ReadonlySet<string> = new Set(["deal_breakers", "dealBreakers"]);
+
+/**
  * The fairness check on words a person typed: a refusal is recorded with the reason, as the assistant would have declined
  * it. `also` is one more check for this list (a must-have that restates a refused deal-breaker, in `applyFactsPatch`).
  */
 function screened(edit: FactsEdit, field: string, values: string[], also?: (v: string) => CriterionCheck | null): string[] {
   const ok: string[] = [];
   for (const v of values) {
-    const hit = (QUESTION_FIELDS.has(field) ? questionCheck(v) : screenCriterion(v)) ?? also?.(v) ?? null;
+    const hit = (QUESTION_FIELDS.has(field) ? questionCheck(v) : DEAL_BREAKER_FIELDS.has(field) ? screenDealBreaker(v) : screenCriterion(v)) ?? also?.(v) ?? null;
     if (!hit) {
       ok.push(v);
       continue;
@@ -666,9 +672,11 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
   // the edit says it counts as (`countsAs`, the quick start's "As a must-have", in the person's words: "No felons" as
   // "Felony-free"), its requirement, or its words without the "No" (review of the live test, 12 Nov 2026: "No felonies or
   // license suspensions" was refused while "Felonies or license suspensions" was stored; and of its fix: a wording the
-  // person typed was read on its own words only). Worked out first: the edit lists its must-haves before its deal-breakers.
+  // person typed was read on its own words only). A record named on its own is refused as a deal-breaker ("Felony
+  // convictions", and the must-have it counts as: review of the criminal-record fix, 17 Nov 2026). Worked out first: the
+  // edit lists its must-haves before its deal-breakers.
   const refusedDeals = (patch.add ?? []).filter((a) => a.field === "dealBreakers").flatMap((a) => {
-    const hit = screenCriterion(a.value) ?? screenCriterion(mustHaveOf(a.value));
+    const hit = screenDealBreaker(a.value) ?? screenCriterion(mustHaveOf(a.value));
     return hit ? [{ as: [...restatementsOf(a.value), ...(a.countsAs ? [a.countsAs] : [])], hit }] : [];
   });
   const restatesRefused = (v: string) => refusedDeals.find((r) => r.as.some((m) => same(m, v)))?.hit ?? null;
@@ -749,9 +757,9 @@ function plainFact(k: string, v: string): string {
  * Deal-breakers offered back as visible must-haves (C17, founder decision Q19): each one that passes the fairness check
  * is asked about on the deal-breaker card (`prepareQuestions`), as an option worded as the requirement it rules people
  * out on (`mustHaveOf`), or, when that requirement still rules someone out (`rulesOut`, "No RDA"), named on the card for
- * the owner to write what they need in their own words; one that fails, in the owner's words or as that requirement, is
- * declined with the reason, never offered and never used. One already a must-have, either way it is worded, is not
- * offered again.
+ * the owner to write what they need in their own words; one that fails, in the owner's words (read as a deal-breaker, so
+ * a record named on its own fails: "Felony convictions") or as that requirement, is declined with the reason, never
+ * offered and never used. One already a must-have, either way it is worded, is not offered again.
  */
 export function dealBreakerOffer(facts: IntakeFacts, alreadyOffered: string[]): { offer: string[]; declined: DeclinedCriterion[] } {
   const offer: string[] = [];
@@ -759,7 +767,7 @@ export function dealBreakerOffer(facts: IntakeFacts, alreadyOffered: string[]): 
   for (const d of facts.dealBreakers) {
     const need = mustHaveOf(d);
     if (alreadyOffered.some((o) => same(o, d)) || facts.mustHaves.some((m) => same(m, d) || same(m, need))) continue;
-    const hit = screenCriterion(d) ?? screenCriterion(need);
+    const hit = screenDealBreaker(d) ?? screenCriterion(need);
     if (hit) declined.push({ requested: d, reason: hit.reason, alternative: hit.alternative, rule: hit.rule });
     else offer.push(d);
   }

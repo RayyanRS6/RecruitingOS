@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, unresolvedFlags } from "./packet-guard";
+import { companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
 
 /** A small valid packet; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
@@ -398,5 +398,115 @@ describe("a ban on a criminal record is refused in any common wording, and a bac
       ["requirements.mustHaves[1].text", "criminal_record", "No felony", false],
     ]);
     expect(unresolvedFlags(next.packet)).toHaveLength(1);
+  });
+});
+
+// Review of the criminal-record fix, 17 Nov 2026: a ban written after "people with" passed, a record named on its own was
+// stored as a deal-breaker and offered back as the must-have "Felony convictions", fair-chance and billing words were
+// refused, questions about the work were refused, crime types before "convictions", ex-felons and "Felons will not be
+// considered" passed, and a question in a ban's own words was only flagged, so it could be kept.
+describe("the review of the criminal-record fix: each common ban refused, and the lawful words around a record never", () => {
+  const RULE = { rule: "criminal_record", reason: "A blanket ban on criminal records breaks fair-chance hiring laws in many places.", alternative: "Leave any background check to the end of the process, after an offer, where the law allows it." };
+
+  it("refuses a ban written after the people it rules out, with the words the rule found before the fix", () => {
+    for (const text of ["We only hire people with a clean record", "Individuals who have never been convicted", "Looking for people with no criminal record", "Team members with no felonies", "Those with no criminal history", "Seeking individuals with no felony convictions", "People with felonies need not apply", "Those with a felony need not apply", "Those with a criminal record will be disqualified"]) {
+      expect(screenCriterion(text), text).toMatchObject(RULE);
+    }
+    // the words a flag kept before the fix was found by, so that keep still holds
+    expect(screenCriterion("We only hire people with a clean record")?.text).toBe("clean record");
+    expect(screenCriterion("Individuals who have never been convicted")?.text).toBe("never been convicted");
+    // the people the work is with still pass
+    for (const text of ["Experience supporting clients with a criminal record", "Experience supporting clients with no stable housing or criminal records", "We welcome applicants with a criminal record", "We hire people with records"]) expect(screenCriterion(text), text).toBeNull();
+  });
+
+  it("refuses a crime's kind before a conviction, ex-felons and non-felons, offenders, and someone not considered or disqualified for a record", () => {
+    for (const text of [
+      "No domestic violence convictions", "No drug-related convictions", "No theft-related convictions", "No fraud convictions", "No assault convictions", "No violent crime convictions", "No theft or fraud convictions", "Must have no domestic violence convictions",
+      "Must be a non-felon", "Non-felons only", "No ex-felons", "No ex-cons", "Ex-offenders need not apply", "No sex offenders", "No registered sex offenders", "No jail time",
+      "Felons will not be considered", "Applicants with a felony conviction will not be considered", "We will not consider anyone with a criminal record", "A felony disqualifies you", "Felony convictions disqualify",
+      "We do not hire anyone who has been convicted of a felony", "Applicants who have been convicted of a felony will not be considered",
+      "Must not carry any felony convictions", "Cannot hold a felony conviction", "No pending criminal charges", "Must be felony-free", "Must have a spotless record", "Zero felony convictions",
+    ]) expect(screenCriterion(text), text).toMatchObject(RULE);
+  });
+
+  it("never refuses fair-chance words, billing words or a driving record", () => {
+    for (const text of [
+      "We are a second-chance employer in Irvine, and we do not hold a criminal record against anyone who wants to work.", "We will not hold past convictions against our team.", "We do not hold arrests or convictions against applicants.",
+      "End each day with no pending charges", "You don't have to be felony-free to apply", "We do not have a criminal record requirement for this job.",
+      "No conviction automatically disqualifies you", "No felony or misdemeanor conviction will disqualify you", "No one convicted of a felony will be automatically disqualified", "Not every conviction disqualifies you",
+      "No one with a record is turned away", "We will not take arrests into account", "No degree, convictions considered case by case",
+      "We will not consider arrests that did not lead to a conviction", "Convictions older than seven years will not be considered", "We have no blanket ban on convictions", "Arrests without a conviction are never considered", "We welcome ex-offenders",
+      "Pursuant to the San Francisco Fair Chance Ordinance, we will consider for employment qualified applicants with arrest and conviction records.",
+      "We consider all qualified applicants without regard to race, color, religion, sex, national origin, or arrest and conviction records.", "No experience needed, felons welcome!",
+      "No DUI or DWI convictions", "No reckless driving convictions", "No traffic convictions", "Never had a DUI conviction", "Keep a clean record of patient charts", "No candidate record is linked to this request.",
+    ]) expect(screenCriterion(text), text).toBeNull();
+  });
+
+  it("refuses a question about the candidate's own record in these words, and one in a ban's own words, wherever a question is set", () => {
+    for (const question of [
+      "Are you a person with a criminal record?", "Are you an individual with a criminal history?", "Are you one of those with a criminal record?",
+      "Were you ever charged with a crime?", "Were you charged?", "Have you ever been charged?", "Are you currently on parole?", "Have you ever been on probation or parole?", "Do you have any pending charges?", "Do you have any pending criminal charges?",
+      "Do you have any fraud convictions?", "Any domestic violence convictions?", "Do you have any violent crime convictions?", "Are you an ex-felon?", "Are you a non-felon?", "Are you a registered sex offender?",
+      "Do you have a clean record?", "Can you confirm you have no felony convictions?", "Are you free of felony convictions?", "Have you never been convicted?", "Is your record clean?",
+      "Have you served time in jail or prison?", "Are you currently awaiting trial?",
+    ]) {
+      expect(questionCheck(question)?.rule, question).toBe("asks_record");
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
+    }
+    // a ban's words in a help line or in what a good answer shows are refused too, never only flagged
+    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your last job.", lookFor: "We only hire people with a clean record" }] })[0]).toMatchObject({ part: "lookFor", rule: "criminal_record" });
+  });
+
+  it("never refuses a question about the work with records, the people it is with, or a bill's charges", () => {
+    for (const question of [
+      "How do you follow up on any pending charges on a patient account?", "Do you have experience clearing any pending charges on patient accounts?", "In your last job, were you charged with opening the office?",
+      "Do you have probation and parole experience?", "Are you a former probation or parole officer?", "Do you have experience with probation and parole clients?", "Have you worked with people on probation or parole?",
+      "Have you helped clients convicted of a felony find housing?", "Have you handled criminal charges as a paralegal?", "Do you have experience researching criminal records?", "Have you worked with people who have a criminal record?",
+      "Do you have any DUI convictions?", "Can you pass a background check?",
+    ]) {
+      expect(questionCheck(question), question).toBeNull();
+      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+    }
+  });
+
+  it("reads a record named on its own as a deal-breaker as the ban, and only as a deal-breaker", () => {
+    for (const text of ["Felony convictions", "A criminal record", "Felons", "Criminal history", "Convicted of a felony", "Has a felony", "Any convictions", "Arrest record", "Pending charges", "Theft convictions"]) {
+      expect(screenDealBreaker(text), text).toMatchObject(RULE);
+      // as a must-have's own words they are no ban
+      expect(screenCriterion(text), text).toBeNull();
+    }
+    for (const text of ["DUI convictions", "Moving violations", "Must pass a background check", "Cannot pass a background check", "Criminal background check after a conditional offer", "Experience supporting clients with a criminal record", "Cannot work Saturdays", "Smokers"]) {
+      expect(screenDealBreaker(text), text).toBeNull();
+    }
+    // the phrase list reads every deal-breaker as before
+    expect(screenDealBreaker("No felons")).toEqual(screenCriterion("No felons"));
+    expect(screenDealBreaker("No recent grads")?.rule).toBe("recent_graduate");
+  });
+
+  it("flags a saved job's ban as before the fix, a record named as a deal-breaker and the must-have in its words, and passes fair-chance words", () => {
+    // as it was saved: the description's ban was flagged under the words the rule found then, and a person kept it
+    const keep = { id: "criminal_record:description.publicJobDescription:clean_record", path: "description.publicJobDescription", ...RULE, text: "clean record", kept: { reason: "Our state licensing board requires it for this role.", by: dana, at: "2026-11-01T10:00:00.000Z" } };
+    const saved = packet((x) => {
+      x.description.publicJobDescription += " We only hire people with a clean record. We do not hold a criminal record against anyone who wants to work.";
+      x.preferences.dealBreakersInTheirWords = ["Felony convictions", "Cannot work Saturdays"];
+      x.requirements.mustHaves.push({ key: "record", text: "Felony convictions", rationale: "r", evidencedBy: ["resume"] }, { key: "saturdays", text: "Able to work Saturdays", rationale: "r", evidencedBy: ["screen"] });
+      x.provenance.flags = [keep];
+    });
+    const next = guardPacket(saved, { ...ctx, previousFlags: [keep] });
+    // nothing is taken out or reworded: the job reads as it did and goes on running
+    expect(next.packet.description.publicJobDescription).toBe(saved.description.publicJobDescription);
+    expect(next.packet.preferences.dealBreakersInTheirWords).toEqual(["Felony convictions", "Cannot work Saturdays"]);
+    expect(next.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Felony convictions", "Able to work Saturdays"]);
+    expect(next.changes).toEqual([]);
+    // the keep holds; the deal-breaker and the must-have in its words wait for a person
+    expect(next.flags.map((f) => [f.path, f.rule, f.text, !!f.kept])).toEqual([
+      ["description.publicJobDescription", "criminal_record", "clean record", true],
+      ["requirements.mustHaves[1].text", "criminal_record", "Felony convictions", false],
+      ["preferences.dealBreakersInTheirWords[0]", "criminal_record", "Felony convictions", false],
+    ]);
+    expect(unresolvedFlags(next.packet)).toHaveLength(2);
+    // a company question in a ban's own words is refused when it is saved, with the reason a question gets
+    const problem = companyQuestionProblems({ quick: [{ key: "cq_record", question: "Do you have a clean record?", options: ["Yes", "No"] }] });
+    expect(companyQuestionProblemWords(problem[0])).toBe("Quick question 1: Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places. Leave any background check to the end of the process, after an offer, where the law allows it.");
   });
 });
