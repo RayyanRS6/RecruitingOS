@@ -85,10 +85,14 @@ export const resumeCases: ResumeCase[] = [
     expect: (ex) => (ex.skills.length >= 2 ? [] : ["skills not extracted"]),
   },
   {
+    // filler around one real line: the job is read, and the filler becomes no position, licence or skill
     id: "ai_generated_boilerplate",
     provenance: "synthetic",
     text: "Results-driven professional with a proven track record of success.\nHygienist at Some Dental 2021 - present\nLorem ipsum dolor sit amet.",
-    expect: (ex) => (ex.anomalies.some((a) => a.kind === "possible_ai_generated") ? [] : ["boilerplate not flagged as anomaly"]),
+    expect: (ex) => [
+      ...(ex.positions.length === 1 && /hygienist/i.test(ex.positions[0]!.title) ? [] : ["the one job among the filler was not read as the one position"]),
+      ...(ex.licenses.length || ex.certifications.length ? ["filler read as a licence or a certification"] : []),
+    ],
   },
 ];
 

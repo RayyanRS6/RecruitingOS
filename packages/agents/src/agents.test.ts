@@ -46,7 +46,7 @@ describe("the AI interviewer is given the job and states pay as the job page doe
 
 describe("verifyQuotes", () => {
   it("drops quotes that do not appear in the source", () => {
-    const out = verifyQuotes({ positions: [{ title: "RDH", quote: "RDH at Smile Co 2019-2023", current: false }], education: [], licenses: [{ name: "RDH", quote: "invented line" }], certifications: [], skills: [], languages: [], anomalies: [], confidence: "medium" }, "Registered hygienist.\nRDH at Smile Co 2019-2023\n");
+    const out = verifyQuotes({ positions: [{ title: "RDH", quote: "RDH at Smile Co 2019-2023", current: false }], licenses: [{ name: "RDH", quote: "invented line" }], certifications: [], skills: [] }, "Registered hygienist.\nRDH at Smile Co 2019-2023\n");
     expect(out.positions[0].quote).toBe("RDH at Smile Co 2019-2023");
     expect(out.licenses[0].quote).toBeUndefined();
   });

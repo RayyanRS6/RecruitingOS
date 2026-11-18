@@ -25,7 +25,6 @@ export function verifyQuotes(ex: ResumeExtraction, source: string): ResumeExtrac
   return {
     ...ex,
     positions: ex.positions.map((p) => ({ ...p, quote: check(p.quote) })),
-    education: ex.education.map((e) => ({ ...e, quote: check(e.quote) })),
     licenses: ex.licenses.map((l) => ({ ...l, quote: check(l.quote) })),
     certifications: ex.certifications.map((c) => ({ ...c, quote: check(c.quote) })),
   };

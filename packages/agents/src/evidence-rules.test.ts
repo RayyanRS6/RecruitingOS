@@ -167,7 +167,7 @@ describe("what the AI sees when it scores", () => {
   it("the resume reading's input holds no name, email, phone, street address, link or earlier application", () => {
     const { promptInput, view } = scoringInput({
       packet: PACKET as never,
-      extraction: { fullName: "Dana Kim", email: "dana.kim@example.com", positions: [{ title: "Hygienist", employer: "Harbor Dental", current: true, quote: "Dana Kim, RDH" }], education: [], licenses: [], certifications: [], skills: ["Dentrix"], languages: [], anomalies: [], confidence: "high" },
+      extraction: { fullName: "Dana Kim", positions: [{ title: "Hygienist", employer: "Harbor Dental", current: true, quote: "Dana Kim, RDH" }], licenses: [], certifications: [], skills: ["Dentrix"] },
       resumeText: FULL_RESUME,
       formAnswers: {},
       identity: DANA,
@@ -180,7 +180,7 @@ describe("what the AI sees when it scores", () => {
     // what the job is judged on is still there
     for (const kept of ["Registered Dental Hygienist at Harbor Dental 2021 - present", "RDH license CA expired 2019", "Irvine, CA", "Dentrix"]) expect(sent, kept).toContain(kept);
     // the record of the reading: counts only, never the values
-    expect(view.counts()).toMatchObject({ name: 4, email: 2, phone: 1 });
+    expect(view.counts()).toMatchObject({ name: 4, email: 1, phone: 1 });
     expect(view.counts().street).toBeGreaterThanOrEqual(1);
     expect(view.counts().link).toBeGreaterThanOrEqual(1);
     expect(JSON.stringify(view.counts())).not.toContain("Dana");

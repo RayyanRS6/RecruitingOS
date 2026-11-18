@@ -25,7 +25,7 @@ describe("the decision email's Colorado line", () => {
   const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie: owner }, body: body === undefined ? undefined : JSON.stringify(body) });
   const mailTo = (email: string) => (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === email);
   /** What the resume reading makes of where someone is, for the stand-in AI, which reads no place by itself. */
-  const readsPlace = (name: string, locationText: string): ResumeExtraction => ({ fullName: name, locationText, positions: [{ title: "Dental Hygienist", employer: "Mile High Dental", current: true }], education: [], licenses: [], certifications: [], skills: ["Dentrix"], languages: [], anomalies: [], confidence: "medium" });
+  const readsPlace = (name: string, locationText: string): ResumeExtraction => ({ fullName: name, locationText, positions: [{ title: "Dental Hygienist", employer: "Mile High Dental", current: true }], licenses: [], certifications: [], skills: ["Dentrix"] });
 
   /** Someone applies, is marked Not selected, and the email "Email the decision" would send them is read; then it is sent. */
   async function declined(roleId: string, first: string, place?: string) {

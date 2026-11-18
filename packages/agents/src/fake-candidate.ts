@@ -12,8 +12,6 @@ import { namesCredential, plainlyNotHeld } from "./triage";
 export function fakeResumeExtract(req: StructuredRequest<unknown>): ResumeExtraction {
   const text = ((req.messages[0]?.content ?? "") as string).replace(/^[\s\S]*?<resume[^>]*>\n?/, "").replace(/\n?<\/resume>[\s\S]*$/, "");
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
-  const phone = text.match(/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/)?.[0];
   const positions: ResumeExtraction["positions"] = [];
   for (const l of lines) {
     const m = l.match(/^(.{3,60}?)\s+(?:at|@|-|–|\|)\s+(.{2,60}?)\s*(?:\(|,|\s)?\s*((?:19|20)\d{2})\s*(?:-|–|to)\s*((?:19|20)\d{2}|present|current)/i);
@@ -32,9 +30,7 @@ export function fakeResumeExtract(req: StructuredRequest<unknown>): ResumeExtrac
     return Number.isFinite(s) && Number.isFinite(e) ? n + Math.max(0, e - s) : n;
   }, 0);
   const skills = [...new Set((text.match(/\b(Dentrix|Eaglesoft|Open Dental|perio(?:dontal)?|radiograph|x-ray|scaling|root planing|scheduling|insurance|billing|Salesforce|Excel|HVAC|EPA 608|welding)\b/gi) ?? []).map((s) => s.toLowerCase()))];
-  const anomalies: ResumeExtraction["anomalies"] = [];
-  if (/lorem ipsum|results-driven professional with a proven track record/i.test(text)) anomalies.push({ kind: "possible_ai_generated", detail: "boilerplate phrasing" });
-  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, email, phone, positions, education: [], licenses, certifications, skills, languages: [], yearsOfExperienceEstimate: years || undefined, anomalies, confidence: positions.length ? "medium" : "low" };
+  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, positions, licenses, certifications, skills, yearsOfExperienceEstimate: years || undefined };
 }
 
 const STOP = new Set(["with", "that", "this", "from", "have", "your", "their", "will", "able", "must", "need", "work", "experience", "years", "year", "active", "current", "relevant", "setting", "posted", "schedule", "reliable", "availability", "the", "and", "for"]);
