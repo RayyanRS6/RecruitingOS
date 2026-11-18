@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { MagicLinkConsume, MagicLinkRequest, type MeResponse, type MembershipRole } from "@ros/contracts";
+import { MagicLinkConsume, MagicLinkRequest, appPaths, type AuthConfig, type MeResponse, type MembershipRole } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
 import { InvitationRefused, audit, consumeMagicLink, createMagicLink, escapeHtml, findInvitationByToken, hashInvitationToken, invitationState, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, roleInWords, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
 import { companies, memberships, users, withPlatform } from "@ros/db";
@@ -9,7 +9,7 @@ import { REAUTH_STATE_SUFFIX, completeReauth, readReauthMarker, refusedReauth } 
 import { renderSignInLinkPage } from "../pages/signin-link";
 import { renderInvitePage, type InvitePageProps } from "../pages/invite";
 import { signupConfigFor } from "../services/access-requests";
-import { clearInviteCookie, clearPkceCookie, clearSessionCookie, needsSecondFactor, openSession, readInviteCookie, readPkceCookie, setInviteCookie, setMfaCookie, setPkceCookie, setSessionCookie, signInPolicy } from "./auth-shared";
+import { clearInviteCookie, clearPkceCookie, clearSessionCookie, landingFor, needsSecondFactor, openSession, readInviteCookie, readPkceCookie, setInviteCookie, setMfaCookie, setPkceCookie, setSessionCookie, signInPolicy } from "./auth-shared";
 import { FakeEmailAdapter, FakeIdentityProvider, IdentityError, base64url, mailbox } from "@ros/integrations";
 import { clientIp, readSessionCookie, type Vars } from "../middleware/session";
 import type { Container } from "../container";
@@ -29,16 +29,15 @@ export function consumeLink(container: Container, token: string): string {
 }
 
 /**
- * What the sign-in page offers: delegated providers always; the email link only where it is enabled. `signup` (GATE-V2):
- * whether company sign-up is open, by invitation or by approval (SIGNUP_MODE), whether the person asking may send the
- * company form (by invitation or approval, nobody before signing in; the list itself is never sent), whom to ask: the ITS
- * inbox job pages already print (EMAIL_REPLY_TO), and, under approval, which door they have and their own request
- * (SignupConfig in @ros/contracts).
+ * What the sign-in page offers: delegated providers always; the email link only where it is enabled. `signup`: whether
+ * a company comes in by approval or sign-up is open (SIGNUP_MODE), whether the person asking may send the company form
+ * (by approval, nobody before signing in), whom to ask: the ITS inbox job pages already print (EMAIL_REPLY_TO), and,
+ * under approval, which door they have and their own request (SignupConfig in @ros/contracts).
  */
 authRoutes.get("/config", async (c) => {
   const container = c.get("container");
-  const signup = await signupConfigFor(container, c.get("session")?.user);
-  return c.json({ mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS, signup });
+  const config: AuthConfig = { mode: container.integrations.identity.id, providers: container.integrations.identity.providers(), magicLink: container.env.MAGIC_LINK_ENABLED, staffDomains: container.env.ITS_STAFF_EMAIL_DOMAINS, signup: await signupConfigFor(container, c.get("session")?.user) };
+  return c.json(config);
 });
 
 authRoutes.route("/mfa", mfaRoutes);
@@ -65,7 +64,7 @@ authRoutes.get("/start/:provider", async (c) => {
  */
 authRoutes.get("/callback", async (c) => {
   const container = c.get("container");
-  const fail = (code: string) => { clearPkceCookie(c); return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(code)}`, 302); };
+  const fail = (code: string) => { clearPkceCookie(c); return c.redirect(`${container.env.APP_BASE_URL}${appPaths.login}?error=${encodeURIComponent(code)}`, 302); };
   const pkce = readPkceCookie(c);
   const code = c.req.query("code");
   const returnedState = c.req.query("state");
@@ -80,7 +79,7 @@ authRoutes.get("/callback", async (c) => {
     if (reauth && pkce && returnedState === pkce.state && returnedState.endsWith(REAUTH_STATE_SUFFIX)) return refusedReauth(c, container, reauth);
     clearPkceCookie(c);
     // The trailing `#`: a browser carries the service's fragment, a copy of the refusal, through a redirect that names none.
-    return c.redirect(`${container.env.APP_BASE_URL}/login?error=${encodeURIComponent(refusal.code)}#`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}${appPaths.login}?error=${encodeURIComponent(refusal.code)}#`, 302);
   }
   if (!pkce || !code) return fail("signin_incomplete");
   // The state is mandatory and must be the one this browser was given; PKCE binds the code, the state binds the flow.
@@ -101,7 +100,7 @@ authRoutes.get("/callback", async (c) => {
     const result = await openSession(container, c, identity, pkce.provider);
     clearPkceCookie(c);
     setSessionCookie(c, result.sessionToken);
-    return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId || result.staff ? "/" : "/setup/company"}`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}${landingFor(result)}`, 302);
   } catch (err) {
     if (err instanceof SignInRefused || err instanceof IdentityError) return fail(err.code);
     throw err;
@@ -194,7 +193,7 @@ authRoutes.post("/magic-link", rateLimit(POLICIES.authMagicLink), async (c) => {
 authRoutes.get("/consume", async (c) => {
   const container = c.get("container");
   const token = c.req.query("token") ?? "";
-  if (!token) return c.redirect(`${container.env.APP_BASE_URL}/login?error=expired`, 302);
+  if (!token) return c.redirect(`${container.env.APP_BASE_URL}${appPaths.login}?error=expired`, 302);
   // A team invitation is no longer carried by the link (migration 0022): the page is the plain sign-in one; the sealed
   // invite cookie, if the person came from an invitation page, is honoured when the button is pressed.
   return c.html(renderSignInLinkPage({ token, productName: container.env.PRODUCT_NAME, action: `${container.env.APP_BASE_URL}/api/v1/auth/consume`, invite: !!readInviteCookie(c, container) }));
@@ -224,9 +223,10 @@ authRoutes.post("/consume", async (c) => {
   try {
     const result = await consumeWithInvitation(c, container, token);
     setSessionCookie(c, result.sessionToken);
-    return c.redirect(`${container.env.APP_BASE_URL}${result.activeCompanyId ? "/" : "/setup/company"}`, 302);
+    // An emailed link never signs a platform administrator in (they use Microsoft and a second factor).
+    return c.redirect(`${container.env.APP_BASE_URL}${landingFor({ platformAdmin: false, activeCompanyId: result.activeCompanyId })}`, 302);
   } catch (err) {
-    return c.redirect(`${container.env.APP_BASE_URL}/login?error=${err instanceof InvitationRefused ? err.code : "expired"}`, 302);
+    return c.redirect(`${container.env.APP_BASE_URL}${appPaths.login}?error=${err instanceof InvitationRefused ? err.code : "expired"}`, 302);
   }
 });
 
@@ -247,7 +247,7 @@ authRoutes.post("/magic-link/consume", async (c) => {
 
 /** What the invitation page needs to say about one link. Never the token hash; the token itself only goes back into the page's own form. */
 async function invitePageFor(container: Container, token: string): Promise<InvitePageProps> {
-  const base = { productName: container.env.PRODUCT_NAME, providers: container.integrations.identity.providers(), startBase: `${container.env.APP_BASE_URL}/api/v1/auth/start`, magicLink: container.env.MAGIC_LINK_ENABLED, emailAction: `${container.env.APP_BASE_URL}/api/v1/auth/invite/email`, token, loginHref: `${container.env.APP_BASE_URL}/login` };
+  const base = { productName: container.env.PRODUCT_NAME, providers: container.integrations.identity.providers(), startBase: `${container.env.APP_BASE_URL}/api/v1/auth/start`, magicLink: container.env.MAGIC_LINK_ENABLED, emailAction: `${container.env.APP_BASE_URL}/api/v1/auth/invite/email`, token, loginHref: `${container.env.APP_BASE_URL}${appPaths.login}` };
   const found = await withPlatform(container.db, async (tx) => {
     const inv = await findInvitationByToken(tx, token);
     if (!inv) return null;

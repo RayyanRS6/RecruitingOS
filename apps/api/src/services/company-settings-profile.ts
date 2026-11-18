@@ -1,35 +1,26 @@
 import { desc, eq } from "drizzle-orm";
-import { z } from "zod";
-import { isCompanyVerified, type Actor, type Location } from "@ros/contracts";
+import { mayOfferUpgrade, trialStanding, type Actor, type CompanyView, type Location } from "@ros/contracts";
 import { companyAboutPrompt, runPromptDetached, type CompanyAboutDraft, type CompanyAboutInput, type RunOutcome } from "@ros/ai";
-import { PROXY_RULES, type CriterionCheck } from "@ros/core";
-import { companies, rolePackets, roles, withTenant, type CompanySettings, type Tx } from "@ros/db";
+import { PROXY_RULES, aiCreditView, can, entitlements, type CriterionCheck } from "@ros/core";
+import { companies, rolePackets, roles, withPlatform, withTenant, type CompanySettings, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Env } from "../env";
+import { HttpError } from "../middleware/errors";
+import type { Tenant } from "../middleware/session";
 import { jobUrls } from "./job-urls";
+import { openPlanRequest } from "./plan-request";
 
 /**
- * What a company shows candidates about itself (plan D10, founder decision Q13): a few sentences about the company,
- * drafted by the assistant and approved once in Setup by a person; a logo we store and serve ourselves; and the contact
- * a candidate can reach before applying. They live on `companies.settings` next to the rest of the company's choices
- * (no schema change: the column is JSON). Only the approved text is ever shown; a draft, and the role plans' own company
- * line (`communication.companyBlurb`, which no person approved), never are.
+ * What a company shows candidates about itself: a few sentences about the company, drafted by the assistant and approved
+ * in Settings by a person; a logo we store and serve ourselves; and the contact a candidate can reach before applying.
+ * They live on `companies.settings` next to the rest of the company's details. Only the approved text is ever shown to a
+ * candidate; a draft never is.
  */
-export type CompanyAbout = NonNullable<CompanySettings["about"]>;
-export type CompanyAboutDraftRecord = NonNullable<CompanySettings["aboutDraft"]>;
 export type CompanyLogo = NonNullable<CompanySettings["logo"]>;
-export type HiringContact = NonNullable<CompanySettings["hiringContact"]>;
-export type PublicProfileSettings = { about?: CompanyAbout; aboutDraft?: CompanyAboutDraftRecord; logo?: CompanyLogo; hiringContact?: HiringContact };
-export type SettingsWithProfile = CompanySettings & PublicProfileSettings;
 
-/** The profile part of a company's settings. */
-export function profileOf(settings: CompanySettings | null | undefined): PublicProfileSettings {
-  return (settings ?? {}) as SettingsWithProfile;
-}
-
-/** The text a person approved, or null. Never a draft and never a role plan's own company line. */
+/** The text a person approved, or null. Never a draft. */
 export function approvedAbout(settings: CompanySettings | null | undefined): string | null {
-  const about = profileOf(settings).about;
+  const about = settings?.about;
   return about?.approvedAt && about.text.trim() ? about.text.trim() : null;
 }
 
@@ -38,10 +29,9 @@ export function logoPublicPath(slug: string, logo: Pick<CompanyLogo, "file">): s
   return `/careers/${slug}/logo/${logo.file}`;
 }
 
-/** Where the team (Setup, and the preview pages before the company is public) loads the logo, signed in. */
-export const MEMBER_LOGO_PATH = "/api/v1/companies/current/logo";
+/** Where the team (Settings, and the job-page preview) loads the logo, signed in. */
 export function logoMemberPath(logo: Pick<CompanyLogo, "file">): string {
-  return `${MEMBER_LOGO_PATH}?v=${encodeURIComponent(logo.file)}`;
+  return `/api/v1/companies/current/logo?v=${encodeURIComponent(logo.file)}`;
 }
 
 /** An image response that can only ever be an image: its exact type, no sniffing, and a policy that runs nothing. */
@@ -59,12 +49,12 @@ export function logoPublicUrl(env: Pick<Env, "JOBS_BASE_URL">, slug: string, log
 
 /**
  * Who a candidate can reach before applying (for help, or a change to how they apply because of a disability): the
- * company's own hiring contact when it set one in Setup, otherwise the Identified Talent Solutions inbox that answers
+ * company's own hiring contact when it set one in Settings, otherwise the Identified Talent Solutions inbox that answers
  * for the company (the reply-to address of every message we send).
  */
 export type ContactLine = { email: string; name: string | null; kind: "company" | "its" };
 export function contactLineFor(settings: CompanySettings | null | undefined, env: Pick<Env, "EMAIL_REPLY_TO">): ContactLine {
-  const own = profileOf(settings).hiringContact;
+  const own = settings?.hiringContact;
   return own?.email ? { email: own.email, name: own.name, kind: "company" } : { email: env.EMAIL_REPLY_TO, name: null, kind: "its" };
 }
 
@@ -82,20 +72,10 @@ export function aboutWordingProblem(text: string): CriterionCheck | null {
   return null;
 }
 
-export const ABOUT_MIN = 40;
-export const ABOUT_MAX = 1200;
-
-/** POST /companies/current/about/draft: what the person wants it to say, optionally. */
-export const AboutDraftRequest = z.object({ notes: z.string().trim().max(1000).optional() }).strict();
-/** POST /companies/current/about/approve: the words as the person left them. */
-export const AboutApproval = z.object({ text: z.string().trim().min(ABOUT_MIN, `Write at least ${ABOUT_MIN} characters about the company.`).max(ABOUT_MAX, `Keep it under ${ABOUT_MAX} characters.`) }).strict();
-/** PUT /companies/current/hiring-contact: an address candidates may write to before applying, or null for the ITS inbox. */
-export const HiringContactInput = z.object({ email: z.email("Use an email address like jobs@acme.com.").max(254).nullable(), name: z.string().trim().max(120).nullable().optional() }).strict();
-
 const placeText = (l: Location) => [l.city, l.region].filter(Boolean).join(", ");
 
-/** What the assistant drafts from: what the company told us, its role titles, and the role plans' unapproved company lines as background. */
-export async function aboutInputs(tx: Tx, companyId: string, notes: string | null): Promise<CompanyAboutInput> {
+/** What the assistant drafts from: what the company told us, its job titles, and the jobs' own company lines as background. */
+async function aboutInputs(tx: Tx, companyId: string, notes: string | null): Promise<CompanyAboutInput> {
   const [co] = await tx.select().from(companies).where(eq(companies.id, companyId)).limit(1);
   const recent = await tx.select({ title: roles.title, packet: rolePackets.packet }).from(rolePackets).innerJoin(roles, eq(roles.id, rolePackets.roleId)).where(eq(roles.companyId, companyId)).orderBy(desc(rolePackets.createdAt)).limit(20);
   const unique = (xs: string[], n: number) => [...new Set(xs.map((x) => x.trim()).filter(Boolean))].slice(0, n);
@@ -119,27 +99,46 @@ export async function draftAbout(container: Container, input: { companyId: strin
   return runPromptDetached(container.db, container.ai, companyAboutPrompt, prepared, { companyId: input.companyId, inputRef: { requestedBy: input.actor.id, withNotes: !!input.notes } });
 }
 
-/** What Setup shows: the approved text, a draft waiting for a person, the logo, and the contact candidates see. */
-export type PublicProfileView = {
-  about: { text: string; approvedAt: string; approvedBy: string | null; aiAssisted: boolean } | null;
-  draft: { text: string; draftedAt: string; basedOn: string[]; check: CriterionCheck | null } | null;
-  logo: { url: string; publicUrl: string; contentType: string; width: number | null; height: number | null; uploadedAt: string } | null;
-  hiringContact: { email: string; name: string | null } | null;
-  contactShown: ContactLine;
-  careersUrl: string;
-  /** False until ITS has checked the company (founder decision B7): nothing is public before then. */
-  public: boolean;
-};
-
-export function publicProfileView(company: { slug: string; settings: CompanySettings }, env: Pick<Env, "JOBS_BASE_URL" | "EMAIL_REPLY_TO">): PublicProfileView {
-  const p = profileOf(company.settings);
-  return {
-    about: p.about ? { text: p.about.text, approvedAt: p.about.approvedAt, approvedBy: p.about.approvedBy.name ?? null, aiAssisted: p.about.aiAssisted } : null,
-    draft: p.aboutDraft ? { text: p.aboutDraft.text, draftedAt: p.aboutDraft.draftedAt, basedOn: p.aboutDraft.basedOn, check: aboutWordingProblem(p.aboutDraft.text) } : null,
-    logo: p.logo ? { url: logoMemberPath(p.logo), publicUrl: logoPublicUrl(env, company.slug, p.logo), contentType: p.logo.contentType, width: p.logo.width, height: p.logo.height, uploadedAt: p.logo.uploadedAt } : null,
-    hiringContact: p.hiringContact ? { email: p.hiringContact.email, name: p.hiringContact.name } : null,
-    contactShown: contactLineFor(company.settings, env),
-    careersUrl: jobUrls(env, { slug: company.slug, roleId: "-" }).careers,
-    public: isCompanyVerified(company.settings),
-  };
+/**
+ * The company as its own people read it in Settings (GET /companies/current, and the answer to every change of its
+ * details): the details, what candidates see about it, and its plan with the usage lines, the AI help as a percentage
+ * and words (never an amount), the trial's standing and the open request for a bigger plan. `viewer.mayEdit`: this
+ * person may change the details (an owner or an admin).
+ */
+export async function companyView(container: Pick<Container, "db" | "env" | "engine">, tenant: Tenant): Promise<CompanyView> {
+  const now = container.engine.clock();
+  const view = await withTenant(container.db, tenant.companyId, async (tx) => {
+    const [co] = await tx.select().from(companies).where(eq(companies.id, tenant.companyId)).limit(1);
+    if (!co) throw new HttpError(404, "not_found", "Company not found.");
+    const { about, aboutDraft, logo, hiringContact } = co.settings;
+    return {
+      id: co.id,
+      name: co.name,
+      slug: co.slug,
+      vertical: co.vertical,
+      sizeBand: co.sizeBand,
+      timezone: co.timezone,
+      locations: co.locations,
+      website: co.settings.website ?? null,
+      logoUrl: logo ? logoMemberPath(logo) : null,
+      about: about ? { text: about.text, approvedAt: about.approvedAt, aiAssisted: about.aiAssisted } : null,
+      aboutDraft: aboutDraft ? { text: aboutDraft.text, draftedAt: aboutDraft.draftedAt, check: aboutWordingProblem(aboutDraft.text) } : null,
+      benefitsSummary: co.settings.benefitsSummary ?? null,
+      hiringContact: hiringContact ? { email: hiringContact.email, name: hiringContact.name } : null,
+      contactShown: contactLineFor(co.settings, container.env),
+      careersUrl: jobUrls(container.env, { slug: co.slug, roleId: "-" }).careers,
+      plan: {
+        key: co.planKey,
+        name: (await entitlements.planOf(tx, co.id))?.name ?? co.planKey,
+        usage: await entitlements.usageOf(tx, co.id, { now }),
+        aiCredit: await aiCreditView(tx, co.id, { now, timeZone: co.timezone, planKey: co.planKey }),
+        trial: trialStanding(co, now),
+        mayUpgrade: mayOfferUpgrade(co.planKey),
+      },
+      viewer: { mayEdit: can(tenant.role, "company.update") },
+    };
+  });
+  // The request is an alert the administrators read, and the company's own role cannot read alerts: looked up on the platform side.
+  const open = await withPlatform(container.db, (tx) => openPlanRequest(tx, tenant.companyId));
+  return { ...view, plan: { ...view.plan, upgradeRequestedAt: open?.requestedAt ?? null } };
 }

@@ -3,7 +3,7 @@ import { memberships, randomToken, sessions, users, type Queryable } from "@ros/
 import { audit } from "./audit";
 import { STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
 import { acceptPendingInvitations } from "./invitations";
-import { applyBootstrapAdmin } from "./platform-roles";
+import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 
 /**
  * Sign-in policy on top of the managed identity service (founder decisions F11, D19, D25; correction 4 of 18 September
@@ -75,12 +75,13 @@ export function evaluateSignIn(identity: IdentityLike, existing: { platformRole:
  * delegated sign-in (by verified email), creates the user if new, accepts any open team invitation for the verified
  * address (and the one the browser carried, by its token hash), and records how the session was opened. Never stores
  * the provider's token. An invitation the sign-in cannot honour raises InvitationRefused and nothing is opened.
- * `startedProvider` is the provider the browser flow started with (identityForSignIn).
+ * `startedProvider` is the provider the browser flow started with (identityForSignIn). `platformAdmin`: the person holds
+ * the platform administrator role in the ledger, so they land on the admin dashboard.
  */
 export async function openSessionFromIdentity(
   q: Queryable,
   input: { identity: IdentityLike; startedProvider?: string | null; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date; invitationTokenHash?: string | null; openedAt?: Date },
-): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; expiresAt: string; invitationsAccepted: number }> {
+): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; platformAdmin: boolean; expiresAt: string; invitationsAccepted: number }> {
   const policy = input.policy ?? DEFAULT_SIGN_IN_POLICY;
   const now = input.now ?? new Date();
   const email = normalizeEmail(input.identity.email);
@@ -124,11 +125,12 @@ export async function openSessionFromIdentity(
   const [row] = await q.insert(sessions).values({
     userId: user.id, tokenHash: hashToken(sessionToken), activeCompanyId, expiresAt, lastSeenAt: now.toISOString(), ip: input.ip ?? null, userAgent: input.userAgent ?? null,
     identityProvider: identity.provider, aal: identity.aal, mfaVerifiedAt: identity.mfaVerifiedAt,
-    // When the session opened, on the caller's clock: the freshness rule for policy and notice changes (A12) reads it against the same clock.
+    // When the session opened, on the caller's clock: the recent-sign-in rule (`isRecentlyAuthenticated`) reads it against the same clock.
     createdAt: (input.openedAt ?? now).toISOString(),
   }).returning({ id: sessions.id });
   await audit(q, { companyId: null, actor: { kind: "user", id: user.id, name: user.name ?? user.email }, action: "session.opened", target: { type: "user", id: user.id }, reason: identity.provider, ip: input.ip, details: { sessionId: row.id, provider: identity.provider, aal: identity.aal, staff: decision.staff, mfaVerifiedAt: identity.mfaVerifiedAt } });
-  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, expiresAt, invitationsAccepted: invited.accepted.length };
+  const platformAdmin = (await activeGrantFor(q, user.id))?.role === "platform_admin";
+  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, platformAdmin, expiresAt, invitationsAccepted: invited.accepted.length };
 }
 
 export class SignInRefused extends Error {

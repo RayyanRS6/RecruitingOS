@@ -51,8 +51,8 @@ export async function consumeMagicLink(
   input: { token: string; ip?: string; userAgent?: string; invitationTokenHash?: string | null; openedAt?: Date },
 ): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; invitationsAccepted: number }> {
   const now = new Date().toISOString();
-  // When the session opened, on the caller's clock (the engine's): the freshness rule for policy and notice changes
-  // (audit finding A12) reads `createdAt` against that same clock, so the two are never measured on different ones.
+  // When the session opened, on the caller's clock (the engine's): the recent-sign-in rule (`isRecentlyAuthenticated`)
+  // reads `createdAt` against that same clock, so the two are never measured on different ones.
   const openedAt = (input.openedAt ?? new Date()).toISOString();
   const [link] = await q
     .update(magicLinks)
@@ -99,16 +99,16 @@ export type SessionContext = {
   /** How the session was opened: magic_link, azure, google, email. */
   identityProvider: string;
   aal: "aal1" | "aal2";
-  /** When the session was opened and when its holder last confirmed with the sign-in provider inside it (audit finding A12). */
+  /** When the session was opened and when its holder last confirmed with the sign-in provider inside it. */
   createdAt: string;
   reauthenticatedAt: string | null;
 };
 
-/** A sensitive change is accepted from a session this young, or one confirmed again this recently (audit finding A12). */
+/** Making someone an admin or an owner is accepted from a session this young, or one confirmed again this recently. */
 export const FRESH_SESSION_MS = 30 * 60_000;
 export const REAUTH_WINDOW_MS = 10 * 60_000;
 
-/** True when the session may make a policy or notice change without confirming again. */
+/** True when the session's holder signed in, or confirmed it was them, recently enough to grant admin or owner. */
 export function isRecentlyAuthenticated(s: Pick<SessionContext, "createdAt" | "reauthenticatedAt">, now: Date): boolean {
   const t = now.getTime();
   const opened = Date.parse(s.createdAt);
@@ -152,26 +152,6 @@ export async function loadSession(q: Queryable, sessionToken: string): Promise<S
 /** Records that the holder confirmed with the sign-in provider again inside this session. */
 export async function markReauthenticated(q: Queryable, sessionId: string, now: Date = new Date()): Promise<void> {
   await q.update(sessions).set({ reauthenticatedAt: now.toISOString() }).where(eq(sessions.id, sessionId));
-}
-
-/** A person's own open sessions as the account page shows them: never the token, and the address only as a short hash. */
-export type SessionSummary = { id: string; createdAt: string; lastSeenAt: string | null; expiresAt: string; addressHash: string | null; userAgent: string | null; provider: string; reauthenticatedAt: string | null; current: boolean };
-
-export function addressHash(ip: string | null | undefined): string | null {
-  return ip ? createHash("sha256").update(ip).digest("hex").slice(0, 12) : null;
-}
-
-export async function listSessions(q: Queryable, userId: string, currentSessionId: string, now: Date = new Date()): Promise<SessionSummary[]> {
-  const rows = await q.select().from(sessions).where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), gt(sessions.expiresAt, now.toISOString())));
-  return rows
-    .map((s) => ({ id: s.id, createdAt: s.createdAt, lastSeenAt: s.lastSeenAt ?? null, expiresAt: s.expiresAt, addressHash: addressHash(s.ip), userAgent: s.userAgent ? s.userAgent.slice(0, 160) : null, provider: s.identityProvider ?? "magic_link", reauthenticatedAt: s.reauthenticatedAt ?? null, current: s.id === currentSessionId }))
-    .sort((a, b) => (a.current === b.current ? Date.parse(b.lastSeenAt ?? b.createdAt) - Date.parse(a.lastSeenAt ?? a.createdAt) : a.current ? -1 : 1));
-}
-
-/** Ends one of a person's own sessions by id. False when the id is not one of theirs or is already closed. */
-export async function revokeSessionById(q: Queryable, userId: string, sessionId: string, now: Date = new Date()): Promise<boolean> {
-  const rows = await q.update(sessions).set({ revokedAt: now.toISOString() }).where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt))).returning({ id: sessions.id });
-  return rows.length > 0;
 }
 
 export async function setActiveCompany(q: Queryable, sessionId: string, companyId: string): Promise<void> {

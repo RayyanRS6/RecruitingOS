@@ -15,7 +15,7 @@ import { emit } from "./events";
  * path calls `acceptPendingInvitations`, which joins the person to the company with the invited role when the verified
  * address is the invited one, and refuses the sign-in when it is not. Every pending invitation for the verified address
  * is accepted at any sign-in, so a person who lost the link still joins by signing in with the invited address. ITS
- * staff accounts never join by invitation; they get access through a scoped grant.
+ * staff accounts never join by invitation.
  *
  * This module deliberately imports nothing from ./auth or ./identity (both call into it), so the token hash and the
  * address normalisation are computed here with the same recipes.
@@ -39,20 +39,15 @@ export function invitationLink(appBaseUrl: string, token: string): string {
   return `${appBaseUrl}/api/v1/auth/invite?token=${encodeURIComponent(token)}`;
 }
 
-/** The role in plain words, as the invitation email and the team page say it. */
+/** The role in plain words, as the invitation email and the invitation page say it: the words Settings shows (`MEMBERSHIP_ROLE_LABEL`). */
 export function roleInWords(role: string): string {
-  return ({ owner: "an owner", admin: "an administrator", hiring_manager: "a hiring manager" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
+  return ({ owner: "an owner", admin: "an admin", hiring_manager: "a member" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
 }
 
 /** What an invitation is right now. A pending row past its expiry reads as expired even before anything marks it. */
 export function invitationState(row: Pick<InvitationRow, "status" | "expiresAt">, now: Date = new Date()): InvitationState {
   if (row.status === "accepted" || row.status === "revoked" || row.status === "expired") return row.status;
   return Date.parse(row.expiresAt) > now.getTime() ? "pending" : "expired";
-}
-
-/** What a team member may see about an invitation. Never the token hash. */
-export function publicInvitation(row: InvitationRow, now: Date = new Date()) {
-  return { id: row.id, email: row.email, role: row.role, name: row.name, status: invitationState(row, now), expiresAt: row.expiresAt, invitedBy: { name: row.invitedBy.name ?? null }, createdAt: row.createdAt, acceptedAt: row.acceptedAt, revokedAt: row.revokedAt };
 }
 
 /**
