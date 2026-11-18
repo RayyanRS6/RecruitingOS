@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { HIRE_OUTCOME, REMOVED_RUN_OUTPUT, checkPrivacyRequestDeadlines, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, unconfirmedScreens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -12,7 +12,7 @@ import { applicationForm, plantJob, seedCompany, signInAdmin, signInByEmailLink,
 /** The subject of a run stored before in-person interviews were removed: the column still holds such rows. */
 const storedSubject = (type: string, id: string) => ({ type, id }) as unknown as (typeof workflowRuns.$inferInsert)["subject"];
 /** What an AI interview kept of an applicant's words in a row stored by an earlier version of the app: the column still holds such rows. */
-const storedProgress = (words: Record<string, unknown>) => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...words }) as unknown as (typeof unconfirmedScreens.$inferInsert)["progress"];
+const storedProgress = (words: Record<string, unknown>) => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...words }) as unknown as (typeof screens.$inferInsert)["progress"];
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
@@ -204,9 +204,8 @@ describe("candidate privacy requests", () => {
     const wfStepsBefore = await wfStepsOf(wfBefore.map((r) => r.id));
     expect(JSON.stringify(wfBefore)).toContain("Maria Reyes");
     expect(JSON.stringify(wfStepsBefore)).toContain("Coastal Family Dentistry");
-    // a stored chat of hers that was never tied to an AI interview, with her words in its progress
-    const [appRow] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
-    const [typedRow] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: appRow.roleId, applicationId, packetVersion: appRow.packetVersion, firstName: "Maria", token: "privacy-test-typed", status: "completed", confirmation: "sent", progress: storedProgress({ typedFacts: { cv: ["Registered Dental Hygienist at Coastal Family Dentistry"], formAnswers: ["Licensed in California: yes."] }, focusQuestions: [{ key: "unknown_1", question: "Is your licence active?", answer: "Yes, Coastal Family Dentistry renewed it" }] }), expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
+    // an AI interview of hers stored by an earlier version of the app, with her words in its progress
+    const [typedRow] = await container.db.insert(screens).values({ companyId, applicationId, token: "privacy-test-typed", status: "expired", progress: storedProgress({ typedFacts: { cv: ["Registered Dental Hygienist at Coastal Family Dentistry"], formAnswers: ["Licensed in California: yes."] }, focusQuestions: [{ key: "unknown_1", question: "Is your licence active?", answer: "Yes, Coastal Family Dentistry renewed it" }] }) }).returning({ id: screens.id });
     // the "your data was deleted" email leaves only once the deletion committed: when it is sent, the record is already anonymized
     // (the adapter sits behind the do-not-send guard, whose `send` calls the adapter's own: the probe calls the class's)
     const email = container.integrations.email as FakeEmailAdapter;
@@ -301,11 +300,10 @@ describe("candidate privacy requests", () => {
     expect(doc.textExtracted).toBeNull();
     expect(storage.has(docBefore.storageKey)).toBe(false);
     for (const s of await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))) { expect(s.transcript).toEqual([]); expect(s.answers).toEqual({}); }
-    // nothing she typed is left on the stored chat's row, and it is discarded for good
-    const [typedAfter] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, typedRow.id));
+    // nothing she typed is left on the row an earlier version stored
+    const [typedAfter] = await container.db.select().from(screens).where(eq(screens.id, typedRow.id));
     expect(typedAfter.progress).toEqual({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 });
     expect(JSON.stringify(typedAfter)).not.toMatch(/Coastal Family Dentistry|Licensed in California|Maria/);
-    expect(typedAfter).toMatchObject({ confirmation: "discarded", discardedAt: expect.any(String) });
     for (const m of await container.db.select().from(communications).where(eq(communications.candidateId, candidateId))) expect(m.bodyText).not.toContain("Maria");
     const [a] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
     expect(a.stage).toBe("hired"); // where she stood stays, and so does the stage history
@@ -322,10 +320,10 @@ describe("candidate privacy requests", () => {
     // after the deletion, or a reading written back (as a deletion made before this clean-up existed left them)
     const [late] = await container.db.insert(aiRuns).values({ companyId, agent: "triage", task: "triage.assess", provider: "fake", model: "fake", promptKey: "triage.assess", promptVersion: 1, promptHash: "h", inputRef: { applicationId, reading: 1, note: "Maria Reyes" }, structuredOutput: { summary: "Maria Reyes, 5 years at Coastal Family Dentistry" }, costUsd: "0.0021", latencyMs: 812, status: "ok" }).returning();
     await container.db.update(assessments).set({ result: readingsBefore[0].result }).where(eq(assessments.id, readingsBefore[0].id));
-    // a stored chat's turns are logged against its own row, with no workflow run: found by that id too
-    const [app0] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
-    const [unconfirmed] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: app0.roleId, applicationId, packetVersion: app0.packetVersion, firstName: "Removed", token: "privacy-test-unconfirmed", expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
-    const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: unconfirmed.id, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
+    // a turn of a chat an earlier version kept apart from the AI interviews, with no workflow run: its run names that chat
+    // and, since migration 0040, the application, which is what it is found by
+    const earlierChat = randomUUID();
+    const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: earlierChat, applicationId, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
     // and the workflow engine's copies: a step that finished after the deletion, and a run's state written back with her words
     const [lateStep] = await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "ready", seq: 100, status: "ok", input: { wake: null }, output: { kind: "complete", summary: "Maria Reyes fits", contact: "maria.reyes@example.com" }, finishedAt: new Date().toISOString() }).returning();
     await container.db.update(workflowRuns).set({ state: { ...going.state, invitationNote: { text: "Hi Maria Reyes", aiHelped: false, senderName: "Dana" } } }).where(eq(workflowRuns.id, stillGoing.id));
@@ -338,7 +336,7 @@ describe("candidate privacy requests", () => {
     expect(JSON.stringify(await workflowRunsAboutHer())).not.toMatch(words);
     const [turnAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, turn.id));
     expect(turnAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
-    expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: unconfirmed.id, turn: 1 });
+    expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: earlierChat, applicationId, turn: 1 });
     const [lateAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, late.id));
     expect(lateAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
     expect(lateAfter.inputRef).toEqual({ applicationId, reading: 1 });

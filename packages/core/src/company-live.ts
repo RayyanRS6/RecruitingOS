@@ -23,6 +23,6 @@ export const companyIsLive: SQL = sql`coalesce(${companies.settings}->>'verified
 export async function setCompanyLive(q: Queryable, companyId: string, live: boolean, now: Date): Promise<void> {
   const settings = live
     ? sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('verifiedAt', coalesce(nullif(${companies.settings}->>'verifiedAt', ''), ${now.toISOString()}::text))`
-    : sql`coalesce(${companies.settings}, '{}'::jsonb) - 'verifiedAt' - 'verifiedBy'`;
+    : sql`coalesce(${companies.settings}, '{}'::jsonb) - 'verifiedAt'`;
   await q.update(companies).set({ settings }).where(eq(companies.id, companyId));
 }

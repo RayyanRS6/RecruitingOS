@@ -12,8 +12,8 @@ import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, Ste
  *   job lease expires, so the step re-executes. Steps are written to be idempotent.
  * - A step with slow external work (a model call) declares a `prepare` phase that runs before its transaction opens,
  *   so no connection or lock is held while a provider is thinking; messages leave through the outbox after commit.
- * - `wait` suspends the run on a human decision, an event, or a timer; `signal` wakes event and human waits;
- *   timers are jobs with a future `run_at`.
+ * - `wait` suspends the run on an event or a timer; `signal` wakes event waits; timers are jobs with a future
+ *   `run_at`.
  * - Failures retry with exponential backoff; after `maxAttempts` the run fails, emits `workflow.failed`, and
  *   raises an alert for ITS administrators so nothing dies silently.
  * - An AI provider that is not answering is not a reason to give up (Wave S5 C2): such a failure is retried with
@@ -196,7 +196,7 @@ export class WorkflowEngine {
     return { runId: run.id, created: true };
   }
 
-  /** Wakes runs waiting on an event or human decision key (e.g. `approval:<id>`, `application:<id>:message.received`). */
+  /** Wakes runs waiting on an event key (e.g. `screen:<id>:changed`). */
   async signal(q: Queryable, input: { companyId: string; key: string; payload?: Record<string, unknown> }): Promise<number> {
     const waiting = await q
       .select({ id: workflowRuns.id })
@@ -448,7 +448,7 @@ export class WorkflowEngine {
       const keys = (w as { keys?: unknown } | null)?.keys;
       if (wake?.kind === "event" && wake.key && Array.isArray(keys) && !keys.includes(wake.key)) return run;
       if (w?.kind === "timer" && Date.parse(w.until) > this.now().getTime()) return run; // not due yet
-      if ((w?.kind === "event" || w?.kind === "human") && !wake) return run; // needs a signal (or its timer)
+      if (w?.kind === "event" && !wake) return run; // needs a signal (or its timer)
     }
     const def = this.defs.get(run.workflowKey);
     if (!def) throw new UnknownToThisBuild({ workflowKey: run.workflowKey });
@@ -539,7 +539,7 @@ export class WorkflowEngine {
       const token = randomToken(8);
       const wait = { ...withKeys(res.wait), token };
       await q.update(workflowRuns).set({ status: "waiting", currentStep: res.resumeStep ?? stepKey, state, wait, attempts: 0, lastError: null }).where(eq(workflowRuns.id, run.id));
-      // A timer wait is due at `until`; an event or human wait with `until` is woken then too (an approval that ran out of time).
+      // A timer wait is due at `until`; an event wait with `until` is woken then too.
       const until = wait.until;
       if (until) {
         await q.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
@@ -740,7 +740,6 @@ class UnknownToThisBuild extends Error {
 
 function withKeys(wait: WaitCondition): WaitCondition & { keys?: string[] } {
   if (wait.kind === "event") return { ...wait, keys: wait.eventTypes.map((t) => (wait.subjectId ? `${wait.subjectId}:${t}` : t)) };
-  if (wait.kind === "human") return { ...wait, keys: [wait.approvalRequestId ? `approval:${wait.approvalRequestId}` : "human"] };
   return wait;
 }
 

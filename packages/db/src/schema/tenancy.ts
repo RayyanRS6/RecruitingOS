@@ -20,48 +20,23 @@ export type CompanySettings = {
   hiringContact?: { email: string; name: string | null; setAt: string; setBy: Actor };
   benefitsSummary?: string;
   notices?: Record<string, { version: string; text: string; jurisdictions: string[] }>;
-  retention?: Record<string, number>;
   careersPage?: { enabled: boolean; intro?: string };
-  brief?: { channel: "email" | "in_app" | "sms"; hourLocal: number };
-  /**
-   * When the company wants candidates contacted (audit finding J16): days 0 (Sunday) to 6, and local times "HH:MM".
-   * Narrows the legal quiet-hours window for texts (packages/core/src/contact-hours.ts); never widens it.
-   */
-  businessHours?: { days: number[]; start: string; end: string };
   /** Design Partner pilot term (founder decision F8): roles in progress are never cut off when it ends. */
   pilot?: { startedAt: string; endsAt: string; extendedUntil?: string };
   /**
-   * The Trial plan's 30 days (founder decision L-02 B): set by the ITS check, by the hourly check for a company already
-   * on Trial, and by ITS from the console (an extension, a change back to Trial); never by the customer. Read only while
-   * the company is on the Trial plan (`trialStanding` in @ros/contracts). Every write is one JSON-merge statement.
+   * The Trial plan's 30 days (founder decision L-02 B): set when the company is accepted, by the hourly check for a
+   * company already on Trial, and by ITS from the console (an extension, a change back to Trial); never by the customer.
+   * Read only while the company is on the Trial plan (`trialStanding` in @ros/contracts). Every write is one JSON-merge
+   * statement.
    */
   trial?: TrialTerm;
-  /** The one-time ITS check (founder decision B7): set and cleared from the admin console only (apps/api services/company-trust.ts). */
+  /** The one gate: when the company went live. Written only by `setCompanyLive` (packages/core/src/company-live.ts). */
   verifiedAt?: string;
-  verifiedBy?: Actor;
   /**
    * When the email saying a request for access was sent really left (apps/api services/access-requests.ts), so the waiting
    * screen claims it only when true. Never who is waiting: that is the owner's membership status.
    */
   accessRequestEmailedAt?: string;
-  /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
-  onboarding?: Record<string, unknown>;
-  /** The company has its own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered and prepared. */
-  zipRecruiterPlan?: boolean;
-  /**
-   * How new roles meet the screening conversation unless ITS set a role itself (plan E1): "form_then_screen" when unset;
-   * ITS sets "one_visit" for a pilot company. Set from the ITS admin console only, with who and when (apps/api routes/admin.ts).
-   */
-  applyFlowDefault?: string;
-  applyFlowSetBy?: { at: string; by: Actor; reason: string };
-  /** Automatic new interview times for candidates who cancel and ask for them (founder decision 3A). Unset: on, after 3 working days. */
-  newTimesAfterCancel?: { auto: boolean; workingDays: number };
-  /**
-   * Whether candidates see their match score after sending (founder decision S7-1): unset or true shows it; false, set by
-   * ITS from the admin console with who, when and why, hides it (`candidateScoreShown` in @ros/contracts).
-   */
-  candidateScoreShown?: boolean;
-  candidateScoreSetBy?: { at: string; by: Actor; reason: string };
   /**
    * Which period of the AI credit the owner was told about, at 80% and when it was used up, so each is told once
    * (packages/core/src/ai-credit.ts: "total" or the month's start, never an amount, because this object reaches the
@@ -82,7 +57,6 @@ export const companies = pgTable(
     locations: jsonb("locations").$type<Location[]>().notNull().default([]),
     settings: jsonb("settings").$type<CompanySettings>().notNull().default({}),
     planKey: text("plan_key").notNull().default("trial"),
-    status: text("status").notNull().default("trial"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -95,8 +69,7 @@ export const users = pgTable(
     id: id(),
     email: text("email").notNull(),
     name: text("name"),
-    phone: text("phone"),
-    platformRole: text("platform_role").notNull().default("none"), // none | its_recruiter | platform_admin
+    platformRole: text("platform_role").notNull().default("none"), // none | platform_admin
     /** The managed identity service's subject and the provider it came through (D19). Null until the first delegated sign-in. */
     authProvider: text("auth_provider"),
     authSubject: text("auth_subject"),
@@ -114,8 +87,8 @@ export const memberships = pgTable(
     id: id(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     userId: uuid("user_id").notNull().references(() => users.id),
-    role: text("role").notNull(), // owner | admin | hiring_manager | interviewer | hr | recruiter
-    status: text("status").notNull().default("active"), // invited | active | removed | requested | declined (a request for access: ACCESS_REQUEST_STATUSES in @ros/contracts)
+    role: text("role").notNull(), // owner | admin | hiring_manager
+    status: text("status").notNull().default("active"), // active | removed | requested | declined (a request for access: ACCESS_REQUEST_STATUSES in @ros/contracts)
     invitedBy: uuid("invited_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -138,7 +111,7 @@ export const sessions = pgTable(
     identityProvider: text("identity_provider"),
     aal: text("aal"),
     mfaVerifiedAt: ts("mfa_verified_at"),
-    /** When the holder last confirmed with their sign-in provider inside this session (migration 0024); unlocks policy and notice changes for ten minutes. */
+    /** When the holder last confirmed with their sign-in provider inside this session (migration 0024); needed shortly before making someone an admin or an owner. */
     reauthenticatedAt: ts("reauthenticated_at"),
     revokedAt: ts("revoked_at"),
     createdAt: createdAt(),
@@ -152,9 +125,6 @@ export const magicLinks = pgTable(
     id: id(),
     email: text("email").notNull(),
     tokenHash: text("token_hash").notNull(),
-    /** No longer written or read: invitations are rows of their own (migration 0022). Kept because migrations are append-only. */
-    inviteCompanyId: uuid("invite_company_id"),
-    inviteRole: text("invite_role"),
     expiresAt: ts("expires_at").notNull(),
     usedAt: ts("used_at"),
     ip: text("ip"),
@@ -175,7 +145,7 @@ export const invitations = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     /** Lower-cased; the sign-in compares it with the verified address, case-insensitively. */
     email: text("email").notNull(),
-    role: text("role").notNull(), // owner | admin | hiring_manager | interviewer | hr
+    role: text("role").notNull(), // owner | admin | hiring_manager
     name: text("name"),
     invitedBy: jsonb("invited_by").$type<Actor>().notNull(),
     tokenHash: text("token_hash").notNull(),

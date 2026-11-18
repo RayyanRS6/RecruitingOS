@@ -50,7 +50,7 @@ describe("jobs", () => {
     });
   const applicant = (roleId: string, stage: ApplicationStage, n: number, locked = false) =>
     withTenant(container.db, companyId, async (tx) => {
-      const [c] = await tx.insert(candidates).values({ companyId, firstName: "Pat", lastName: `Lee ${n}`, email: `pat${n}.${roleId.slice(0, 8)}@candidate.test`, firstSource: "direct" }).returning();
+      const [c] = await tx.insert(candidates).values({ companyId, firstName: "Pat", lastName: `Lee ${n}`, email: `pat${n}.${roleId.slice(0, 8)}@candidate.test` }).returning();
       await tx.insert(applications).values({ companyId, roleId, candidateId: c.id, packetVersion: 1, source: "direct", stage, statusToken: randomToken(16), ...(locked ? { lockedAt: new Date().toISOString() } : {}) });
     });
   const detailOf = async (cookie: string, roleId: string) => (await (await json(cookie, "GET", `/api/v1/roles/${roleId}`)).json()) as RoleDetail;

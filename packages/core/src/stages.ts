@@ -86,10 +86,6 @@ async function move(q: Queryable, input: Move, undo: boolean): Promise<{ from: A
   if (!canTransition(from, input.to, input.by, { toldState: app.toldState, undo })) throw new TransitionError(from, input.to, input.by);
   const now = (input.now ?? new Date()).toISOString();
   const patch: Partial<typeof applications.$inferInsert> = { stage: input.to, stageChangedAt: now };
-  if (input.to === "withdrawn") {
-    patch.withdrawnAt = now;
-    patch.withdrawReason = input.reason ?? null;
-  }
   if (input.to === "rejected" || undo) {
     patch.rejectedAt = input.to === "rejected" ? now : null;
     patch.toldState = "not_told";

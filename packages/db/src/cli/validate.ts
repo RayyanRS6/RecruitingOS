@@ -20,9 +20,7 @@ const DESTRUCTIVE = [/\bDROP\s+TABLE\b/i, /\bTRUNCATE\b/i, /\bDROP\s+COLUMN\b/i,
  */
 const TENANT_MAY: Record<string, ReadonlyArray<"SELECT" | "INSERT" | "UPDATE" | "DELETE">> = {
   plans: ["SELECT"], // public price list
-  playbooks: ["SELECT"], // platform-wide playbook text the agents read inside tenant transactions
   email_suppressions: ["SELECT"], // every send checks the do-not-send list (migration 0010)
-  business_calendar_versions: ["SELECT"], // service-level clocks read the ITS calendar inside tenant transactions (correction 12)
   jobs: ["INSERT"], // tenant transactions enqueue work; only the worker claims, updates or deletes (migration 0003)
 };
 

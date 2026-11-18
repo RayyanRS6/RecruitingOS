@@ -93,7 +93,7 @@ export async function createScreen(q: Queryable, input: { companyId: string; app
   if (open) return open;
   const [row] = await q
     .insert(screens)
-    .values({ companyId: input.companyId, applicationId: input.applicationId, channel: "web", status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null, progress: EMPTY_SCREEN_PROGRESS })
+    .values({ companyId: input.companyId, applicationId: input.applicationId, status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null, progress: EMPTY_SCREEN_PROGRESS })
     .returning();
   return row;
 }
@@ -835,7 +835,7 @@ export async function startScreenConversation(q: Queryable, deps: Pick<ScreenDep
   const content = chatOpening({ firstName: candidate.firstName, cv: cvLinesOf(app.extraction), question: first.question });
   const entry: ScreenTranscriptEntry = { role: "assistant", content, at: now, questionKey: first.key, source: "system" };
   const progress = advanceProgress(planned, { ...SILENT_TURN, messageToCandidate: content, questionKey: first.key });
-  await q.update(screens).set({ status: "in_progress", startedAt: screen.startedAt ?? now, lastCandidateMessageAt: now, transcript: [...screen.transcript, entry], progress }).where(eq(screens.id, screen.id));
+  await q.update(screens).set({ status: "in_progress", startedAt: screen.startedAt ?? now, transcript: [...screen.transcript, entry], progress }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.started", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { applicationId: app.id }, correlationId: screen.workflowRunId });
   if (app.stage === "screen_invited") await transition(q, { applicationId: app.id, companyId: company.id, to: "screening", by: "system", actor: input.actor, correlationId: screen.workflowRunId });
   return { ok: true, message: content };
@@ -940,7 +940,7 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
   const command = said !== null && !tapped ? screenCommand(input.message, withdrawPending(screen.transcript)) : null;
   const allowance = said !== null && command === null && !screen.progress.countedAt ? await countConversation(q, { companyId: company.id, companyName: company.name, screenId: screen.id }) : null;
   const progress: ScreenProgress = allowance ? { ...screen.progress, countedAt: now } : screen.progress;
-  await q.update(screens).set({ transcript, progress, lastCandidateMessageAt: now }).where(eq(screens.id, screen.id));
+  await q.update(screens).set({ transcript, progress }).where(eq(screens.id, screen.id));
   const at = { ...b, screen: { ...screen, transcript, progress } };
 
   if (command === "confirm_withdraw" || command === "keep_application") {
@@ -1212,7 +1212,7 @@ export async function editScreenAnswer(q: Queryable, input: { screenId: string; 
   const recorded = tapped ?? redactProtected(words);
   const progress = syncedChat({ ...screen.progress, edits: { ...(screen.progress.edits ?? {}), [question.key]: (screen.progress.edits?.[question.key] ?? 0) + 1 }, declined: screen.progress.declined?.filter((k) => k !== question.key) });
   const entry: ScreenTranscriptEntry = { role: "candidate", content: words, at: now.toISOString(), questionKey: question.key, source: "edit" };
-  await q.update(screens).set({ transcript: [...screen.transcript, entry], answers: { ...screen.answers, [question.key]: recorded }, progress, lastCandidateMessageAt: now.toISOString() }).where(eq(screens.id, screen.id));
+  await q.update(screens).set({ transcript: [...screen.transcript, entry], answers: { ...screen.answers, [question.key]: recorded }, progress }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.answer_edited", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { questionKey: question.key, tapped: !!tapped }, correlationId: screen.workflowRunId });
   return { ok: true, answer: recorded };
 }

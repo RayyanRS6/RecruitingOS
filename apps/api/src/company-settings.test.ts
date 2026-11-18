@@ -261,7 +261,7 @@ describe("company details, re-authentication and the privacy-request form", () =
 
     beforeAll(async () => {
       await withTenant(container.db, companyId, async (tx) => {
-        const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Maria", lastName: "Reyes", email: candidateEmail, firstSource: "direct" }).returning();
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Maria", lastName: "Reyes", email: candidateEmail }).returning();
         await tx.insert(applications).values({ companyId, roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "received", statusToken: randomToken(16) });
       });
     });

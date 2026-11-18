@@ -952,7 +952,7 @@ describe("a company comes in by approval (SIGNUP_MODE=approval)", () => {
     // the next free one. Read before the lock, it would have been taken twice and failed on the unique index.
     const seen: string[] = [];
     const rival = (slug: string) => async (tx: Tx) => {
-      await tx.insert(companies).values({ name: "A company of the same name", slug, vertical: "dental", sizeBand: "1-19", planKey: FREE_PLAN_KEY, status: "active" });
+      await tx.insert(companies).values({ name: "A company of the same name", slug, vertical: "dental", sizeBand: "1-19", planKey: FREE_PLAN_KEY });
     };
     const watched = (tx: Tx, atLock: (tx: Tx) => Promise<void>) => new Proxy(tx, {
       get(target, prop) {

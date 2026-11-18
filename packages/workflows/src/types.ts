@@ -14,7 +14,7 @@ export type Services = {
   engine: WorkflowEngine;
 };
 
-export type WakePayload = { kind: "event" | "timer" | "human" | "manual"; key?: string; payload?: Record<string, unknown> } | null;
+export type WakePayload = { kind: "event" | "timer" | "manual"; key?: string; payload?: Record<string, unknown> } | null;
 
 export type StepContext<S extends Record<string, unknown> = Record<string, unknown>> = {
   run: RunRow;

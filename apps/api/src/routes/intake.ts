@@ -327,7 +327,7 @@ intakeRoutes.post("/sessions/:id/publish", requireTenant, async (c) => {
   try {
     result = await withTenant(container.db, t.companyId, async (tx) => {
       await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
-      const made = await jobFromDraft(tx, { companyId: t.companyId, sessionId: row.id, actor, userId: t.userId });
+      const made = await jobFromDraft(tx, { companyId: t.companyId, sessionId: row.id, actor });
       if ("blockers" in made) throw new HttpError(409, "not_ready", `This job cannot be published yet. ${made.blockers.map((b) => b.message).join(" ")}`, { blockers: made.blockers });
       // The job existed already: answered as it stands when it is published, and published now when it is still a draft.
       if (!made.created) return (await publishResultOf(tx, container, made.roleId)) ?? publishRole(tx, container, { tenant: t, actor, roleId: made.roleId });

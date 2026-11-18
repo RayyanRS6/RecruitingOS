@@ -100,7 +100,7 @@ describe("candidates and their applications", () => {
 
   it("a person added at the same moment by another submission is read again instead of failing on the unique key", async () => {
     const out = await withTenant(container.db, companyId, async (tx) => {
-      const values = { companyId, firstName: "Twin", lastName: "One", email: "twin@example.com", phone: null, dedupeKey: "email:twin@example.com", firstSource: "careers_page", consent: {} };
+      const values = { companyId, firstName: "Twin", lastName: "One", email: "twin@example.com", phone: null, dedupeKey: "email:twin@example.com", consent: {} };
       const a = await insertCandidateOnce(tx, values);
       const b = await insertCandidateOnce(tx, { ...values, firstName: "Twin", lastName: "Two" });
       return { a, b };

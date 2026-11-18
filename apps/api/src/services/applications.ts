@@ -75,7 +75,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
 
   let candidate = key ? (await tx.select().from(candidates).where(and(eq(candidates.companyId, input.companyId), eq(candidates.dedupeKey, key))).limit(1))[0] : undefined;
   if (!candidate) {
-    const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, dedupeKey: key, firstSource: input.source, consent: consentOf(input, now) });
+    const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, dedupeKey: key, consent: consentOf(input, now) });
     candidate = created.candidate;
     if (created.inserted) await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
   }

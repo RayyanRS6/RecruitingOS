@@ -63,12 +63,11 @@ describe("the resume reading of someone who applied before", () => {
   });
 
   it("sends no earlier application or how it ended, and no name, email or phone; the team still has the earlier application", async () => {
-    // her first application, to the front desk job, marked Not selected, with a note an older decision left on it
+    // her first application, to the front desk job, marked Not selected
     const first = await apply(frontDesk);
     expect(first.stage).toBe("triaged");
     const decided = await json("POST", `/api/v1/applications/${first.id}/actions`, { action: "reject" });
     expect(((await decided.json()) as ActionResult).stage).toBe("rejected");
-    await container.db.update(applications).set({ rejectNote: "Turned down in March 2025: patchy attendance record" }).where(eq(applications.id, first.id));
     sent.length = 0;
 
     // she applies again, to the dental assistant job
@@ -80,7 +79,7 @@ describe("the resume reading of someone who applied before", () => {
     expect(sent).toHaveLength(3);
     for (const { system, messages } of sent) {
       const request = `${system}\n${messages}`;
-      expect(request).not.toMatch(/Front desk coordinator|March 2025|patchy attendance/i);
+      expect(request).not.toMatch(/Front desk coordinator/i);
       // the fixed instructions may name the rule ("never their earlier applications"); the data never carries one
       expect(messages).not.toMatch(/rejected|not selected|not moving forward|earlier application|prior_applications/i);
       expect(request).not.toMatch(/Lena|Ortiz|lena\.ortiz@example\.com|555-0142/);
@@ -91,6 +90,6 @@ describe("the resume reading of someone who applied before", () => {
     }
     // nothing was lost for the team: the earlier application is on her record as it was
     const [kept] = await container.db.select().from(applications).where(eq(applications.id, first.id));
-    expect(kept).toMatchObject({ roleId: frontDesk, stage: "rejected", rejectNote: "Turned down in March 2025: patchy attendance record" });
+    expect(kept).toMatchObject({ roleId: frontDesk, stage: "rejected" });
   });
 });

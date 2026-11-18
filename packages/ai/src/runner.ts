@@ -140,7 +140,6 @@ function endedValues<TOutput>(meta: RunMeta, call: PromptCall<TOutput>) {
     costUsd: String(estimateCostUsd(model, usage)),
     latencyMs: result.latencyMs,
     structuredOutput: result.kind === "ok" ? (result.output as unknown as Record<string, unknown>) : null,
-    confidence: result.kind === "ok" ? extractConfidence(result.output) : null,
     status: result.kind === "ok" ? "ok" : result.kind === "refused" ? "refused" : result.error.startsWith("provider") ? "error" : "invalid_output",
     error: result.kind === "ok" ? null : result.kind === "refused" ? result.reason : result.error,
   };
@@ -243,14 +242,6 @@ export async function runPromptDetached<TInput, TOutput>(db: Db, rt: AiRuntime, 
 export async function runPrompt<TInput, TOutput>(q: Queryable, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, input: TInput, meta: RunMeta): Promise<RunOutcome<TOutput>> {
   const call = await callPrompt(rt, prompt, input, meta);
   return recordRun(q, rt, prompt, meta, call);
-}
-
-function extractConfidence(output: unknown): string | null {
-  if (output && typeof output === "object" && "confidence" in output) {
-    const c = (output as { confidence?: unknown }).confidence;
-    return typeof c === "string" ? c : null;
-  }
-  return null;
 }
 
 /**

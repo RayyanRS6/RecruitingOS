@@ -42,7 +42,7 @@ describe("team invitations, members and roles", () => {
   /** A candidate with an application on a role, straight into the tables (the apply flow is covered elsewhere). */
   const seedApplication = (email: string, forRoleId = roleId) =>
     withTenant(container.db, companyId, async (tx) => {
-      const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Pat", lastName: "Lee", email, firstSource: "direct" }).returning();
+      const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Pat", lastName: "Lee", email }).returning();
       const [application] = await tx.insert(applications).values({ companyId, roleId: forRoleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomToken(16) }).returning();
       return application.id;
     });

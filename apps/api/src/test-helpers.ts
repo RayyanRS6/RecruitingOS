@@ -182,7 +182,7 @@ export async function plantJob(container: Container, input: { companyId: string;
  */
 export async function plantApplicant(container: Container, input: { companyId: string; roleId: string; mark: string; stage?: ApplicationStage; locked?: boolean }): Promise<string> {
   return withPlatform(container.db, async (tx) => {
-    const [person] = await tx.insert(candidates).values({ companyId: input.companyId, firstName: input.mark, lastName: input.mark, email: `${input.mark.toLowerCase()}@people.test`, firstSource: "direct" }).returning({ id: candidates.id });
+    const [person] = await tx.insert(candidates).values({ companyId: input.companyId, firstName: input.mark, lastName: input.mark, email: `${input.mark.toLowerCase()}@people.test` }).returning({ id: candidates.id });
     const [application] = await tx.insert(applications).values({ companyId: input.companyId, roleId: input.roleId, candidateId: person.id, packetVersion: 1, source: "direct", stage: input.stage ?? "triaged", statusToken: randomBytes(16).toString("hex"), lockedAt: input.locked ? container.engine.clock().toISOString() : null }).returning({ id: applications.id });
     return application.id;
   });

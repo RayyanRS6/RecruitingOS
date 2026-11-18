@@ -3,8 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import { createDb, inspectConnectionRole, problemsWithConnectionRole, rowsOf, withPlatform, withTenant, type DbHandle } from "./client";
 import { migrate } from "./migrate";
 import {
-  aiRuns, applications, approvalRequests, auditRecords, candidates, communications, companies, documents, entitlements, events,
-  interventions, memberships, notifications, policies, recruiterEscalations, roles, screens, usageEvents, users, workflowRuns,
+  aiRuns, applications, auditRecords, candidates, communications, companies, documents, entitlements, events,
+  memberships, notifications, roles, screens, usageEvents, users, workflowRuns,
 } from "./schema";
 
 /**
@@ -66,20 +66,16 @@ describe("row-level security", () => {
         const [role] = await tx.insert(roles).values({ companyId, title: `Hygienist ${label}`, createdBy: actor }).returning();
         if (label === "A") roleA = role.id; else roleB = role.id;
         await tx.insert(memberships).values({ companyId, userId, role: "owner", status: "active" });
-        const [cand] = await tx.insert(candidates).values({ companyId, firstName: label, lastName: "Candidate", email: `${label.toLowerCase()}c@example.test`, firstSource: "careers_page", dedupeKey: `email:${label.toLowerCase()}c@example.test` }).returning();
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: label, lastName: "Candidate", email: `${label.toLowerCase()}c@example.test`, dedupeKey: `email:${label.toLowerCase()}c@example.test` }).returning();
         const [app] = await tx.insert(applications).values({ companyId, roleId: role.id, candidateId: cand.id, packetVersion: 1, source: "careers_page", statusToken: `tok-${label}` }).returning();
         await tx.insert(documents).values({ companyId, candidateId: cand.id, applicationId: app.id, kind: "resume", filename: "r.txt", mime: "text/plain", sizeBytes: 1, storageKey: `${label}/r`, sha256: label });
         await tx.insert(communications).values({ companyId, candidateId: cand.id, applicationId: app.id, direction: "outbound", channel: "email", bodyText: `hello ${label}`, sentBy: actor });
-        await tx.insert(screens).values({ companyId, applicationId: app.id, channel: "web", token: `screen-${label}` });
+        await tx.insert(screens).values({ companyId, applicationId: app.id, token: `screen-${label}` });
         await tx.insert(notifications).values({ companyId, userId, kind: "test", title: label, body: label });
         await tx.insert(events).values({ companyId, type: "role.created", actor, subjectType: "role", subjectId: role.id });
         await tx.insert(auditRecords).values({ companyId, actor, action: "candidate.viewed" });
         await tx.insert(workflowRuns).values({ companyId, workflowKey: "test", subject: { type: "role", id: role.id }, currentStep: "x" });
         await tx.insert(aiRuns).values({ companyId, agent: "t", task: "triage.assess", provider: "fake", model: "fake", promptKey: "k", promptVersion: 1, promptHash: "h" });
-        await tx.insert(recruiterEscalations).values({ companyId, kind: "ask", question: label, requestedBy: actor });
-        await tx.insert(policies).values({ companyId, actionType: "application.invite_screen", level: "approval", createdBy: actor });
-        await tx.insert(approvalRequests).values({ companyId, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, requestedBy: actor });
-        await tx.insert(interventions).values({ companyId, roleId: role.id, detector: "candidates_waiting", ladderLevel: "brief" });
         await tx.insert(entitlements).values({ companyId, key: "text_screens", limit: 10 });
         await tx.insert(usageEvents).values({ companyId, key: "text_screens", quantity: 1, unit: "screen" });
       }
@@ -101,7 +97,7 @@ describe("row-level security", () => {
         WHERE c.table_schema = 'public' AND c.column_name = 'company_id' AND t.table_type = 'BASE TABLE'
       `),
     );
-    expect(tables.length).toBeGreaterThan(25);
+    expect(tables.length).toBeGreaterThan(20);
     const unprotected = tables.filter((t) => !t.relrowsecurity || Number(t.policies) !== 1).map((t) => t.table_name);
     expect(unprotected).toEqual([]);
   });
@@ -109,7 +105,7 @@ describe("row-level security", () => {
   it("a tenant sees only its own rows in every seeded table", async () => {
     const tablesToCheck = [
       roles, memberships, candidates, applications, documents, communications, screens, notifications, events, auditRecords,
-      workflowRuns, aiRuns, recruiterEscalations, policies, approvalRequests, interventions, entitlements, usageEvents,
+      workflowRuns, aiRuns, entitlements, usageEvents,
     ];
     for (const table of tablesToCheck) {
       const seenByA = await withTenant(handle.db, a, (tx) => tx.select().from(table));

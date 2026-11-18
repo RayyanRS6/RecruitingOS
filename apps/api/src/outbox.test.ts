@@ -134,7 +134,7 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
   });
 
   it("an email to a candidate of a company that is not live is cancelled at send time, with the reason; the team's mail and the answer to a privacy request still go, and nothing waits for later", async () => {
-    const candidateId = await withTenant(container.db, companyId, async (tx) => (await tx.insert(candidates).values({ companyId, firstName: "Cal", lastName: "Waiting", email: "cal.waiting@example.com", firstSource: "direct" }).returning({ id: candidates.id }))[0].id);
+    const candidateId = await withTenant(container.db, companyId, async (tx) => (await tx.insert(candidates).values({ companyId, firstName: "Cal", lastName: "Waiting", email: "cal.waiting@example.com" }).returning({ id: candidates.id }))[0].id);
     const byKey = async (key: string) => (await container.db.select().from(communications).where(eq(communications.idempotencyKey, key)))[0];
     // the company's access is taken away (the one writer of the fact, as the admin dashboard's route calls it)
     await withPlatform(container.db, (tx) => setCompanyLive(tx, companyId, false, container.engine.clock()));

@@ -191,7 +191,7 @@ describe("maintenance", () => {
     const { gone, kept } = await withTenant(container.db, companyId, async (tx) => {
       const [role] = await tx.insert(roles).values({ companyId, title: "Hygienist", status: "open", createdBy: actor }).returning({ id: roles.id });
       const person = async (first: string, last: string, email: string | null, anonymizedAt: string | null) => {
-        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: last, email, firstSource: "direct", anonymizedAt }).returning({ id: candidates.id });
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: last, email, anonymizedAt }).returning({ id: candidates.id });
         const [a] = await tx.insert(applications).values({ companyId, roleId: role.id, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "withdrawn", statusToken: randomToken(16) }).returning({ id: applications.id });
         return { candidateId: cand.id, applicationId: a.id, roleId: role.id };
       };

@@ -4,13 +4,9 @@ import { guardOutbound } from "./secrets";
 
 export type AuditAction =
   | "candidate.viewed"
-  | "candidate.exported"
-  | "export.created"
   | "membership.changed"
-  | "data.deleted"
   | "admin.bypass"
   | "session.revoked"
-  | "assessment.flagged"
   | "plan.changed"
   /** An application past the plan's candidates per job, and its opening by a change of plan (Rule 2): why, in arrival order and the plan's numbers, never a name. */
   | "application.locked"
@@ -22,8 +18,6 @@ export type AuditAction =
   | "alert.acknowledged"
   /** An alert marked dealt with: by a person in the console, or by the system once its condition ended (Wave S2 F1). */
   | "alert.resolved"
-  /** A person booked an interview time for the candidate ("Book this for them", Wave S2 F2). */
-  | "interview.booked_on_behalf"
   | "session.opened"
   | "signin.refused"
   | "platform_role.changed"
@@ -34,10 +28,6 @@ export type AuditAction =
   | "outcome.recorded"
   /** A rate limit tripped (21 Sep, item 5): the key is a hash, never the subject. */
   | "security.rate_limited"
-  | "outcome.corrected"
-  /** A decision recorded as an outcome ("No hire", "We declined") taken back with it before the candidate was told (17 November 2026): the record kept, marked taken back. */
-  | "outcome.taken_back"
-  | "role.outcome_recorded"
   /** Privacy requests (correction 7). */
   | "data_request.created"
   /** The same candidate re-sent the same request within a day: the earlier record is answered again, nothing new is created (21 Sep, item 3). */
@@ -59,7 +49,6 @@ export type AuditAction =
   /** Résumé files (founder decision 2, 22 Sep 2026): who uploaded, read, replaced or deleted which file. Never the contents. */
   | "document.uploaded"
   | "document.read"
-  | "document.replaced"
   | "document.deleted"
   | "document.rejected"
   /** A job's closing date set, changed or taken off. */
@@ -69,8 +58,6 @@ export type AuditAction =
   | "invitation.resent"
   | "invitation.revoked"
   | "invitation.accepted"
-  /** The role report's applicant list or figures left as a file (docs/spec/21 section 7, P1): who, which role, how many rows. */
-  | "report.exported"
   /** A company's details changed by an owner or an admin: which fields, never what was written in them. */
   | "company.updated"
   /** The one gate: an administrator accepted or declined a company's request, or took an accepted company's access away. */
@@ -79,12 +66,8 @@ export type AuditAction =
   | "company.access_removed"
   /** The holder of a session confirmed with their sign-in provider again, before making someone an admin or an owner. */
   | "session.reauthenticated"
-  /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
-  | "message.undone"
   /** A person turned their "Email me updates" switch on or off: before and after. Never anything else. */
-  | "notification.preferences_changed"
-  /** Wave E: how a role meets the conversation was changed. */
-  | "role.apply_mode_changed";
+  | "notification.preferences_changed";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

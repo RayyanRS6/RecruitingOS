@@ -726,7 +726,7 @@ export type JobFromDraft = { roleId: string; version: number; created: boolean }
  * reason, until every essential is in, a person set or confirmed the pay, the job is written and up to date with the
  * answers, and no wording flag is open. Two presses take turns on the draft's row: the second gets the job the first made.
  */
-export async function jobFromDraft(tx: Tx, input: { companyId: string; sessionId: string; actor: Actor; userId: string | null }): Promise<JobFromDraft> {
+export async function jobFromDraft(tx: Tx, input: { companyId: string; sessionId: string; actor: Actor }): Promise<JobFromDraft> {
   const loaded = await loadIntakeInputs(tx, input.companyId, input.sessionId);
   const [session] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
   if (!session) throw new IntakeSessionError("not_found");
@@ -746,7 +746,7 @@ export async function jobFromDraft(tx: Tx, input: { companyId: string; sessionId
   if (!after.publish.allowed) return { blockers: after.publish.blockers };
   const packet = RolePacketSchema.parse(draft);
   const agent: Actor = { kind: "agent", id: "intake", ...(runId ? { runId } : {}) };
-  const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: packet.identity.title, status: "draft", hiringManagerUserId: input.userId, createdBy: input.actor }).returning();
+  const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: packet.identity.title, status: "draft", createdBy: input.actor }).returning();
   const [pv] = await tx.insert(rolePackets).values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: "proposed", source: "intake_agent", changeSummary: "Written with the assistant in the job builder", createdBy: agent }).returning();
   await tx.update(intakeSessions).set({ roleId: role.id, status: "compiled", draftPacket: packet }).where(eq(intakeSessions.id, session.id));
   await emit(tx, { type: "intake.compiled", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { roleId: role.id } });
