@@ -1,49 +1,47 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
-import type { ScreenTurn } from "@ros/contracts";
-import { aiRuns, applications, candidates, events, notifications, screens, usageEvents } from "@ros/db";
+import { and, desc, eq } from "drizzle-orm";
+import type { CandidatePanel, ScreenTurn } from "@ros/contracts";
+import { aiRuns, applications, candidates, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
- * Two screening rules the real model is held to, proven over HTTP with the fake model scripted where the fake's own
- * heuristics cannot reach the rule (docs/spec/21 section 7, P0 rows "follow-up cap test" and the HUMAN hand-off):
- * a question gets at most two follow-ups, and "I'd rather talk to a person" leads to two equal choices (plan E3, Q16),
- * where "Have a person contact me" opens a request for a person with the whole conversation, tells the candidate when to
- * expect an answer, is idempotent, and is rate-limited per link. The conversations are the ones offered with the
- * application (plan E1): the introduction first, then Start.
+ * Two rules of the AI interview, proven over HTTP. A question gets at most one follow-up: the stand-in model is scripted
+ * to keep asking for more, since its own handler would not, and the code still moves on. And "I'd rather talk to a
+ * person" leads to one plain choice that closes the AI interview as the candidate's own choice, tells the hiring team
+ * once, sends them nothing the candidate typed, changes nothing when pressed again, and is rate-limited per link.
  */
-describe("screening rules: the follow-up cap and the web hand-off to a person", () => {
+describe("AI interview rules: the follow-up cap and choosing a person instead", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  let cookie = "";
+  let owner = "";
   let slug = "";
   let roleId = "";
-  let elig: Array<{ key: string }> = [];
-  let questions: Array<{ key: string; question: string }> = [];
+  const QUESTIONS = [
+    { key: "license", question: "Do you hold an active California RDH license?", kind: "eligibility" as const },
+    { key: "charting", question: "Tell me about the periodontal charting you do.", kind: "skills" as const },
+    { key: "patient", question: "Tell me about a nervous patient and what you did.", kind: "behavioral" as const },
+  ];
 
-  const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-  const form = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
-  const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
+  const form = (path: string, fields: Record<string, string> = {}, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(fields) });
+  const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)))[0];
   const eventsFor = async (type: string, subjectId: string) => container.db.select().from(events).where(and(eq(events.type, type), eq(events.subjectId, subjectId)));
+  /** The team's updates that this applicant chose a person instead of the AI interview. */
+  const toldTheyChose = async (applicationId: string) => (await container.db.select().from(notifications).where(eq(notifications.kind, "screen.declined_by_candidate"))).filter((x) => (x.action?.href ?? "").includes(applicationId));
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const pageOf = async (path: string) => decodeEntities(await (await app.request(path)).text());
 
-  async function apply(p: { first: string; last: string; email: string }) {
-    const fd = new FormData();
-    fd.set("firstName", p.first); fd.set("lastName", p.last); fd.set("email", p.email);
-    fd.set("resume", new File([`${p.first} ${p.last}, RDH\n${p.email} | (949) 555-0100\n\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\n\nLicenses: RDH license CA #RDH12345, active\nCertifications: BLS/CPR current\nSkills: Dentrix, periodontal charting, digital radiography, perio maintenance`], `${p.first.toLowerCase()}.txt`, { type: "text/plain" }));
-    for (const r of elig) fd.set(`elig_${r.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    const res = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
-    expect(res.status).toBe(302);
+  /** Someone applies, the team shortlists them, and they press Start: the job's first question is on the page. */
+  async function interview(p: { first: string; last: string; email: string }) {
+    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: p.last, email: p.email }) })).status).toBe(302);
     await container.drain();
-    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, p.email.toLowerCase()));
+    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, p.email));
     const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
-    expect(a.stage).toBe("screen_invited");
+    expect(a.stage).toBe("triaged");
+    expect((await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ action: "shortlist" }) })).status).toBe(200);
+    await container.drain();
     const scr = await screenOf(a.id);
-    // the introduction, then Start: the first question in the packet's own words
     expect((await app.request(`/c/screen/${scr.token}`)).status).toBe(200);
     expect((await form(`/c/screen/${scr.token}/start`)).status).toBe(302);
     return { application: a, candidate: cand, token: scr.token, screenId: scr.id };
@@ -53,43 +51,27 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
   const followUp: ScreenTurn = { messageToCandidate: "Could you say a bit more about that? A sentence or two is plenty.", questionKey: null, answerRecorded: null, followUpReason: "answer too short to establish anything", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
   beforeAll(async () => {
-    // The per-link budget for "Talk to a person" is lowered so the test can trip it without thirty posts.
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen_human": 3 }) } });
+    // The per-link budget for "Tell the hiring team" is lowered so the test can trip it without thirty posts.
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen_human": 3 }) } });
     app = createApp(container);
-    const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@rules.test" })).json()) as { devLink: string };
-    const consume = await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") });
-    cookie = consume.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Rules Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    slug = co.slug;
-    // The AI interview opens right after the form for every company since 20 Oct 2026 (R20-12); the switch is ignored.
-    await useOneVisitApplyFlow(container, co.id);
-    const c1 = (await (await json("POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. I need someone who can start within 30 days." })).json()) as { intakeSessionId: string };
-    await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/messages`, { message: "It's a replacement, our hygienist moved. Ceiling is $58. Interviewers: Dr. Chen and me. I decide. Must-haves: active CA RDH license, perio experience. Deal-breakers: can't work Saturdays." });
-    const compiled = (await (await json("POST", `/api/v1/intake/sessions/${c1.intakeSessionId}/compile`)).json()) as { roleId: string };
-    roleId = compiled.roleId;
-    await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1 });
-    await container.drain();
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; screening: { questions: Array<{ key: string; question: string }> } } } };
-    expect(role.status).toBe("open");
-    elig = role.currentPacket.packet.requirements.eligibility;
-    questions = role.currentPacket.packet.screening.questions;
-    expect(questions.length).toBeGreaterThanOrEqual(2);
+    const company = await seedCompany(app, { email: "dana@rules.test", name: "Rules Dental Group" });
+    ({ owner, slug } = company);
+    await usePlan(container, company.companyId);
+    roleId = await plantJob(container, { companyId: company.companyId, title: "Dental Hygienist", packet: (p) => { p.screening.questions = QUESTIONS.map((q) => ({ ...q })); } });
   });
-  afterAll(async () => { await container.close(); });
+  afterAll(async () => {
+    await container.close();
+  });
 
-  it("Wave S7, the chat's follow-ups: a yes-or-no question takes its answer; an open one gets one push for specifics, then the chat moves on; the transcript shows all of it", async () => {
-    const { application, token, screenId } = await apply({ first: "Maria", last: "Reyes", email: "maria.reyes@rules.test" });
-    // since 20 Oct 2026 the résumé is read before the chat starts, so what it could not confirm comes first ("About your
-    // experience"): answered here in plain words, by the fake's own handler
-    for (let i = 0; i < 8 && (await screenOf(application.id)).progress.chat?.section === "experience"; i++) {
-      expect((await form(`/c/screen/${token}`, { message: "Yes: five years of periodontal charting and perio maintenance at Smile Bright Dental, and I can work any day of the week." })).status).toBe(302);
-    }
+  it("a yes-or-no question takes its answer; an open one gets one push for specifics, then the chat moves on; the page shows all of it", async () => {
+    const { application, token, screenId } = await interview({ first: "Maria", last: "Reyes", email: "maria.reyes@rules.test" });
     const opened = await screenOf(application.id);
-    expect(opened.progress.currentQuestionKey).toBe(questions[0].key);
+    expect(opened.progress.currentQuestionKey).toBe("license");
     expect(opened.progress.chat?.section).toBe("required");
     const shown = opened.transcript.length;
-    const runsBefore = (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId).length;
-    // The model keeps asking for more every time. The fake's own screen handler would not, so the turns are scripted; each still has to satisfy the ScreenTurn schema.
+    const runsOf = async () => (await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId).length;
+    const runsBefore = await runsOf();
+    // The model keeps asking for more every time. Each scripted turn still has to satisfy the ScreenTurn schema.
     const say = async (message: string) => {
       container.fake!.scriptNext("screen.turn", followUp);
       const r = await form(`/c/screen/${token}`, { message });
@@ -97,140 +79,129 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
       expect(r.headers.get("location")).toBe(`/c/screen/${token}`);
       return screenOf(application.id);
     };
-    // the licence question is a yes-or-no one: "Yes" is its answer, and the chat moves on without asking for more
+    // the license question is a yes-or-no one: "Yes" is its answer, and the chat moves on without asking for more
     let scr = await say("Yes");
-    expect(scr.answers[questions[0].key]).toBe("Yes");
-    expect(scr.progress.currentQuestionKey).toBe(questions[1].key);
-    expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: questions[1].question, questionKey: questions[1].key });
+    expect(scr.answers.license).toBe("Yes");
+    expect(scr.progress.currentQuestionKey).toBe("charting");
+    expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: QUESTIONS[1].question, questionKey: "charting" });
     // the open question: one push for specifics, in one question (the model's second sentence is left out)
     scr = await say("Yes");
-    expect(scr.progress.currentQuestionKey).toBe(questions[1].key);
+    expect(scr.progress.currentQuestionKey).toBe("charting");
     expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: "Could you say a bit more about that?" });
-    expect(scr.progress.chat?.items.find((i) => i.key === questions[1].key)).toMatchObject({ state: "asking", pushes: 1 });
-    // the page: the chat as a thread, the push the one to answer now, the reply box named after it, the counter in the header
-    const page = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
+    expect(scr.progress.chat?.items.find((i) => i.key === "charting")).toMatchObject({ state: "asking", pushes: 1 });
+    // the page: the chat as a thread, the push the one to answer now, the reply box named after it, how far along in one line
+    const page = await pageOf(`/c/screen/${token}`);
     expect(page).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
     expect(page).toContain('<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>Could you say a bit more about that?</li>');
     expect(page).toContain("Your reply<span class=\"sr-only\"> to: Could you say a bit more about that?</span>");
-    expect(page).toContain(`<p class="journey-count">1 of ${questions.length} required · Required questions</p>`);
+    expect(page).toContain(`<p class="meta">1 of ${QUESTIONS.length} required · Required questions</p>`);
     // a second push is not asked: the chat moves on, with the candidate's own words as the answer
     scr = await say("Yes.");
-    expect(scr.progress.currentQuestionKey).toBe(questions[2].key);
+    expect(scr.progress.currentQuestionKey).toBe("patient");
     const since = scr.transcript.slice(shown);
     const assistant = since.filter((t) => t.role === "assistant");
     expect(assistant).toHaveLength(3); // the next question, one push, then the question after
-    expect(assistant[2]).toMatchObject({ content: questions[2].question, questionKey: questions[2].key });
+    expect(assistant[2]).toMatchObject({ content: QUESTIONS[2].question, questionKey: "patient" });
     expect(since.filter((t) => t.role === "candidate").map((t) => t.content)).toEqual(["Yes", "Yes", "Yes."]);
-    expect(scr.answers[questions[1].key]).toBe("Yes Yes.");
-    expect(scr.progress.askedKeys.slice(-3)).toEqual([questions[0].key, questions[1].key, questions[2].key]);
+    expect(scr.answers.charting).toBe("Yes Yes.");
+    expect(scr.progress.askedKeys.slice(-3)).toEqual(["license", "charting", "patient"]);
     // every turn went through the model runner and was recorded
-    expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId)).toHaveLength(runsBefore + 3);
+    expect(await runsOf()).toBe(runsBefore + 3);
     // the page counts both as done
-    const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
-    expect(html).toContain(`<p class="journey-count">2 of ${questions.length} required · Required questions</p>`);
-    expect(html).toContain(`<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>${questions[2].question}</li>`);
+    const html = await pageOf(`/c/screen/${token}`);
+    expect(html).toContain(`<p class="meta">2 of ${QUESTIONS.length} required · Required questions</p>`);
+    expect(html).toContain(`<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>${QUESTIONS[2].question}</li>`);
     // the next answer is read afresh: the push count of the last question is not carried over
-    const r = await form(`/c/screen/${token}`, { message: "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me." });
-    expect(r.status).toBe(302);
+    expect((await form(`/c/screen/${token}`, { message: "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me." })).status).toBe(302);
     const later = await screenOf(application.id);
-    expect(later.answers[questions[2].key]).toMatch(/nervous patient/);
-    expect(later.progress.chat?.items.find((i) => i.key === questions[2].key)?.pushes).toBe(0);
+    expect(later.answers.patient).toMatch(/nervous patient/);
+    expect(later.progress.chat?.items.find((i) => i.key === "patient")?.pushes).toBe(0);
   });
 
-  it("'I'd rather talk to a person' offers two equal choices; 'Have a person contact me' opens a request for a person with the conversation, tells the candidate when to expect an answer, is idempotent, and is rate-limited per link", async () => {
-    const { application, candidate, token, screenId } = await apply({ first: "Luis", last: "Ortega", email: "luis.ortega@rules.test" });
+  it("'I'd rather talk to a person' is one plain choice: it closes the AI interview as theirs, tells the team once with none of their words, changes nothing when pressed again, and is rate-limited per link", async () => {
+    const { application, candidate, token, screenId } = await interview({ first: "Luis", last: "Ortega", email: "luis.ortega@rules.test" });
     const answer = "Yes, my RDH license is active in California, number RDH12345.";
     expect((await form(`/c/screen/${token}`, { message: answer })).status).toBe(302);
     const before = await screenOf(application.id);
     expect(before.status).toBe("in_progress");
-    const notesBefore = (await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).length;
+    expect(before.answers.license).toBe(answer);
 
-    // the button on every page is a link to the choice; the older one-button route leads there too and changes nothing
-    const question = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
-    expect(question).toContain(`<a class="link-action" href="/c/screen/${token}/person">I'd rather talk to a person</a>`);
-    const old = await form(`/c/screen/${token}/human`);
-    expect(old.status).toBe(302);
-    expect(old.headers.get("location")).toBe(`/c/screen/${token}/person`);
-    expect((await screenOf(application.id)).status).toBe("in_progress");
-    const choice = decodeEntities(await (await app.request(`/c/screen/${token}/person`)).text());
+    // the way there is a link on the chat's page; opening the choice changes nothing
+    expect(await pageOf(`/c/screen/${token}`)).toContain(`<a class="link-action" href="/c/screen/${token}/person">I'd rather talk to a person</a>`);
+    const choice = await pageOf(`/c/screen/${token}/person`);
     expect(choice).toContain("<h1>Talk to a person instead</h1>");
-    // two equal choices: the same button, side by side
-    expect(choice).toContain('<input type="hidden" name="choice" value="send_without"/><button class="btn secondary" type="submit">Send without the conversation</button>');
-    expect(choice).toContain('<input type="hidden" name="choice" value="contact_me"/><button class="btn secondary" type="submit">Have a person contact me</button>');
-    expect(choice).toContain("The hiring team at Rules Dental Group is told you asked to talk to a person, to go through the questions with you or answer yours.");
+    expect(choice).toContain("That is fine. Anything you have answered so far is not sent to the hiring team.");
+    expect(choice).toContain("The hiring team at Rules Dental Group is told you would rather talk to a person than do the AI interview. Your application stays with them, and they decide the next step. This AI interview then closes.");
+    expect(choice).toContain(`<form method="post" action="/c/screen/${token}/person"><button class="btn secondary" type="submit">Tell the hiring team</button></form>`);
+    expect((await screenOf(application.id)).status).toBe("in_progress");
+    expect(await toldTheyChose(application.id)).toHaveLength(0);
 
-    const r = await form(`/c/screen/${token}/person`, { choice: "contact_me" });
+    const r = await form(`/c/screen/${token}/person`);
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe(`/c/screen/${token}`);
+    await container.drain();
     const after = await screenOf(application.id);
-    expect(after.status).toBe("human_requested");
-    expect(after.humanRequestedAt).toBeTruthy();
-    // the candidate is told, in the conversation and on the page, that the hiring team has been told: no time is promised
-    const last = after.transcript.at(-1)!;
-    expect(last.role).toBe("assistant");
-    expect(last.content).toBe("Understood. The hiring team at Rules Dental Group has been told you asked for a person. Thank you for your patience.");
-    const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
+    expect(after.status).toBe("declined_by_candidate");
+    expect(after.completedAt).toBeTruthy();
+    // the candidate is told, in the chat and on the page, that the team knows: nobody is promised a call
+    expect(after.transcript.at(-1)).toMatchObject({ role: "assistant", content: "Thanks, Luis. The hiring team at Rules Dental Group has been told that you would rather talk to a person than do the AI interview. Nothing you typed here was sent to them. People on the team make every decision." });
+    const html = await pageOf(`/c/screen/${token}`);
     expect(html).toContain("<h1>The hiring team has been told</h1>");
-    expect(html).toContain("The hiring team at Rules Dental Group has been told you asked to talk to a person. If nobody has been in touch, reply to any of our emails.");
-    expect(html).not.toContain('name="message"'); // the conversation is closed to the assistant
-    // counted (Q16)
-    expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === screenId)).toMatchObject([{ ref: { choice: "contact_me" } }]);
-    // the team reads that he asked, and none of the answers he never sent (founder decision of 9 October 2026, "hide them
-    // until they send")
-    const detail = await (await json("GET", `/api/v1/applications/${application.id}`)).text();
-    expect((JSON.parse(detail) as { screens: unknown[] }).screens).toEqual([expect.objectContaining({ status: "human_requested", answersShared: false, answers: {}, transcript: [] })]);
-    expect(detail).not.toContain(answer);
-    // the facts and the owner's notification
-    expect(await eventsFor("screen.human_requested", screenId)).toHaveLength(1);
-    expect((await eventsFor("screen.human_requested", screenId))[0].payload).toMatchObject({ reason: "candidate chose 'Have a person contact me'" });
-    const notes = await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"));
-    expect(notes.length).toBe(notesBefore + 1);
-    expect(notes.at(-1)!.title).toBe("Luis Ortega asked to talk to a person");
-    expect(notes.at(-1)!.body).not.toContain(answer); // the owner's notice never carries the candidate's words
-    const owner = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
-    expect(owner.some((n) => n.kind === "screen.human_requested" && /Luis/.test(n.title))).toBe(true);
-    expect((await container.db.select().from(applications).where(eq(applications.id, application.id)))[0].stage).toBe("screening"); // a person finishes it; nothing is decided
-    // the candidate row is untouched: same person, same address
+    expect(html).toContain("The hiring team at Rules Dental Group has been told you would rather talk to a person than do the AI interview. They decide the next step.");
+    expect(html).toContain("Anything you answered here was not sent to the hiring team. Nothing else is needed from you here.");
+    expect(html).not.toContain('name="message"'); // the chat is closed
+    // the team reads that he chose so, and none of the answers he never sent
+    const detail = await (await app.request(`/api/v1/applications/${application.id}`, { headers: { cookie: owner } })).text();
+    expect((JSON.parse(detail) as CandidatePanel).aiInterview).toMatchObject({ status: "opted_out", answers: [], review: null });
+    expect(detail).not.toContain("RDH12345");
+    // the fact and the team's update, which never carries the candidate's words
+    expect(await eventsFor("screen.declined_by_candidate", screenId)).toHaveLength(1);
+    const notes = await toldTheyChose(application.id);
+    expect(notes.map((x) => x.title)).toEqual(["Luis Ortega chose not to do the AI interview"]);
+    expect(notes[0].body).not.toContain("RDH12345");
+    // nothing is decided: the application stays where it was, and the person is who they were
+    expect((await container.db.select().from(applications).where(eq(applications.id, application.id)))[0].stage).toBe("screening");
     const [row] = await container.db.select().from(candidates).where(eq(candidates.id, candidate.id));
     expect(row).toMatchObject({ firstName: "Luis", lastName: "Ortega", email: "luis.ortega@rules.test" });
 
-    // pressing again, either way, changes nothing: one event, one notification, the same time stamp; the choice page sends back to the conversation
-    const again = await form(`/c/screen/${token}/person`, { choice: "send_without" });
-    expect(again.status).toBe(302);
-    expect((await screenOf(application.id)).status).toBe("human_requested");
-    expect((await screenOf(application.id)).humanRequestedAt).toBe(after.humanRequestedAt);
-    expect(await eventsFor("screen.human_requested", screenId)).toHaveLength(1);
-    expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).length).toBe(notesBefore + 1);
+    // pressing again changes nothing: one fact, one update, the same time stamp; the choice's page leads back to the closed one
+    expect((await form(`/c/screen/${token}/person`)).status).toBe(302);
+    await container.drain();
+    expect((await screenOf(application.id)).completedAt).toBe(after.completedAt);
+    expect(await eventsFor("screen.declined_by_candidate", screenId)).toHaveLength(1);
+    expect(await toldTheyChose(application.id)).toHaveLength(1);
     expect((await app.request(`/c/screen/${token}/person`)).headers.get("location")).toBe(`/c/screen/${token}`);
-    // a further message from the candidate gets the holding answer, not the assistant
+    // a further message is no answer: the AI interview stays closed with what it had
     expect((await form(`/c/screen/${token}`, { message: "Hello?" })).status).toBe(302);
-    expect((await screenOf(application.id)).status).toBe("human_requested");
+    const still = await screenOf(application.id);
+    expect(still.status).toBe("declined_by_candidate");
+    expect(still.answers).toEqual(after.answers);
 
-    // the link's own budget (three an hour here, thirty in production): the fourth press is refused plainly, nothing breaks
-    const fourth = await app.request(`/c/screen/${token}/person`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html" }, body: new URLSearchParams({ choice: "contact_me" }) });
+    // the link's own budget (three an hour here, thirty in production): the next press is refused plainly, nothing breaks
+    expect((await form(`/c/screen/${token}/person`)).status).toBe(302);
+    const fourth = await form(`/c/screen/${token}/person`, {}, { accept: "text/html" });
     expect(fourth.status).toBe(429);
     expect(Number(fourth.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(await fourth.text()).toContain("Please try again in");
-    expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).length).toBe(notesBefore + 1);
+    expect(await toldTheyChose(application.id)).toHaveLength(1);
   });
 
-  it("a dead link and a closed conversation are refused without creating anything", async () => {
+  it("a dead link and a closed AI interview are refused without creating anything", async () => {
     // another address: the lowered budget above is per address as well as per link
-    const press = (path: string) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.77" }, body: new URLSearchParams() });
-    expect((await press(`/c/screen/${"x".repeat(32)}/human`)).status).toBe(404);
-    expect((await press(`/c/screen/${"x".repeat(32)}/person`)).status).toBe(404);
-    const { application, token } = await apply({ first: "Ana", last: "Silva", email: "ana.silva@rules.test" });
+    const elsewhere = { "x-forwarded-for": "203.0.113.77" };
+    expect((await form(`/c/screen/${"x".repeat(32)}/person`, {}, elsewhere)).status).toBe(404);
+    expect((await app.request(`/c/screen/${"x".repeat(32)}/person`)).status).toBe(404);
+    const { application, token } = await interview({ first: "Ana", last: "Silva", email: "ana.silva@rules.test" });
     const scr = await screenOf(application.id);
     await container.db.update(screens).set({ status: "expired" }).where(eq(screens.id, scr.id));
-    const r = await app.request(`/c/screen/${token}/person`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.77" }, body: new URLSearchParams({ choice: "contact_me" }) });
+    const r = await form(`/c/screen/${token}/person`, {}, elsewhere);
     expect(r.status).toBe(302);
     expect((await screenOf(application.id)).status).toBe("expired");
-    expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).filter((n) => (n.action?.href ?? "").includes(application.id))).toHaveLength(0);
-    // the closed page says the application went on without the conversation (it was offered with it, plan E4), and
-    // offers nothing to press
-    const html = (await (await app.request(`/c/screen/${token}`)).text()).replace(/&#39;/g, "'");
-    expect(html).toContain("<h1>This conversation has closed</h1>");
-    expect(html).toContain("Your application has gone to the hiring team at Rules Dental Group without it, and that is fine.");
+    expect(await toldTheyChose(application.id)).toHaveLength(0);
+    // the closed page says the link has closed and what was not passed on, and offers nothing to press
+    const html = await pageOf(`/c/screen/${token}`);
+    expect(html).toContain("<h1>This link has closed</h1>");
+    expect(html).toContain("The link to this AI interview has closed. The answers you did not send were not passed on. If you would still like to do it, reply to any of our emails: the hiring team at Rules Dental Group can send you a new link.");
     expect(html).not.toContain('action="/c/screen/');
   });
 });

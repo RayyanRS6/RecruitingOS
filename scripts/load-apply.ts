@@ -4,10 +4,10 @@ import { performance } from "node:perf_hooks";
 /**
  * Synthetic application load (docs/spec/20 section 2 item 18 and section 4 "Load"; docs/readiness/03 section 7a).
  * Posts N made-up applications to one job's apply address at a steady rate, exactly as the form does (the
- * acknowledgment, every eligibility answer, a small text résumé, unique addresses), honours a 429 by waiting for the
- * Retry-After the server names (capped by --max-wait), and prints what happened: accepted, refused by the rate limit,
- * refused otherwise, server errors, and the latency percentiles. Nothing here is a real person and nothing is read
- * back but the status codes.
+ * acknowledgment, an answer to every question on the form, a small text resume, unique addresses), honours a 429 by
+ * waiting for the Retry-After the server names (capped by --max-wait), and prints what happened: accepted, refused by
+ * the rate limit, refused otherwise, server errors, and the latency percentiles. Nothing here is a real person and
+ * nothing is read back but the status codes.
  *
  *   tsx scripts/load-apply.ts --url http://localhost:3010/careers/<slug>/jobs/<roleId>/apply --count 200 --per-minute 5
  *
@@ -59,18 +59,31 @@ export function syntheticApplicant(runId: string, i: number, emailDomain: string
     firstName: first,
     lastName: last,
     email: `load-${runId}-${String(i + 1).padStart(4, "0")}@${emailDomain}`,
-    locationText: "Irvine, CA",
     resume: `${first} ${last}\nRegistered Dental Hygienist at Harbor Point Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\nRDH license CA active\nBLS current\nSkills: Dentrix, periodontal charting, digital radiography\n(synthetic load-test applicant ${runId}, not a real person)`,
   };
 }
 
-/** What the apply page asks: the eligibility fields (a select answered "yes", or day checkboxes ticked in full) and the notice versions it shows. */
-export function readApplyForm(html: string): { eligibility: Array<{ key: string; days: string[] | null }>; noticeVersionsShown: string } {
-  const keys = new Map<string, string[] | null>();
-  for (const m of html.matchAll(/<select[^>]*\bname="elig_([A-Za-z0-9_]+)"/g)) keys.set(m[1], null);
-  for (const m of html.matchAll(/<input[^>]*\btype="checkbox"[^>]*\bname="elig_([A-Za-z0-9_]+)"[^>]*\bvalue="([^"]+)"/g)) keys.set(m[1], [...(keys.get(m[1]) ?? []), m[2]]);
-  const notice = html.match(/name="noticeVersionsShown"\s+value="([^"]*)"/)?.[1] ?? "";
-  return { eligibility: [...keys.entries()].map(([key, days]) => ({ key, days })), noticeVersionsShown: notice };
+const attr = (tag: string, name: string): string | null => {
+  const m = tag.match(new RegExp(`\\b${name}="([^"]*)"`));
+  return m ? m[1].replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&") : null;
+};
+
+/**
+ * What the apply page asks, and an answer to each of its questions: the first choice a question offers ("yes" for a yes
+ * or no question), or for a number its smallest allowed value (1 when it names none). `formOpened`: the sealed moment
+ * the page was opened, which the form sends back.
+ */
+export function readApplyForm(html: string): { answers: Array<{ field: string; value: string }>; formOpened: string } {
+  const answers = new Map<string, string>();
+  for (const m of html.matchAll(/<input\b[^>]*>/g)) {
+    const field = attr(m[0], "name");
+    if (!field?.startsWith("q_") || answers.has(field)) continue;
+    const type = attr(m[0], "type");
+    if (type === "radio") answers.set(field, attr(m[0], "value") ?? "");
+    else if (type === "number") answers.set(field, attr(m[0], "min") ?? "1");
+  }
+  const opened = html.match(/<input\b[^>]*\bname="formOpened"[^>]*>/)?.[0];
+  return { answers: [...answers.entries()].map(([field, value]) => ({ field, value })), formOpened: opened ? attr(opened, "value") ?? "" : "" };
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -96,7 +109,7 @@ export async function runLoad(opts: LoadOptions): Promise<LoadSummary> {
   if (page.status === 404) throw new Error("the apply page answers 404: the role is not open or not accepting applications");
   if (!page.ok) throw new Error(`the apply page answered ${page.status}`);
   const form = readApplyForm(await page.text());
-  log(`run ${runId}: ${opts.count} applications to ${target.pathname} at ${opts.perMinute} a minute; ${form.eligibility.length} eligibility question${form.eligibility.length === 1 ? "" : "s"} on the form; a 429 pauses up to ${opts.maxWaitSeconds}s`);
+  log(`run ${runId}: ${opts.count} applications to ${target.pathname} at ${opts.perMinute} a minute; ${form.answers.length} question${form.answers.length === 1 ? "" : "s"} on the form; a 429 pauses up to ${opts.maxWaitSeconds}s`);
 
   const latencies: number[] = [];
   const statuses: Record<string, number> = {};
@@ -121,13 +134,9 @@ export async function runLoad(opts: LoadOptions): Promise<LoadSummary> {
     fd.set("firstName", person.firstName);
     fd.set("lastName", person.lastName);
     fd.set("email", person.email);
-    fd.set("locationText", person.locationText);
     fd.set("resume", new File([person.resume], "resume.txt", { type: "text/plain" }));
-    for (const q of form.eligibility) {
-      if (q.days) for (const d of q.days) fd.append(`elig_${q.key}`, d);
-      else fd.set(`elig_${q.key}`, "yes");
-    }
-    fd.set("noticeVersionsShown", form.noticeVersionsShown);
+    for (const q of form.answers) fd.set(q.field, q.value);
+    if (form.formOpened) fd.set("formOpened", form.formOpened);
     fd.set("acknowledged", "yes");
     const t0 = performance.now();
     let status = 0;
@@ -136,10 +145,8 @@ export async function runLoad(opts: LoadOptions): Promise<LoadSummary> {
       status = r.status;
       const ms = performance.now() - t0;
       statuses[String(status)] = (statuses[String(status)] ?? 0) + 1;
-      // an accepted application ends on the receipt page (Wave 0 item 0.1: the status link only ever travels by email), or
-      // goes on to the screening conversation offered with it (plan E1)
-      const to = r.headers.get("location") ?? "";
-      if (status === 302 && (to.endsWith("/applied") || /\/c\/screen\/[A-Za-z0-9_-]+$/.test(to))) {
+      // an accepted application ends on the receipt page: the status link only ever travels by email
+      if (status === 302 && (r.headers.get("location") ?? "").endsWith("/applied")) {
         accepted++;
         latencies.push(ms);
       } else if (status === 429) {
@@ -157,7 +164,7 @@ export async function runLoad(opts: LoadOptions): Promise<LoadSummary> {
       } else {
         refused++;
         const text = (await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-        const why = text.match(/(Please [^.]+\.|One more step[^.]+\.|Resume files [^.]+\.|Upload a resume[^.]+\.)/)?.[1] ?? text.slice(0, 120);
+        const why = text.match(/(Please [^.]+\.|One more step[^.]+\.|Resume files [^.]+\.)/)?.[1] ?? text.slice(0, 120);
         refusals.push(`#${i + 1}: ${status} ${why}`);
         log(`#${i + 1} refused (${status}): ${why}`);
       }

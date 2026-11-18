@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { SEND_MAX_ATTEMPTS, queueCommunication, sweepStaleSending } from "@ros/agents";
+import { PROVIDER_REFUSED_ALERT, SEND_MAX_ATTEMPTS, queueCommunication, sweepStaleSending } from "@ros/agents";
 import { setCompanyLive } from "@ros/core";
-import { adminAlerts, candidates, communications, events, jobs, notifications, uuidv7, withPlatform, withTenant } from "@ros/db";
-import type { FakeEmailAdapter } from "@ros/integrations";
+import { adminAlerts, applications, candidates, communications, events, jobs, notifications, uuidv7, withPlatform, withTenant } from "@ros/db";
+import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { plantApplicant, plantJob } from "./test-helpers";
 
 /**
  * The outbox: a message written inside a transaction leaves only after that transaction commits, once per key, and a
@@ -192,5 +193,66 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
       // back to the class's own send (the override is an own property of the adapter)
       Reflect.deleteProperty(adapter, "send");
     }
+  });
+
+  describe("an email to a candidate that the provider refuses for good", () => {
+    let roleId = "";
+    const applicant = async (mark: string, locked = false) => {
+      roleId ||= await plantJob(container, { companyId, title: "Dental Hygienist" });
+      const applicationId = await plantApplicant(container, { companyId, roleId, mark, locked });
+      const [row] = await container.db.select({ candidateId: applications.candidateId }).from(applications).where(eq(applications.id, applicationId));
+      return { applicationId, candidateId: row.candidateId, email: `${mark.toLowerCase()}@people.test` };
+    };
+    /** Queues one email to this applicant, with the provider answering `answer`, and runs the worker. */
+    const sendRefused = async (who: { applicationId: string; candidateId: string; email: string }, answer: SendResult) => {
+      const adapter = fake();
+      const key = `refused:${who.applicationId}`;
+      adapter.send = async () => answer;
+      try {
+        await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, draft(key, { candidateId: who.candidateId, applicationId: who.applicationId, to: who.email, subject: "Thank you for applying: Dental Hygienist at Outbox Dental", templateKey: "acknowledgment" })));
+        await container.drain();
+      } finally {
+        Reflect.deleteProperty(adapter, "send");
+      }
+      return (await container.db.select().from(communications).where(eq(communications.idempotencyKey, key)))[0];
+    };
+    const refusals = () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, PROVIDER_REFUSED_ALERT));
+    const noticesAbout = async (applicationId: string) => (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "candidate.unreachable")))).filter((x) => (x.action?.href ?? "").includes(applicationId));
+
+    it("the team's notice names the person in plain words, never the provider's error, and opens that candidate; nothing is written about someone past the plan's limit", async () => {
+      const gil = await applicant("Gil");
+      const row = await sendRefused(gil, { status: "failed", error: "postmark 422: The 'From' address you supplied (x) is not a Sender Signature on your account.", retryable: false });
+      expect(row.status).toBe("failed");
+      const [note] = await noticesAbout(gil.applicationId);
+      expect(note.title).toBe("An email to Gil Gil did not arrive");
+      expect(note.body).toBe('"Thank you for applying: Dental Hygienist at Outbox Dental" could not be delivered. Phone them, or write to them another way.');
+      expect(note.body).not.toMatch(/postmark|422|Sender Signature/);
+      expect(note.action).toEqual({ label: "Open Gil Gil", href: `/roles/${roleId}/talent?open=${gil.applicationId}` });
+      // someone the team cannot read yet: the email is marked failed, and no notice leads the team to them
+      const kept = await applicant("Kit", true);
+      expect((await sendRefused(kept, { status: "failed", error: "postmark 422: not a Sender Signature.", retryable: false })).status).toBe("failed");
+      expect(await noticesAbout(kept.applicationId)).toEqual([]);
+      expect(JSON.stringify(await container.db.select().from(notifications).where(eq(notifications.companyId, companyId)))).not.toContain("Kit");
+    });
+
+    it("a refusal that is not about one address alerts ITS once while it lasts; one about the address alerts nobody", async () => {
+      await container.db.delete(adminAlerts).where(eq(adminAlerts.kind, PROVIDER_REFUSED_ALERT));
+      const hal = await applicant("Hal");
+      const ida = await applicant("Ida");
+      await sendRefused(hal, { status: "failed", error: "postmark 412: Your account is pending approval.", retryable: false });
+      const [alert] = await refusals();
+      expect(alert).toMatchObject({ severity: "high", companyId, title: "The email provider is refusing emails", details: { provider: fake().id, template: "acknowledgment" } });
+      expect(alert.body).toContain("postmark 412: Your account is pending approval.");
+      // the next refused email in the hour adds nothing to the console
+      await sendRefused(ida, { status: "failed", error: "postmark 412: Your account is pending approval.", retryable: false });
+      expect(await refusals()).toHaveLength(1);
+      // a refusal about one address: that person's problem, not the provider's, and no alert
+      await container.db.delete(adminAlerts).where(eq(adminAlerts.kind, PROVIDER_REFUSED_ALERT));
+      const jo = await applicant("Jo");
+      const row = await sendRefused(jo, { status: "failed", error: "postmark 406: You tried to send to recipient(s) that have been marked as inactive.", retryable: false, aboutAddress: true });
+      expect(row.status).toBe("failed");
+      expect(await refusals()).toEqual([]);
+      expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_failed"))).some((a) => a.target?.id === row.id)).toBe(false);
+    });
   });
 });
