@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { EvidenceAssessment, ScreenAssessment } from "./assessment";
+import { EvidenceAssessment, ResumeExtraction, ScreenAssessment } from "./assessment";
 import { EventType } from "./events";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, ScreenProgress, ScreenStatus, ScreenTranscriptEntry, aiInterviewStatusOf } from "./screen";
 
@@ -60,6 +60,22 @@ describe("what the AI writes about a candidate", () => {
 
   it("never quotes a source the product no longer has", () => {
     for (const gone of ["recruiter_note", "interview", "playbook", "benchmark"]) expect(EvidenceAssessment.safeParse({ summary: "x", strengths: [{ claim: "c", evidence: { source: gone } }] }).success, gone).toBe(false);
+  });
+
+  it("a resume's facts keep only what something reads: an older stored row still parses, and the model is asked for nothing else", () => {
+    const stored = {
+      fullName: "Dana Kim", email: "dana.kim@example.com", phone: "(303) 555-0100", locationText: "Denver, CO", headline: "Registered Dental Hygienist",
+      positions: [{ title: "Hygienist", employer: "Mile High Dental", startDate: "2019", current: true, quote: "Hygienist at Mile High Dental 2019 - present" }],
+      education: [{ institution: "Cypress College", credential: "A.S.", field: "Dental Hygiene" }],
+      licenses: [{ name: "RDH", jurisdiction: "CO", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"], languages: ["Spanish"],
+      yearsOfExperienceEstimate: 6, anomalies: [{ kind: "other", detail: "x" }], confidence: "high",
+    };
+    expect(ResumeExtraction.parse(stored)).toEqual({
+      fullName: "Dana Kim", locationText: "Denver, CO",
+      positions: [{ title: "Hygienist", employer: "Mile High Dental", startDate: "2019", current: true, quote: "Hygienist at Mile High Dental 2019 - present" }],
+      licenses: [{ name: "RDH", jurisdiction: "CO", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"], yearsOfExperienceEstimate: 6,
+    });
+    expect(JSON.stringify(z.toJSONSchema(ResumeExtraction))).not.toMatch(/"(?:email|phone|headline|education|languages|anomalies|confidence)"/);
   });
 });
 

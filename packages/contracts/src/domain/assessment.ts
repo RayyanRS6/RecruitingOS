@@ -1,13 +1,16 @@
 import { z } from "zod";
-import { Confidence, Evidence } from "./common";
+import { Evidence } from "./common";
 
-/** Structured extraction of a CV. The model reads; code verifies quotes. */
+/**
+ * The facts of a resume, read by AI once per application. The model reads; code verifies quotes. Every field has a
+ * reader: the name is hidden from the resume reading, the place decides a state's notice in the decision email, and the
+ * positions, licences, certifications, skills and years are given to the resume reading and the AI interview. A stored
+ * row of an earlier build also holds an email, a phone, a headline, education, languages, anomalies and a confidence;
+ * they are dropped when it is parsed.
+ */
 export const ResumeExtraction = z.object({
   fullName: z.string().optional(),
-  email: z.string().optional(),
-  phone: z.string().optional(),
   locationText: z.string().optional(),
-  headline: z.string().optional(),
   positions: z.array(z.object({
     title: z.string(),
     employer: z.string().optional(),
@@ -17,14 +20,10 @@ export const ResumeExtraction = z.object({
     summary: z.string().optional(),
     quote: z.string().optional(),
   })).default([]),
-  education: z.array(z.object({ institution: z.string().optional(), credential: z.string().optional(), field: z.string().optional(), quote: z.string().optional() })).default([]),
   licenses: z.array(z.object({ name: z.string(), jurisdiction: z.string().optional(), number: z.string().optional(), expires: z.string().optional(), quote: z.string().optional() })).default([]),
   certifications: z.array(z.object({ name: z.string(), quote: z.string().optional() })).default([]),
   skills: z.array(z.string()).default([]),
-  languages: z.array(z.string()).default([]),
   yearsOfExperienceEstimate: z.number().optional(),
-  anomalies: z.array(z.object({ kind: z.enum(["date_inconsistency", "possible_ai_generated", "contradiction", "missing_dates", "other"]), detail: z.string() })).default([]),
-  confidence: Confidence,
 });
 export type ResumeExtraction = z.infer<typeof ResumeExtraction>;
 
