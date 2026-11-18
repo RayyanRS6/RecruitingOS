@@ -3,29 +3,19 @@ import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uu
 import type {
   Actor,
   ApplicationStage,
-  ApplyMode,
   DraftRolePacket,
-  EligibilityResult,
   EvidenceAssessment,
   IntakeFacts,
   IntakeMessage,
   IntakeServerState,
-  KeptFact,
-  LearnedFact,
   Location,
-  MarkKind,
-  MarkSource,
-  Playbook,
   ResumeExtraction,
   RolePacket,
   ScreenAssessment,
-  ScreenInvitedVia,
   ScreenProgress,
   ScreenStatus,
   ScreenTranscriptEntry,
   ToldState,
-  UnconfirmedConfirmation,
-  UnconfirmedIntent,
 } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { companies, users } from "./tenancy";
@@ -36,7 +26,7 @@ export const playbooks = pgTable(
     id: id(),
     vertical: text("vertical").notNull(),
     version: integer("version").notNull(),
-    content: jsonb("content").$type<Playbook>().notNull(),
+    content: jsonb("content").$type<Record<string, unknown>>().notNull(),
     status: text("status").notNull().default("published"),
     createdAt: createdAt(),
   },
@@ -80,7 +70,7 @@ export const roles = pgTable(
      * "form_then_screen" by email later; null follows the company's default (`companies.settings.applyFlowDefault`).
      * Only ITS changes it (packages/core/src/apply-flow.ts, `resolveApplyMode`).
      */
-    applyMode: text("apply_mode").$type<ApplyMode>(),
+    applyMode: text("apply_mode"),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -115,7 +105,7 @@ export const intakeSessions = pgTable(
     roleId: uuid("role_id"),
     status: text("status").notNull().default("active"),
     messages: jsonb("messages").$type<IntakeMessage[]>().notNull().default([]),
-    facts: jsonb("facts").$type<IntakeFacts>().notNull().default({ mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] }),
+    facts: jsonb("facts").$type<IntakeFacts>().notNull().default({ mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] }),
     missingFacts: jsonb("missing_facts").$type<string[]>().notNull().default([]),
     /** The draft written beside the conversation (C7); pay only once a person set or confirmed it. */
     draftPacket: jsonb("draft_packet").$type<DraftRolePacket | null>(),
@@ -289,8 +279,8 @@ export type ApplicationAnswers = {
   quick?: Record<string, string>;
   fromCv?: string[];
   workSummary?: string;
-  learned?: LearnedFact[];
-  kept?: KeptFact[];
+  learned?: unknown[];
+  kept?: unknown[];
 };
 
 export const applications = pgTable(
@@ -311,7 +301,7 @@ export const applications = pgTable(
     stageChangedAt: ts("stage_changed_at").notNull().defaultNow(),
     resumeDocumentId: uuid("resume_document_id"),
     answers: jsonb("answers").$type<ApplicationAnswers>().notNull().default({}),
-    eligibility: jsonb("eligibility").$type<EligibilityResult | null>(),
+    eligibility: jsonb("eligibility").$type<Record<string, unknown> | null>(),
     extraction: jsonb("extraction").$type<ResumeExtraction | null>(),
     latestAssessmentId: uuid("latest_assessment_id"),
     statusToken: text("status_token").notNull(),
@@ -353,11 +343,11 @@ export const applicationMarks = pgTable(
     id: id(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
     applicationId: uuid("application_id").notNull().references(() => applications.id),
-    mark: text("mark").$type<MarkKind>().notNull(),
+    mark: text("mark").notNull(),
     remindAt: ts("remind_at"),
     note: text("note"),
     setBy: jsonb("set_by").$type<Actor>().notNull(),
-    source: text("source").$type<MarkSource>().notNull().default("manual"),
+    source: text("source").notNull().default("manual"),
     createdAt: createdAt(),
     clearedAt: ts("cleared_at"),
     clearedBy: jsonb("cleared_by").$type<Actor | null>(),
@@ -411,7 +401,7 @@ export const screens = pgTable(
     assessmentId: uuid("assessment_id"),
     workflowRunId: uuid("workflow_run_id"),
     /** "apply" (offered in the visit that sent the application), "confirmed_repeat", "with_application" (every applicant's AI interview, 20 Oct 2026), or null for an emailed invitation (migration 0033). */
-    invitedVia: text("invited_via").$type<ScreenInvitedVia>(),
+    invitedVia: text("invited_via"),
     /** The one reminder to someone who started and stopped part-way (plan E4). */
     idleRemindedAt: ts("idle_reminded_at"),
     createdAt: createdAt(),
@@ -437,8 +427,8 @@ export const unconfirmedScreens = pgTable(
     firstName: text("first_name").notNull(),
     token: text("token").notNull(),
     status: text("status").$type<ScreenStatus>().notNull().default("invited"),
-    intent: text("intent").$type<UnconfirmedIntent | null>(),
-    confirmation: text("confirmation").$type<UnconfirmedConfirmation | null>(),
+    intent: text("intent"),
+    confirmation: text("confirmation"),
     confirmTokenHash: text("confirm_token_hash"),
     transcript: jsonb("transcript").$type<ScreenTranscriptEntry[]>().notNull().default([]),
     answers: jsonb("answers").$type<Record<string, string>>().notNull().default({}),

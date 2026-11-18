@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, AutoNewTimesReason, AutoNewTimesState, CancelNext, FollowUpKind, FollowUpResolution } from "@ros/contracts";
+import type { Actor } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { applications, interviews } from "./hiring";
 import { companies } from "./tenancy";
@@ -20,11 +20,11 @@ export const interviewFollowups = pgTable(
     /** The interview they cancelled or missed, and its attempt after that (the entry). */
     interviewId: uuid("interview_id").notNull().references(() => interviews.id),
     interviewAttempt: integer("interview_attempt").notNull(),
-    kind: text("kind").$type<FollowUpKind>().notNull(),
+    kind: text("kind").notNull(),
     /** The candidate's choice; null for a no-show. */
-    choice: text("choice").$type<CancelNext | null>(),
-    autoState: text("auto_state").$type<AutoNewTimesState>().notNull().default("none"),
-    autoReason: text("auto_reason").$type<AutoNewTimesReason | null>(),
+    choice: text("choice"),
+    autoState: text("auto_state").notNull().default("none"),
+    autoReason: text("auto_reason"),
     autoWorkingDays: integer("auto_working_days"),
     autoDueAt: ts("auto_due_at"),
     autoRunId: uuid("auto_run_id"),
@@ -38,7 +38,7 @@ export const interviewFollowups = pgTable(
     /** `slots:{interviewId}:{attempt}` of the last offer counted, so an offer step that runs twice counts once. */
     lastOfferKey: text("last_offer_key"),
     resolvedAt: ts("resolved_at"),
-    resolvedHow: text("resolved_how").$type<FollowUpResolution | null>(),
+    resolvedHow: text("resolved_how"),
     resolvedBy: jsonb("resolved_by").$type<Actor | null>(),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),

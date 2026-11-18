@@ -1,12 +1,11 @@
 import { sql } from "drizzle-orm";
 import { index, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { NoteStarter } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 import { applications } from "./hiring";
 import { companies, users } from "./tenancy";
 
 /** A note's earlier words, kept when its author changes it. */
-export type NoteVersion = { body: string; starter: NoteStarter | null; at: string };
+export type NoteVersion = { body: string; starter: string | null; at: string };
 
 /**
  * Private team notes on a candidate (migration 0034; founder decision Q24, plan H3). One live note per person per
@@ -20,7 +19,7 @@ export const applicationNotes = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     applicationId: uuid("application_id").notNull().references(() => applications.id),
     authorUserId: uuid("author_user_id").notNull().references(() => users.id),
-    starter: text("starter").$type<NoteStarter | null>(),
+    starter: text("starter"),
     body: text("body").notNull(),
     previousVersions: jsonb("previous_versions").$type<NoteVersion[]>().notNull().default([]),
     createdAt: createdAt(),

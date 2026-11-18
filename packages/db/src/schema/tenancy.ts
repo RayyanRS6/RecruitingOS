@@ -1,5 +1,5 @@
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Actor, ApplyMode, CompanyOnboarding, Location, TrialTerm } from "@ros/contracts";
+import type { Actor, Location, TrialTerm } from "@ros/contracts";
 import { createdAt, id, ts, updatedAt } from "./columns";
 
 export type CompanySettings = {
@@ -45,14 +45,14 @@ export type CompanySettings = {
    */
   accessRequestEmailedAt?: string;
   /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
-  onboarding?: CompanyOnboarding;
+  onboarding?: Record<string, unknown>;
   /** The company has its own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered and prepared. */
   zipRecruiterPlan?: boolean;
   /**
    * How new roles meet the screening conversation unless ITS set a role itself (plan E1): "form_then_screen" when unset;
    * ITS sets "one_visit" for a pilot company. Set from the ITS admin console only, with who and when (apps/api routes/admin.ts).
    */
-  applyFlowDefault?: ApplyMode;
+  applyFlowDefault?: string;
   applyFlowSetBy?: { at: string; by: Actor; reason: string };
   /** Automatic new interview times for candidates who cancel and ask for them (founder decision 3A). Unset: on, after 3 working days. */
   newTimesAfterCancel?: { auto: boolean; workingDays: number };
