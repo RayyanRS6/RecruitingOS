@@ -5,11 +5,10 @@ import { describe, expect, it } from "vitest";
 import type { SortDir } from "@ros/ui";
 
 /**
- * The design system's Table, its sorting, Stat and tab labels as the server draws them (docs/07; the Obsidian-look
- * decisions of 10 October 2026).
+ * The design system's Table, its sorting and tab labels as the server draws them (docs/07).
  */
 (globalThis as { React?: typeof React }).React = React;
-const { Stat, Table, Tabs, numHead, useTableSort } = await import("@ros/ui");
+const { Table, Tabs, numHead, useTableSort } = await import("@ros/ui");
 // cells passed as separate children, so React needs no keys
 const row = (...cells: Array<[string, string?]>) => createElement("tr", null, ...cells.map(([text, className]) => createElement("td", { className }, text)));
 const noop = () => undefined;
@@ -159,12 +158,7 @@ describe("useTableSort", () => {
   });
 });
 
-describe("Stat and tab labels", () => {
-  it("draws a figure with what it counts", () => {
-    expect(renderToStaticMarkup(createElement(Stat, { n: 12, label: "applicants in total" }))).toBe('<div class="stat"><span class="stat-n">12</span><span class="stat-label">applicants in total</span></div>');
-    expect(renderToStaticMarkup(createElement(Stat, { n: "$1.20", label: "spent on AI this month" }))).toBe('<div class="stat"><span class="stat-n">$1.20</span><span class="stat-label">spent on AI this month</span></div>');
-  });
-
+describe("tab labels", () => {
   it("gives each tab label its own words for the width of its bold self", () => {
     const html = renderToStaticMarkup(createElement(Tabs, { label: "Stages", items: [{ id: "new", label: "New", count: 3 }, { id: "hired", label: "Hired", count: 0 }] }));
     expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">3</span>');

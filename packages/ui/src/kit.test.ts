@@ -6,8 +6,8 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, 
 
 /**
  * The kit's markup for the October 2026 redesign (docs/07): the layout helpers screens rely on (spec 5b) render the
- * classes styles.css draws, and the kit keeps no inline style of its own except a value that is data (a bar's width, a
- * menu placed against the window, a text box's measured height). The components are hook-free, so they are called
+ * classes styles.css draws, and the kit keeps no inline style of its own except a value that is data (a menu placed
+ * against the window, a menu's list height inside a dialog). The components are hook-free, so they are called
  * directly here (packages/ui has no DOM renderer); the shell's tests render the rest to markup.
  */
 type El = ReactElement<{ children?: ReactNode; className?: string; style?: unknown; [key: string]: unknown }>;
@@ -283,14 +283,29 @@ describe("the kit's round-3 options", () => {
     expect(Object.keys(wrapped.props)).toEqual(Object.keys(plain.props));
   });
 
-  // Review of the live-test fixes, 12 November 2026: someone decided before any AI review was still shown "No score yet"
-  it("ScoreBadge `none` gives the words with no number; left out, it says 'No score yet' as before", () => {
+  it("ScoreBadge `none` gives the words with no number; left out, it says 'No score yet'", () => {
     expect((ScoreBadge({ score: null }) as El).props).toEqual({ className: "score none", children: "No score yet" });
     expect((ScoreBadge({ score: null, size: "sm", none: "No score" }) as El).props).toEqual({ className: "score none sm", children: "No score" });
     // a number is still the number, whatever the words for none
-    const scored = ScoreBadge({ score: 91, size: "sm", none: "No score" }) as El;
+    const scored = ScoreBadge({ score: 91, size: "sm", none: "No score", tone: "good", label: "Resume match" }) as El;
     expect(scored.props.className).toBe("score good sm");
-    expect(scored.props.title).toBe("Match score 91 out of 100");
+    expect(scored.props.title).toBe("Resume match 91 out of 100");
+  });
+
+  it("ScoreBadge takes its colour and its band word from the page: the kit keeps no band table", () => {
+    // no colour given is grey, whatever the number; the number is rounded and kept inside 0-100
+    const plain = ScoreBadge({ score: 99.6 }) as El;
+    expect(plain.props.className).toBe("score neutral");
+    expect(plain.props.title).toBe("Score 100 out of 100");
+    expect((ScoreBadge({ score: -4, tone: "caution" }) as El).props.title).toBe("Score 0 out of 100");
+    // a band word sits beside the number, in words, so the colour never says it alone
+    const banded = ScoreBadge({ score: 72, tone: "good", band: "High", label: "AI interview" }) as El;
+    expect(banded.props.className).toBe("score-wrap");
+    const [badge, word] = kids(banded);
+    expect(badge.props).toMatchObject({ className: "score good", title: "AI interview 72 out of 100" });
+    expect(word.props).toEqual({ className: "score-band", children: "High" });
+    // the large number at the head of a section carries no colour of its own
+    expect((ScoreBadge({ score: 72, tone: "good", size: "lg" }) as El).props.className).toBe("score lg");
   });
 });
 
@@ -327,8 +342,7 @@ describe("the kit without inline styles", () => {
 
   it("keeps an inline style only for a value that is data", () => {
     const styles = (file: string) => (readFileSync(new URL(file, import.meta.url), "utf8").match(/style=\{/g) ?? []).length;
-    expect(styles("./index.tsx")).toBe(1); // the pipeline's widths and colours per stage
-    expect(styles("./score-bars.tsx")).toBe(1); // a bar's width
+    expect(styles("./index.tsx")).toBe(0);
     // a menu placed against the window inside a table's scrolling box; a menu's list height inside a dialog (--menu-max)
     expect(styles("./menu.tsx")).toBe(2);
     for (const file of ["./sheet.tsx", "./tabs.tsx", "./toast.tsx", "./split-view.tsx", "./auto-textarea.tsx", "./motion-provider.tsx"]) expect(styles(file), file).toBe(0);

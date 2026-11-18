@@ -1,6 +1,6 @@
 import { Children, type ReactNode } from "react";
 import { cn } from "./cn";
-import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, type TableHead, type Tone } from "./helpers";
+import { cx, initials, type StepState, STEP_STATE_TEXT, type TableHead, type Tone } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
 /**
@@ -119,43 +119,31 @@ export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"
   );
 }
 
-/** Plain-language application status. Owner Mode never shows raw stage names. */
-export function StatusChip(props: { stage: string; label: string; group?: string }) {
-  const tone: Tone = props.group === "waiting_on_you" ? "caution" : props.group === "hired" ? "good" : props.group === "not_moving_forward" ? "neutral" : "accent";
-  return <Pill tone={tone}>{props.label}</Pill>;
-}
-
-/** Sources whose own name would mislead: a recruiter's call notes are never the candidate's words (plan E3). */
-const EVIDENCE_SOURCE_LABEL: Record<string, string> = { recruiter_note: "recruiter's call notes" };
-
-export function EvidenceChip(props: { source: string }) {
-  return <Chip tone="source">{EVIDENCE_SOURCE_LABEL[props.source] ?? props.source.replace("_", " ")}</Chip>;
-}
-
 /**
- * The match score as "91/100", green from 70, amber from 55, grey below (helpers.ts SCORE_BANDS). A screen reader hears
- * "Match score 91 out of 100". With no score it says so in words instead of showing a number: `none`, else "No score yet"
- * (a screen that knows none will come says "No score": someone decided before any AI review).
+ * A score as "91/100", with its band word beside it when one is given. The page hands it the number, the band's word and
+ * the colour that goes with the band (green, amber or grey; never red, which belongs to a missing must-have): the kit
+ * keeps no band table of its own. `label` says what the number is to a screen reader ("Resume match 91 out of 100").
+ * With no score it says why in words (`none`) instead of showing a number.
  */
-export function ScoreBadge(props: { score: number | null | undefined; size?: "sm" | "md" | "lg"; showBand?: boolean; none?: string }) {
-  const s = scoreBand(props.score);
+export function ScoreBadge(props: { score: number | null | undefined; label?: string; tone?: "good" | "caution" | "neutral"; band?: string | null; size?: "sm" | "md" | "lg"; none?: string }) {
   const size = props.size === "sm" || props.size === "lg" ? props.size : undefined;
-  if (!s) return <span className={cx("score", "none", size)}>{props.none ?? "No score yet"}</span>;
-  const label = scoreLabel(s.score);
+  if (props.score === null || props.score === undefined || !Number.isFinite(props.score)) return <span className={cx("score", "none", size)}>{props.none ?? "No score yet"}</span>;
+  const score = Math.min(100, Math.max(0, Math.round(props.score)));
+  const label = `${props.label ?? "Score"} ${score} out of 100`;
   const badge = (
-    <span className={cx("score", size !== "lg" && s.tone, size)} title={label}>
+    <span className={cx("score", size !== "lg" && (props.tone ?? "neutral"), size)} title={label}>
       <span className="sr-only">{label}</span>
       <span aria-hidden="true">
-        {s.score}
+        {score}
         <span className="of">/100</span>
       </span>
     </span>
   );
-  if (!props.showBand) return badge;
+  if (!props.band) return badge;
   return (
     <span className="score-wrap">
       {badge}
-      <span className="score-band">{s.label}</span>
+      <span className="score-band">{props.band}</span>
     </span>
   );
 }
@@ -337,24 +325,6 @@ export function Timeline(props: { items: Array<{ when: string; what: string; who
   );
 }
 
-export function PipelineBar(props: { counts: Record<string, number>; total: number }) {
-  // `waiting_on_candidate`: an offer made outside the app, waiting on the candidate's answer (plan H2)
-  const parts: Array<[string, string]> = [["in_process", "var(--ink-2)"], ["waiting_on_you", "var(--caution-dot)"], ["waiting_on_candidate", "var(--ink-3)"], ["hired", "var(--good-dot)"], ["not_moving_forward", "var(--line-2)"]];
-  return (
-    <div className="pipeline" role="img" aria-label={`Pipeline: ${parts.map(([k]) => `${k.replace(/_/g, " ")} ${props.counts[k] ?? 0}`).join(", ")}`}>
-      {parts.map(([k, color]) => {
-        const n = props.counts[k] ?? 0;
-        return n ? <span key={k} style={{ width: `${(n / Math.max(1, props.total)) * 100}%`, background: color }} title={`${k.replace(/_/g, " ")}: ${n}`} /> : null;
-      })}
-    </div>
-  );
-}
-
-/** One message in a conversation; `from` says who wrote it (the name avoids the `role` ARIA attribute). */
-export function Bubble(props: { from: "assistant" | "user" | "system"; children: ReactNode }) {
-  return <div className={`bubble ${props.from}`}>{props.children}</div>;
-}
-
 /**
  * A table in a box that scrolls sideways when it must (docs/07). `head` takes words, or a TableHead: `num` for a column
  * of figures (right-aligned, heading included; give the cells className="num"), or `sort` and `onSort` for a heading
@@ -404,16 +374,6 @@ export function Table(props: { head: Array<string | TableHead>; children?: React
       </table>
       {live ? <span className="sr-only" role="status">{status}</span> : null}
     </section>
-  );
-}
-
-/** A figure and what it counts, for a report ("12" over "applicants in total"): the number large and tabular, the words under it. Not on Today (founder decision Q4). */
-export function Stat(props: { n: number | string; label: string }) {
-  return (
-    <div className="stat">
-      <span className="stat-n">{props.n}</span>
-      <span className="stat-label">{props.label}</span>
-    </div>
   );
 }
 
@@ -503,18 +463,16 @@ export function SectionHeader(props: { title: ReactNode; sub?: ReactNode; eyebro
 
 export { cn } from "./cn";
 export { Icon, ICON_NAMES, type IconName } from "./icons";
-// The match score's breakdown (Wave F): bars per requirement, no hooks.
-export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { compareValues, cx, initials, nextSort, normalizeToast, numHead, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StageChoice, stageMenuItems, type StepState, type TableHead, type TabOrientation, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
+export { compareValues, cx, initials, nextSort, normalizeToast, numHead, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StepState, type TableHead, type TabOrientation, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.
-export { Dialog, Drawer, Sheet } from "./sheet";
+export { Dialog, Drawer } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
 export { useTableSort } from "./table-sort";
 export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";
-export { Menu, type MenuItem, StageButton } from "./menu";
+export { Menu, type MenuItem } from "./menu";
 export { Toast, Toaster } from "./toast";
 // Motion's provider (LazyMotion with domMax, strict, and MotionConfig reducedMotion="user"), mounted once by the shell.
 export { MotionProvider } from "./motion-provider";
