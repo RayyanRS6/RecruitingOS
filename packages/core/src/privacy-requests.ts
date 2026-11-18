@@ -68,7 +68,7 @@ export async function recordCounselDecision(q: Queryable, row: DataRequestRow, i
   return u;
 }
 
-/** Message statuses that mean it left us (handed to the email or text provider; `unknown` and `sending` may have gone). */
+/** Message statuses that mean it left us (handed to the email provider; `unknown` and `sending` may have gone). */
 const LEFT_US = new Set(["sent", "delivered", "bounced", "complained", "unknown", "sending"]);
 /** A message that left us but may not have reached them, in the words the export uses. */
 const DID_NOT_ARRIVE: Record<string, string> = { bounced: "sent, but it did not arrive", complained: "sent; marked as unwanted", unknown: "sent, but we could not confirm it arrived", sending: "being sent" };

@@ -7,7 +7,7 @@ import { glob } from "node:fs/promises";
 /**
  * Tenant isolation lives in row-level security, and row-level security only applies inside `withTenant` (or, for
  * platform tables, `withPlatform`). A query made straight on `container.db` runs as the connection's own role, which
- * sees every company. Some routes need that (a token lookup before any tenant is known, a platform-wide feed); most
+ * sees every company. Some routes need that (a token lookup before any tenant is known); most
  * do not. Tests cannot catch a missed wrapper (PGlite runs as a superuser), so this test holds the line instead: the
  * number of raw queries per file may go down, never up, without a deliberate change here.
  */

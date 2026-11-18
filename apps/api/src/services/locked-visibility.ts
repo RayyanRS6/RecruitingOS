@@ -49,10 +49,10 @@ const UNPLACED_SUBJECTS = new Set(["escalation", "interview", "approval_request"
  * back when it is about someone locked, whichever way it says so: its subject (an application, or a screen or message
  * of one), the application its payload names, the workflow run working on them, or the person
  * themselves when everything they have here is locked (someone also visible on another job shows through that job).
- * `application.received` is why this looks at the subject and not at the words: an emailed-in applicant's note carries their
- * address and a subject line that is often their name. A stored entry about a recruiter request, an in-person interview
- * or an approval can hold words about someone locked, and nothing read here says which was about whom, so none of them
- * is shown. Costs one query for a company with nobody locked.
+ * `application.received` is why this looks at the subject and not at the words: a stored entry of someone who applied by
+ * email, which an earlier release took, carries their address and a subject line that is often their name. A stored entry
+ * about a recruiter request, an in-person interview or an approval can hold words about someone locked, and nothing read
+ * here says which was about whom, so none of them is shown. Costs one query for a company with nobody locked.
  */
 export async function withoutLockedEvents<E extends EventRow>(tx: Tx, companyId: string, all: E[]): Promise<E[]> {
   if (!all.length || !(await companyHasLocked(tx, companyId))) return all;

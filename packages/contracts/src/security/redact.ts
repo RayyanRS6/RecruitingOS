@@ -1,8 +1,8 @@
 /**
  * What counts as a secret, and how to remove it from anything that leaves the process (founder decision I-series and
  * correction 10 of 18 September 2026: tokens must never appear in logs, errors, analytics, audit records, support
- * messages, screenshots, or documentation). Pure functions; the runtime registry of values actually read from the
- * secret store lives in @ros/core and is passed in as `values`.
+ * messages, screenshots, or documentation). Pure functions; the runtime registry of the secret values a process
+ * actually holds lives in @ros/core and is passed in as `values`.
  */
 
 export const REDACTED = "[redacted]";
