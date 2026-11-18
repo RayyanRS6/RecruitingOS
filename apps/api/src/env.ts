@@ -36,7 +36,7 @@ export type Env = {
    * apart. "production" when DEPLOY_ENV=production or on a Vercel Production deployment (VERCEL_ENV=production): the
    * strict mode, whose start-up also refuses every setting that is only right for staging. "staging" when
    * DEPLOY_ENV=staging or on a Vercel Preview deployment. null on a person's machine and in tests. Anything but
-   * production keeps search engines out (robots.txt, pages/public-feeds.ts).
+   * production keeps search engines out (robots.txt, pages/sitemap.ts).
    */
   DEPLOY_ENV: "production" | "staging" | null;
   DATABASE_URL: string | null;
@@ -45,9 +45,9 @@ export type Env = {
   /** The one public address of a deployment. The app, the API, the candidate pages and the webhooks are all served from it (the Next.js shell mounts the API in-process). */
   APP_BASE_URL: string;
   /**
-   * The public job-page host (docs/spec/20 item 1; jobs.identifiedtalent.com once its domain exists): every
-   * candidate-facing job URL, feed, sitemap entry, posting package and tracked link is built from it. Defaults to
-   * APP_BASE_URL, so one host serves everything until the second domain is attached.
+   * The public job-page host (jobs.identifiedtalent.com once its domain exists): every candidate-facing job URL and
+   * sitemap entry is built from it. Defaults to APP_BASE_URL, so one host serves everything until the second domain is
+   * attached.
    */
   JOBS_BASE_URL: string;
   SESSION_SECRET: string;
@@ -65,8 +65,6 @@ export type Env = {
   BOOTSTRAP_ADMIN_EMAILS: string[];
   /** The internal email magic link. On by default outside production; production defaults to off (the identity service handles email sign-in). */
   MAGIC_LINK_ENABLED: boolean;
-  /** "vault" (Supabase Vault, production) or "memory" (development and tests). Never application-side cryptography (F1). */
-  SECRET_STORE: string;
   AI_PROVIDER: string;
   /**
    * "postmark" sends real email; anything else is the fake, which keeps each email in memory and reports it sent. Allowed
@@ -77,9 +75,8 @@ export type Env = {
   EMAIL_FROM_DOMAIN: string;
   /** The single sending address (F6): updates@hire.identifiedtalent.com in production. Display names name the customer's hiring team. */
   EMAIL_FROM_ADDRESS: string;
-  /** Where candidate replies land until the platform inbox exists: a monitored ITS mailbox (F6). */
+  /** Where candidate replies land: a monitored ITS mailbox (F6). */
   EMAIL_REPLY_TO: string;
-  EMAIL_INTAKE_DOMAIN: string;
   ITS_QUEUE_EMAIL: string;
   /** Internal product name used in staff-facing and owner-facing system mail; never a claim to candidates. */
   PRODUCT_NAME: string;
@@ -101,8 +98,7 @@ export type Env = {
   RATE_LIMIT_OVERRIDES: Record<string, number>;
   /** How many proxies in front of the API append to X-Forwarded-For (Vercel: 1). The address that many hops from the right is the client; anything a client sends itself is ignored. */
   TRUST_PROXY_HOPS: number;
-  /** Text messaging to candidates (decision M2): off until counsel, carrier registration and a partner need it. Opting out always works. */
-  SMS_ENABLED: boolean;
+
   /** Content-security policy: "report-only" (default everywhere until staging reports are reviewed) or "enforce". */
   CSP_MODE: "report-only" | "enforce";
   /**
@@ -127,7 +123,7 @@ export type Env = {
    */
   COMPANY_CHECK: "its" | "auto";
   /**
-   * The Undo window (plan G9): how many seconds a message a person sent waits in the outbox before it goes, so they can
+   * The Undo window: how many seconds a decision email a person sent waits in the outbox before it goes, so they can
    * take it back. 30 by default; 0 under NODE_ENV=test unless set, so tests that send and drain see it leave at once.
    */
   MESSAGE_UNDO_SECONDS: number;
@@ -189,7 +185,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     APP_BASE_URL: get("APP_BASE_URL", "http://localhost:3000").replace(/\/+$/, ""),
     JOBS_BASE_URL: get("JOBS_BASE_URL", get("APP_BASE_URL", "http://localhost:3000")).replace(/\/+$/, ""),
     SESSION_SECRET: get("SESSION_SECRET", "dev-only-change-me-32-bytes-minimum-please"),
-    SECRET_STORE: get("SECRET_STORE", "memory"),
     AUTH_PROVIDER: get("AUTH_PROVIDER", "fake"),
     SUPABASE_URL: source.SUPABASE_URL ?? null,
     SUPABASE_ANON_KEY: source.SUPABASE_ANON_KEY ?? null,
@@ -201,7 +196,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     EMAIL_FROM_DOMAIN: get("EMAIL_FROM_DOMAIN", "mail.localhost"),
     EMAIL_FROM_ADDRESS: get("EMAIL_FROM_ADDRESS", `updates@${get("EMAIL_FROM_DOMAIN", "mail.localhost")}`),
     EMAIL_REPLY_TO: get("EMAIL_REPLY_TO", get("ITS_QUEUE_EMAIL", "recruiters@its.localhost")),
-    EMAIL_INTAKE_DOMAIN: get("EMAIL_INTAKE_DOMAIN", "intake.localhost"),
     ITS_QUEUE_EMAIL: get("ITS_QUEUE_EMAIL", "recruiters@its.localhost"),
     PRODUCT_NAME: get("PRODUCT_NAME", "Recruiting OS"),
     PRIVACY_EMAIL: get("PRIVACY_EMAIL", "privacy@identifiedtalent.com"),
@@ -223,7 +217,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     COMPANY_CHECK: get("COMPANY_CHECK", get("NODE_ENV", "development") === "test" ? "auto" : "its") === "auto" ? "auto" : "its",
     MESSAGE_UNDO_SECONDS: Math.min(120, Math.max(0, Number(get("MESSAGE_UNDO_SECONDS", get("NODE_ENV", "development") === "test" ? "0" : "30")) || 0)),
     TRUST_PROXY_HOPS: Math.max(0, Number(get("TRUST_PROXY_HOPS", "1")) || 0),
-    SMS_ENABLED: get("SMS_ENABLED", get("SMS_PROVIDER", "fake") === "twilio" ? "true" : "false") === "true",
     STORAGE_DIR: fromRoot(get("STORAGE_DIR", "./.data/files")),
     WORKER_INLINE: get("WORKER_INLINE", "true") !== "false",
     WORKER_POLL_MS: Number(get("WORKER_POLL_MS", "500")),
@@ -249,7 +242,6 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (!/^https:\/\/[^/]+$/.test(env.APP_BASE_URL)) throw new Error("APP_BASE_URL must be the deployment's https origin in production (for example https://app.example.com), with no path");
     if (source.JOBS_BASE_URL && !/^https:\/\/[^/]+$/.test(env.JOBS_BASE_URL)) throw new Error("JOBS_BASE_URL must be the public job-page https origin in production (for example https://jobs.example.com), with no path");
     if (!source.ANALYTICS_SALT) throw new Error("ANALYTICS_SALT must be set in production: analytics identifiers are keyed hashes and must never use the development salt");
-    if (env.SECRET_STORE !== "vault") throw new Error("SECRET_STORE must be \"vault\" in production: secrets live in the managed key-management service, never in application-side cryptography");
     if (env.AI_PROVIDER === "fake") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (env.AUTH_PROVIDER !== "supabase") throw new Error("AUTH_PROVIDER must be \"supabase\" in production: sign-in is delegated to the managed identity service (D19)");
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) throw new Error("SUPABASE_URL and SUPABASE_ANON_KEY must be set in production for sign-in");
@@ -278,12 +270,11 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     if (!source.POSTMARK_SERVER_TOKEN) throw new Error("POSTMARK_SERVER_TOKEN must be set on the production deployment: without the Postmark server's token no email can be sent");
     // Only the app answers Postmark's webhooks (webhooks/postmark.ts); the worker sends but never reads the secret.
     if (role === "app" && !source.POSTMARK_WEBHOOK_SECRET) throw new Error("POSTMARK_WEBHOOK_SECRET must be set on the production deployment: without it the app refuses Postmark's bounce, complaint and delivery reports");
-    // Both webhook secrets are passwords the application makes up, as long as the session secret: a forged bounce or
-    // complaint would put a candidate on the do-not-send list, and the inbound one admits email into the product.
+    // The webhook secret is a password the application makes up, as long as the session secret: a forged bounce or
+    // complaint would put a candidate on the do-not-send list.
     if (role === "app" && (source.POSTMARK_WEBHOOK_SECRET ?? "").length < 32) throw new Error("POSTMARK_WEBHOOK_SECRET must be at least 32 characters on the production deployment: generate one for production (scripts/new-secret.ps1), never staging's, and enter the same value as the webhook's password in Postmark");
-    if (source.POSTMARK_INBOUND_SECRET && source.POSTMARK_INBOUND_SECRET.length < 32) throw new Error("POSTMARK_INBOUND_SECRET must be at least 32 characters on the production deployment when it is set: generate one for production (scripts/new-secret.ps1), never staging's");
     // Each is set by hand, never left to the fallback a person's machine uses (EMAIL_REPLY_TO is the contact printed on
-    // job pages). EMAIL_INTAKE_DOMAIN may end in localhost: that is how inbound email stays off (registry.ts, emailInConfigured).
+    // job pages).
     for (const [name, fallback] of [["EMAIL_FROM_ADDRESS", "updates@<EMAIL_FROM_DOMAIN>"], ["EMAIL_REPLY_TO", "ITS_QUEUE_EMAIL"], ["ITS_QUEUE_EMAIL", "recruiters@its.localhost"]] as const) {
       const value = source[name];
       if (!value) throw new Error(`${name} must be set on the production deployment to a real mailbox, not left to its fallback (${fallback})`);

@@ -272,7 +272,7 @@ export async function settleAiCreditAlerts(q: Queryable, opts: { companyId?: str
   const gone = alerts.filter((a) => !!a.companyId && !CREDIT_ALERTS[a.kind]?.(standings.get(a.companyId) ?? null));
   if (!gone.length) return 0;
   const done = await q.update(adminAlerts).set({ status: "resolved", resolvedAt: now.toISOString() }).where(and(inArray(adminAlerts.id, gone.map((a) => a.id)), inArray(adminAlerts.status, ["open", "acknowledged"]))).returning({ id: adminAlerts.id, companyId: adminAlerts.companyId });
-  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", target: { type: "integration", id: a.id }, reason: "the AI credit has room again: a new month or a new plan", details: { resolved: true, automatic: true } });
+  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", reason: "the AI credit has room again: a new month or a new plan", details: { alertId: a.id, resolved: true, automatic: true } });
   return done.length;
 }
 

@@ -4,7 +4,7 @@ import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt,
 import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, isOneVisitFlow, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
-import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
+import { recordInbound, sendPersonRequestedNote } from "./coordinator";
 import { FOCUS_INTRO, answersOf, focusedPacket, isFocusKey, unfairQuestion, unplannedChatPacket, withFocusAnswer, type FocusQuestion } from "./screen-focus";
 import { PLACEHOLDER, SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
 import { TRIAGE_READINGS, answerInContext, applyEvidenceRules, closedAnswer, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, jobWords, linkReadingRuns, plainlyNotHeld, sentenceAround, shownNotHeld, withoutInterviewSkills } from "./triage";
@@ -1158,11 +1158,10 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
   if (input.tap && !tapped) return { kind: "done", result: { kind: "error", message: "That answer does not fit this question. Please type it instead." } };
   const said = input.skip ? null : tapped ?? input.message;
   // Kept with the conversation's id: the team sees it only once the conversation's answers are sent (9 October 2026).
-  if (said !== null) await recordInbound(q, { companyId: company.id, candidateId: candidate.id, applicationId: app.id, channel: input.channel, text: said, from: input.channel === "sms" ? candidate.phone : null, provider: input.channel === "sms" ? deps.integrations.sms.id : null, providerMessageId: input.providerMessageId ?? null, actor: candidateActor, correlationId: screen.workflowRunId, screenId: screen.id });
+  if (said !== null) await recordInbound(q, { companyId: company.id, candidateId: candidate.id, applicationId: app.id, channel: input.channel, text: said, from: null, provider: null, providerMessageId: input.providerMessageId ?? null, actor: candidateActor, correlationId: screen.workflowRunId, screenId: screen.id });
 
   if (!ACTIVE_STATUSES.has(screen.status)) {
     const msg = closedMessage(screen.status, company.name);
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_closed:${screen.id}:${now}`, templateKey: "screen_closed", disclosureIncluded: false });
     return { kind: "done", result: { kind: "closed", message: msg } };
   }
   // Checking answers (E10): changes go through the page's own forms, not the conversation.
@@ -1207,11 +1206,8 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
   }
   if (command === "withdraw") {
     // Nothing is withdrawn yet: the candidate is asked once, and the answer to that question decides.
-    const msg = input.channel === "sms"
-      ? `Do you want to withdraw your application for ${packet.identity.title}? Reply CONFIRM to withdraw. To keep your application, just reply with your answer.`
-      : `Do you want to withdraw your application for ${packet.identity.title}? Press "Yes, withdraw my application" below to confirm. To keep your application, just type your answer.`;
+    const msg = `Do you want to withdraw your application for ${packet.identity.title}? Press "Yes, withdraw my application" below to confirm. To keep your application, just type your answer.`;
     await q.update(screens).set({ transcript: [...transcript, { role: "assistant", content: msg, at: now, channel: input.channel, questionKey: WITHDRAW_CONFIRM_KEY }] }).where(eq(screens.id, screen.id));
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdraw_ask:${screen.id}:${transcript.length}`, templateKey: "screen_withdraw_ask", disclosureIncluded: false });
     return { kind: "done", result: { kind: "reply", message: msg, done: false, humanRequested: false } };
   }
   if (input.skip || tapped) {
@@ -1343,9 +1339,6 @@ async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { 
   const reply: ScreenTranscriptEntry = { role: "assistant", content: message, at: nowOf(deps).toISOString(), questionKey: s.questionKey ?? undefined, channel: s.channel, aiRunId: s.aiRunId };
   const transcript = [...s.transcript, reply];
   await q.update(screens).set({ transcript, answers: s.answers, progress }).where(eq(screens.id, screen.id));
-  if (s.channel === "sms") {
-    await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: s.aiRunId ? { kind: "agent", id: "screening", runId: s.aiRunId } : s.actor, text: message, idempotencyKey: `screen_turn:${screen.id}:${transcript.length}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: s.aiRunId ?? null, correlationId: screen.workflowRunId });
-  }
   if (s.done && !review) await completeScreen(q, deps, b, { answers: s.answers, progress, channel: s.channel, actor: s.actor });
   return { kind: "reply", message, done: s.done && !review, humanRequested: false, ...(review ? { review: true } : {}) };
 }
@@ -1405,7 +1398,6 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
     const current = screen.progress.currentQuestionKey ? packet.screening.questions.find((x) => x.key === screen.progress.currentQuestionKey) : undefined;
     const msg = `No problem, your application stays active.${current ? ` Here is where we were: ${current.question}` : ""}`;
     await q.update(screens).set({ transcript: [...screen.transcript, { role: "assistant", content: msg, at, channel: input.channel }] }).where(eq(screens.id, screen.id));
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdraw_kept:${screen.id}:${screen.transcript.length}`, templateKey: "screen_withdraw_kept", disclosureIncluded: false });
     return msg;
   }
   // A withdrawn application cannot be reopened, so the reply promises nothing about changing their mind (plan A1).
@@ -1416,7 +1408,6 @@ export async function answerWithdrawPrompt(q: Queryable, deps: ScreenDeps, input
   await emit(q, { type: "application.withdrawn", companyId: company.id, actor: candidateActor, subject: { type: "application", id: app.id }, payload: { during: "screen", channel: input.channel }, correlationId: screen.workflowRunId });
   await deps.onWithdrawn?.(q, { companyId: company.id, applicationId: app.id, actor: candidateActor });
   await notify(q, { companyId: company.id, about: app.id, kind: "candidate.withdrawn", title: `${candidate.firstName} ${candidate.lastName} withdrew`, body: `They withdrew from ${packet.identity.title} during the AI interview, and confirmed it.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
-  if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: msg, idempotencyKey: `screen_withdrawn:${screen.id}`, templateKey: "screen_withdrawn", disclosureIncluded: false });
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:completed`, payload: { withdrawn: true } });
   return msg;
 }
@@ -1453,7 +1444,6 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
       return { kind: "reply", message: msg, done: false, humanRequested: true };
     }
     const holding = "Sorry, something went wrong on our end. Please send that again in a minute.";
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: input.actor, text: holding, idempotencyKey: `screen_holding:${screen.id}:${pending.transcript.length}`, templateKey: "screen_holding", disclosureIncluded: false });
     return { kind: "error", message: holding };
   }
 
@@ -1485,7 +1475,6 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
   if (turn.humanRequested) {
     const reply: ScreenTranscriptEntry = { role: "assistant", content: turn.messageToCandidate, at: nowOf(deps).toISOString(), channel: input.channel, aiRunId };
     await q.update(screens).set({ transcript: [...fresh.transcript, reply], answers, progress }).where(eq(screens.id, screen.id));
-    if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: aiRunId ? { kind: "agent", id: "screening", runId: aiRunId } : input.actor, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: aiRunId ?? null, correlationId: screen.workflowRunId });
     // A turn retried after an outage (E5) that hands over is told by the hand-over email instead: one email, not two.
     // One reason for every hand-over the assistant makes in the conversation, whether they asked for a person in their
     // own words or it judged they needed one: either comes from words they have not sent, so the team never learns
@@ -1554,9 +1543,7 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
     ? { title: `${name} asked to talk to a person`, body: `During the AI interview for ${packet.identity.title}. Anything they typed before asking was not sent, so it stays private.` }
     : { title: `The AI interview stopped for ${name}`, body: `The assistant could not continue during the AI interview for ${packet.identity.title}. Anything they typed was not sent, so it stays private.` };
   await notify(q, { companyId: company.id, about: app.id, kind: "screen.human_requested", ...words, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
-  if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
-  const textSaidSo = !!input.reply && input.replyChannel === "sms";
-  if (byCandidate && input.confirmByEmail !== false && !textSaidSo && candidate.email) {
+  if (byCandidate && input.confirmByEmail !== false && candidate.email) {
     await sendPersonRequestedNote(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, correlationId: screen.workflowRunId, key: screen.id });
   }
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:human` });

@@ -23,7 +23,6 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("screen.writeup", (req) => fakeScreenWriteup(req));
   fake.register("packet.revise", (req) => fakeRevise(req));
   fake.register("company.about", (req) => fakeCompanyAbout(req));
-  fake.register("message.freeform", (req) => fakeMessageLine(req));
   fake.register("intake.suggest", (req) => fakeSuggest(req));
 }
 
@@ -56,17 +55,6 @@ function fakeSuggest(req: StructuredRequest<unknown>): { mustHaves: string[]; qu
   }
   if (type === "Part time" || type === "Temporary") mustHaves.push("Available for the posted hours");
   return { mustHaves: mustHaves.slice(0, 8), questions: questions.slice(0, 4) };
-}
-
-/**
- * message.suggest_line v1 (Q28): one warm line for an interview invitation or an update, the way the model is told to
- * write it: no promise, no judgment, nothing about the person. The interview's title is used when given.
- */
-function fakeMessageLine(req: StructuredRequest<unknown>): { line: string } {
-  const text = req.messages.map((m) => m.content).join("\n");
-  const interview = text.match(/<interview>([^<]*)<\/interview>/)?.[1]?.trim();
-  if (/Purpose: an interview invitation/.test(text)) return { line: interview ? `We are looking forward to meeting you for the ${interview.toLowerCase()} and hearing more about what you are looking for.` : "We are looking forward to meeting you and hearing more about what you are looking for." };
-  return { line: "Thank you for your patience while the team works through the applications for this role." };
 }
 
 type FakeIntakeContext = {

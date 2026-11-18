@@ -45,7 +45,6 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
   "scorecard.draft": "standard",
   "debrief.compose": "standard",
   "offer.propose": "standard",
-  "message.freeform": "standard",
 };
 
 /**

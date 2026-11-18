@@ -7,7 +7,6 @@ export * from "./prompts/intake";
 export * from "./prompts/intake-suggest";
 export * from "./prompts/packet-revise";
 export * from "./prompts/company-about";
-export * from "./prompts/message-line";
 export * from "./prompts/resume";
 export { FakeProvider, type FakeFailure, type FakeHandler } from "./providers/fake";
 export * from "./prompts/triage";

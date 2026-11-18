@@ -1,19 +1,19 @@
 import type { ClosingDateView } from "@ros/contracts";
-import { BUSINESS_TIMEZONE, dayKeyIn, zonedToUtc } from "./business-hours";
+import { BUSINESS_TIMEZONE, dayKeyIn, zonedToUtc } from "./time-zone";
 
 /**
- * A role's closing date (founder decision Q12, plan D7). The owner picks the last day new applications are taken; at the
- * end of that day, in the company's own time zone, the accepting switch turns off with this reason. Nobody is rejected:
- * people part-way through the form may finish for a while (`CLOSING_GRACE_HOURS`), screens already started go on, and
- * closing the role stays a person's decision. Colorado expects the date on the job ad, so a Colorado (or remote) role
- * that opens without one gets `DEFAULT_CLOSING_DAYS` from the day it opens, which the owner can change.
+ * A job's closing date. An owner or admin picks the last day new applications are taken; at the end of that day, in the
+ * company's own time zone, the job stops taking applications with this reason. Nobody is rejected: people part-way
+ * through the form may finish for a while (`CLOSING_GRACE_HOURS`), AI interviews already sent go on, and closing the job
+ * stays a person's decision. Colorado expects the date on the job ad, so a Colorado (or remote) job that opens without
+ * one gets `DEFAULT_CLOSING_DAYS` from the day it opens, which the team can change.
  */
 export const CLOSING_DATE_REASON = "closing date";
 export const DEFAULT_CLOSING_DAYS = 30;
 /** How long after the closing moment a form opened before it is still accepted. */
 export const CLOSING_GRACE_HOURS = 24;
 
-/** The zone the company's days are cut in; one the runtime does not know falls back to the business default. */
+/** The zone the company's days are cut in; one the runtime does not know falls back to `BUSINESS_TIMEZONE`. */
 export function companyTimeZone(timeZone: string | null | undefined): string {
   if (!timeZone) return BUSINESS_TIMEZONE;
   try {
@@ -68,7 +68,7 @@ export function closingDateProblem(closesOn: string, now: Date, timeZone: string
   return null;
 }
 
-/** What the role page, the Posting tab and the job pages need to know about the date. */
+/** What the job's page in the app and the public job pages need to know about the date. */
 export function closingDateView(input: {
   role: { applicationsCloseOn: string | null; acceptingApplications: boolean; applicationsClosedReason: string | null; status: string };
   timeZone: string | null | undefined;

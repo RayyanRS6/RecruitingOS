@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, messageLinePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
 import {
   INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, credentialMustHaves, editableView, enforceTurnRules, finalizePacket, hasPlaceholder, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type ScoringIdentity,
@@ -14,7 +14,7 @@ import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intak
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
-import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, lineCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
+import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -296,7 +296,7 @@ async function main() {
     results["triage.fairness_rules"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
-  // The match score and the board's placement (plan F6): rules and determinism of the code, no model call.
+  // The match score: rules and determinism of the code, no model call.
   if (runs("board.determinism")) {
     const out: (typeof results)[string]["cases"] = boardCases.map((c) => {
       const f = boardCaseFailures(c);
@@ -332,18 +332,6 @@ async function main() {
       out.push({ id: c.id, pass: f.length === 0, failures: f });
     }
     results["company.about"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
-  }
-
-  // The line the assistant suggests for an invitation or an update (Q28): judged as the candidate would read it.
-  if (runs("message.suggest_line")) {
-    const out: (typeof results)[string]["cases"] = [];
-    for (const c of lineCases) {
-      const r = await runPrompt(q, rt, messageLinePrompt, c.input, { companyId: null, inputRef: { eval: c.id } });
-      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`suggestion failed: ${r.error}`] }); continue; }
-      const f = c.expect(r.output.line);
-      out.push({ id: c.id, pass: f.length === 0, failures: f });
-    }
-    results["message.suggest_line"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   if (runs("screen.conversation")) {

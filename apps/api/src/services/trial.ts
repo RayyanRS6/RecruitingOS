@@ -1,10 +1,8 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { TRIAL_ENDED_LINE, TRIAL_NOTICE_DAYS, TRIAL_PLAN_KEY, newTrialTerm, onTrialPlan, trialStanding, trialTermOf, type Actor, type TrialExtension, type TrialStanding, type TrialTerm } from "@ros/contracts";
 import { audit, closingDayWords, companyToday, emit, notify, raiseAlert, resolveAlertsFor } from "@ros/core";
-import { companies, roles, withTenant, type Queryable } from "@ros/db";
-import type { Container } from "../container";
+import { companies, type Queryable } from "@ros/db";
 import { HttpError } from "../middleware/errors";
-import { replayHeldEmails } from "../webhooks/postmark";
 
 /**
  * The Trial plan's 30 days (founder decision L-02 B, 16 October 2026), on the API side: the dates written on
@@ -89,22 +87,6 @@ export async function extendTrial(q: Queryable, input: { companyId: string; days
   const date = trialDateWords(to, co.timezone);
   await notify(q, { companyId, kind: "company.trial_extended", title: "ITS extended your trial", body: `ITS extended your trial to ${date}.${wasPaused ? " New applications are open again." : ""}`, action: { label: "See your plan", href: "/setup" }, roles: ["owner", "admin"] });
   return { wasPaused, standing: trialStanding({ planKey: co.planKey, settings: { ...co.settings, trial: next } }, now) };
-}
-
-/**
- * Once a paused company can take applications again (an extension, a change of plan), the emails that arrived for its
- * jobs while it was paused are added, job by job, as when a job reopens (C19). Run after the change has committed; a
- * no-op for a job that is still not taking applications, and while the company is still paused.
- */
-export async function replayHeldEmailsForCompany(container: Container, companyId: string): Promise<{ replayed: number; failed: number }> {
-  const open = await withTenant(container.db, companyId, (tx) => tx.select({ id: roles.id }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "open"), eq(roles.acceptingApplications, true))));
-  const total = { replayed: 0, failed: 0 };
-  for (const r of open) {
-    const done = await replayHeldEmails(container, { companyId, roleId: r.id });
-    total.replayed += done.replayed;
-    total.failed += done.failed;
-  }
-  return total;
 }
 
 /**

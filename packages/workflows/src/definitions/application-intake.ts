@@ -1,14 +1,13 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { ResumeExtraction, type EvidenceAssessment } from "@ros/contracts";
 import { outOfCredit, type RunOutcome } from "@ros/ai";
-import { ASSESSMENT_UNAVAILABLE_TEXT, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
+import { ASSESSMENT_UNAVAILABLE_TEXT, evaluateEligibility, emit, notify, transition } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, type ConsentRecord, type Tx } from "@ros/db";
 import { assessApplication, extractResume, verifyQuotes } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
 import { waitForCredit } from "../credit-wait";
 import { examineQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination } from "../documents";
 import { FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, linkFormReading } from "../form-reading";
-import { settleSuggestion, type SuggestionState } from "../suggestions";
 import { interviewRunOn, offerInterview, readingSettledSignal, sendOnFileEmail, startInterviewAgain } from "../with-application";
 
 /**

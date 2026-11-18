@@ -1,14 +1,11 @@
 import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
-import { cancelInterviewEvents } from "@ros/agents";
-import { eq } from "drizzle-orm";
-import { communications, createDb, inspectConnectionRole, migrate, migrationStatus, postings, problemsWithConnectionRole, roles, seedPlatform, withPlatform, withTenant, type Db, type DbHandle, type DbRole } from "@ros/db";
-import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createAiCreditGate, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
+import { createDb, inspectConnectionRole, migrate, migrationStatus, problemsWithConnectionRole, seedPlatform, withPlatform, type Db, type DbHandle, type DbRole } from "@ros/db";
+import { SYSTEM_ACTOR, countActiveAdmins, createAiCreditGate, createRateLimitStore, raiseAlert, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
-import { AI_HOLD_CHECK_JOB_KIND, aiNoticeSentSignal, createEngine, type WorkflowEngine } from "@ros/workflows";
-import { ALERT_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
-import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
+import { AI_HOLD_CHECK_JOB_KIND, createEngine, type WorkflowEngine } from "@ros/workflows";
+import { ALERT_EMAIL_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
+import { SEND_JOB_KIND, retryCommunication, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
-import type { Actor } from "@ros/contracts";
 import { mailbox, toProductEvent } from "@ros/integrations";
 import { loadEnv, type Env } from "./env";
 import { errorForLog, registerSecretValue } from "@ros/core";
@@ -22,8 +19,8 @@ import { DAILY_MS, recurring } from "./recurring-jobs";
 import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
 import { registerApplyConversationJobs } from "./services/apply-conversation";
 import { registerApplyDetailsJobs } from "./services/apply-details";
+import { CLOSE_OUT_JOB_KIND, sendDueCloseOutNotes } from "./services/close-out";
 import { registerProfileJobs } from "./services/profile-facts";
-import { PUBLISHING_BACKFILL_JOB_KIND, backfillPublishing } from "./services/publishing-backfill";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
@@ -52,7 +49,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
   // The boot checks know which process this is (H7): the app needs DATABASE_URL, the worker WORKER_DATABASE_URL, and neither may fall back to PGlite in production.
   const env = loadEnv(opts.env ?? process.env, { role });
   // Every runtime secret the environment carries is registered so logs, error responses and error reports scrub it (correction 10).
-  for (const name of ["SESSION_SECRET", "ANTHROPIC_API_KEY", "POSTMARK_SERVER_TOKEN", "POSTMARK_INBOUND_SECRET", "POSTMARK_WEBHOOK_SECRET", "UPSTASH_REDIS_REST_TOKEN", "TWILIO_AUTH_TOKEN", "GOOGLE_OAUTH_CLIENT_SECRET", "SUPABASE_JWT_SECRET", "STORAGE_S3_SECRET_ACCESS_KEY"]) {
+  for (const name of ["SESSION_SECRET", "ANTHROPIC_API_KEY", "POSTMARK_SERVER_TOKEN", "POSTMARK_WEBHOOK_SECRET", "UPSTASH_REDIS_REST_TOKEN", "SUPABASE_JWT_SECRET", "STORAGE_S3_SECRET_ACCESS_KEY"]) {
     const v = env.raw[name];
     if (v && v.length >= 12 && !v.startsWith("dev-only")) registerSecretValue(v);
   }
@@ -103,8 +100,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     }
     // Every value the adapters read is the normalized one from loadEnv, so a default lives in one place only.
     const integrations = createIntegrations(
-      { ...env.raw, APP_BASE_URL: env.APP_BASE_URL, STORAGE_DIR: env.STORAGE_DIR, EMAIL_FROM_DOMAIN: env.EMAIL_FROM_DOMAIN, EMAIL_FROM_ADDRESS: env.EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO: env.EMAIL_REPLY_TO, EMAIL_INTAKE_DOMAIN: env.EMAIL_INTAKE_DOMAIN, ITS_QUEUE_EMAIL: env.ITS_QUEUE_EMAIL, PRODUCT_NAME: env.PRODUCT_NAME, SECRET_STORE: env.SECRET_STORE },
-      { memoryStorage: opts.memory || env.STORAGE_PROVIDER === "memory", secretsExecutor: (text, params) => handle.query(text, params) },
+      { ...env.raw, APP_BASE_URL: env.APP_BASE_URL, STORAGE_DIR: env.STORAGE_DIR, EMAIL_FROM_DOMAIN: env.EMAIL_FROM_DOMAIN, EMAIL_FROM_ADDRESS: env.EMAIL_FROM_ADDRESS, EMAIL_REPLY_TO: env.EMAIL_REPLY_TO, ITS_QUEUE_EMAIL: env.ITS_QUEUE_EMAIL, PRODUCT_NAME: env.PRODUCT_NAME },
+      { memoryStorage: opts.memory || env.STORAGE_PROVIDER === "memory" },
     );
     // A real malware engine is asked whether it answers (H6); a scanner that is down does not stop the boot, the quarantine step retries.
     if (integrations.scanner.check) {
@@ -131,7 +128,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     const engine = createEngine(
       {
         db: handle.db,
-        services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, jobsBaseUrl: env.JOBS_BASE_URL, smsEnabled: env.SMS_ENABLED } },
+        services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, jobsBaseUrl: env.JOBS_BASE_URL } },
         // Failures that used up their attempts reach the error reporter with kinds and ids (H2) and the last error scrubbed and cut (failure-reports.ts); the payload and the run's state never leave the database.
         onJobFailed: (info) => { const report = jobFailureReport(info); reportError(report.err, report.context); },
         onStepFailed: (info) => { const report = stepFailureReport(info); reportError(report.err, report.context); },
@@ -142,7 +139,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     ai.credit = createAiCreditGate({ now: () => engine.clock() });
     // The outbox stamps its send jobs on the engine's clock, so a message queued "now" is due on the clock that runs the queue.
     integrations.clock = () => engine.clock();
-    // So does the job that writes an email alert for an update (plan B3).
+    // So does the job that writes the emails for an update.
     setNotifyClock(() => engine.clock());
     const alertEmailDeps = (now: Date) => ({ send: (m: Parameters<typeof integrations.email.send>[0]) => integrations.email.send(m), from: mailbox(env.PRODUCT_NAME, integrations.env.fromAddress), consoleUrl: `${env.APP_BASE_URL}/admin`, now });
     /** Emails one critical alert now (after the commit that raised it); a failure is left to the queued job. */
@@ -151,31 +148,14 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       if (r.retry) throw new Error(r.retry);
     };
 
-    // Correction 10: disconnecting queues revocation and deletion; the worker (the only role that can read the value) runs it.
-    engine.registerJob(REVOKE_JOB_KIND, async (payload, ctx) => {
-      const integrationId = String(payload.integrationId ?? "");
-      if (!integrationId) return;
-      const actor = (payload.actor as Actor | undefined) ?? { kind: "system", id: "credential_revoker" };
-      const result = await withPlatform(handle.db, (tx) => revokeAndDeleteCredentials(tx, integrations.secrets, {
-        integrationId, actor, attempt: ctx.attempt, maxAttempts: ctx.maxAttempts, now: ctx.now,
-        revoker: (provider, value) => (integrations.revokers[provider] ? integrations.revokers[provider].revoke(value) : Promise.resolve({ ok: false, error: `no revoker for ${provider}` })),
-      }));
-      // The alert and audit record are committed; failing the job here makes the queue retry with backoff.
-      if (!result.deleted) throw new Error(result.error ?? "credential deletion failed");
-    });
-
-    // Calendar events are removed by the worker (the only role that reads credentials); a failure notifies the person, never blocks the cancellation.
-    engine.registerJob("interview.cancel_events", async (payload) => {
-      const interviewId = String(payload.interviewId ?? "");
-      const companyId = String(payload.companyId ?? "");
-      if (!interviewId || !companyId) return;
-      const actor = (payload.actor as Actor | undefined) ?? { kind: "system", id: "calendar" };
-      await withTenant(handle.db, companyId, (tx) => cancelInterviewEvents(tx, integrations, { interviewId, actor }));
-    });
-
     // Privacy-request deadlines are checked daily (correction 7): the job re-arms itself even when a run fails (H13); a person sees an alert ten days before and when overdue.
     engine.registerJob(PRIVACY_DEADLINE_JOB_KIND, recurring(engine, handle.db, PRIVACY_DEADLINE_JOB_KIND, DAILY_MS, async (ctx) => {
       await checkPrivacyRequestDeadlines(handle.db, ctx.now);
+    }));
+
+    // The close-out note to someone still locked when the latest date they were promised comes, checked daily.
+    engine.registerJob(CLOSE_OUT_JOB_KIND, recurring(engine, handle.db, CLOSE_OUT_JOB_KIND, DAILY_MS, async (ctx) => {
+      await sendDueCloseOutNotes({ db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL }, ctx.now);
     }));
 
     // The daily sweep (docs/14, retention): finished jobs, expired sessions and sign-in links, old receipts and reports, old heartbeats,
@@ -209,20 +189,12 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       setAlertEmails(() => engine.clock());
     }
 
-    // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
+    // The outbox: every email queued inside a transaction is sent here, after that transaction committed, once.
     engine.registerJob(SEND_JOB_KIND, async (payload, ctx) => {
       const communicationId = String(payload.communicationId ?? "");
       const companyId = String(payload.companyId ?? "");
       if (!communicationId || !companyId) return;
-      const outcome = await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
-      // An acknowledgment carries the AI notice for someone who applied by email: their intake run waits for it before any
-      // AI reading (application-intake `ai_notice`, known-bugs row 16), so it hears at once that the email went or never will.
-      if (outcome === "sent" || outcome === "failed" || outcome === "unknown" || outcome === "cancelled") {
-        await withTenant(handle.db, companyId, async (tx) => {
-          const [row] = await tx.select({ templateKey: communications.templateKey, applicationId: communications.applicationId }).from(communications).where(eq(communications.id, communicationId)).limit(1);
-          if (row?.templateKey === "acknowledgment" && row.applicationId) await engine.signal(tx, { companyId, key: aiNoticeSentSignal(row.applicationId) });
-        });
-      }
+      await sendQueuedCommunication(handle.db, integrations, { communicationId, companyId }, ctx);
     });
 
     // "Lost your link?" (Wave 0 item 0.1): the page queued the request and answered at once; the lookup and the emails happen here.
@@ -241,72 +213,10 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     engine.registerJob("email.retry", async (payload, ctx) => {
       await withPlatform(handle.db, (tx) => retryCommunication(tx, integrations, { communicationId: String(payload.communicationId ?? ""), attempt: Number(payload.attempt ?? 1), now: ctx.now }));
     });
-    engine.registerJob("email.fallback_sms", async (payload) => {
-      const applicationId = String(payload.applicationId ?? "");
-      if (!applicationId) return;
-      // The status link a candidate receives lives on the job-page host, like the acknowledgment's.
-      await withPlatform(handle.db, (tx) => sendFallbackSms(tx, integrations, { applicationId, communicationId: (payload.communicationId as string | null) ?? null, appBaseUrl: env.JOBS_BASE_URL }));
-    });
-
-    /**
-     * Public URL verification (docs/spec/20 item 12): fetches the posting's recorded URL through the verifier adapter
-     * and moves the posting to live_verified when the page answers with the job title. A failed fetch is recorded on
-     * the row and retried by the queue with backoff; the third failure marks the posting failed for a person to look at.
-     * A posting a person confirmed by hand ("I checked it myself") is left alone by a check that was already waiting
-     * when they confirmed; only a check they asked for (`payload.requested`, "Check again") fetches it again.
-     * Never posts anything, never touches a candidate.
-     */
-    engine.registerJob(POSTING_VERIFY_JOB_KIND, async (payload, ctx) => {
-      const postingId = String(payload.postingId ?? "");
-      const companyId = String(payload.companyId ?? "");
-      if (!postingId || !companyId) return;
-      const requested = payload.requested === true;
-      const actor: Actor = { kind: "system", id: "link_check" };
-      const checkable = (p: { status: string; externalUrl: string | null; verifiedBy: Actor | null }) => {
-        if (!["posted_manually", "submitted_integration", "live_verified"].includes(p.status) || !p.externalUrl) return false;
-        const byPerson = p.status === "live_verified" && p.verifiedBy !== null && p.verifiedBy.kind !== "system";
-        return requested || !byPerson;
-      };
-      const target = await withTenant(handle.db, companyId, async (tx) => {
-        const [p] = await tx.select().from(postings).where(eq(postings.id, postingId)).limit(1);
-        if (!p || !checkable(p)) return null;
-        const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, p.roleId)).limit(1);
-        return role ? { url: p.externalUrl!, title: role.title } : null;
-      });
-      if (!target) return; // nothing to check: no URL yet, the posting moved on, or a person's word stands
-      const result = await integrations.verifier.verify(target.url, { expectedTitle: target.title });
-      const retry = await withTenant(handle.db, companyId, async (tx) => {
-        const [p] = await tx.select().from(postings).where(eq(postings.id, postingId)).limit(1);
-        if (!p || !checkable(p)) return false;
-        if (result.ok) {
-          if (p.status === "live_verified") await tx.update(postings).set({ verifiedAt: ctx.now.toISOString(), verifiedBy: actor, verificationError: null, verificationAttempts: 0 }).where(eq(postings.id, p.id));
-          else await transitionPosting(tx, { postingId: p.id, to: "live_verified", actor, now: ctx.now, patch: { verifiedAt: ctx.now.toISOString(), verifiedBy: actor, verificationError: null, verificationAttempts: 0 }, payload: { check: "fetched" } });
-          return false;
-        }
-        const attempts = p.verificationAttempts + 1;
-        const detail = `${result.reason}: ${result.detail}`;
-        const last = attempts >= POSTING_VERIFY_MAX_ATTEMPTS || ctx.attempt >= ctx.maxAttempts;
-        await tx.update(postings).set({ verificationAttempts: attempts, verificationError: detail }).where(eq(postings.id, p.id));
-        await emit(tx, { type: "posting.verification_failed", companyId, actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, url: p.externalUrl, reason: result.reason, detail: result.detail, attempt: attempts, final: last } });
-        if (last) {
-          await transitionPosting(tx, { postingId: p.id, to: "failed", actor, now: ctx.now, patch: { error: `The public URL could not be verified after ${attempts} ${attempts === 1 ? "check" : "checks"} (${detail}). Check the link, then record it again or confirm it yourself.` }, payload: { reason: result.reason } });
-          return false;
-        }
-        return true;
-      });
-      if (retry) throw new Error(`verification of posting ${postingId} failed (${result.ok ? "" : result.reason}); retrying`);
-    });
-
-    // Roles already open when the publishing rules arrived (plan Wave D): their missing Colorado closing dates. Queued
-    // once per boot; a run changes only what is still missing (services/publishing-backfill.ts).
-    engine.registerJob(PUBLISHING_BACKFILL_JOB_KIND, async () => {
-      await backfillPublishing({ db: handle.db, engine });
-    });
-
     // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.
     if (env.NODE_ENV !== "test") {
       // the AI hold check too: with nothing held it resolves any outage alert left open and arms nothing more
-      for (const kind of [PRIVACY_DEADLINE_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, PUBLISHING_BACKFILL_JOB_KIND, AI_HOLD_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
+      for (const kind of [PRIVACY_DEADLINE_JOB_KIND, CLOSE_OUT_JOB_KIND, MAINTENANCE_JOB_KIND, HEALTH_CHECK_JOB_KIND, AI_HOLD_CHECK_JOB_KIND]) await engine.ensureQueued(handle.db, { kind });
     }
 
     let draining: Promise<void> | null = null;

@@ -2,7 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import { and, eq } from "drizzle-orm";
 import { LOCKED_WORD, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION } from "@ros/contracts";
 import { applicationLocked, can } from "@ros/core";
-import { applications, interviews, withTenant, type Tx } from "@ros/db";
+import { applications, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "./errors";
 import { isCanonicalId, type Tenant, type Vars } from "./session";
 
@@ -56,10 +56,4 @@ function lockGuard(notFound: string, find: (tx: Tx, id: string, companyId: strin
 export const applicationLockGuard = lockGuard("Application not found.", async (tx, id, companyId) => {
   const [row] = await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.id, id), eq(applications.companyId, companyId))).limit(1);
   return row?.id ?? null;
-});
-
-/** Every route under /api/v1/interviews/:id: the person is the one the interview is with. */
-export const interviewLockGuard = lockGuard("Interview not found.", async (tx, id, companyId) => {
-  const [row] = await tx.select({ applicationId: interviews.applicationId }).from(interviews).where(and(eq(interviews.id, id), eq(interviews.companyId, companyId))).limit(1);
-  return row?.applicationId ?? null;
 });

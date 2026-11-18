@@ -2,10 +2,10 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { companies, withPlatform } from "@ros/db";
-import { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { FakeEmailAdapter } from "@ros/integrations";
 import type { Container } from "./container";
 import { errorHandler } from "./middleware/errors";
-import { applicationLockGuard, interviewLockGuard } from "./middleware/candidate-lock";
+import { applicationLockGuard } from "./middleware/candidate-lock";
 import { sessionMiddleware, type Vars } from "./middleware/session";
 import { authRoutes } from "./routes/auth";
 import { companyRoutes } from "./routes/companies";
@@ -15,30 +15,17 @@ import { authSessionRoutes } from "./routes/auth-sessions";
 import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
 import { applicationRoutes, roleRoutes } from "./routes/roles";
-import { postingRoutes } from "./routes/postings";
 import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
-import { reportRoutes } from "./routes/reports";
-import { messageRoutes } from "./routes/messages";
-import { compareRoutes } from "./routes/compare";
-import { noteRoutes } from "./routes/notes";
-import { approvalRoutes, briefRoutes, eventRoutes } from "./routes/approvals-events";
 import { adminRoutes } from "./routes/admin";
-import { policyRoutes } from "./routes/policies";
 import { notificationRoutes } from "./routes/notifications";
-import { integrationRoutes } from "./routes/integrations";
-import { applicationInterviewRoutes, interviewRoutes, meRoutes, roleInterviewRoutes } from "./routes/interviews";
-import { applicationNewTimesRoutes, roleNewTimesRoutes } from "./routes/new-times";
-import { schedulePages } from "./pages/schedule";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
 import { observabilityRoutes } from "./routes/observability";
 import { readWorkerHealth } from "./worker-health";
 import { appHealthWatch } from "./maintenance";
 import { redactString } from "@ros/core";
-import { twilioWebhook } from "./webhooks/twilio";
 import { candidatePages } from "./pages/candidate";
 import { draftPreviewPages, rolePreviewPages } from "./pages/preview";
-import { linkPages } from "./pages/links";
-import { publicFeeds } from "./pages/public-feeds";
+import { sitemapPages } from "./pages/sitemap";
 import { fileRoutes } from "./routes/files";
 import { screenRoleRoutes } from "./routes/screen-routes";
 import { postmarkWebhook } from "./webhooks/postmark";
@@ -70,7 +57,7 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   // 21 Sep, item 5: per-user and per-tenant limits on the API, per-address for anonymous calls, generous per-provider limits on webhooks.
   app.use("/api/*", apiRateLimit());
   app.use("/webhooks/*", webhookRateLimit());
-  for (const p of ["/c/*", "/careers/*", "/privacy", "/feeds/*", "/files/*", "/a/*", "/sitemap.xml", "/robots.txt"]) app.use(p, rateLimit(POLICIES.candidatePages));
+  for (const p of ["/c/*", "/careers/*", "/privacy", "/files/*", "/sitemap.xml", "/robots.txt"]) app.use(p, rateLimit(POLICIES.candidatePages));
   // 21 Sep, item 6: candidate pages carry a strict policy with a per-request nonce; report-only until reviewed (CSP_MODE).
   const candidateCsp: MiddlewareHandler<Vars> = async (c, next) => {
     // One nonce per response: "/x/*" also matches "/x", so a page mounted under both runs this twice, and a second nonce
@@ -84,7 +71,6 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.use("/c/*", candidateCsp);
   app.use("/careers/*", candidateCsp);
   app.use("/privacy", candidateCsp);
-  app.use("/a/*", candidateCsp);
   // The staff second-factor pages and the sign-in link page are server-rendered HTML under the API: same policy, same nonce.
   app.use("/api/v1/auth/mfa", candidateCsp);
   app.use("/api/v1/auth/mfa/*", candidateCsp);
@@ -135,7 +121,6 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
 
   // Rule 3 of the plans of 5 November 2026: before any handler under these paths, and at the prefix so a new router cannot forget it.
   for (const p of ["/api/v1/applications/:id", "/api/v1/applications/:id/*"]) app.use(p, applicationLockGuard);
-  for (const p of ["/api/v1/interviews/:id", "/api/v1/interviews/:id/*"]) app.use(p, interviewLockGuard);
 
   app.route("/api/v1/auth", authRoutes);
   app.route("/api/v1/auth", authSessionRoutes);
@@ -150,49 +135,25 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   // every refusal (the page applies the same scope rules itself); the app's own requests go on to the data routes.
   app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", roleRoutes);
-  app.route("/api/v1/roles", postingRoutes);
   app.route("/api/v1/roles", rolePacketRoutes);
-  app.route("/api/v1/roles", reportRoutes);
-  app.route("/api/v1/roles", compareRoutes);
-  app.route("/api/v1/applications", messageRoutes);
   app.route("/api/v1/applications", applicationRoutes);
-  app.route("/api/v1/applications", noteRoutes);
-  app.route("/api/v1/approvals", approvalRoutes);
-  app.route("/api/v1/events", eventRoutes);
-  app.route("/api/v1/brief", briefRoutes);
   app.route("/api/v1/admin", adminRoutes);
   app.route("/api/v1/admin/data-requests", privacyRequestRoutes);
   app.route("/api/v1/admin/observability", observabilityRoutes);
-  app.route("/api/v1/policies", policyRoutes);
   app.route("/api/v1/notifications", notificationRoutes);
-  app.route("/api/v1/integrations", integrationRoutes);
-  app.route("/api/v1/interviews", interviewRoutes);
-  app.route("/api/v1/applications", applicationInterviewRoutes);
-  // New times for people under Cancelled (founder decision 2A): one person, their automatic set, or a role's column.
-  app.route("/api/v1/applications", applicationNewTimesRoutes);
-  app.route("/api/v1/roles", roleInterviewRoutes);
-  app.route("/api/v1/roles", roleNewTimesRoutes);
   app.route("/api/v1/roles", screenRoleRoutes);
-  app.route("/api/v1/me", meRoutes);
-  app.route("/", schedulePages);
   app.route("/files", fileRoutes);
   app.route("/webhooks/postmark", postmarkWebhook);
-  app.route("/webhooks/twilio", twilioWebhook);
   app.route("/", candidatePages);
   // The public privacy-request form and its confirmation link (audit finding D13): pages/privacy-request.tsx.
   app.route("/", privacyRequestPages);
-  // Tracked application links, the sitemap, robots and the public job feeds (docs/spec/20 items 5 to 7): pages/links.tsx and pages/public-feeds.ts.
-  app.route("/", linkPages);
-  app.route("/", publicFeeds);
+  // The sitemap and robots: pages/sitemap.ts.
+  app.route("/", sitemapPages);
 
   /** Development only: what the fake email adapter would have sent (magic links, acknowledgments). */
   if (container.env.NODE_ENV !== "production" && container.integrations.email instanceof FakeEmailAdapter) {
     const fakeEmail = container.integrations.email;
     app.get("/dev/outbox", (c) => c.json(fakeEmail.sent.slice(-50).reverse()));
-  }
-  if (container.env.NODE_ENV !== "production" && container.integrations.sms instanceof FakeSmsAdapter) {
-    const fakeSms = container.integrations.sms;
-    app.get("/dev/sms-outbox", (c) => c.json(fakeSms.sent.slice(-50).reverse()));
   }
 
   return app;

@@ -71,9 +71,6 @@
   "company.about": {
     "minPassRate": 1
   },
-  "message.suggest_line": {
-    "minPassRate": 1
-  },
   "chat.shape": {
     "minPassRate": 1
   },

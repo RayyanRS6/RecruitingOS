@@ -20,8 +20,7 @@ export type TaskKey =
   | "interview.brief"
   | "scorecard.draft"
   | "debrief.compose"
-  | "offer.propose"
-  | "message.freeform";
+  | "offer.propose";
 
 export type SystemBlock = { text: string; cache?: boolean };
 

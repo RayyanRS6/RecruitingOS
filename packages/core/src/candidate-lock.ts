@@ -1,7 +1,7 @@
 import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, moreAppliedTitle } from "@ros/contracts";
 import { applications, candidates, companies, events, notifications, type Queryable } from "@ros/db";
-import { zonedParts } from "./business-hours";
+import { zonedParts } from "./time-zone";
 import { limitOf, planOf } from "./entitlements";
 import { notify } from "./notifications";
 

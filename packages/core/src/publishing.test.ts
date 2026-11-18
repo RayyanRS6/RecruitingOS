@@ -1,42 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { RolePacket } from "@ros/contracts";
 import { addCalendarDays, applyByLabel, closingDateProblem, closingDateView, closingMoment, companyToday, defaultClosingDate } from "./closing-date";
 import { PAY_TRANSPARENCY_CANDIDATES, PAY_TRANSPARENCY_JURISDICTIONS, benefitsDescriptionFor, closingDateRequired, jobJurisdictions, postingLegalCheck } from "./compliance";
-import { chosenBoards, defaultBoards, publishChannelsFor, showsOldVersion, zipRecruiterOffered } from "./postings";
 
 /**
- * Approving and publishing (plan Wave D), the pure parts: the boards a role uses (Q11), the closing date in the
- * company's own time zone (Q12), the legal check before approval (D5) and the ITS posting task words (D3).
+ * Publishing, the pure parts: the closing date in the company's own time zone and the legal check before a job is
+ * published.
  */
-describe("the boards a role uses (founder decision Q11, plan D6)", () => {
-  const packet = (channels: string[]) => ({ sourcing: { channels } }) as unknown as Pick<RolePacket, "sourcing">;
-
-  it("defaults to the boards the role plan names, ZipRecruiter only with the company's own plan; the careers page, Google and email always", () => {
-    expect(defaultBoards(packet(["careers_page", "google_jobs", "indeed", "referrals"]), {})).toEqual(["indeed"]);
-    expect(defaultBoards(packet(["linkedin_basic", "indeed", "ziprecruiter"]), {})).toEqual(["linkedin_basic", "indeed"]);
-    expect(defaultBoards(packet(["linkedin_basic", "indeed", "ziprecruiter"]), { zipRecruiterPlan: true })).toEqual(["linkedin_basic", "indeed", "ziprecruiter"]);
-    expect(zipRecruiterOffered({ zipRecruiterPlan: "yes" })).toBe(false);
-    expect(publishChannelsFor({ publishChannels: null }, packet(["indeed"]), {})).toEqual(["careers_page", "google_jobs", "email_in", "indeed"]);
-  });
-
-  it("a person's ticks win over the role plan, in the Posting tab's order, and never bring ZipRecruiter without the plan", () => {
-    expect(chosenBoards({ publishChannels: ["indeed", "linkedin_basic"] }, packet(["indeed"]), {})).toEqual(["linkedin_basic", "indeed"]);
-    expect(chosenBoards({ publishChannels: [] }, packet(["indeed"]), {})).toEqual([]);
-    expect(chosenBoards({ publishChannels: ["ziprecruiter"] }, packet([]), {})).toEqual([]);
-    expect(chosenBoards({ publishChannels: ["ziprecruiter", "careers_page"] }, packet([]), { zipRecruiterPlan: true })).toEqual(["ziprecruiter"]);
-    expect(publishChannelsFor({ publishChannels: [] }, packet(["indeed"]), {})).toEqual(["careers_page", "google_jobs", "email_in"]);
-  });
-
-  it("says which board listings still show an older version", () => {
-    expect(showsOldVersion({ channel: "indeed", status: "live_verified", boardVersion: 1 }, 2)).toBe(true);
-    expect(showsOldVersion({ channel: "indeed", status: "live_verified", boardVersion: 2 }, 2)).toBe(false);
-    expect(showsOldVersion({ channel: "indeed", status: "ready_to_post", boardVersion: 1 }, 2)).toBe(false); // not up anywhere
-    expect(showsOldVersion({ channel: "indeed", status: "live_verified", boardVersion: null }, 2)).toBe(false); // unknown
-    expect(showsOldVersion({ channel: "careers_page", status: "live_verified", boardVersion: 1 }, 2)).toBe(false); // the job page itself
-  });
-});
-
-describe("the closing date (founder decision Q12, plan D7)", () => {
+describe("the closing date", () => {
   it("applications stop at the end of the closing day in the company's own time zone, across daylight saving", () => {
     // Pacific daylight time: midnight is 07:00 UTC the next day
     expect(closingMoment("2026-10-08", "America/Los_Angeles").toISOString()).toBe("2026-10-09T07:00:00.000Z");
@@ -74,7 +44,7 @@ describe("the closing date (founder decision Q12, plan D7)", () => {
   });
 });
 
-describe("the legal check before approval (plan D5; counsel confirms the lists)", () => {
+describe("the legal check before publishing (counsel confirms the lists)", () => {
   const packet = (locations: Array<{ city?: string; region?: string }>, extra: { remotePolicy?: string; min?: number; max?: number; benefitsSummary?: string } = {}) => ({
     identity: { locations: locations.map((l) => ({ ...l, country: "US" })), remotePolicy: extra.remotePolicy ?? "onsite" },
     compensation: { min: extra.min ?? 60000, max: extra.max ?? 70000, benefitsSummary: extra.benefitsSummary },

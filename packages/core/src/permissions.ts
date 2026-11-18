@@ -1,66 +1,44 @@
 import type { MembershipRole } from "@ros/contracts";
 
+/**
+ * What each team role may do. An owner and an admin may do everything; a member (`hiring_manager`) builds, edits and
+ * publishes jobs and acts on candidates, and does not pause, resume or close a job, set its closing date, change the
+ * company's details or manage people.
+ */
 export type Permission =
   | "company.read"
   | "company.update"
   | "members.manage"
   | "role.create"
   | "role.read"
-  | "role.approve"
+  /** Publish a job: open it, so its job page is public and takes applications. */
+  | "role.publish"
+  /** Pause, resume and close a job, set its closing date, take over a draft. */
   | "role.manage"
   | "packet.edit"
   | "application.read"
   | "application.act"
   | "application.reject"
-  | "candidate.search"
   | "compensation.read"
-  | "scorecard.write"
-  | "offer.manage"
-  | "policy.manage"
   /** Ask ITS for a bigger plan (the Upgrade button). */
   | "plan.request"
   | "events.read"
-  | "billing.manage"
-  /** Connect and disconnect external calendars and job boards for the company (correction 10). */
-  | "integration.manage"
-  /** Record a hiring outcome that happened outside the platform, or close a role with its outcome (decision-makers only). */
-  | "outcome.record"
-  /** Approve an interview round for a candidate and pick the interviewers (the human click that starts scheduling). */
-  | "interview.request"
-  /** Re-offer times, cancel, book on the candidate's behalf, and record whether an interview took place for any interview. */
-  | "interview.manage"
-  /** Record the decision after an interview: next round, finalist, or not moving forward. */
-  | "interview.decide"
-  /**
-   * Read every private team note on a candidate, and write one's own (founder decision Q24; plan H3). An interviewer
-   * holds neither: they write their own note on people they interviewed and read only that (services/interviewer-view.ts).
-   */
-  | "note.read"
-  | "note.write";
+  /** Record a hire. */
+  | "outcome.record";
 
 const MATRIX: Record<MembershipRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
-    "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
-    "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
-    "offer.manage", "policy.manage", "plan.request", "events.read", "billing.manage", "integration.manage", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
+    "company.read", "company.update", "members.manage", "role.create", "role.read", "role.publish", "role.manage", "packet.edit",
+    "application.read", "application.act", "application.reject", "compensation.read", "plan.request", "events.read", "outcome.record",
   ]),
   admin: new Set<Permission>([
-    "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
-    "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
-    "offer.manage", "policy.manage", "plan.request", "events.read", "billing.manage", "integration.manage", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
+    "company.read", "company.update", "members.manage", "role.create", "role.read", "role.publish", "role.manage", "packet.edit",
+    "application.read", "application.act", "application.reject", "compensation.read", "plan.request", "events.read", "outcome.record",
   ]),
   hiring_manager: new Set<Permission>([
-    "company.read", "role.create", "role.read", "role.approve", "packet.edit", "application.read", "application.act",
-    "application.reject", "compensation.read", "scorecard.write", "plan.request", "events.read", "outcome.record",
-    "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
+    "company.read", "role.create", "role.read", "role.publish", "packet.edit", "application.read", "application.act",
+    "application.reject", "compensation.read", "plan.request", "events.read", "outcome.record",
   ]),
-  hr: new Set<Permission>([
-    "company.read", "role.read", "application.read", "application.act", "candidate.search", "compensation.read", "offer.manage",
-    "plan.request", "events.read", "members.manage", "outcome.record", "note.read", "note.write",
-  ]),
-  interviewer: new Set<Permission>(["company.read", "role.read", "scorecard.write"]),
 };
 
 export function can(role: MembershipRole | null | undefined, permission: Permission): boolean {

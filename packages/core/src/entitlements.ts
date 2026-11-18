@@ -392,6 +392,6 @@ export async function settleAllowanceAlerts(q: Queryable, opts: { companyId?: st
   if (!gone.length) return 0;
   const done = await q.update(adminAlerts).set({ status: "resolved", resolvedAt: now.toISOString() }).where(and(inArray(adminAlerts.id, gone.map((a) => a.id)), inArray(adminAlerts.status, ["open", "acknowledged"]))).returning({ id: adminAlerts.id, companyId: adminAlerts.companyId });
   // each one on the record, as resolved by the system and why (a person's resolve is audited the same way)
-  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", target: { type: "integration", id: a.id }, reason: "allowance period reset or limit raised", details: { resolved: true, automatic: true } });
+  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", reason: "allowance period reset or limit raised", details: { alertId: a.id, resolved: true, automatic: true } });
   return done.length;
 }

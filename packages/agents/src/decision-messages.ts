@@ -1,17 +1,16 @@
-import { and, count, eq, gt, gte, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
-import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type ApplicationStage, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
-import { CANDIDATE_LOCK_ACTOR, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, adverseDecisionLineApplies, emit, gate, inCancelled, notLocked, notify, resolvePolicy, unlockedAtFor, waitingSince } from "@ros/core";
-import { applications, approvalRequests, candidates, communications, companies, events, interviews, rolePackets, roles, type Queryable } from "@ros/db";
+import { and, count, eq, gte, inArray, isNotNull, like, lte } from "drizzle-orm";
+import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
+import { CANDIDATE_LOCK_ACTOR, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, adverseDecisionLineApplies, emit } from "@ros/core";
+import { applications, candidates, communications, companies, rolePackets, roles, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
-import { CLOSE_OUT_TEMPLATE, dispositionMessage, sendCloseOutNote, sendDisposition, sendStillReviewingNote, type CancelledInterview, type PersonalLine } from "./coordinator";
+import { CLOSE_OUT_TEMPLATE, dispositionMessage, sendCloseOutNote, sendDisposition } from "./coordinator";
 import { HELD_REASON } from "./outbox";
-import { UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, untoldFallbackDue, workingDayRulesFor } from "./orchestrator";
 
 /**
  * Telling candidates a private decision (founder decision B6; plan Wave G). Everything that writes the decision message,
- * wherever the Send comes from: a person on the candidate's page or in bulk, an approver, the closing message of a closed
- * role (Q30), and the untold safety net (Q27). The wording is always one of the approved wordings (Q28); the assistant
- * never writes a decline.
+ * wherever the Send comes from: a person on the candidate's page or in bulk, and the message to someone locked
+ * (`tellOneLocked`). The wording is always one of the approved wordings (Q28); the assistant never writes a decline.
+ * Also the close-out note to someone locked, which is no decision.
  */
 type App = typeof applications.$inferSelect;
 type Role = typeof roles.$inferSelect;
@@ -48,28 +47,12 @@ export function statusUrlPlaceholder(baseUrl: string): string {
   return `${baseUrl}/c/status/[their status link]`;
 }
 
-/**
- * Interviews the decision called off that the candidate knew about (a booked time still to come, or times they were
- * offered and had not picked) and has not yet been told are off. A private decision tells the candidate at once, in a
- * short note with no reason, that such an interview is off, so the decision message leaves those out. It names one only
- * when nobody told them yet (the `interview.cancelled` event records whether they were), and never one no email about ever
- * reached them (`neverHeard` on that event): a time a person set and called off before they heard of it.
- */
-export async function interviewsCalledOff(q: Queryable, app: Pick<App, "id" | "rejectedAt" | "stageChangedAt">, now: Date): Promise<CancelledInterview[]> {
-  const since = app.rejectedAt ?? app.stageChangedAt;
-  const rows = await q.select({ id: interviews.id, title: interviews.title, startsAt: interviews.startsAt, timezone: interviews.timezone, offeredSlots: interviews.offeredSlots }).from(interviews).where(and(eq(interviews.applicationId, app.id), eq(interviews.status, "cancelled"), gte(interviews.updatedAt, since)));
-  if (!rows.length) return [];
-  const told = new Set((await q.select({ id: events.subjectId }).from(events).where(and(eq(events.type, "interview.cancelled"), inArray(events.subjectId, rows.map((r) => r.id)), sql`(${events.payload}->>'candidateTold' = 'true' or ${events.payload}->>'neverHeard' = 'true')`))).map((r) => r.id));
-  const known = (r: (typeof rows)[number]) => (r.startsAt ? Date.parse(r.startsAt) > now.getTime() : r.offeredSlots.length > 0);
-  return rows.filter((r) => known(r) && !told.has(r.id)).map(({ title, startsAt, timezone }) => ({ title, startsAt, timezone }));
-}
-
 const isEligibilityDecline = (app: Pick<App, "stage" | "rejectReason">) => app.stage === "rejected" && app.rejectReason === "eligibility";
 
 /**
  * The standard wording for a decision: the eligibility wording after an eligibility decline (fixed), the closing message
- * for someone a closed role moved to the talent pool, the standard wording otherwise. The untold safety net sends this
- * one (Q27: "the standard courteous message"); a person's Send starts on the suggested one.
+ * for someone a closed role moved to the talent pool, the standard wording otherwise. A person's Send starts on the
+ * suggested one.
  */
 export function defaultWording(app: Pick<App, "stage" | "rejectReason">, role: Pick<Role, "status">): DecisionWording {
   if (isEligibilityDecline(app)) return "eligibility";
@@ -81,12 +64,11 @@ export function defaultWording(app: Pick<App, "stage" | "rejectReason">, role: P
  * The wording the Send screen suggests (and starts on): "position filled" when that was the reason, "after an
  * interview" for someone who met the team, the default wording otherwise. The person may choose any approved wording.
  */
-export async function suggestedWording(q: Queryable, app: Pick<App, "id" | "stage" | "rejectReason">, role: Pick<Role, "status">): Promise<DecisionWording> {
+export async function suggestedWording(_q: Queryable, app: Pick<App, "id" | "stage" | "rejectReason">, role: Pick<Role, "status">): Promise<DecisionWording> {
   const fallback = defaultWording(app, role);
   if (fallback !== "v1") return fallback;
   if (app.rejectReason === "position_filled") return "position_filled";
-  const [met] = await q.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), eq(interviews.status, "completed"))).limit(1);
-  return met ? "after_interview" : "v1";
+  return "v1";
 }
 
 /** The wordings a person may choose for this decision, with the suggested one marked. */
@@ -113,15 +95,15 @@ async function resolveWording(q: Queryable, app: App, role: Role, wanted: Decisi
  * placeholder (`statusUrlPlaceholder`): this text is only ever shown to the team, and a Send writes its own with the
  * real link (`queueDecisionMessage`). Null when there is no decision or nothing to write it from.
  */
-export async function decisionMessageDraft(q: Queryable, input: { app: App; wording?: DecisionWording | null; personalLine?: PersonalLine | null; statusBaseUrl: string; now: Date }) {
+export async function decisionMessageDraft(q: Queryable, input: { app: App; wording?: DecisionWording | null; statusBaseUrl: string; now: Date }) {
   const { app } = input;
   if (!DECISION_STAGES.includes(app.stage)) return null;
   const parts = await loadDecisionParts(q, app);
   if (!parts) return null;
   const { wording, options } = await resolveWording(q, app, parts.role, input.wording);
   const adverseDecisionLine = adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText });
-  const message = dispositionMessage({ candidate: parts.cand, company: parts.company, packet: parts.packet, wording, cancelledInterviews: await interviewsCalledOff(q, app, input.now), personalLine: input.personalLine ?? null, statusUrl: statusUrlPlaceholder(input.statusBaseUrl), adverseDecisionLine });
-  return { to: parts.cand.email, subject: message.subject, text: message.text, wording, wordings: options, personalLine: input.personalLine?.text ?? null, adverseDecisionLine };
+  const message = dispositionMessage({ candidate: parts.cand, company: parts.company, packet: parts.packet, wording, statusUrl: statusUrlPlaceholder(input.statusBaseUrl), adverseDecisionLine });
+  return { to: parts.cand.email, subject: message.subject, text: message.text, wording, wordings: options, adverseDecisionLine };
 }
 
 /** What became of one decision message: the toast's words, the told state now, the message (for Undo) and the wording used. */
@@ -129,13 +111,13 @@ export type QueuedDecision = { notice: CandidateNotice; toldState: ToldState; co
 
 /**
  * Queues the decision message and records that it is on its way (the outbox marks it sent once it leaves, or not told
- * again if it cannot be delivered). The caller has passed the policy gate. A Send after a message that could not be
- * delivered is a new attempt with a key of its own; one still on its way or delivered never gets here: the application
- * row is locked and its told state read again first, so two Sends at the same moment (a person's, the closing message's,
- * the safety net's) write one message, and the second is refused (`already_told`). Nothing is written for someone whose
- * details were deleted at their request. `sendAt` holds a person's Send for the Undo window (plan G9).
+ * again if it cannot be delivered). A Send after a message that could not be delivered is a new attempt with a key of
+ * its own; one still on its way or delivered never gets here: the application row is locked and its told state read
+ * again first, so two Sends at the same moment write one message, and the second is refused (`already_told`). Nothing
+ * is written for someone whose details were deleted at their request. `sendAt` holds a person's Send for the Undo
+ * window (plan G9).
  */
-export async function queueDecisionMessage(q: Queryable, integrations: Integrations, input: { app: App; actor: Actor; wording?: DecisionWording | null; personalLine?: PersonalLine | null; statusBaseUrl: string; now: Date; sendAt?: Date | null }): Promise<QueuedDecision> {
+export async function queueDecisionMessage(q: Queryable, integrations: Integrations, input: { app: App; actor: Actor; wording?: DecisionWording | null; statusBaseUrl: string; now: Date; sendAt?: Date | null }): Promise<QueuedDecision> {
   const [locked] = await q.select({ toldState: applications.toldState, stage: applications.stage }).from(applications).where(eq(applications.id, input.app.id)).limit(1).for("update");
   if (!locked) return { notice: "not_sent", toldState: input.app.toldState, communicationId: null, wording: null };
   if (locked.toldState !== "not_told") throw new DecisionMessageError("already_told", ALREADY_TOLD);
@@ -148,7 +130,7 @@ export async function queueDecisionMessage(q: Queryable, integrations: Integrati
   // new Send is a new message with a key of its own.
   const [failed] = await q.select({ n: count() }).from(communications).where(and(eq(communications.applicationId, app.id), like(communications.templateKey, "disposition:%"), inArray(communications.status, ["failed", "cancelled", "unknown", "bounced"]), gte(communications.createdAt, app.rejectedAt ?? app.stageChangedAt)));
   const adverseDecisionLine = adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText });
-  const res = await sendDisposition(q, integrations, { application: app, candidate: parts.cand, role: parts.role, company: parts.company, packet: parts.packet, actor: input.actor, wording, cancelledInterviews: await interviewsCalledOff(q, app, input.now), attempt: Number(failed?.n ?? 0), personalLine: input.personalLine ?? null, statusUrl: statusUrlOf(input.statusBaseUrl, app), adverseDecisionLine, sendAt: input.sendAt ?? null });
+  const res = await sendDisposition(q, integrations, { application: app, candidate: parts.cand, role: parts.role, company: parts.company, packet: parts.packet, actor: input.actor, wording, attempt: Number(failed?.n ?? 0), statusUrl: statusUrlOf(input.statusBaseUrl, app), adverseDecisionLine, sendAt: input.sendAt ?? null });
   const communicationId = "communicationId" in res && typeof res.communicationId === "string" ? res.communicationId : null;
   // The outbox answers "sent" only for this decision's own message, already delivered under the same key. A message held
   // for the ITS company check is in the outbox too ("queued" told state), and the team is told it waits for the check.
@@ -160,91 +142,12 @@ export async function queueDecisionMessage(q: Queryable, integrations: Integrati
   return { notice: parts.cand.email ? "not_sent" : "not_sent_no_email", toldState: app.toldState, communicationId, wording };
 }
 
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The closing message of a closed role (founder decision Q30)                                                   */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/** The proposal of the one approval request that covers a closed role's closing message. */
-export type ClosingProposal = { kind: "role_closed"; applicationIds: string[]; count: number };
-export function isClosingProposal(p: unknown): p is ClosingProposal {
-  return !!p && typeof p === "object" && (p as { kind?: unknown }).kind === "role_closed" && Array.isArray((p as { applicationIds?: unknown }).applicationIds);
-}
-
-/**
- * Who a closed role's closing message is for: everyone the role left in the talent pool who has not been told (the
- * people still in process when it closed, and emailed applications added to the pool at the close). Those already told,
- * or whose own message waits for an approver, are counted and left out, so nobody is told twice; so is anyone whose
- * details were deleted at their request, who is never written to. `batch` is the one approval request already waiting
- * for this role's closing message, if any. `locked`: the people past the plan's candidates per job (Rule 2), counted apart and
- * never named: the team cannot read them, and they get the message with no word about keeping them (`tellLockedOfClose`).
- */
-export async function closingAudience(q: Queryable, roleId: string) {
-  const [role] = await q.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-  if (!role) return null;
-  const everyone = await q.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.stage, "talent_pool")));
-  const pool = everyone.filter((a) => !a.lockedAt);
-  const lockedUntold = everyone.filter((a) => a.lockedAt && a.toldState === "not_told");
-  const gone = lockedUntold.length ? new Set((await q.select({ id: candidates.id }).from(candidates).where(and(inArray(candidates.id, lockedUntold.map((a) => a.candidateId)), isNotNull(candidates.anonymizedAt)))).map((c) => c.id)) : new Set<string>();
-  const locked = lockedUntold.filter((a) => !gone.has(a.candidateId));
-  const untold = pool.filter((a) => a.toldState === "not_told");
-  const [batch] = (await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")))).filter((r) => isClosingProposal(r.proposal));
-  const own = new Set((untold.length ? await q.select({ applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, untold.map((a) => a.id)), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending"))) : []).map((r) => r.applicationId ?? ""));
-  const waiting = untold.filter((a) => !own.has(a.id));
-  const found = waiting.length ? await q.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName, email: candidates.email, preferences: candidates.preferences, anonymizedAt: candidates.anonymizedAt }).from(candidates).where(inArray(candidates.id, waiting.map((a) => a.candidateId))) : [];
-  const removed = new Set(found.filter((c) => c.anonymizedAt).map((c) => c.id));
-  const apps = waiting.filter((a) => !removed.has(a.candidateId));
-  const people = found.filter((c) => !removed.has(c.id)).map((c) => ({ id: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email, preferences: c.preferences }));
-  return { role, apps, people, alreadyTold: pool.length - untold.length, waitingApproval: own.size, batch: batch ?? null, locked };
-}
-
-/**
- * The closing message as one of its readers will get it, with "[first name]" in place of the name: what the person
- * approves once for everyone. Built from the first person's application (their packet version and status link shape).
- */
-export async function closingMessageText(q: Queryable, input: { app: App; statusBaseUrl: string }): Promise<{ subject: string; text: string } | null> {
-  const parts = await loadDecisionParts(q, input.app);
-  if (!parts) return null;
-  const sample = { ...parts.cand, firstName: "[first name]", preferences: { ...parts.cand.preferences, talentPoolOptOut: false } };
-  const message = dispositionMessage({ candidate: sample, company: parts.company, packet: parts.packet, wording: "role_closed", statusUrl: statusUrlPlaceholder(input.statusBaseUrl), adverseDecisionLine: false });
-  return { subject: message.subject, text: message.text };
-}
-
-/** One person's closing message: what became of it, and the message and its Undo while it waits out the window (plan G9). */
-export type ClosingResult = { applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string };
-
-/**
- * Sends the closing message to each of these people still untold on the closed role, each with their own result. Every
- * message has the key `role_closed:<application>`, so nobody gets it twice, whatever is pressed again; a Send of their
- * own at the same moment is refused by the told state (`queueDecisionMessage`). A message queued to wait out a person's
- * Undo window carries its `communicationId` and `undoUntil`.
- */
-export async function queueClosingMessages(q: Queryable, integrations: Integrations, input: { roleId: string; applicationIds: string[]; actor: Actor; statusBaseUrl: string; now: Date; sendAt?: Date | null }): Promise<ClosingResult[]> {
-  const rows = input.applicationIds.length ? await q.select().from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, input.applicationIds))) : [];
-  const out: ClosingResult[] = [];
-  const undoUntil = input.sendAt && input.sendAt.getTime() > input.now.getTime() ? input.sendAt.toISOString() : null;
-  for (const id of input.applicationIds) {
-    const app = rows.find((r) => r.id === id);
-    if (!app) { out.push({ applicationId: id, ok: false, code: "not_found", message: "Not a candidate of this role." }); continue; }
-    if (app.stage !== "talent_pool") { out.push({ applicationId: id, ok: false, code: "not_decided", message: "They are no longer in the talent pool from this role." }); continue; }
-    if (app.toldState !== "not_told") { out.push({ applicationId: id, ok: false, code: "already_told", message: "They were already told." }); continue; }
-    try {
-      const r = await queueDecisionMessage(q, integrations, { app, actor: input.actor, wording: "role_closed", statusBaseUrl: input.statusBaseUrl, now: input.now, sendAt: input.sendAt ?? null });
-      out.push({ applicationId: id, ok: true, candidateNotice: r.notice, communicationId: r.communicationId, undoUntil: r.notice === "queued" && r.communicationId ? undoUntil : null });
-    } catch (e) {
-      if (!(e instanceof DecisionMessageError)) throw e;
-      out.push({ applicationId: id, ok: false, code: e.code, message: e.message });
-    }
-  }
-  return out;
-}
-
 /**
  * The decision message by itself for one person past the plan's candidates per job (the plans of 5 November 2026, Rule 2), in
  * `wording`, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Nothing
  * goes to the team and nobody is brought in, and the fact on the record means nobody tries again if it could not go. True
  * when it is on its way. The closing message for someone a closed job left in its talent pool (`tellOneLockedOfClose`), or
- * the standard wording of the decision (`defaultWording`) for someone locked whose application carries a decision, on a job
- * still open or not, once the safety net's day comes (`runUntoldSafetyNet`; known bug 141).
+ * the standard wording of the decision (`defaultWording`) for someone locked whose application carries a decision.
  */
 export async function tellOneLocked(q: Queryable, integrations: Integrations, input: { app: App; wording: DecisionWording; statusBaseUrl: string; now: Date }): Promise<boolean> {
   const { app } = input;
@@ -261,179 +164,11 @@ export async function tellOneLocked(q: Queryable, integrations: Integrations, in
 
 /**
  * The closing message for one person past the plan's candidates per job (Rule 2), through `tellOneLocked`: the role_closed
- * wording. Its key is one per application, so nobody gets it twice. Sent by itself on the safety net's day
- * (`runUntoldSafetyNet`), when a person sends the closing message for the others (`tellLockedOfClose`), or by a change of plan
- * about to open them, so they are opened as told (`unlockApplicants`). True when it is on its way.
+ * wording. Its key is one per application, so nobody gets it twice. Sent by a change of plan about to open them, so they
+ * are opened as told (`unlockApplicants`). True when it is on its way.
  */
 export async function tellOneLockedOfClose(q: Queryable, integrations: Integrations, input: { app: App; statusBaseUrl: string; now: Date }): Promise<boolean> {
   return tellOneLocked(q, integrations, { ...input, wording: "role_closed" });
-}
-
-/** Everyone locked this closed role left untold hears when a person tells the others: nobody waits five days for the same news. Returns how many. */
-export async function tellLockedOfClose(q: Queryable, integrations: Integrations, input: { roleId: string; statusBaseUrl: string; now: Date }): Promise<number> {
-  const aud = await closingAudience(q, input.roleId);
-  if (aud?.role.status !== "closed") return 0;
-  let told = 0;
-  for (const app of aud.locked) if (await tellOneLockedOfClose(q, integrations, { app, statusBaseUrl: input.statusBaseUrl, now: input.now })) told += 1;
-  return told;
-}
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The untold safety net (founder decision Q27)                                                                  */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-export type SafetyNetDeps = { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor };
-export type SafetyNetResult = { applicationId: string; action: "sent" | "not_sent" };
-
-/**
- * Q27: a decision nobody has told the candidate about by the fifth working day after it was made (Monday to Friday in the
- * company's time zone, its contact days, holidays left out). It is due on that day by the company's calendar, the day the
- * toast and the "not told yet" card name, whatever hour the daily check runs (`untoldFallbackDue`). Under "Do it" for
- * `disposition.send` the standard message goes out by itself through the same gate and wording as a person's Send, and
- * the team is told who got it. When the settings ask for approval or keep decisions with a person, or there is no email
- * address on file for someone, nothing is sent: the team is told who still waits and why, one notice per role. Once per
- * decision (recorded as `application.untold_fallback` with when the decision was made). Someone whose details were
- * deleted at their request is never written to, and nobody is asked to reach them. Someone a change of plan just opened
- * counts from then: until then the team could not tell them.
- *
- * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself whatever the settings say, because the team cannot
- * tell them, with no name to the team: the closing message when their job closed and left them in its talent pool, and
- * the standard wording of the decision on a job still open or not. They were promised a date when they applied, and a decision or a job closing does
- * not move it, so they are due by then too: from the day before it by the company's calendar (29 days after they applied, as
- * the close-out note goes), whatever hour the daily check runs, or on the fifth working day if that comes first. The day the
- * answer, the toast and the card name is that day (`untoldFallbackDay`).
- */
-export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, companyId: string): Promise<SafetyNetResult[]> {
-  const untold = (await q.select({ app: applications }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.companyId, companyId), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt)))).map((r) => r.app);
-  if (!untold.length) return [];
-  const rules = await workingDayRulesFor(q, companyId, deps.now);
-  const decidedAt = (a: App) => new Date(a.rejectedAt ?? a.stageChangedAt).toISOString();
-  const unlocks = await unlockedAtFor(q, untold.map((a) => a.id));
-  // Someone locked by the date they were promised too, on the company's calendar like the fifth working day.
-  const due = untold.filter((a) => untoldFallbackDue(new Date(waitingSince(decidedAt(a), unlocks.get(a.id))), deps.now, rules, a));
-  if (!due.length) return [];
-  const waiting = await decisionsWaitingApproval(q, due.map((a) => a.id));
-  const handled = new Set((await q.select({ subjectId: events.subjectId, at: sql<string>`${events.payload}->>'decisionAt'` }).from(events).where(and(eq(events.type, "application.untold_fallback"), inArray(events.subjectId, due.map((a) => a.id))))).map((e) => `${e.subjectId}|${e.at}`));
-  const todo = due.filter((a) => !waiting.has(a.id) && !handled.has(`${a.id}|${decidedAt(a)}`));
-  const results: SafetyNetResult[] = [];
-  const lockedOnes = todo.filter((a) => a.lockedAt);
-  if (lockedOnes.length) {
-    const closed = new Set((await q.select({ id: roles.id }).from(roles).where(and(inArray(roles.id, [...new Set(lockedOnes.map((a) => a.roleId))]), eq(roles.status, "closed")))).map((r) => r.id));
-    for (const app of lockedOnes) {
-      // The closing message to someone a closed job left in its talent pool; the standard wording of the decision to anyone
-      // else, never the closing message on a job that has not closed.
-      const wording = defaultWording(app, { status: closed.has(app.roleId) ? "closed" : "open" });
-      if (await tellOneLocked(q, deps.integrations, { app, wording, statusBaseUrl: deps.statusBaseUrl, now: deps.now })) results.push({ applicationId: app.id, action: "sent" });
-    }
-  }
-  const byRole = new Map<string, { sent: App[]; notSent: Array<{ app: App; why: string }> }>();
-  const slot = (roleId: string) => { let s = byRole.get(roleId); if (!s) { s = { sent: [], notSent: [] }; byRole.set(roleId, s); } return s; };
-  for (const app of todo.filter((a) => !a.lockedAt)) {
-    const policy = await resolvePolicy(q, companyId, app.roleId, "disposition.send");
-    if (policy.level === "auto" || policy.level === "auto_notify") {
-      const g = await gate(q, { companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal: { reason: "untold_safety_net", decision: app.stage }, requestedBy: deps.actor });
-      if (g.outcome === "execute") {
-        // the standard wording (Q27), never one a person would choose
-        const [role] = await q.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
-        const r = await queueDecisionMessage(q, deps.integrations, { app, actor: deps.actor, wording: defaultWording(app, role ?? { status: "open" }), statusBaseUrl: deps.statusBaseUrl, now: deps.now }).catch((e: unknown) => {
-          // someone told them at this very moment: nothing more to do
-          if (e instanceof DecisionMessageError && (e.code === "already_told" || e.code === "not_decided")) return null;
-          throw e;
-        });
-        if (!r) continue;
-        if (r.notice === "queued" || r.notice === "held") {
-          await emit(q, { type: "application.untold_fallback", companyId, actor: deps.actor, subject: { type: "application", id: app.id }, payload: { action: "sent", decisionAt: decidedAt(app), communicationId: r.communicationId, wording: r.wording } });
-          slot(app.roleId).sent.push(app);
-          results.push({ applicationId: app.id, action: "sent" });
-          continue;
-        }
-        slot(app.roleId).notSent.push({ app, why: "there is no email address on file for them, so the message could not be sent" });
-        continue;
-      }
-    }
-    const why = policy.level === "human_only" ? "the settings keep decision messages with a person" : "the settings ask for approval before a decision message goes";
-    slot(app.roleId).notSent.push({ app, why });
-  }
-  for (const [roleId, s] of byRole) {
-    const [role] = await q.select({ title: roles.title }).from(roles).where(eq(roles.id, roleId)).limit(1);
-    const title = role?.title ?? "a role";
-    const all = [...s.sent, ...s.notSent.map((x) => x.app)];
-    const names = new Map((await q.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, all.map((a) => a.candidateId)))).map((c) => [c.id, `${c.firstName} ${c.lastName}`.trim() || "A candidate"]));
-    const list = (apps: App[]) => `${apps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ")}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}`;
-    const open = `/roles/${roleId}/talent?ownerStage=not_moving_forward`;
-    if (s.sent.length) {
-      const one = s.sent.length === 1;
-      await notify(q, { companyId, kind: "message.untold_sent", title: `${one ? "1 person was" : `${s.sent.length} people were`} sent your decision message (${title})`, body: `${list(s.sent)}. Nobody had told them your decision for ${UNTOLD_SEND_WORKING_DAYS} working days, so the standard message went out, as your settings allow. ${one ? "It is on their page." : "Each message is on that person's page."}`, action: { label: "See who", href: open } });
-    }
-    if (s.notSent.length) {
-      const apps = s.notSent.map((x) => x.app);
-      const reasons = [...new Set(s.notSent.map((x) => x.why))].join("; ");
-      for (const { app, why } of s.notSent) {
-        await emit(q, { type: "application.untold_fallback", companyId, actor: deps.actor, subject: { type: "application", id: app.id }, payload: { action: "not_sent", decisionAt: decidedAt(app), why } });
-        results.push({ applicationId: app.id, action: "not_sent" });
-      }
-      const one = apps.length === 1;
-      await notify(q, { companyId, kind: "message.untold_not_sent", title: `${one ? "1 person has" : `${apps.length} people have`} not been told your decision (${title})`, body: `${list(apps)} ${one ? "has" : "have"} not been told for ${UNTOLD_SEND_WORKING_DAYS} working days. Nothing was sent, because ${reasons}. Send the decision message from their page, or record that you told them yourself.`, action: { label: "See who", href: `${open}&told=not_told` } });
-    }
-  }
-  return results;
-}
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The "still reviewing" note (plan G10)                                                                         */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/** Steps where an applicant waits on the team with nothing of their own to do (a screen or an interview in motion is contact enough). */
-const WAITING_STAGES: ApplicationStage[] = ["received", "eligible", "ineligible", "triaged", "screen_complete", "interview_recommended", "interview_complete", "debrief", "finalist"];
-
-/**
- * Daily runs missed (an outage, a retry) are made up for this many days; an older wait is never noted, so turning the
- * note on, or the release that added it, never writes to a backlog of people who applied months ago.
- */
-export const STILL_REVIEWING_CATCH_UP_DAYS = 7;
-
-/**
- * The courtesy note to everyone still waiting for a decision `afterDays` after they applied (policy
- * `message.still_reviewing`, 30 days unless the company chose otherwise): one per application, only under "Do it", never
- * to someone set aside as not a fit for now, nor without an address. Only within a week of the wait reaching `afterDays`
- * (`STILL_REVIEWING_CATCH_UP_DAYS`): someone who crossed it longer ago is never noted, months after the fact. Returns the
- * applications noted. Never to someone locked, because nobody is reviewing them (they get the close-out note instead); and
- * someone a change of plan opened has waited from then, however long before it they applied.
- */
-export async function sendStillReviewingNotes(q: Queryable, deps: { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor }, companyId: string): Promise<string[]> {
-  const open = await q.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused"])));
-  const noted: string[] = [];
-  for (const role of open) {
-    const policy = await resolvePolicy(q, companyId, role.id, "message.still_reviewing");
-    if (policy.level !== "auto" && policy.level !== "auto_notify") continue;
-    const afterDays = Math.max(7, Number(policy.params.afterDays ?? 30) || 30);
-    const cutoff = new Date(deps.now.getTime() - afterDays * 86_400_000);
-    const windowStart = new Date(cutoff.getTime() - STILL_REVIEWING_CATCH_UP_DAYS * 86_400_000);
-    const everOpened = sql`exists (select 1 from ${events} where ${events.type} = 'application.unlocked' and ${events.subjectType} = 'application' and ${events.subjectId} = ${applications.id}::text)`;
-    const found = await q.select().from(applications).where(and(eq(applications.roleId, role.id), inArray(applications.stage, WAITING_STAGES), or(gt(applications.createdAt, windowStart.toISOString()), everOpened), lte(applications.createdAt, cutoff.toISOString()), notLocked()));
-    if (!found.length) continue;
-    const unlocks = await unlockedAtFor(q, found.map((a) => a.id));
-    const waiting = found.filter((a) => {
-      const since = waitingSince(a.createdAt, unlocks.get(a.id));
-      return since > windowStart.getTime() && since <= cutoff.getTime();
-    });
-    if (!waiting.length) continue;
-    const already = new Set((await q.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, waiting.map((a) => a.id)), eq(communications.templateKey, "still_reviewing")))).map((r) => r.applicationId ?? ""));
-    const marks = await activeMarksFor(q, waiting.map((a) => a.id));
-    // Not to someone under Cancelled: they cancelled an interview and chose what comes next, or did not come to it, and
-    // the team takes it from the Cancelled column; "still reviewing" would read wrong to them.
-    const followUps = await activeFollowUpsFor(q, waiting.map((a) => a.id));
-    for (const app of waiting) {
-      if (already.has(app.id) || marks.get(app.id)?.mark === "not_a_fit_for_now" || inCancelled(app.stage, followUps.get(app.id))) continue;
-      const parts = await loadDecisionParts(q, app);
-      if (!parts?.cand.email) continue;
-      const g = await gate(q, { companyId, roleId: role.id, applicationId: app.id, actionType: "message.still_reviewing", subject: { type: "application", id: app.id }, proposal: { afterDays }, requestedBy: deps.actor });
-      if (g.outcome !== "execute") continue;
-      await sendStillReviewingNote(q, deps.integrations, { application: app, candidate: parts.cand, role: parts.role, company: parts.company, packet: parts.packet, actor: deps.actor, statusUrl: statusUrlOf(deps.statusBaseUrl, app) });
-      noted.push(app.id);
-    }
-  }
-  return noted;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

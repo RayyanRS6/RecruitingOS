@@ -9,8 +9,8 @@ export type RunRow = typeof workflowRuns.$inferSelect;
 export type Services = {
   ai: AiRuntime;
   integrations: Integrations;
-  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link and tracked link is built from it. `smsEnabled` is SMS_ENABLED: while off, candidate copy promises nothing by text. */
-  env: { appBaseUrl: string; jobsBaseUrl: string; smsEnabled: boolean };
+  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link is built from it. */
+  env: { appBaseUrl: string; jobsBaseUrl: string };
   engine: WorkflowEngine;
 };
 

@@ -2,7 +2,6 @@ import { and, asc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, type ActorKind, type ApplicationStage, type Actor, type CandidateStep, type MarkKind, type OwnerGroup, type OwnerStage, type ToldState } from "@ros/contracts";
 import { applicationMarks, applications, communications, events, interviews, type Queryable } from "@ros/db";
 import { emit } from "./events";
-import { CANCEL_STAGES, followUpInMotion, inCancelled, resolveOpenFollowUp, restoreFollowUpAfterUndo, type FollowUpStrip } from "./interview-followups";
 
 /**
  * The application state machine (docs/06). Each transition names who may perform it.

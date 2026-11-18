@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { outOfCredit, runPromptDetached, screenTurnPrompt } from "@ros/ai";
-import { audit, emit, entitlements, evaluateEligibility, gate, isOneVisitFlow, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
+import { audit, emit, entitlements, evaluateEligibility, isOneVisitFlow, notify, readingConsistency, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, interviews, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, linkEmailWaiting, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
@@ -11,7 +11,6 @@ import {
 import type { SendResult } from "@ros/integrations";
 import { twoPhase, type StepContext, type StepResult, type WorkflowDefinition } from "../types";
 import { waitForCredit } from "../credit-wait";
-import { SUGGESTION_WINDOW_HOURS, settleSuggestion, waitForSuggestion, type SuggestionState } from "../suggestions";
 import { INTERVIEW_LINK_HOURS, READING_SETTLED_EVENT, READING_WAIT_MINUTES, offerInterview, overDesignPartnerAllowance, readingSettled, readingSettledSignal } from "../with-application";
 import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
 

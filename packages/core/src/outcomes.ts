@@ -5,7 +5,6 @@ import { audit } from "./audit";
 import { lockApplicants } from "./candidate-lock";
 import { ACTIVE_ROLES, roleRoom } from "./entitlements";
 import { emit } from "./events";
-import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
 import { DECISION_STAGES, transition, withdrawQueuedDecision } from "./stages";
 
 const ACTIVE_STAGES = new Set<ApplicationStage>(["applied", "received", "ineligible", "eligible", "triaged", "screen_invited", "screening", "screen_complete", "interview_recommended", "interview_scheduled", "interview_complete", "debrief", "finalist", "reference_check", "offer_draft", "offer_approval", "offer_sent", "negotiation", "accepted", "onboarding"]);
