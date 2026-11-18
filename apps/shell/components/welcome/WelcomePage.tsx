@@ -2,23 +2,18 @@ import { type ChipTone, Icon, IconChip, type IconName } from "@ros/ui";
 import { BrandMark } from "../BrandMark";
 
 /**
- * The public welcome page (/welcome, October 2026 redesign, screenshot 2): what Recruiting OS is, for someone who is not
- * signed in. Static and server-drawn, with no script of its own. Every way in leads to the sign-in page, where an
- * invitation is opened too; there is no sign-up or pilot request here, so the page asks for nothing. The hero comes in
+ * The public welcome page (/welcome): what Recruiting OS is, for someone who is not signed in. Static and
+ * server-drawn, with no script of its own. Every way in leads to the sign-in page: a company signs in, gives its
+ * details there and is let in once an administrator accepts it, so the page itself asks for nothing. The hero comes in
  * with a short CSS rise, 30 ms apart (motion-safe only, so nothing moves for someone who asked for less motion).
  *
- * By invitation or by approval (`inviteOnly`, SIGNUP_MODE=invite or approval, GATE-V2) the owner band's "Get help with
- * your next hire" goes, so nothing invites a stranger to start: the ways in that stay are for someone with an invitation,
- * and signing in.
+ * Fewer words: each section is its heading, its one paragraph or list, and its way in; no eyebrows over the headings,
+ * no strip of ticks, no taglines. The two-column sections line their heading up with the top of the list beside it.
  *
- * Fewer words (founder, 23 October 2026): each section is its heading, its one paragraph or list, and its way in; no
- * eyebrows over the headings, no strip of ticks, no taglines. The two-column sections line their heading up with the
- * top of the list beside it.
- *
- * The copy promises only what the product does (no applicant AI opt-in exists, so none is promised): applicants are told
- * how AI is used and can ask for a person (the ai_use notice), a person makes every decision, and a failed or missing
- * answer is held for a person, never declined on its own (application-intake's eligibility hold, triage's "hold" and
- * "review_manually").
+ * The copy promises only what the product does: applicants answer screening questions and upload a resume; AI reads
+ * and scores each resume with the evidence beside it; only the people the company shortlists do the AI interview;
+ * applicants are told how AI is used; a "No" to a screening question is a flag for a person, never a decline; and a
+ * person makes every decision.
  *
  * The plum band stays dark in both themes (plum in light, deep lavender in dark), so its text is white and its coral is a
  * fixed light coral, #f4a68e (the dark theme's --accent-ink): 5.3:1 on the light band and 7:1 on the dark one.
@@ -50,12 +45,12 @@ const STEPS: Array<{ icon: IconName; title: string; body: string }> = [
   {
     icon: "people",
     title: "Check the essentials before you meet",
-    body: "Approve role-specific qualification questions, pay, work location and start-date requirements. Applicants share their answers; see matches, differences and unknowns beside the source. An answer that doesn’t match is held for your decision, never declined automatically.",
+    body: "Applicants answer your screening questions and upload a resume. AI reads each resume against the job and scores it, with the evidence beside the score. An answer that doesn’t match is flagged for you, never declined automatically.",
   },
   {
     icon: "star",
     title: "Choose your shortlist with context",
-    body: "Use transparent review groups to focus your conversations, with AI evidence notes you can check against the source. Every applicant stays visible. You choose who to shortlist and when to move them toward an interview or offer.",
+    body: "Applicants are ranked by score, best match first, and every applicant stays visible. You choose who to shortlist; only they do a short AI interview about the job, and you decide who to hire.",
   },
 ];
 
@@ -73,11 +68,11 @@ const POINTS: Array<{ icon: IconName; title: string; body: string }> = [
   {
     icon: "file-text",
     title: "Clear expectations for applicants",
-    body: "Applicants are told how AI is used, and can ask to talk to a person at any point. Missing information is something to clarify—not an automatic “no.”",
+    body: "Applicants are told how AI is used, and anyone can say they would rather not do the AI interview. Missing information is something to clarify—not an automatic “no.”",
   },
 ];
 
-export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
+export function WelcomePage() {
   return (
     <>
       <header className="motion-safe:animate-fade">
@@ -99,7 +94,7 @@ export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
             <div className="flex items-center gap-1.5 md:justify-self-end">
               <a href="/login" className="inline-flex h-10 items-center rounded-full px-3.5 text-[14px] font-medium text-ink-2 transition-colors duration-150 hover:bg-surface-2 hover:text-ink">Sign in</a>
               <a href="/login" className="btn primary sm group hidden sm:inline-flex">
-                Have an invitation?
+                Get started
                 <Arrow />
               </a>
             </div>
@@ -119,7 +114,7 @@ export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
             </p>
             <div className="mt-8 motion-safe:animate-enter [animation-delay:60ms]">
               <a href="/login" className="btn primary group">
-                Open your invitation
+                Get started
                 <Arrow />
               </a>
             </div>
@@ -187,12 +182,10 @@ export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
               <p className="mt-5 max-w-[26rem] text-[15px] leading-[1.65] text-white/80">
                 Hiring shouldn{"’"}t become another one. Whether it falls to the owner, a manager, or whoever has a spare hour, Recruiting OS brings AI-assisted review and step-by-step guidance to the work a recruiter would help you navigate.
               </p>
-              {inviteOnly ? null : (
-                <a href="/login" className="group mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-lg text-[14px] font-semibold text-[#f4a68e] focus-visible:outline-white">
-                  Get help with your next hire
-                  <Arrow />
-                </a>
-              )}
+              <a href="/login" className="group mt-5 inline-flex min-h-10 items-center gap-1.5 rounded-lg text-[14px] font-semibold text-[#f4a68e] focus-visible:outline-white">
+                Get help with your next hire
+                <Arrow />
+              </a>
             </div>
             <div className="rounded-2xl border border-white/15 bg-black/20 p-6 md:p-8">
               <h3 className="font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-white md:text-[30px]">You don{"’"}t have to figure out every step alone.</h3>
@@ -233,7 +226,7 @@ export function WelcomePage({ inviteOnly = false }: { inviteOnly?: boolean }) {
               You run the business. <span className="block">Get help with the hiring.</span>
             </h2>
             <a href="/login" className="btn primary group self-start md:self-center">
-              Open your invitation
+              Get started
               <Arrow />
             </a>
           </div>

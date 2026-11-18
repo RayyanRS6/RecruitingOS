@@ -9,15 +9,14 @@ import { signInAdmin, signInWithIdentity } from "@ros/api/src/test-helpers";
 import { installShellForTests } from "../lib/container";
 
 /**
- * The company step by invitation (SIGNUP_MODE=invite, GATE-V2): someone the API will not let open a company gets one
- * line where the form was, naming the ITS inbox to ask, and keeps Sign out; whoever may (an address on the list, a
- * platform administrator, anyone while sign-up is open) gets the form as before. The page's server asks the API's
- * public configuration (GET /api/v1/auth/config) in-process with the person's own cookie, so the answer is theirs.
+ * The company details step: the form after the first sign-in, and what stands in its place for someone who may not send
+ * it. The page's server asks the API's public configuration (GET /api/v1/auth/config) in-process with the person's own
+ * cookie, so the answer is theirs.
  *
- * By approval (SIGNUP_MODE=approval, 6 November 2026) the same form sends a request, and the person reads where it stands:
- * waiting or declined, in the same card, from any signed-in address. The email line is there only when the email really
- * left. The waiting screen's every-30-seconds look is proved in tests/web/access-approval.test.ts and, in a real browser,
- * in tests/e2e/specs/access-approval.spec.ts.
+ * Where a company must be accepted (SIGNUP_MODE=approval) the same form sends a request, and the person reads where it
+ * stands: waiting or declined, in the same card, from any signed-in address. The email line is there only when the
+ * email really left. The waiting screen's every-30-seconds look is proved in tests/web/access-approval.test.ts and, in
+ * a real browser, in tests/e2e/specs/signup-approval.spec.ts.
  */
 const jar = vi.hoisted(() => ({ cookie: "" }));
 vi.mock("next/headers", () => ({
@@ -47,17 +46,18 @@ const draw = (node: ReactNode) => renderToStaticMarkup(createElement(QueryClient
 const words = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
 const title = (html: string) => words(/<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(html)?.[1] ?? "");
 
-describe("the company step by invitation", () => {
-  it("someone who may not open a company gets one line instead of the form, with the ITS inbox to ask, and can still sign out", () => {
+describe("the company details step: who may send the form", () => {
+  it("someone who may not send it gets one line instead of the form, with the inbox to ask, and can still sign out", () => {
     const html = draw(createElement(CompanySetup, { signup: { allowed: false, contact: "recruiting@its.example" } }));
-    expect(title(html)).toBe("Recruiting OS is by invitation for now");
-    expect(words(html)).toContain("Ask ITS for an invitation: recruiting@its.example.");
+    expect(title(html)).toBe("Tell us about your company");
+    expect(words(html)).toContain("This account cannot set up a company right now. Questions? recruiting@its.example");
     expect(html).toContain("<a href=\"mailto:recruiting@its.example\">recruiting@its.example</a>");
     for (const tag of ["<form", "<input", "<select", "<textarea"]) expect(html, tag).not.toContain(tag);
-    expect(words(html)).not.toContain("Tell us about your company");
     expect(words(html)).not.toContain("Create my hiring workspace");
     // whoever signed in with the wrong account still has the way out
     expect(words(html)).toContain("Sign out");
+    // one gate: nobody is told to get an invitation
+    expect(words(html)).not.toMatch(/invitation|invite/i);
   });
 
   // The live smoke test of 4 Nov 2026: beside a long title the button gave way and "Sign out" broke onto two lines.
@@ -71,29 +71,30 @@ describe("the company step by invitation", () => {
 
   it("with no inbox to name, the line still says whom to ask", () => {
     const html = draw(createElement(CompanySetup, { signup: { allowed: false, contact: null } }));
-    expect(words(html)).toContain("Ask ITS for an invitation.");
+    expect(words(html)).toContain("This account cannot set up a company right now. Questions? Ask ITS.");
     expect(html).not.toContain("mailto:");
     expect(html).not.toContain("<form");
   });
 
-  it("someone who may (on the list, an administrator, open sign-up) or an unanswered question: the form as before", () => {
+  it("someone who may, or an unanswered question: the form", () => {
     for (const signup of [{ allowed: true, contact: "recruiting@its.example" }, null, undefined]) {
       const html = draw(createElement(CompanySetup, { signup }));
       expect(title(html), String(signup)).toBe("Tell us about your company");
       expect(html, String(signup)).toContain("<form");
       expect(words(html), String(signup)).toContain("Create my hiring workspace");
-      expect(words(html), String(signup)).not.toContain("by invitation");
+      // company name, your name, kind of business, size, city and state, time zone, website
+      for (const id of ["name", "owner", "vertical", "size", "city", "region", "timezone", "web"]) expect(html, id).toContain(` id="${id}"`);
     }
   });
 });
 
-describe("the company step's page asks the API, with the person's own cookie", () => {
+describe("the company details page asks the API, with the person's own cookie", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  const open = async () => (await page.default()) as ReactElement<{ signup: unknown }>;
+  const open = async () => (await page.default()) as ReactElement<{ signup: { mode?: string; allowed?: boolean; contact?: string; door?: string; request?: unknown } }>;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "invite", SIGNUP_ALLOWED_EMAILS: "@pilot-partner.test", EMAIL_REPLY_TO: "recruiting@its.example" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "open", EMAIL_REPLY_TO: "recruiting@its.example" } });
     installShellForTests(container);
     app = createApp(container);
   });
@@ -102,18 +103,14 @@ describe("the company step's page asks the API, with the person's own cookie", (
     await container.close();
   });
 
-  it("a stranger is told it is by invitation, with the ITS inbox", async () => {
+  it("where a company is live as soon as it is made (local work and tests), anyone signed in gets the form", async () => {
     jar.cookie = await signInWithIdentity(app, container, { email: "sam@stranger.test", provider: "google", aal2: false });
     const element = await open();
-    expect(element.props.signup).toEqual({ mode: "invite", allowed: false, contact: "recruiting@its.example" });
-    expect(words(draw(element))).toContain("Ask ITS for an invitation: recruiting@its.example.");
-  });
-
-  it("an address at a listed domain gets the form", async () => {
-    jar.cookie = await signInWithIdentity(app, container, { email: "pat@pilot-partner.test", provider: "google", aal2: false });
-    const element = await open();
-    expect(element.props.signup).toEqual({ mode: "invite", allowed: true, contact: "recruiting@its.example" });
-    expect(draw(element)).toContain("<form");
+    expect(element.props.signup).toMatchObject({ mode: "open", allowed: true, contact: "recruiting@its.example" });
+    expect(element.props.signup.request).toBeUndefined();
+    const html = draw(element);
+    expect(html).toContain("<form");
+    expect(words(html)).toContain("Create my hiring workspace");
   });
 
   it("someone signed out is still sent to sign in", async () => {
@@ -122,7 +119,7 @@ describe("the company step's page asks the API, with the person's own cookie", (
   });
 });
 
-describe("the company step by approval: the person's screens", () => {
+describe("a company that must be accepted: the person's screens", () => {
   const contact = "recruiting@its.example";
   const request = (over: Record<string, unknown> = {}) => ({ status: "requested" as const, companyName: "Harbor Dental", email: "sam@stranger.test", emailedAt: "2026-11-06T10:00:00.000Z", ...over });
 
@@ -143,7 +140,6 @@ describe("the company step by approval: the person's screens", () => {
     expect(words(html)).toContain("Please wait for approval.");
     expect(words(html)).toContain("Harbor Dental");
     for (const tag of ["<form", "<input", "<select", "<textarea"]) expect(html, tag).not.toContain(tag);
-    expect(words(html)).not.toContain("by invitation");
     expect(words(html)).not.toContain("Tell us about your company");
     // the same card and the same way out as the form
     expect(html).toContain("rounded-[20px] border border-line bg-surface");
@@ -161,7 +157,7 @@ describe("the company step by approval: the person's screens", () => {
     expect(stayed).not.toMatch(/sent a copy|we will email|sam@stranger\.test/i);
   });
 
-  it("declined: a polite title and the same mailto as the by-invitation line, with no claim about email and no way to ask again", () => {
+  it("declined: a polite title and the inbox to ask, with no claim about email and no way to ask again", () => {
     const html = draw(createElement(CompanySetup, { signup: { allowed: false, contact, door: "request", request: request({ status: "declined" }) } }));
     expect(title(html)).toBe("We can't offer access right now");
     expect(words(html)).toContain(`Questions? ${contact}`);
@@ -212,7 +208,7 @@ describe("a person with a request lands on the same screen from any signed-in ad
   });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", COMPANY_CHECK: "its", EMAIL_REPLY_TO: "recruiting@its.example" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", EMAIL_REPLY_TO: "recruiting@its.example" } });
     installShellForTests(container);
     app = createApp(container);
   });

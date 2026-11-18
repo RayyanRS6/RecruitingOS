@@ -2,13 +2,13 @@ import type { SignupRequest } from "@ros/contracts";
 import { zoneWords } from "./dates";
 
 /**
- * The sign-up form's choices, kept out of the page so they can be tested: the business types, and the time zone the
- * owner's own computer reports, snapped to the list we offer.
- * Also what the screens around a request for access need (SIGNUP_MODE=approval): the look the waiting screen takes every
- * 30 seconds, and how a company's typed kind of business and website may be shown.
+ * The company details form's choices, kept out of the page so they can be tested: the business types, and the time
+ * zone the owner's own computer reports, snapped to the list we offer.
+ * Also what the screens around a company's request need: the look the waiting screen takes every 30 seconds, and how a
+ * company's typed kind of business and website may be shown.
  */
 
-/** The launch wedge first (docs/FOUNDER-CONTEXT.md §06): consumer, beauty, e-commerce, creative and marketing, tech-enabled services. */
+/** The kinds of business the form offers: consumer, beauty, e-commerce, creative and marketing, tech-enabled services first. */
 export const VERTICALS: ReadonlyArray<readonly [string, string]> = [
   ["consumer", "Consumer brand or beauty"],
   ["ecommerce", "Retail or e-commerce"],
