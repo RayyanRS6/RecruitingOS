@@ -11,7 +11,7 @@ Recruiting OS is a hiring app for small businesses: the owner says who they need
 | `apps/api` | The Hono API, webhooks, the worker, and the candidate pages (`src/pages`, rendered on the server). |
 | `packages/ui` | The design system: components (`src/index.tsx`, plus client components in their own files), icons (`src/glyphs.ts`), and the whole look (`src/styles.css`). |
 | `packages/core` | Policy engine, state machine, auth, permissions, and the compliance layer (notices candidates must see). |
-| `packages/contracts`, `db`, `workflows`, `ai`, `agents`, `integrations`, `playbooks`, `evals` | Schemas; Drizzle schema, migrations and RLS; the durable workflow engine; the AI provider layer and prompts; the agents; email, SMS and job boards; vertical playbooks; evaluation suites. |
+| `packages/contracts`, `db`, `workflows`, `ai`, `agents`, `integrations`, `evals` | Schemas; Drizzle schema, migrations and RLS; the durable workflow engine; the AI provider layer and prompts; the agents; email, SMS and job boards; evaluation suites. |
 | `tests/` | `scenario` (the end-to-end hiring scenario on PGlite), `web` (tests of the signed-in pages in `apps/web`), `policy` (repository-wide guards), `e2e` (Playwright). |
 | `docs/` | `07-ux-and-design-system.md` is the design system. |
 

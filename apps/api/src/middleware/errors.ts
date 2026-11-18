@@ -26,7 +26,7 @@ export function messageTooLong(max: number, opts: { afterFirst?: boolean } = {})
 const TYPED_MESSAGE_FIELDS = new Set(["message", "initialMessage", "note"]);
 
 /** A later turn of the job builder's conversation (not its first message): only there does the limit differ from the first. */
-const laterIntakeTurn = (path: string, field: string) => field !== "initialMessage" && /^\/api\/v1\/intake\/(?:sessions\/[^/]+\/(?:messages|answers)|conversation\/messages)$/.test(path);
+const laterIntakeTurn = (path: string, field: string) => field !== "initialMessage" && /^\/api\/v1\/intake\/sessions\/[^/]+\/(?:messages|answers)$/.test(path);
 
 function tooLongMessage(err: ZodError, path: string): HttpError | null {
   for (const issue of err.issues) {

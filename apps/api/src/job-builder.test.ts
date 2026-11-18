@@ -207,6 +207,11 @@ describe("the job builder", () => {
     const invalid = (await empty.json()) as { error: { code: string; details: Array<{ message: string }> } };
     expect(invalid.error.code).toBe("invalid_request");
     expect(invalid.error.details.map((i) => i.message)).toEqual(["Describe the job first: a sentence or two, or paste a job ad you already have."]);
+    // a first message may be a whole job ad; anything longer, and a later message past its own limit, is refused in plain words
+    const tooLong = async (path: string, body: unknown) => ((await (await json(owner, "POST", path, body)).json()) as { error: { code: string; message: string } }).error;
+    expect(await tooLong(sessions, { initialMessage: "x".repeat(20_001) })).toEqual(expect.objectContaining({ code: "message_too_long", message: "That is too long to send in one go: up to 20,000 characters. Shorten it, or send it in parts." }));
+    const draft = await start(owner, HYGIENIST);
+    expect(await tooLong(`${sessions}/${draft.id}/messages`, { message: "x".repeat(4_001) })).toEqual(expect.objectContaining({ code: "message_too_long", message: "That is too long to send in one go: up to 4,000 characters after the first message. Shorten it, or send it in parts." }));
   });
 
   it("reads a pasted ad once, and asks the owner to confirm its pay before it counts", async () => {
