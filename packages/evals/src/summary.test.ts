@@ -27,17 +27,17 @@ describe("the fairness run's summary", () => {
     const text = summarize(run(), { "triage.bias_pairs": { minPassRate: 1 }, "triage.consistency": { minPassRate: 1 } });
     expect(text).toContain("## Fairness tests on the real AI");
     expect(text).toContain("**All 2 checks passed.**");
-    expect(text).toContain("Models: claude-sonnet-5-5 for the test job's draft; claude-haiku-5-5 for screening and most tasks; claude-haiku-5-5 for reading CVs.");
+    expect(text).toContain("Models: claude-sonnet-5-5 for the test job's draft; claude-haiku-5-5 for screening and most tasks; claude-haiku-5-5 for reading resumes.");
     expect(text).toContain("Cost of this run: $0.12 for 31 AI calls.");
-    expect(text).toContain("| Twin CVs | Two CVs that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same reading and the same score. | ✅ 3 of 3 |");
+    expect(text).toContain("| Twin resumes | Two resumes that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same reading and the same score. | ✅ 3 of 3 |");
   });
 
   it("names each check that needs a look and what differed", () => {
     const text = summarize(run({ bias: false }), { "triage.bias_pairs": { minPassRate: 1 } });
     expect(text).toContain("**1 of 2 checks need a look.**");
-    expect(text).toContain("| Twin CVs |");
+    expect(text).toContain("| Twin resumes |");
     expect(text).toContain("❌ 2 of 3");
-    expect(text).toContain("- **Twin CVs**, case `graduation_year`: resume score differs: 88 vs 81");
+    expect(text).toContain("- **Twin resumes**, case `graduation_year`: resume score differs: 88 vs 81");
   });
 
   // a failing case's full record stays in the file; the page says where it is and does not print it
@@ -61,7 +61,7 @@ describe("the fairness run's summary", () => {
     expect(text).toContain("| score.rules |  | ✅ 1 of 1 |");
   });
 
-  /** A job-builder run reads no CV: Sonnet writes every draft under test, and the "screening" model and effort set the builder's conversation. */
+  /** A job-builder run reads no resume: Sonnet writes every draft under test, and the "screening" model and effort set the builder's conversation. */
   it("names the models of a job-builder run for what they did in it", () => {
     const builder = {
       ...run(),
@@ -77,21 +77,21 @@ describe("the fairness run's summary", () => {
     expect(text).toContain("**All 2 checks passed.**");
     expect(text).toContain("Models: claude-sonnet-5-5 for writing each job draft; claude-haiku-5-5 for the job builder's conversation; claude-haiku-5-5 for reading a pasted ad.");
     expect(text).toContain("Thinking effort set for this run: high for the job builder's conversation (otherwise the app's own setting).");
-    expect(text).not.toContain("reading CVs");
+    expect(text).not.toContain("reading resumes");
     expect(text).not.toContain("the test job's draft");
     expect(text).not.toContain("for screening");
     expect(text).toContain("| Writing a job | From what an owner types");
     expect(text).toContain("| A pasted job ad | A pasted ad is read for its job and its pay");
     // a run of both names both
     const both = summarize({ ...builder, suites: "all" as const, results: { ...builder.results, ...run().results } });
-    expect(both).toContain("Models: claude-sonnet-5-5 for writing each job draft; claude-haiku-5-5 for screening, the job builder's conversation and most tasks; claude-haiku-5-5 for reading CVs and pasted ads.");
+    expect(both).toContain("Models: claude-sonnet-5-5 for writing each job draft; claude-haiku-5-5 for screening, the job builder's conversation and most tasks; claude-haiku-5-5 for reading resumes and pasted ads.");
   });
 
   /**
-   * The fast model reads the CVs in the CV checks and the pasted ads in the job builder's. The AI interview's checks read
+   * The fast model reads the resumes in the resume checks and the pasted ads in the job builder's. The AI interview's checks read
    * neither, so their page, the run required before any real candidate, names no model for reading.
    */
-  it("names a model for reading only in a run that read CVs or pasted ads", () => {
+  it("names a model for reading only in a run that read resumes or pasted ads", () => {
     const chat = {
       ...run(),
       suites: ["screen", "chat"],
@@ -105,7 +105,7 @@ describe("the fairness run's summary", () => {
     expect(text).toContain("**All 2 checks passed.**");
     expect(text).toContain("\nModels: claude-sonnet-5-5 for the test job's draft; claude-haiku-5-5 for screening and most tasks.\n");
     expect(text).toContain("\nThinking effort set for this run: high for screening and most tasks (otherwise the app's own setting).\n");
-    expect(text).not.toContain("reading CVs");
+    expect(text).not.toContain("reading resumes");
     expect(text).not.toContain("for reading");
   });
 
@@ -119,7 +119,7 @@ describe("the fairness run's summary", () => {
     expect(text).not.toContain("checks passed");
     expect(text).toContain("| score.renamed | Chosen for this run, but no check by that name ran. | ❌ not run |");
     expect(text).toContain("- **score.renamed**: chosen for this run, but no check by that name ran.");
-    expect(text).toContain("| Twin CVs |");
+    expect(text).toContain("| Twin resumes |");
     // and a choice that names nothing never reads "All 0 checks passed"
     const none = summarize({ ...run(), suites: [], results: {} });
     expect(none).toContain("**No check ran.**");

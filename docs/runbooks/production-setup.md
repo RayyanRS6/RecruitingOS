@@ -145,19 +145,32 @@ If a process refuses to start, its log says why (Vercel, **Logs**; Railway, the 
 | `password authentication failed` (28P01) | the string on the host differs from the vault's: paste it again |
 | a certificate error | `DATABASE_SSL_CA` is missing or incomplete |
 
-### The release (migrations 0036 and 0037 are on production; this release adds 0038, 0039 and the database clean-up)
+### The release of the simple product (migrations 0038 to 0041)
 
-This is the release of the simple product. `0038_role_posts.sql` adds one empty column, `roles.posts`. `0039_one_scoring_system.sql` drops five columns that the build now live reads and writes with every resume reading. So for this release both the old worker and the old app stop before the migrations run.
+Production is at `0037_person_decides_who_to_interview.sql`. This release adds four migrations:
 
-**To fill in (lead):** the database clean-up migrations that follow 0039 are not described here yet. Add each file's name, what it changes, and anything more that must be stopped or checked for it.
+| Migration | What it does |
+|---|---|
+| `0038_role_posts.sql` | Adds one empty column, `roles.posts`. |
+| `0039_one_scoring_system.sql` | Drops five columns that the build now live reads and writes with every resume reading. |
+| `0040_states_the_code_knows.sql` | Moves every stored row to a state today's code knows (stages, AI interviews, job statuses, told states, team roles), cancels the waiting emails and work of removed features, restarts the work still going under today's steps, and adds `screens.packet_version`. Data only; nobody is emailed by it. |
+| `0041_storage_nothing_uses.sql` | Drops the 24 tables and 43 columns of removed features. No migration can undo it. |
+
+The build now live uses what 0039 to 0041 remove, so for this release both the old worker and the old app stop before the migrations run.
 
 1. **Settings on the hosts, before the new code starts.** `SIGNUP_MODE`: `approval` on Vercel Production and on Vercel Preview; on each Railway worker `approval` or not set. Any other value stops the process at start. Then delete the variables nothing reads any more, on Vercel and on both workers: `SMS_PROVIDER`, `SMS_ENABLED`, the `TWILIO_*` values, `CALENDAR_PROVIDER`, the `GOOGLE_OAUTH_*` values, `SECRET_STORE`, `EMAIL_INTAKE_DOMAIN`, `POSTMARK_INBOUND_SECRET`, `LINK_VERIFIER`, `COMPANY_CHECK`, `SIGNUP_ALLOWED_EMAILS`, `COMP_BLS_ENABLED`, `BLS_API_KEY`. They are harmless if left.
 2. The latest commit on `main` has a green `verify`, and nothing else merges into it. Open the release pull request (base `production`, compare `main`) and wait until its `verify` is green, without merging: the steps below then take minutes, not an hour.
-3. **Stop the old worker first.** Railway, the production project, the worker, **Deployments**, the **Active** deployment's three-dot menu, **Remove**. While no worker runs, work waits in the database, emails too, and "The background worker has stopped polling" is expected until item 6.
-4. **Stop the old app** by merging the release pull request with a merge commit, and wait until Vercel, **Deployments**, shows the Production deployment of the merge commit as **Ready**: until then the old build still answers. The new deployment then has production's address and answers 503 until the migrations are applied, because a hosted build never starts while one is pending. From here to item 6 the site is down; keep it short.
-5. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says `status: migrations applied: 38 (last: 0037_person_decides_who_to_interview.sql)`, lists what is pending from `0038_role_posts.sql` on, applies each, and **Confirm no migration is pending** is green.
-6. The worker, then the app, as in "Every later release", item 5. The app comes up on its next request; **Redeploy** the worker if it has not come up by itself.
-7. The check with made-up people, below, the whole of it.
+3. **Count what the drops leave behind, and note the point in time.** In Supabase, the production project, **SQL Editor**, run these and keep the output with the release's notes:
+   - `SELECT count(*) FROM integrations WHERE secret_ref IS NOT NULL OR credentials_ciphertext IS NOT NULL;` The stored credentials of removed integrations: 0 is expected, since none was ever connected on production. If it is not 0, list the Vault rows they name before the migrations (`SELECT s.id, s.name FROM vault.secrets s WHERE s.id::text IN (SELECT secret_ref FROM integrations WHERE secret_ref IS NOT NULL);`) and delete those rows by id afterwards.
+   - `SELECT count(*) FROM inbound_emails WHERE raw_storage_key IS NOT NULL;` The files of applications sent by email, which stay in the bucket under `inbound/` after their table is gone.
+   - `SELECT workflow_key, workflow_version, status, current_step, count(*) FROM workflow_runs WHERE status NOT IN ('completed','failed','cancelled') GROUP BY 1,2,3,4 ORDER BY 1,4;` The work still going, which 0040 restarts or cancels.
+
+   Then, under **Database**, **Backups**, note the newest backup's time (or the present moment, where point-in-time recovery is on): restoring to it is the only way back once 0041 has run.
+4. **Stop the old worker first.** Railway, the production project, the worker, **Deployments**, the **Active** deployment's three-dot menu, **Remove**. While no worker runs, work waits in the database, emails too, and "The background worker has stopped polling" is expected until item 7.
+5. **Stop the old app** by merging the release pull request with a merge commit, and wait until Vercel, **Deployments**, shows the Production deployment of the merge commit as **Ready**: until then the old build still answers. The new deployment then has production's address and answers 503 until the migrations are applied, because a hosted build never starts while one is pending. From here to item 7 the site is down; keep it short.
+6. **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The log says `status: migrations applied: 38 (last: 0037_person_decides_who_to_interview.sql)`, lists `0038_role_posts.sql` to `0041_storage_nothing_uses.sql` as pending, applies each in a transaction of its own, and **Confirm no migration is pending** is green.
+7. The worker, then the app, as in "Every later release", item 5. The app comes up on its next request; **Redeploy** the worker if it has not come up by itself. In its first minutes the new worker runs the work 0040 restarted: an application that was being read when the old worker stopped, or whose reading is of older must-haves than its job has now, is read again (AI credit is spent), and an AI interview that was open gets its reminder or its closing note when due.
+8. The check with made-up people, below, the whole of it.
 
 ### The check with made-up people
 
@@ -202,10 +215,9 @@ The check:
 
 - **The app**: Vercel, **Deployments**, the last good Production deployment, the three-dot menu, **Instant Rollback**. Afterwards Vercel no longer puts new production deployments live by itself: once the fix is merged, open its deployment and **Promote** it.
 - **The worker**: Railway, the worker, **Deployments**, the last good deployment, the three-dot menu, **Redeploy**. An older worker leaves work it does not know in the queue ("An older worker build is running") for up to a day; after that the work fails like any other job, so release the fix within the day, or roll the app back too.
-- **Never past the release of the simple product.** Once `0039_one_scoring_system.sql` has run, no build from before it can run: it reads and writes columns that are gone. From that release on, fix forward.
-- **The database is never rolled back.** A wrong migration is corrected by the next numbered one, in a normal release.
+- **Never past the release of the simple product.** Once `0039_one_scoring_system.sql` has run, no build from before it can run: it reads and writes columns that are gone, and after `0041_storage_nothing_uses.sql` whole tables. From that release on, fix forward.
+- **The database is never rolled back.** A wrong migration is corrected by the next numbered one, in a normal release. The one exception is the release of the simple product itself, while it is still being checked: if its migrations went wrong, restore the database to the point in time noted in its item 3, then roll the app and the worker back.
 - **One company**: **Companies**, the company, **Take away access**: its pages and candidate emails stop at once.
-- **The worker back past 0037.** No build that old can run once 0039 has run. Until then the rule stands: a worker build from before 0037 moves anyone who finishes an AI interview to "Interview to set up" under the old default again, and 0037 has already run, so nothing puts them back. Prefer fixing forward. The repair, had it happened: 0037's statement once by hand on production, with one more condition after `WHERE a.stage = 'interview_recommended'`: `AND a.stage_changed_at >= '<when the rollback began>'`. It puts back only the people whose last move there was `workflow:screen`'s, records each in their history, and sends nothing.
 
 ## Hotfix
 
