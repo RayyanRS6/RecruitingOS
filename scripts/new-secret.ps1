@@ -1,5 +1,5 @@
 # Recruiting OS: a fresh random secret on the clipboard, never shown, for the values the application makes up rather
-# than receives from a provider: SESSION_SECRET, ANALYTICS_SALT, POSTMARK_WEBHOOK_SECRET and POSTMARK_INBOUND_SECRET.
+# than receives from a provider: SESSION_SECRET, ANALYTICS_SALT and POSTMARK_WEBHOOK_SECRET.
 # Run by the founder in her own PowerShell window from the repository root, once per value (the Windows replacement for
 # "openssl rand ... | pbcopy", which this computer does not have):
 #

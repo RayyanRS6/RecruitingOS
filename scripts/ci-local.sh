@@ -3,8 +3,8 @@
 # gitleaks runs only if installed; the repository pattern scan always runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export NODE_ENV=test CI=1 AI_PROVIDER=fake EMAIL_PROVIDER=fake SMS_PROVIDER=fake AUTH_PROVIDER=fake CALENDAR_PROVIDER=fake ANALYTICS_PROVIDER=fake
-export SECRET_STORE=memory STORAGE_PROVIDER=memory PGLITE_DIR="memory://" WORKER_INLINE=true COMP_BLS_ENABLED=false MAGIC_LINK_ENABLED=true
+export NODE_ENV=test CI=1 AI_PROVIDER=fake EMAIL_PROVIDER=fake AUTH_PROVIDER=fake ANALYTICS_PROVIDER=fake
+export STORAGE_PROVIDER=memory PGLITE_DIR="memory://" WORKER_INLINE=true COMP_BLS_ENABLED=false MAGIC_LINK_ENABLED=true
 export RATE_LIMIT_STORE=fake CSP_MODE=report-only
 step() { printf '\n== %s ==\n' "$1"; }
 step "install from the lockfile only";        pnpm install --frozen-lockfile
