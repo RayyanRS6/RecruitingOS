@@ -6,7 +6,7 @@ import {
 import type { StepState } from "@ros/ui";
 
 /**
- * The job builder's rules that need no browser, kept out of the components so tests/web/job-builder.test.ts can check
+ * The job builder's rules that need no browser, kept out of the components so tests/web/builder.test.ts can check
  * them: the question cards' state and what they send, the one summary line the picks are echoed as, the essentials
  * list, the steps of writing the job, when Enter sends, and what is said when a turn fails. The server decides
  * everything that matters (what is missing, the pay, fairness, whether the job may be written or published); these

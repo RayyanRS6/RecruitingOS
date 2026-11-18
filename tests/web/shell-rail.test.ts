@@ -1,115 +1,73 @@
 import { describe, expect, it } from "vitest";
-import { activeCompanyOf, jobHref, otherCompanies, RAIL_ROLE_LIMIT, railCompact, railListsRoles, railRoles, rolesInProgress, teamRoleWord } from "../../apps/web/src/rail";
-import { ROLE_STATUS, roleStatus } from "../../apps/web/src/role-status";
+import { COMPANY_LINKS, activeCompanyOf, otherCompanies, railCompact, teamRoleWord, unreadBadge } from "../../apps/web/src/rail";
 
 /**
- * The left rail (Wave DS; plain words of 14 October 2026): which jobs are listed under Jobs and how they read to a
- * screen reader, where a job opens (its Candidates once live, the Kanvis way), when the rail folds to icons, and the
- * words for the signed-in person's role in the company chip.
+ * The side rail's decisions: a company's four places, when the rail folds to icons, the words for the signed-in
+ * person's role in the company chip, the companies they can switch to, and how the count of unread updates reads.
  */
-const role = (id: string, status: string, total = 0, createdAt = "2026-10-01T00:00:00Z") => ({ id, title: `Role ${id}`, status, createdAt, counts: { total } });
-
-describe("where a job opens", () => {
-  it("opens a job that has gone live on its Candidates, and a draft or one waiting for approval on the job itself", () => {
-    for (const status of ["open", "paused", "filled"]) expect(jobHref({ id: "r1", status }), status).toBe("/roles/r1/talent");
-    for (const status of ["draft", "pending_approval"]) expect(jobHref({ id: "r1", status }), status).toBe("/roles/r1");
-    // a closed job that was once open still has its candidates; one closed before it ever opened does not
-    expect(jobHref({ id: "r1", status: "closed", openedAt: "2026-09-01T00:00:00Z" })).toBe("/roles/r1/talent");
-    expect(jobHref({ id: "r1", status: "closed", openedAt: null })).toBe("/roles/r1");
-  });
-
-  it("always opens the job itself for someone who cannot see candidates (an interviewer)", () => {
-    expect(jobHref({ id: "r1", status: "open" }, { talent: false })).toBe("/roles/r1");
-  });
-});
-
-describe("the jobs under Jobs", () => {
-  it("lists open jobs first with their applicants, then paused, waiting and drafts; never filled or closed ones", () => {
-    const list = railRoles([role("d", "draft"), role("c", "closed", 9), role("p", "paused", 4), role("o", "open", 6), role("f", "filled", 3), role("w", "pending_approval")], { role: "owner" });
-    expect(list.map((r) => r.id)).toEqual(["o", "p", "w", "d"]);
-    expect(list[0]).toEqual({ id: "o", title: "Role o", href: "/roles/o/talent", live: true, applicants: 6, statusWord: "live, 6 applicants", tag: null });
-    // a live job (open or paused) opens on its Candidates, the others on the job
-    expect(list.map((r) => r.href)).toEqual(["/roles/o/talent", "/roles/p/talent", "/roles/w", "/roles/d"]);
-    // the same jobs, in the same order, as Home's "Your jobs" reads them
-    expect(rolesInProgress([role("d", "draft"), role("c", "closed", 9), role("p", "paused", 4), role("o", "open", 6), role("f", "filled", 3), role("w", "pending_approval")]).map((r) => r.id)).toEqual(["o", "p", "w", "d"]);
-    // a paused or draft role gets the grey dot and no count, and a word in its place, so the colour never says it alone
-    expect(list.slice(1).every((r) => !r.live && r.applicants === null)).toBe(true);
-    expect(list.map((r) => r.tag)).toEqual([null, "Paused", "Waiting", "Draft"]);
-    expect(list.map((r) => r.statusWord)).toEqual(["live, 6 applicants", "paused", "waiting for approval", "draft"]);
-    expect(railRoles([role("o", "open", 1)], { role: "owner" })[0].statusWord).toBe("live, 1 applicant");
-  });
-
-  it("puts the newest first within a status and stops at eight", () => {
-    const many = Array.from({ length: 12 }, (_, i) => role(`r${i}`, "open", i, `2026-10-${String(i + 1).padStart(2, "0")}T00:00:00Z`));
-    const list = railRoles(many, { role: "admin" });
-    expect(list).toHaveLength(RAIL_ROLE_LIMIT);
-    expect(list[0].id).toBe("r11");
-    expect(list.at(-1)!.id).toBe("r4");
-  });
-
-  it("never counts applicants for an interviewer, whose list the API already limits to the roles they interview for", () => {
-    const fromApi = [{ ...role("b", "open"), countsHidden: true }];
-    // with no count, the open role says "Live" beside its green dot: an interviewer's paused role reads "Paused"
-    expect(railRoles(fromApi, { role: "interviewer" })).toEqual([{ id: "b", title: "Role b", href: "/roles/b", live: true, applicants: null, statusWord: "live", tag: "Live" }]);
-    expect(railRoles([{ ...role("p", "paused"), countsHidden: true }], { role: "interviewer" })[0].tag).toBe("Paused");
-    // a count is never shown to an interviewer, and never from a list that says its counts were left out
-    expect(railRoles([role("a", "open", 5)], { role: "interviewer" })[0].applicants).toBeNull();
-    expect(railRoles(fromApi, { role: "owner" })[0].applicants).toBeNull();
-  });
-
-  it("is empty when there is nothing in progress", () => {
-    expect(railRoles([], { role: "owner" })).toEqual([]);
-    expect(railRoles([role("c", "closed")], { role: "owner" })).toEqual([]);
+describe("a company's places", () => {
+  it("are Home, Jobs, Candidates and Settings, in that order, and nothing else", () => {
+    expect(COMPANY_LINKS.map((l) => [l.label, l.to])).toEqual([["Home", "/"], ["Jobs", "/roles"], ["Candidates", "/talent"], ["Settings", "/setup"]]);
+    // Home is the current link on Home alone; the others on every page under them
+    expect(COMPANY_LINKS.map((l) => l.end)).toEqual([true, false, false, false]);
+    for (const gone of ["Interviews", "Recruiter", "Updates", "Today"]) expect(COMPANY_LINKS.some((l) => (l.label as string) === gone), gone).toBe(false);
   });
 });
 
 describe("the rail's shape", () => {
-  it("folds to icons on a role's own pages only", () => {
+  it("folds to icons on a job's own pages and in the job builder only", () => {
     expect(railCompact("/roles/9f1c")).toBe(true);
     expect(railCompact("/roles/9f1c/talent")).toBe(true);
+    expect(railCompact("/roles/new")).toBe(true);
     expect(railCompact("/roles")).toBe(false);
     expect(railCompact("/roles/")).toBe(false);
     expect(railCompact("/")).toBe(false);
     expect(railCompact("/talent")).toBe(false);
+    expect(railCompact("/setup")).toBe(false);
     expect(railCompact(null)).toBe(false);
   });
 
-  it("lists the company's roles only for a member", () => {
+  it("knows the company the person is working in and their role in it", () => {
     const member = { activeCompanyId: "co1", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }] };
     const elsewhere = { activeCompanyId: "co2", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }] };
-    expect(railListsRoles(member)).toBe(true);
-    expect(railListsRoles(elsewhere)).toBe(false);
-    expect(railListsRoles({ activeCompanyId: null, memberships: [] })).toBe(false);
-    expect(railListsRoles(null)).toBe(false);
     expect(activeCompanyOf(member)).toEqual({ name: "Bright Dental", role: "owner", member: true });
+    expect(activeCompanyOf(elsewhere)).toEqual({ name: null, role: null, member: false });
+    expect(activeCompanyOf({ activeCompanyId: null, memberships: [] })).toEqual({ name: null, role: null, member: false });
     expect(activeCompanyOf(undefined)).toEqual({ name: null, role: null, member: false });
   });
 
-  it("names the person's role in plain words", () => {
+  it("names the person's role in the three words Settings uses", () => {
     expect(teamRoleWord("owner")).toBe("Owner");
-    expect(teamRoleWord("hiring_manager")).toBe("Hiring manager");
-    expect(teamRoleWord("hr")).toBe("HR");
+    expect(teamRoleWord("admin")).toBe("Admin");
+    expect(teamRoleWord("hiring_manager")).toBe("Member");
+    // a role that no longer exists has no word, never its raw name
+    expect(teamRoleWord("interviewer")).toBeNull();
     expect(teamRoleWord(null)).toBeNull();
   });
 });
 
-describe("a role's status pill", () => {
-  it("has a word for every status, green only for open and filled, never a raw status name", () => {
-    for (const [status, s] of Object.entries(ROLE_STATUS)) {
-      expect(s.label, status).not.toMatch(/_/);
-      expect(s.tone === "good", status).toBe(status === "open" || status === "filled");
-    }
-    expect(roleStatus("pending_approval").label).toBe("Waiting for approval");
-    expect(roleStatus("something_new")).toEqual({ label: "something new", tone: "neutral" });
+describe("the company switcher's choices", () => {
+  const m = (companyId: string, companyName: string, role = "owner") => ({ companyId, companyName, role });
+
+  it("lists every other company the person works in, by name, and nothing for one company", () => {
+    const me = { activeCompanyId: "c2", memberships: [m("c1", "Zephyr Dental", "admin"), m("c2", "Bright Dental"), m("c3", "Alpine Clinic", "hiring_manager")] };
+    expect(otherCompanies(me)).toEqual([{ companyId: "c3", companyName: "Alpine Clinic", role: "hiring_manager" }, { companyId: "c1", companyName: "Zephyr Dental", role: "admin" }]);
+    expect(otherCompanies({ activeCompanyId: "c2", memberships: [m("c2", "Bright Dental")] })).toEqual([]);
+    expect(otherCompanies(null)).toEqual([]);
   });
 });
 
-describe("the company switcher's choices (rows 9, 49)", () => {
-  const m = (companyId: string, companyName: string, role = "owner") => ({ companyId, companyName, role });
-  it("lists every other company the person works in, by name, and nothing for one company", () => {
-    const me = { activeCompanyId: "c2", memberships: [m("c1", "Zephyr Dental", "hr"), m("c2", "Bright Dental"), m("c3", "Alpine Clinic", "interviewer")] };
-    expect(otherCompanies(me)).toEqual([{ companyId: "c3", companyName: "Alpine Clinic", role: "interviewer" }, { companyId: "c1", companyName: "Zephyr Dental", role: "hr" }]);
-    expect(otherCompanies({ activeCompanyId: "c2", memberships: [m("c2", "Bright Dental")] })).toEqual([]);
-    expect(otherCompanies(null)).toEqual([]);
+describe("the count of unread updates", () => {
+  it("draws the figure and says it in the link's name; nothing at zero or before it is known", () => {
+    expect(unreadBadge(3)).toEqual({ text: "3", spoken: "Updates, 3 unread" });
+    expect(unreadBadge(0)).toEqual({ text: null, spoken: "Updates" });
+    expect(unreadBadge(undefined)).toEqual({ text: null, spoken: "Updates" });
+    expect(unreadBadge(null)).toEqual({ text: null, spoken: "Updates" });
+  });
+
+  it("draws at most 99+, and still says the real number", () => {
+    expect(unreadBadge(99)).toEqual({ text: "99", spoken: "Updates, 99 unread" });
+    expect(unreadBadge(250)).toEqual({ text: "99+", spoken: "Updates, 250 unread" });
+    expect(unreadBadge(-2)).toEqual({ text: null, spoken: "Updates" });
   });
 });

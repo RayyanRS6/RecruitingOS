@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { AI_HELP_LINE, type PublicPlan } from "../../packages/contracts/src";
-import { boardLockedWords, cannotSeeYetWords, firstChoice, isPlanAsk, moreLockedWords, planFacts, priceWords, reasonOf, reportLockedLabel, requestSentWords } from "../../apps/web/src/upgrade";
-import { draftNoRoom, problemAsk, turnProblem } from "../../apps/web/src/pages/new-role/rules";
+import { AI_HELP_UPGRADE_QUESTION, MORE_JOBS_UPGRADE_QUESTION, type PlanRoom, type PublicPlan } from "../../packages/contracts/src/index";
+import { ApiError, errorCode, errorWords, isCandidateLocked, planLimitOf } from "../../apps/web/src/api/client";
+import { TRIAL_ASK } from "../../apps/web/src/trial";
+import { firstChoice, moreLockedWords, planFacts, priceWords, requestSentWords, roomAsk } from "../../apps/web/src/upgrade";
 
 /**
- * The upgrade path's words and rules (the plans of 5 November 2026, Rule 5), as a page reads them without a browser. The sheet
- * compares the four plans with prices in dollars and the AI help in words, never in dollars; a request about the plan opens
- * the sheet instead of going in one click; and running out of AI help or of jobs offers an upgrade, never "try again".
+ * The upgrade path's words and rules, as a page reads them without a browser. The sheet compares the plans with prices
+ * in dollars and the AI help in words, never in dollars; a refusal by the plan carries the request to offer; and running
+ * out of AI help or of jobs offers an upgrade, never "try again".
  */
 const plan = (over: Partial<PublicPlan>): PublicPlan => ({ key: "basic", name: "Basic", monthlyUsd: 49, activeRoles: 3, jobsTotal: null, candidatesPerJob: 25, seats: 3, aiHelp: "About 600 candidates a month", current: false, ...over });
 const free = plan({ key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit" });
@@ -38,59 +39,55 @@ describe("what the sheet says of each plan", () => {
     for (const elsewhere of ["growth", "trial", "design_partner"]) expect(firstChoice(all(elsewhere)), elsewhere).toBeNull();
     expect(firstChoice([])).toBeNull();
   });
-});
-
-describe("what a request about the plan is", () => {
-  it("an action about the plan opens the sheet, with why; anything else stays as it was", () => {
-    const upgrade = { label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } };
-    expect(isPlanAsk(upgrade)).toBe(true);
-    expect(reasonOf(upgrade.body)).toBe("We would like more AI help.");
-    expect(reasonOf({})).toBeUndefined();
-    expect(isPlanAsk({ path: "/api/v1/roles/r1/pause" })).toBe(false);
-    expect(isPlanAsk({ path: "/roles/r1/talent" })).toBe(false);
-  });
 
   it("while a request is with ITS, the day it was sent stands in the button's place", () => {
     expect(requestSentWords("2026-11-18T12:00:00Z")).toBe("Request sent on November 18, 2026");
   });
 });
 
-describe("out of AI help, or out of jobs, in the job builder", () => {
-  const upgrade = { label: "Upgrade", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } };
-
-  it("a turn with no AI help left says its own line, with no 'could not reply', and the way on is the Upgrade", () => {
-    const p = turnProblem({ error: "AI credit used up", recovery: AI_HELP_LINE.turn, proposedActions: [upgrade], upgrade: true });
-    expect(p?.message).toBe(AI_HELP_LINE.turn);
-    expect(p?.message).not.toContain("could not reply");
-    expect(p).toMatchObject({ upgrade: true, ask: { label: "Upgrade", reason: "We would like more AI help." } });
-    // any other failure reads as it always did
-    expect(turnProblem({ error: "provider", recovery: "Try again." })).toEqual({ message: "The assistant could not reply just now. Try again.", ask: null });
-    expect(turnProblem({})).toBeNull();
+describe("a refusal by the plan", () => {
+  it("carries the request about the plan to offer, with its words; any other failure offers none", () => {
+    const ask = { label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION };
+    expect(planLimitOf(new ApiError(402, "ai_credit_used_up", "Your plan's AI help is used up.", { upgrade: true, ask }))).toEqual({ upgrade: true, ask });
+    // someone who may not ask (the API sends no request): the words alone
+    expect(planLimitOf(new ApiError(402, "limit_reached", "Your plan includes one job.", { upgrade: false, ask: null }))).toEqual({ upgrade: false, ask: null });
+    expect(planLimitOf(new ApiError(402, "trial_ended", "Your trial has ended.", undefined))).toEqual({ upgrade: false, ask: null });
+    // a request that is not whole is not offered
+    expect(planLimitOf(new ApiError(402, "limit_reached", "x", { upgrade: true, ask: { label: "Upgrade" } }))?.ask).toBeNull();
+    for (const other of [new ApiError(409, "action_not_allowed", "This job is closed."), new ApiError(403, "forbidden", "No."), new TypeError("Failed to fetch"), null]) expect(planLimitOf(other)).toBeNull();
   });
 
-  it("a refusal carries its own request about the plan; any other failure offers none", () => {
-    expect(problemAsk({ details: { upgrade: true, actions: [upgrade] } })).toMatchObject({ label: "Upgrade" });
-    expect(problemAsk({ details: { upgrade: true, actions: [] } })).toBeNull();
-    expect(problemAsk({ details: {} })).toBeNull();
-    expect(problemAsk(null)).toBeNull();
+  it("carries the plan's room with it when the API sends it", () => {
+    const room: PlanRoom = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
+    expect(planLimitOf(new ApiError(402, "limit_reached", room.message ?? "", { upgrade: true, ask: null, room }))?.room).toEqual(room);
+  });
+
+  it("says the API's own sentence for a refusal, and a line about the connection when there is none", () => {
+    expect(errorWords(new ApiError(409, "role_closed", "This job is closed."))).toBe("This job is closed.");
+    expect(errorWords(new TypeError("Failed to fetch"))).toMatch(/Check your connection/);
+    expect(errorWords(new TypeError("Failed to fetch"), "Could not save.")).toBe("Could not save.");
+    expect(errorCode(new ApiError(409, "stale_version", "Someone else saved this job."))).toBe("stale_version");
+    expect(errorCode(new TypeError("Failed to fetch"))).toBeNull();
+  });
+
+  it("knows someone past the plan's candidates per job is locked, a state to draw and never a failure to retry", () => {
+    expect(isCandidateLocked(new ApiError(402, "candidate_locked", "Upgrade to view more candidates."))).toBe(true);
+    expect(isCandidateLocked(new ApiError(402, "limit_reached", "x"))).toBe(false);
+    expect(isCandidateLocked(new ApiError(404, "not_found", "x"))).toBe(false);
   });
 });
 
-describe("what the builder says as a draft opens", () => {
-  const oneJob = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
-  const noHelp = { ...oneJob, used: 0, message: "Your plan's AI help is used up. Upgrade to keep going.", aiHelp: true };
+describe("no room for another job, as the start box says it", () => {
+  const room = (over: Partial<PlanRoom>): PlanRoom => ({ ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", ...over });
 
-  it("no room for another job, written or not; no AI help only before it is written, since sending a draft for approval uses none", () => {
-    expect(draftNoRoom(oneJob, false)).toBe(oneJob);
-    expect(draftNoRoom(oneJob, true)).toBe(oneJob);
-    expect(draftNoRoom(noHelp, false)).toBe(noHelp);
-    expect(draftNoRoom(noHelp, true)).toBeNull();
+  it("offers an upgrade for more jobs, or for more AI help when that is what ran out", () => {
+    expect(roomAsk(room({ upgrade: true }))).toEqual({ label: "Upgrade", reason: MORE_JOBS_UPGRADE_QUESTION });
+    expect(roomAsk(room({ upgrade: true, aiHelp: true }))).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
   });
 
-  it("nothing while there is room, or when closing a role could still free one", () => {
-    expect(draftNoRoom({ ok: true, limit: 1, used: 0, holding: [], message: null }, false)).toBeNull();
-    expect(draftNoRoom({ ok: false, limit: 2, used: 2, holding: [], message: "Your plan includes 2 roles at a time." }, false)).toBeNull();
-    expect(draftNoRoom(undefined, false)).toBeNull();
+  it("asks ITS to choose a plan once a trial has ended, and to talk when no plan is above theirs", () => {
+    expect(roomAsk(room({ trialEnded: true }))).toEqual({ label: "Ask ITS to choose a plan", reason: TRIAL_ASK });
+    expect(roomAsk(room({ nothingAbove: true }))).toEqual({ label: "Talk to ITS", reason: MORE_JOBS_UPGRADE_QUESTION });
   });
 });
 
@@ -98,10 +95,5 @@ describe("the words about people the team cannot read", () => {
   it("a count, never who", () => {
     expect(moreLockedWords(1)).toBe("1 more candidate is locked");
     expect(moreLockedWords(4)).toBe("4 more candidates are locked");
-    expect(boardLockedWords(1)).toBe("1 more is locked");
-    expect(boardLockedWords(3)).toBe("3 more are locked");
-    expect(reportLockedLabel(1)).toBe("person is locked");
-    expect(reportLockedLabel(2)).toBe("people are locked");
-    expect(cannotSeeYetWords(2)).toBe("and 2 more you cannot see yet");
   });
 });
