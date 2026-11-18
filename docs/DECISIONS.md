@@ -66,6 +66,7 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 
 - **Q14 A** (7 Oct 2026). Every applicant reads the same receipt, a repeat included, and the status page opens only from the emailed link, so the form never tells anyone whether an address applied before.
 - **Q12 B** (7 Oct 2026). A closing date stops new applications at the end of that day. Nobody is rejected by it, and closing the job stays a person's decision.
+- (19 Nov 2026, the team.) An AI interview asks the questions of the job as it is when the interview is made, by Shortlist or by a new link, and keeps them to its end. Closing a job closes its AI interview links that are still open. An interview the candidate sent is always scored.
 
 ## Hosting and releases
 
@@ -122,7 +123,6 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 - **L-16** (15 Oct 2026). No second sign-in step of our own for companies: they rely on Google's or Microsoft's own two-step sign-in.
 - (15 Oct 2026.) A session left open in another company can still switch back to a company the person was signed out of, while they are still a member.
 - (September 2026.) Not built, by decision: payments, job-board API connections, sourcing, background checks, interview recording, a second jurisdiction.
-- (19 Nov 2026, open.) An AI interview asks the questions and must-haves of the job version the person applied to, while their resume score follows the newest version. Whether the interview should follow the job as it is when Shortlist is pressed is not decided.
 
 ## Check with the owner
 
