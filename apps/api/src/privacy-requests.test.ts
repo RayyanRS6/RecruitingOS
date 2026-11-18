@@ -226,7 +226,10 @@ describe("candidate privacy requests", () => {
     // her readings keep what was found as codes (which must-have, which skill, shown or not), so the score still adds up,
     // and lose every word
     const words = /Maria|Reyes|maria\.reyes|Coastal|Dentrix|Tustin|555-01/;
-    const found = (result: { requirementFindings?: Array<{ requirementKey: string; met: string }>; competencyFindings?: Array<{ competencyKey: string; finding: string }> }) => ({ mustHaves: (result.requirementFindings ?? []).map((f) => [f.requirementKey, f.met]), skills: (result.competencyFindings ?? []).map((f) => [f.competencyKey, f.finding]) });
+    const found = (reading: unknown) => {
+      const result = reading as { requirementFindings?: Array<{ requirementKey: string; met: string }>; competencyFindings?: Array<{ competencyKey: string; finding: string }> };
+      return { mustHaves: (result.requirementFindings ?? []).map((f) => [f.requirementKey, f.met]), skills: (result.competencyFindings ?? []).map((f) => [f.competencyKey, f.finding]) };
+    };
     const readingsAfter = await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId));
     expect(readingsAfter).toHaveLength(readingsBefore.length);
     for (const a of readingsAfter) {

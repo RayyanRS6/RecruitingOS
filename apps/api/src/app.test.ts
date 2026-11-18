@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
-import type { ActionResult, AdminFailures, AdminQueue, CompanyCreated, CompanyView } from "@ros/contracts";
+import type { ActionResult, AdminFailures, AdminQueue, CompanyCreated, CompanyView, EvidenceAssessment } from "@ros/contracts";
 import { aiRuns, applications, assessments, candidates, communications, documents, events, jobs, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
@@ -127,7 +127,7 @@ describe("the API, from sign-in to an application and the administrator's view",
     const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id));
     expect(asmt.kind).toBe("triage");
     for (const s of asmt.result.strengths) if (s.evidence.quote) expect(s.evidence.source).toBe("resume");
-    expect(asmt.result.requirementFindings.map((f) => [f.requirementKey, f.met])).toEqual([["mh_xray", "yes"]]);
+    expect((asmt.result as EvidenceAssessment).requirementFindings.map((f) => [f.requirementKey, f.met])).toEqual([["mh_xray", "yes"]]);
     expect(a.extraction?.licenses.map((l) => l.name)).toContain("RDH");
     expect(a.extraction?.positions.length).toBeGreaterThanOrEqual(1);
     // one email: thank you, what happens next and their own link; no link to an AI interview

@@ -1,23 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AI_CREDIT_USED_UP, creditHoldUsd, estimateCostUsd, outOfCredit, runPromptDetached, runPromptsDetached, type AiProvider, type AiRuntime, type PromptDef, type StructuredRequest, type StructuredResult, type Usage } from "@ros/ai";
-import { INTAKE_COMPILE_MAX_TOKENS, runIntakeTurn, startIntakeSession } from "@ros/agents";
-import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION, type AiCreditView, type CompanyView, type UsageLine } from "@ros/contracts";
+import { INTAKE_COMPILE_MAX_TOKENS, PERSON_OFFER, PERSON_REPLY, runIntakeTurn, startIntakeSession } from "@ros/agents";
+import { ACTION_BLOCKED, AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION, CV_NO_SCORE_LABEL, INTERVIEW_NO_SCORE_LABEL, type AiCreditView, type CandidatePanel, type CompanyView, type HomeView, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnResponse, type PlanRoom, type UsageLine } from "@ros/contracts";
 import { AI_CREDIT_DRAFT_HOLD_USD, AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, screens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { AI_OUTAGE_ALERT_KIND } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
-import { SENT_RECORD_LINE, SENT_RECORD_NO_SCORE_LINE } from "./pages/chat-pages";
-import { conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ConversationRef } from "./services/apply-conversation";
-import { readingFor, runResumeReading } from "./services/apply-details";
-import { ensureWriteup } from "./services/writeup";
-import { followApply, signInAdmin, testContainerOptions, usePlan } from "./test-helpers";
+import { conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, type ConversationRef } from "./services/screens";
+import { applicationForm, plantJob, signInAdmin, testContainerOptions, usePlan } from "./test-helpers";
 
-const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
+/** One sentence that names every essential of a job, so the job can be written at once. */
+const HIRE = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
+/** One that leaves the place, the work arrangement and the pay to ask about. */
+const HIRE_WITH_QUESTIONS = "Software Engineer required with 3 years of hands-on experience in Python and Flask";
 const ANSWER = "At Coastal Dental I see nine patients a day and chart perio exams in Dentrix.";
 const HAIKU = "claude-haiku-5-5";
 const SONNET = "claude-sonnet-5-5";
@@ -90,8 +90,8 @@ describe("the AI credit", () => {
     const cookie = signedIn.headers.get("set-cookie")!.split(";")[0];
     const r = await json(cookie, "POST", "/api/v1/companies", { name: `Harbor Dental ${made}`, vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status, await r.clone().text()).toBe(201);
-    const co = await read<{ id: string; slug: string }>(r);
-    return { cookie, id: co.id, slug: co.slug };
+    const { id } = await read<{ id: string }>(r);
+    return { cookie, id };
   };
 
   const spend = (companyId: string, costUsd: number | string, opts: { status?: string; createdAt?: string } = {}) => withPlatform(container.db, (tx) => tx.insert(aiRuns).values({ companyId, agent: "test", task: "test.spent", provider: "fake", model: "fake", promptKey: "test.spent", promptVersion: 1, promptHash: "x", costUsd: String(costUsd), status: opts.status ?? "ok", ...(opts.createdAt ? { createdAt: opts.createdAt } : {}) }));
@@ -114,51 +114,67 @@ describe("the AI credit", () => {
     }
   };
 
-  const draftOf = async (cookie: string) => (await read<{ session: { id: string } }>(await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE }))).session.id;
+  /** A draft in the job builder, started with one sentence. */
+  const draftOf = async (cookie: string, words = HIRE): Promise<IntakeSessionView> => {
+    const r = await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: words });
+    expect(r.status, await r.clone().text()).toBe(201);
+    return (await read<IntakeStartResponse>(r)).session!;
+  };
+  /** The same with the job written ("Write the job"). */
+  const writtenDraftOf = async (cookie: string): Promise<string> => {
+    const draft = await draftOf(cookie);
+    const r = await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/draft`);
+    expect(r.status, await r.clone().text()).toBe(200);
+    return draft.id;
+  };
+  /** The plan's room for another job, as Start a hire reads it before anyone types: on Home, and beside the drafts. */
+  const roomOf = async (cookie: string): Promise<PlanRoom> => {
+    const { room } = await read<IntakeSessionList>(await json(cookie, "GET", "/api/v1/intake/sessions?mine=1"));
+    expect((await read<HomeView>(await json(cookie, "GET", "/api/v1/home"))).room).toEqual(room);
+    return room;
+  };
 
-  /** A company with one job open, the AI credit untouched (the stand-in AI costs nothing). */
+  /** A company with one job open, the AI credit untouched (no model wrote it). */
   const openJob = async () => {
     const company = await newCompany();
-    const compiled = await json(company.cookie, "POST", `/api/v1/intake/sessions/${await draftOf(company.cookie)}/compile`);
-    expect(compiled.status, await compiled.clone().text()).toBe(201);
-    const { roleId } = await read<{ roleId: string }>(compiled);
-    expect((await json(company.cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-    await container.drain();
-    const role = await read<{ status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } }>(await json(company.cookie, "GET", `/api/v1/roles/${roleId}`));
-    expect(role.status).toBe("open");
-    return { ...company, roleId, eligibility: role.currentPacket.packet.requirements.eligibility };
+    const { slug } = await read<CompanyView>(await json(company.cookie, "GET", "/api/v1/companies/current"));
+    const roleId = await plantJob(container, { companyId: company.id, title: "Registered Dental Hygienist" });
+    return { ...company, slug, roleId };
   };
   type Job = Awaited<ReturnType<typeof openJob>>;
 
   let applicants = 0;
-  /** The public form, as a browser posts it. */
-  const postApplication = async (job: Job, p: { first: string; last: string; email: string; phone?: string }) => {
+  /** The public form, as a browser posts it; then the worker runs, and the application is read back. */
+  const apply = async (job: Job, p: { first: string; last: string; email: string }) => {
     applicants += 1;
-    const fd = new FormData();
-    fd.set("firstName", p.first); fd.set("lastName", p.last); fd.set("email", p.email); fd.set("locationText", "Irvine, CA");
-    if (p.phone) { fd.set("phone", p.phone); fd.set("smsConsent", "yes"); }
-    fd.set("resume", new File([`${p.first} ${p.last}\nRegistered Dental Hygienist at Coastal Dental 2019 - present\nRDH license active\nPerio maintenance, Dentrix`], `${p.first.toLowerCase()}.txt`, { type: "text/plain" }));
-    for (const rule of job.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    const res = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": `198.51.100.${applicants}` } });
+    const res = await app.request(`/careers/${job.slug}/jobs/${job.roleId}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: p.last, email: p.email }, "Registered Dental Hygienist at Coastal Dental 2019 - present\nRDH license active\nRadiography certificate\nPerio maintenance, Dentrix"), headers: { "x-forwarded-for": `198.51.100.${applicants}` } });
     expect(res.status, await res.clone().text()).toBe(302);
-    return res;
-  };
-  const apply = async (job: Job, p: { first: string; last: string; email: string; phone?: string }) => {
-    await postApplication(job, p);
     await container.drain();
     const [cand] = await container.db.select().from(candidates).where(and(eq(candidates.companyId, job.id), eq(candidates.email, p.email)));
     const [row] = await container.db.select().from(applications).where(and(eq(applications.roleId, job.roleId), eq(applications.candidateId, cand.id)));
     return row;
   };
   const applicationOf = async (id: string) => (await container.db.select().from(applications).where(eq(applications.id, id)))[0];
-  const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId)))[0];
+  const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)))[0];
   const runOf = async (key: string, applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, key))).find((r) => r.subject.id === applicationId)!;
-  const interviewOf = async (applicationId: string): Promise<ConversationRef> => {
-    const wait = await interviewWaitFor(container.db, applicationId);
-    if (wait.state !== "ready") throw new Error(`the AI interview is not ready: ${wait.state}`);
-    return (await findConversation(container.db, wait.token))!;
+  const mailTo = (email: string) => (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === email);
+  /** What a person on the team presses for one candidate. */
+  const act = (job: Job, applicationId: string, action: string) => json(job.cookie, "POST", `/api/v1/applications/${applicationId}/actions`, { action });
+  const panelOf = async (job: Job, applicationId: string) => read<CandidatePanel>(await json(job.cookie, "GET", `/api/v1/applications/${applicationId}`));
+  /** A person shortlists them: their AI interview is made and its link emailed. */
+  const interviewOf = async (job: Job, applicationId: string): Promise<ConversationRef> => {
+    const r = await act(job, applicationId, "shortlist");
+    expect(r.status, await r.clone().text()).toBe(200);
+    await container.drain();
+    return (await findConversation(container.db, (await screenOf(applicationId)).token))!;
+  };
+  /** Someone who applied, was read, was shortlisted and pressed Start. */
+  const started = async (job: Job, p: { first: string; last: string; email: string }) => {
+    const a = await apply(job, p);
+    expect(a.stage).toBe("triaged");
+    const ref = await interviewOf(job, a.id);
+    expect(await conversationStart(container, ref)).toBe(true);
+    return { a, ref };
   };
   /** Answers every question left, as a candidate does, and says where the chat ended. */
   const answerToTheEnd = async (ref: ConversationRef) => {
@@ -183,18 +199,17 @@ describe("the AI credit", () => {
   const noFalseAlarm = async (companyId: string, applicationIds: string[] = []) => {
     expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, AI_OUTAGE_ALERT_KIND))).toEqual([]);
     const types = await eventTypes(companyId);
-    for (const type of ["ai.run_failed", "ai.output_invalid", "resume.extraction_failed", "workflow.failed", "workflow.retried", "screen.paused"]) expect(types, type).not.toContain(type);
+    for (const type of ["ai.run_failed", "ai.output_invalid", "resume.extraction_failed", "workflow.failed", "workflow.retried"]) expect(types, type).not.toContain(type);
     const runs = await container.db.select().from(workflowRuns).where(eq(workflowRuns.companyId, companyId));
     expect(runs.filter((r) => r.status === "failed")).toEqual([]);
     const steps = await container.db.select().from(workflowSteps).where(and(eq(workflowSteps.companyId, companyId), eq(workflowSteps.status, "error")));
     expect(steps).toEqual([]);
     const notes = await container.db.select().from(notifications).where(eq(notifications.companyId, companyId));
-    expect(notes.filter((n) => n.kind === "application.assessment_unavailable")).toEqual([]);
-    for (const id of applicationIds) expect(notes.filter((n) => n.kind === "screen.human_requested" && (n.action?.href ?? "").includes(id))).toEqual([]);
+    for (const id of applicationIds) expect(notes.filter((n) => n.kind === "candidate.unreachable" && (n.action?.href ?? "").includes(id))).toEqual([]);
   };
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" }));
     app = createApp(container);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
   });
@@ -413,7 +428,7 @@ describe("the AI credit", () => {
       const { id, cookie } = await newCompany();
       const provider = new PricedProvider();
       provider.answer = (_req, model) => ({ kind: "invalid", error: "provider error: Connection error.", model, usage: NO_USAGE, latencyMs: 5, final: true });
-      // what one no-résumé applicant's reading tried in the outage: three readings and their three second tries, each of the 15 tries the engine gives it
+      // what one applicant's reading tried in the outage: three readings and their three second tries, each of the 15 tries the engine gives it
       const hold = creditHoldUsd(HAIKU, { promptChars: charsOf(chatPrompt, INPUT) });
       for (let attempt = 0; attempt < 15; attempt++) {
         const [one, two, three] = await runPromptsDetached(container.db, runtime(provider), chatPrompt, INPUT, [1, 2, 3].map((reading) => ({ companyId: id, inputRef: { reading } })));
@@ -446,7 +461,8 @@ describe("the AI credit", () => {
       expect(await spent(id)).toBeCloseTo(9.89, 6);
       const provider = new PricedProvider();
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "no_credit" });
-      const failures = async () => (await read<{ failedAi: Array<{ task: string; companyId: string }> }>(await json(admin, "GET", "/api/v1/admin/failures"))).failedAi.filter((r) => r.companyId === id);
+      const [stale] = await container.db.select({ id: aiRuns.id }).from(aiRuns).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running")));
+      const failures = async () => (await read<{ failedAi: Array<{ id: string; task: string }> }>(await json(admin, "GET", "/api/v1/admin/failures"))).failedAi.filter((r) => r.id === stale.id);
       expect(await failures()).toEqual([]);
       // still running: it holds its place in the credit and is on nobody's list of failures
       expect(await container.db.select({ status: aiRuns.status }).from(aiRuns).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running")))).toHaveLength(1);
@@ -501,46 +517,47 @@ describe("the AI credit", () => {
     });
   });
 
+  /** A candidate's page as they read it: its words, without its styles and scripts (and without this suite's own mail domain, which says "credit"). */
+  const shown = async (path: string) => (await (await app.request(path)).text()).replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<script[\s\S]*?<\/script>/g, " ").replace(/&#39;/g, "'").replace(/@ai-credit\.test/g, "@example.test");
+  /** What the builder's assistant answers when the plan's AI help stops its turn. */
+  const noTurn = (recovery: string, upgrade: boolean) => ({ error: "The assistant did not answer.", recovery, upgrade });
+
   describe("the job builder", () => {
     it("a new job stops before anyone types, in the plan's words, with an upgrade that asks about AI help", async () => {
       const { cookie, id } = await newCompany();
       await spend(id, "9.200000");
       // too little for a draft: it says what is true
-      let room = await read<{ ok: boolean; upgrade?: boolean; aiHelp?: boolean; message: string; holding: unknown[] }>(await json(cookie, "GET", "/api/v1/intake/room"));
+      let room = await roomOf(cookie);
       expect(room).toMatchObject({ ok: false, upgrade: true, aiHelp: true, message: AI_HELP_LINE.newJobTooBig, holding: [] });
       expect(await withTenant(container.db, id, (tx) => aiCreditRoomForJob(tx, id))).toBe("too_low");
       await spend(id, "0.750000");
-      room = await read(await json(cookie, "GET", "/api/v1/intake/room"));
+      room = await roomOf(cookie);
       expect(room).toMatchObject({ ok: false, upgrade: true, aiHelp: true, message: AI_HELP_LINE.newJob });
-      expect((await read<{ room: { ok: boolean; message: string } }>(await json(cookie, "GET", "/api/v1/intake/sessions?mine=1"))).room).toMatchObject({ ok: false, message: AI_HELP_LINE.newJob });
-      for (const [path, body] of [["/api/v1/intake/sessions", { initialMessage: HIRE }], ["/api/v1/intake/conversation/messages", { message: HIRE }]] as const) {
-        const r = await json(cookie, "POST", path, body);
-        expect(r.status, path).toBe(402);
-        const error = await errorOf(r);
-        expect(error).toMatchObject({ code: "limit_reached", message: AI_HELP_LINE.newJob, details: { upgrade: true } });
-        expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
-      }
+      const r = await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE });
+      expect(r.status).toBe(402);
+      const error = await errorOf(r);
+      expect(error).toMatchObject({ code: "limit_reached", message: AI_HELP_LINE.newJob, details: { upgrade: true } });
+      expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
       expect(await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, id))).toEqual([]);
       expect(await runsOf(id)).toEqual([]);
     });
 
     it("a turn keeps the owner's words, offers an upgrade and nothing else, and records no failure", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
+      const draft = await draftOf(cookie, HIRE_WITH_QUESTIONS);
       await spend(id, "9.950000");
       const runs = (await runsOf(id)).length;
-      const r = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." });
+      const r = await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/messages`, { message: "We also need Saturdays covered." });
       expect(r.status).toBe(200);
-      const { reply, session } = await read<{ reply: { error: string; recovery: string; upgrade: boolean; proposedActions: Array<{ label: string; body: Record<string, unknown> }> }; session: { messages: Array<{ role: string; content: string }> } }>(r);
-      expect(reply).toMatchObject({ error: AI_CREDIT_USED_UP, recovery: AI_HELP_LINE.turn, upgrade: true });
-      expect(reply.proposedActions).toHaveLength(1);
-      expect(reply.proposedActions[0]).toMatchObject({ label: "Upgrade", body: { reason: AI_HELP_UPGRADE_QUESTION } });
+      const { reply, session } = await read<IntakeTurnResponse>(r);
+      expect(reply).toEqual(noTurn(AI_HELP_LINE.turn, true));
       expect(session.messages.at(-1)).toMatchObject({ role: "owner", content: "We also need Saturdays covered." });
-      // the same through the answers and the wrapper
-      const answers = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/answers`, { answers: [], note: "And Sundays.", reply: true });
-      expect((await read<{ reply: { recovery: string } }>(answers)).reply.recovery).toBe(AI_HELP_LINE.turn);
-      const wrapper = await read<{ reply: string; upgrade: boolean; intakeSessionId: string; proposedActions: Array<{ label: string }> }>(await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "One more thing." }));
-      expect(wrapper).toMatchObject({ reply: AI_HELP_LINE.turn, upgrade: true, intakeSessionId: sessionId, proposedActions: [{ label: "Upgrade" }] });
+      // the same through an answered card: the answer is taken and kept, and only the assistant's next turn waits
+      const place = draft.questions.find((q) => q.field === "location")!;
+      const answered = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/answers`, { answers: [{ questionId: place.id, own: ["Austin, TX"] }], note: "And Sundays." }));
+      expect(answered.reply).toEqual(noTurn(AI_HELP_LINE.turn, true));
+      expect(answered.summary).toEqual(["Where the job is: Austin, TX"]);
+      expect(answered.session.facts.locationText).toBe("Austin, TX");
       expect((await runsOf(id)).length).toBe(runs);
       expect(await eventTypes(id)).not.toContain("ai.run_failed");
     });
@@ -551,98 +568,86 @@ describe("the AI credit", () => {
       const ad = "Registered Dental Hygienist wanted. ".repeat(60);
       const me = await read<{ user: { id: string } }>(await json(cookie, "GET", "/api/v1/auth/me"));
       const actor = { kind: "user" as const, id: me.user.id };
-      const started = await withTenant(container.db, id, (tx) => startIntakeSession(tx, { companyId: id, actor, userId: me.user.id, message: { content: ad, kind: "pasted_ad" } }));
-      const out = await runIntakeTurn(container.db, { ai: container.ai, comp: container.integrations.comp }, { companyId: id, sessionId: started.id, actor });
+      const begun = await withTenant(container.db, id, (tx) => startIntakeSession(tx, { companyId: id, actor, userId: me.user.id, message: { content: ad, kind: "pasted_ad" } }));
+      const out = await runIntakeTurn(container.db, { ai: container.ai }, { companyId: id, sessionId: begun.id, actor });
       expect(out).toMatchObject({ noCredit: true, error: AI_CREDIT_USED_UP });
-      const [after] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, started.id));
+      const [after] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, begun.id));
       expect((after.serverState as { ad: { extracted: boolean } }).ad.extracted).toBe(false);
       expect(await eventTypes(id)).not.toContain("ai.run_failed");
       expect(await runsOf(id)).toEqual([]);
       await upgrade(id);
-      await runIntakeTurn(container.db, { ai: container.ai, comp: container.integrations.comp }, { companyId: id, sessionId: started.id, actor });
-      const [read2] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, started.id));
+      await runIntakeTurn(container.db, { ai: container.ai }, { companyId: id, sessionId: begun.id, actor });
+      const [read2] = await container.db.select().from(intakeSessions).where(eq(intakeSessions.id, begun.id));
       expect((read2.serverState as { ad: { extracted: boolean } }).ad.extracted).toBe(true);
     });
 
-    it("the draft answers 402, never 502: everything is kept, progress never says failed, and nothing is on the record", async () => {
+    it("writing the job answers 402, never 502: everything is kept, progress never says failed, and nothing is on the record", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
+      const draft = await draftOf(cookie);
       await spend(id, "9.950000");
-      for (const path of ["draft", "compile"]) {
-        const r = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/${path}`);
-        expect(r.status, path).toBe(402);
-        const error = await errorOf(r);
-        expect(error).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draft, details: { upgrade: true } });
-        expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
-      }
-      const { session } = await read<{ session: { progress: unknown; messages: unknown[] } }>(await json(cookie, "GET", `/api/v1/intake/sessions/${sessionId}`));
+      const r = await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/draft`);
+      expect(r.status).toBe(402);
+      const error = await errorOf(r);
+      expect(error).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draft, details: { upgrade: true } });
+      expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
+      const { session } = await read<{ session: IntakeSessionView }>(await json(cookie, "GET", `/api/v1/intake/sessions/${draft.id}`));
       expect(session.progress).toBeNull();
       expect(session.messages.length).toBeGreaterThan(0);
+      expect(session.readiness).toMatchObject({ mayDraft: true, hasDraft: false });
       expect(await eventTypes(id)).not.toContain("ai.run_failed");
     });
 
-    it("at real prices the draft stops first and says what is true, while the chat goes on", async () => {
+    it("at real prices the writing stops first and says what is true, while the chat goes on", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
+      const draft = await draftOf(cookie);
       await spend(id, "9.500000");
       await atRealPrices(async (provider) => {
-        const r = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
+        const r = await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/draft`);
         expect(r.status).toBe(402);
         expect(await errorOf(r)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draftTooBig });
         expect(provider.calls).toBe(0);
-        const turn = await read<{ reply: { error?: string; assistantMessage?: string } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
-        expect(turn.reply.error).toBeUndefined();
-        expect(turn.reply.assistantMessage).toBeTruthy();
+        const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/messages`, { message: "We also need Saturdays covered." }));
+        expect(turn.reply).toMatchObject({ assistantMessage: expect.any(String) });
         expect(provider.calls).toBe(1);
       });
     });
 
-    it("a draft already written can still be changed by hand and sent for approval: those use no model", async () => {
+    it("a job already written can still be changed by hand and published: neither asks the model", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      const sessionId = await writtenDraftOf(cookie);
       await spend(id, "9.950000");
-      // changing it by chat is the model's: nothing changed, and on a draft no editor is named, since writing it again
-      // with changed answers needs AI help too (live test, 12 Nov 2026)
-      const change = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." });
-      expect(change.status).toBe(402);
-      expect(await errorOf(change)).toMatchObject({ code: "ai_credit_used_up", message: "Your plan's AI help is used up. Nothing was changed.", details: { upgrade: true } });
-      const asked = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/request-approval`);
-      expect(asked.status, await asked.clone().text()).toBe(201);
-      const { roleId } = await read<{ roleId: string }>(asked);
-      // and on the role, whose editor needs no AI help
-      const onRole = await json(cookie, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make the summary shorter." });
-      expect(onRole.status).toBe(402);
-      expect(await errorOf(onRole)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.revise });
+      const runs = (await runsOf(id)).length;
+      const edited = await json(cookie, "PATCH", `/api/v1/intake/sessions/${sessionId}/draft`, { identity: { title: "Senior Dental Hygienist" } });
+      expect(edited.status, await edited.clone().text()).toBe(200);
+      const published = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/publish`);
+      expect(published.status, await published.clone().text()).toBe(201);
+      const { roleId } = await read<{ roleId: string }>(published);
+      await container.drain();
+      expect(await read<{ status: string; title: string }>(await json(cookie, "GET", `/api/v1/roles/${roleId}`))).toMatchObject({ status: "open", title: "Senior Dental Hygienist" });
+      // no model was asked for either, and nothing failed: the posts for its Share tab wait for AI help, as that tab says
+      expect((await runsOf(id)).length).toBe(runs);
       expect(await eventTypes(id)).not.toContain("ai.run_failed");
     });
 
     it("refused only for a running draft's hold, the owner reads what is true: try again in a few minutes, with no Upgrade and nothing used up", async () => {
       // the words below are real money: Basic stops at $19.90, $19.06 is settled, and another person's draft holds $0.84
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      const sessionId = await writtenDraftOf(cookie);
       await usePlan(container, id, "basic");
       await spend(id, "19.060000");
       await spend(id, "0.840000", { status: "running" });
       await atRealPrices(async (provider) => {
         // a turn: the words stay saved
-        const turn = await read<{ reply: { error: string; recovery: string; upgrade?: boolean; proposedActions: unknown[] } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
-        expect(turn.reply).toMatchObject({ error: AI_CREDIT_USED_UP, recovery: AI_HELP_BUSY_LINE.turn, proposedActions: [] });
-        expect(turn.reply.upgrade).toBeUndefined();
-        const wrapper = await read<{ reply: string; upgrade?: boolean; proposedActions: unknown[] }>(await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "One more thing." }));
-        expect(wrapper).toMatchObject({ reply: AI_HELP_BUSY_LINE.turn, proposedActions: [] });
-        expect(wrapper.upgrade).toBeUndefined();
-        // the draft: its own hold fits on what is settled ($19.06 + about $0.80 is under $19.90)
+        const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
+        expect(turn.reply).toEqual(noTurn(AI_HELP_BUSY_LINE.turn, false));
+        expect(turn.session.messages.at(-1)).toMatchObject({ role: "owner", content: "We also need Saturdays covered." });
+        // writing the job: its own hold fits on what is settled ($19.06 + about $0.80 is under $19.90)
         const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
         expect(draft.status).toBe(409);
         const error = await errorOf(draft);
         expect(error).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.draft });
         expect(error.details?.upgrade).toBeUndefined();
-        // changing it by chat (a draft names no editor), and the text about the company
-        const change = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." });
-        expect(change.status).toBe(409);
-        expect(await errorOf(change)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.reviseDraft });
+        // and the text about the company
         const about = await json(cookie, "POST", "/api/v1/companies/current/about/draft", {});
         expect(about.status).toBe(409);
         expect(await errorOf(about)).toMatchObject({ code: "ai_help_busy", message: AI_HELP_BUSY_LINE.about });
@@ -654,18 +659,16 @@ describe("the AI credit", () => {
       // once it settled at about $0.10, the same turn goes
       await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ status: "ok", costUsd: "0.100000" }).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running"))));
       await atRealPrices(async (provider) => {
-        const turn = await read<{ reply: { error?: string; assistantMessage?: string } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Sundays covered." }));
-        expect(turn.reply.error).toBeUndefined();
-        expect(turn.reply.assistantMessage).toBeTruthy();
+        const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Sundays covered." }));
+        expect(turn.reply).toMatchObject({ assistantMessage: expect.any(String) });
         expect(provider.calls).toBe(1);
       });
     });
 
-    it("a draft's hold whose process went away is money spent once no call could still be running: Write draft says it is too big, and every page reads what the gate reads", async () => {
+    it("a draft's hold whose process went away is money spent once no call could still be running: Write the job says it is too big, and every page reads what the gate reads", async () => {
       // the words below are real money: Basic stops at $19.90, $19.06 is settled, and a draft holding $0.80 lost its process
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      const sessionId = await writtenDraftOf(cookie);
       await usePlan(container, id, "basic");
       await monthBegan(id, 3_600_000);
       await spend(id, "19.060000");
@@ -692,38 +695,29 @@ describe("the AI credit", () => {
       const line = (await read<Array<{ id: string; aiCredit: { spentUsd: number; percent: number } | null }>>(await json(admin, "GET", "/api/v1/admin/customers"))).find((c) => c.id === id)!.aiCredit;
       expect(line).toMatchObject({ spentUsd: 19.86, percent: 99 });
       expect(await withTenant(container.db, id, (tx) => aiCreditRoomForJob(tx, id))).toBe("too_low");
-      expect(await read<{ ok: boolean; message: string }>(await json(cookie, "GET", "/api/v1/intake/room"))).toMatchObject({ ok: false, message: AI_HELP_LINE.newJobTooBig });
+      expect(await roomOf(cookie)).toMatchObject({ ok: false, message: AI_HELP_LINE.newJobTooBig });
       // and what the gate counted all along: the stale hold, and room for no draft
       expect(await spent(id)).toBeCloseTo(19.86, 6);
       expect(await withTenant(container.db, id, (tx) => aiCreditRoomSoon(tx, { companyId: id, holdUsd: AI_CREDIT_DRAFT_HOLD_USD, now: new Date() }))).toBe(false);
     });
 
-    it("the same refusals with the money really spent say used up, or that the draft is too big, and offer the Upgrade", async () => {
+    it("the same refusals with the money really spent say used up, or that the job is too big to write, and offer the Upgrade", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
+      const draft = await draftOf(cookie);
       await usePlan(container, id, "basic");
-      // $19.50 settled and $0.39 in flight: a small call fits only once the hold settles, but the draft's $0.80 never fits
+      // $19.50 settled and $0.39 in flight: a small call fits only once the hold settles, but the writing's $0.80 never fits
       await spend(id, "19.500000");
       await spend(id, "0.390000", { status: "running" });
       await atRealPrices(async () => {
-        const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
-        expect(draft.status).toBe(402);
-        expect(await errorOf(draft)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draftTooBig, details: { upgrade: true } });
+        const written = await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/draft`);
+        expect(written.status).toBe(402);
+        expect(await errorOf(written)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draftTooBig, details: { upgrade: true } });
       });
       await spend(id, "0.390000");
       await atRealPrices(async () => {
-        const turn = await read<{ reply: { recovery: string; upgrade: boolean } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
-        expect(turn.reply).toMatchObject({ recovery: AI_HELP_LINE.turn, upgrade: true });
+        const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${draft.id}/messages`, { message: "We also need Saturdays covered." }));
+        expect(turn.reply).toEqual(noTurn(AI_HELP_LINE.turn, true));
       });
-    });
-
-    it("the quick start's suggestions answer with nothing, quietly", async () => {
-      const { cookie, id } = await newCompany();
-      await spend(id, "9.950000");
-      const r = await json(cookie, "POST", "/api/v1/intake/suggestions", { title: "Delivery driver" });
-      expect(r.status).toBe(200);
-      expect(await read(r)).toEqual({ mustHaves: [], questions: [], unavailable: true });
-      expect(await runsOf(id)).toEqual([]);
     });
 
     it("the text about the company answers 402 and says they can write it; approving their own text still works", async () => {
@@ -738,8 +732,7 @@ describe("the AI credit", () => {
 
     it("on Ultra, the last plan, nothing in the job builder or Start a hire says to upgrade: talk with ITS, or wait for the day it starts again, and the button says Talk to ITS", async () => {
       const { cookie, id } = await newCompany();
-      const sessionId = await draftOf(cookie);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
+      const sessionId = await writtenDraftOf(cookie);
       await usePlan(container, id, "ultra");
       // Ultra's $200 a month, with $199.95 spent: a small call no longer fits under $199.90, so it is used up
       await spend(id, "199.950000");
@@ -749,20 +742,15 @@ describe("the AI credit", () => {
       const day = /until it starts again on (\w+, \w+ \d+)\.$/.exec(home.aiCredit.notice.body)?.[1];
       expect(day).toBeTruthy();
       const way = `Talk with ITS, or wait until your AI help starts again on ${day}.`;
-      // the same request about the plan as the Upgrade's, which opens the same sheet: only its label is different
-      const talksToIts = (actions: Array<{ label: string; path: string; body: Record<string, unknown> }>) => {
-        expect(actions).toHaveLength(1);
-        expect(actions[0]).toMatchObject({ label: "Talk to ITS", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } });
-      };
-      /** The same request as a 402 carries it: the button's words, and the reason sent with POST /api/v1/plans/request. */
+      /** The request as a 402 and the room carry it: the button's words, and the reason sent with POST /api/v1/plans/request. */
       const asksIts = (ask: { label: string; reason: string } | null) => expect(ask).toEqual({ label: "Talk to ITS", reason: AI_HELP_UPGRADE_QUESTION });
       const runs = (await runsOf(id)).length;
       const said: string[] = [];
 
-      // Start a hire, before anyone types: the room, from GET /intake/sessions and GET /intake/room
-      const room = (await read<{ room: { ok: boolean; message: string; nothingAbove?: boolean } }>(await json(cookie, "GET", "/api/v1/intake/sessions?mine=1"))).room;
+      // Start a hire, before anyone types: the room, on Home and beside the drafts
+      const room = await roomOf(cookie);
       expect(room).toMatchObject({ ok: false, upgrade: true, aiHelp: true, nothingAbove: true, message: `Your plan's AI help is used up. ${way}` });
-      expect(await read(await json(cookie, "GET", "/api/v1/intake/room"))).toMatchObject({ ok: false, nothingAbove: true, message: room.message });
+      asksIts(room.ask);
       const start = await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE });
       expect(start.status).toBe(402);
       const refused = await errorOf(start);
@@ -770,29 +758,24 @@ describe("the AI credit", () => {
       asksIts(refused.details.ask);
       said.push(refused.message, refused.details.ask?.label ?? "");
 
-      // a turn on the draft, here and through the conversation: their words saved, and the way on is ITS
-      const turn = await read<{ reply: { recovery: string; upgrade: boolean; proposedActions: Array<{ label: string; path: string; body: Record<string, unknown> }> } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
-      expect(turn.reply).toMatchObject({ recovery: `Your plan's AI help is used up. Your draft is saved. ${way}`, upgrade: true });
-      talksToIts(turn.reply.proposedActions);
-      const wrapper = await read<{ reply: string; proposedActions: Array<{ label: string }> }>(await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "One more thing." }));
-      expect(wrapper).toMatchObject({ reply: turn.reply.recovery, proposedActions: [{ label: "Talk to ITS" }] });
-      said.push(turn.reply.recovery, wrapper.reply, ...turn.reply.proposedActions.map((a) => a.label));
+      // a turn on the draft: their words saved, and the way on is ITS
+      const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
+      const recovery = `Your plan's AI help is used up. Your draft is saved. ${way}`;
+      expect(turn.reply).toEqual(noTurn(recovery, true));
+      said.push(recovery);
 
-      // Write draft, a change by chat and the text about the company: 402, with the same button
+      // Write the job and the text about the company: 402, with the same button
       const draft = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/draft`);
       expect(draft.status).toBe(402);
       const draftRefused = await errorOf(draft);
       expect(draftRefused).toMatchObject({ code: "ai_credit_used_up", message: `Your plan's AI help is used up. Everything you confirmed is kept. ${way}`, details: { upgrade: true } });
       asksIts(draftRefused.details.ask);
-      for (const [path, body, line] of [[`/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." }, AI_HELP_LINE.reviseDraft], ["/api/v1/companies/current/about/draft", {}, AI_HELP_LINE.about]] as const) {
-        const r = await json(cookie, "POST", path, body);
-        expect(r.status, path).toBe(402);
-        const e = await errorOf(r);
-        expect(e, path).toMatchObject({ code: "ai_credit_used_up", message: line });
-        asksIts(e.details.ask);
-        said.push(e.message, e.details.ask?.label ?? "");
-      }
-      said.push(draftRefused.message, draftRefused.details.ask?.label ?? "");
+      const about = await json(cookie, "POST", "/api/v1/companies/current/about/draft", {});
+      expect(about.status).toBe(402);
+      const aboutRefused = await errorOf(about);
+      expect(aboutRefused).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.about });
+      asksIts(aboutRefused.details.ask);
+      said.push(draftRefused.message, draftRefused.details.ask?.label ?? "", aboutRefused.message, aboutRefused.details.ask?.label ?? "");
       for (const words of said) expect(words).not.toMatch(/upgrade/i);
       // and no model was asked
       expect((await runsOf(id)).length).toBe(runs);
@@ -800,29 +783,34 @@ describe("the AI credit", () => {
   });
 
   describe("an application still arrives", () => {
-    it("the candidate gets the one email with the link now, and nothing false is raised; the reading waits for the company's signal", async () => {
+    it("the candidate gets the one email with their link now, and nothing false is raised; they reach New unscored, saying why, and the reading waits for the company's signal", async () => {
       const job = await openJob();
       await spend(job.id, "9.950000");
       const a = await apply(job, { first: "Ana", last: "Silva", email: "ana@ai-credit.test" });
-      expect(a).toMatchObject({ stage: "screen_invited", extraction: null, latestAssessmentId: null });
-      const mails = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "ana@ai-credit.test");
+      expect(a).toMatchObject({ stage: "triaged", extraction: null });
+      const mails = mailTo("ana@ai-credit.test");
       expect(mails).toHaveLength(1);
-      const scr = await screenOf(a.id);
-      expect(mails[0].text).toContain(`/c/screen/${scr.token}`);
-      expect(scr).toMatchObject({ status: "invited", invitedVia: "with_application" });
-      // nothing about plans or money reaches the candidate
+      expect(mails[0].text).toContain(`/c/status/${a.statusToken}`);
+      // nothing about plans or money reaches the candidate, in the email or on their own page
       expect(`${mails[0].subject} ${mails[0].text}`).not.toMatch(/\bplan\b|credit|upgrade|AI help/i);
+      const page = await shown(`/c/status/${a.statusToken}`);
+      expect(page).toContain("The hiring team is reviewing your application.");
+      expect(page.match(/\bplans?\b|credit|upgrade|AI help|used up|\bscore/i)).toBeNull();
       expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toEqual([]);
+      // the team reads why there is no score, and the record says so
+      expect((await panelOf(job, a.id)).cvScore).toMatchObject({ score: null, noScore: "ai_used_up", noScoreLabel: CV_NO_SCORE_LABEL.ai_used_up });
+      const triaged = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.subjectId, a.id), eq(events.type, "application.triaged")));
+      expect(triaged.map((e) => e.payload)).toEqual([{ assessmentId: null, noScore: "ai_used_up" }]);
       // the model was never asked, so no run, and no retry: the run waits, with a long timer on the company's own signal
       expect((await runsOf(job.id)).filter((r) => r.task === "resume.extract" || r.task === "triage.assess")).toEqual([]);
       const run = await runOf("application_intake", a.id);
       expect(run.status).toBe("waiting");
       expect(run.attempts).toBe(0);
       expect(run.currentStep).toBe("extract");
-      expect(run.wait).toMatchObject({ kind: "event", keys: [AI_CREDIT_AVAILABLE] });
+      expect(run.wait).toMatchObject({ kind: "event", eventTypes: [AI_CREDIT_AVAILABLE] });
       expect(Date.parse(run.wait!.until!) - Date.now()).toBeGreaterThan(29 * DAY);
       // no poll every few hours: one look so far, and one wait
-      expect((await container.db.select().from(workflowSteps).where(and(eq(workflowSteps.runId, run.id), eq(workflowSteps.stepKey, "ready"))))).toHaveLength(1);
+      expect(await container.db.select().from(workflowSteps).where(and(eq(workflowSteps.runId, run.id), eq(workflowSteps.stepKey, "extract")))).toHaveLength(1);
       await noFalseAlarm(job.id, [a.id]);
       // the owner hears once, about the company, never about the person
       const notes = await creditNotes(job.id);
@@ -832,59 +820,57 @@ describe("the AI credit", () => {
       // a second applicant tells nobody again
       await apply(job, { first: "Ben", last: "Okafor", email: "ben@ai-credit.test" });
       expect(await creditNotes(job.id)).toHaveLength(1);
+      // and nobody new is sent an AI interview while the AI help is used up: the plan's own reason, with the way to more
+      const refused = await act(job, a.id, "shortlist");
+      expect(refused.status).toBe(402);
+      const error = await errorOf(refused);
+      expect(error).toMatchObject({ code: "limit_reached", message: ACTION_BLOCKED.aiUsedUp, details: { upgrade: true } });
+      expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
+      expect((await applicationOf(a.id)).stage).toBe("triaged");
     });
 
-    it("the form's reading of a résumé says failed at once, with no retry, so the candidate fills in the form", async () => {
-      const job = await openJob();
-      await spend(job.id, "9.950000");
-      const uploadId = "0192a6b2-0000-7aaa-8bbb-0000000000aa";
-      const key = `quarantine/${job.id}/${job.roleId}/${uploadId}.txt`;
-      await container.integrations.storage.put(key, new TextEncoder().encode("Dana Kept\nDental hygienist at Coastal Dental 2019 - present\n"), "text/plain");
-      const payload = { companyId: job.id, roleId: job.roleId, uploadId, key, filename: "dana.txt", mime: "text/plain" };
-      // the first of three tries: a throw here would be a retry
-      await runResumeReading({ db: container.db, ai: container.ai, integrations: container.integrations, engine: container.engine }, payload, { attempt: 1, maxAttempts: 3, now: new Date() });
-      expect(await readingFor(container.integrations.storage, payload)).toMatchObject({ outcome: "failed", aiRunId: null, details: null });
-      expect((await runsOf(job.id)).filter((r) => r.inputRef.uploadId === uploadId)).toEqual([]);
-    });
-
-    it("after an upgrade the signal wakes the waiting reading: it is stored beside what happened since, and moves nothing", async () => {
+    it("after an upgrade the signal wakes the waiting reading: they are read where they stand, and nothing else moves", async () => {
       const job = await openJob();
       await spend(job.id, "9.950000");
       const a = await apply(job, { first: "Cy", last: "Rao", email: "cy@ai-credit.test" });
-      const run = await runOf("application_intake", a.id);
-      expect(run.status).toBe("waiting");
+      expect((await runOf("application_intake", a.id)).status).toBe("waiting");
       await upgrade(job.id);
       const after = await applicationOf(a.id);
-      expect(after.stage).toBe("screen_invited");
+      expect(after.stage).toBe("triaged");
       expect(after.extraction).toBeTruthy();
       expect((await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).map((x) => x.kind)).toEqual(["triage"]);
       expect((await runOf("application_intake", a.id)).status).toBe("completed");
+      const scored = (await panelOf(job, a.id)).cvScore;
+      expect(scored.noScore).toBeNull();
+      expect(typeof scored.score).toBe("number");
       // one email all along
-      expect((container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "cy@ai-credit.test")).toHaveLength(1);
+      expect(mailTo("cy@ai-credit.test")).toHaveLength(1);
       await noFalseAlarm(job.id, [a.id]);
     });
 
-    it("a reading refused only for a running draft's hold moves the person on all the same, says nothing is used up, and is read a few minutes later", async () => {
+    it("a reading refused only for a running draft's hold says nothing is used up: the person is still being read, and is read a few minutes later", async () => {
       const job = await openJob();
       await usePlan(container, job.id, "basic");
       // Basic stops at $19.90: $19.06 settled, and a draft holding about $0.80 for two minutes
       await spend(job.id, "19.060000");
       await spend(job.id, "0.800000", { status: "running" });
       const a = await atRealPrices(() => apply(job, { first: "Ned", last: "Ash", email: "ned@ai-credit.test" }));
-      // nobody waits on money: the one email went, with the link
-      const mails = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "ned@ai-credit.test");
+      // nobody waits on money to hear from us: the one email went, with their link
+      const mails = mailTo("ned@ai-credit.test");
       expect(mails).toHaveLength(1);
-      expect(mails[0].text).toContain(`/c/screen/${(await screenOf(a.id)).token}`);
-      expect(a.latestAssessmentId).toBeNull();
+      expect(mails[0].text).toContain(`/c/status/${a.statusToken}`);
+      // not read yet, and not marked as unscored either: the team reads that the resume is being read
+      expect(a.stage).toBe("received");
+      expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toEqual([]);
+      expect((await panelOf(job, a.id)).cvScore).toMatchObject({ score: null, noScore: "being_read", noScoreLabel: CV_NO_SCORE_LABEL.being_read });
       const run = await runOf("application_intake", a.id);
       expect(run.status).toBe("waiting");
-      expect(run.wait).toMatchObject({ kind: "event", keys: [AI_CREDIT_AVAILABLE] });
+      expect(run.wait).toMatchObject({ kind: "event", eventTypes: [AI_CREDIT_AVAILABLE] });
       expect(Date.parse(run.wait!.until!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
       // not parked until the period's end, and nothing on the record says used up
-      const said = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.subjectId, a.id), eq(events.type, "application.triaged")));
-      expect(said.map((e) => e.payload.reason)).toEqual(["the plan's AI help is finishing other work"]);
+      expect(await container.db.select().from(events).where(and(eq(events.subjectId, a.id), eq(events.type, "application.triaged")))).toEqual([]);
       expect((await creditNotes(job.id)).map((n) => n.title)).toEqual(["80% of your plan's AI help used"]);
-      // the draft settles at about $0.10; the next look reads them, and moves nothing
+      // the draft settles at about $0.10; the next look reads them
       await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ status: "ok", costUsd: "0.100000" }).where(and(eq(aiRuns.companyId, job.id), eq(aiRuns.status, "running"))));
       await atRealPrices(async () => {
         try {
@@ -896,7 +882,8 @@ describe("the AI credit", () => {
       });
       expect((await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).map((x) => x.kind)).toEqual(["triage"]);
       expect((await runOf("application_intake", a.id)).status).toBe("completed");
-      expect((container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "ned@ai-credit.test")).toHaveLength(1);
+      expect((await applicationOf(a.id)).stage).toBe("triaged");
+      expect(mailTo("ned@ai-credit.test")).toHaveLength(1);
       expect((await creditNotes(job.id)).map((n) => n.title)).toEqual(["80% of your plan's AI help used"]);
     });
 
@@ -918,25 +905,35 @@ describe("the AI credit", () => {
         moveClock(null);
       }
     });
-  });
 
-  describe("a candidate's chat", () => {
-    it("carries on in the job's own words, can be finished and sent, and the candidate cannot tell", async () => {
+    it("someone who left while their resume reading waited for credit is not read after an upgrade, and no credit is spent on them", async () => {
       const job = await openJob();
       await spend(job.id, "9.950000");
-      const a = await apply(job, { first: "Eva", last: "Noor", email: "eva@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      expect(ref.kind).toBe("screen");
-      expect(await conversationStart(container, ref)).toBe(true);
+      const a = await apply(job, { first: "Lou", last: "Park", email: "lou@ai-credit.test" });
+      expect((await runOf("application_intake", a.id)).status).toBe("waiting");
+      const decided = await act(job, a.id, "reject");
+      expect(decided.status, await decided.clone().text()).toBe(200);
+      await upgrade(job.id);
+      expect((await runOf("application_intake", a.id)).status).toBe("completed");
+      expect((await runsOf(job.id)).filter((r) => ["resume.extract", "triage.assess"].includes(r.task))).toEqual([]);
+      expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toEqual([]);
+      expect((await applicationOf(a.id)).stage).toBe("rejected");
+      await noFalseAlarm(job.id, [a.id]);
+    });
+  });
+
+  describe("a candidate's AI interview", () => {
+    it("carries on in the job's own words, can be finished and sent, and the candidate cannot tell; the team reads the answers while the score waits", async () => {
+      const job = await openJob();
+      const { a, ref } = await started(job, { first: "Eva", last: "Noor", email: "eva@ai-credit.test" });
+      await spend(job.id, "9.950000");
       const first = (await conversationView(container.db, ref))!;
       const firstKey = first.current!.key;
 
-      // only a question, or only confusion: not an answer. The question again, with the offer of a person.
+      // only a question, or only confusion: not an answer. The question again, with how to choose a person.
       for (const message of ["What does it pay?", "What do you mean?"]) {
         const r = await conversationTurn(container, ref, { message });
-        expect(r).toMatchObject({ kind: "reply", done: false, humanRequested: false });
-        expect((r as { message: string }).message).toContain(first.current!.question);
-        expect((r as { message: string }).message).toContain("reply HUMAN");
+        expect(r).toMatchObject({ kind: "reply", review: false, withdrawn: false, message: `${first.current!.question}\n\n${PERSON_OFFER}` });
         const v = (await conversationView(container.db, ref))!;
         expect(v.current?.key).toBe(firstKey);
         expect(v.current?.answered).toBe(false);
@@ -951,112 +948,65 @@ describe("the AI credit", () => {
       expect(reply).toContain(next.current!.question);
       expect(next.current!.key).not.toBe(firstKey);
       let scr = await screenOf(a.id);
-      const recorded = { ...scr.answers, ...Object.fromEntries((scr.progress.focusQuestions ?? []).map((f) => [f.key, f.answer])) }[firstKey];
-      expect(recorded).toBe(ANSWER);
-      // their own words stay in the transcript, and a code reply carries no run, so it counts toward no cap
+      expect(scr.answers[firstKey]).toBe(ANSWER);
+      // a reply worked out in code carries no run, so it counts toward no cap
       expect(scr.transcript.filter((t) => t.role === "assistant").every((t) => !t.aiRunId)).toBe(true);
       expect(scr.progress.failures).toBe(0);
       expect(scr.status).toBe("in_progress");
 
-      // to the end: Review & send, with no words about plans or money anywhere the candidate reads
+      // to the end: "check your answers", with no words about plans or money anywhere the candidate reads
       const end = await answerToTheEnd(ref);
       expect(end.phase).toBe("review");
-      expect(await ensureWriteup(container, ref)).toBe("written");
-      const view = (await conversationView(container.db, ref))!;
-      expect(view.writeup?.answers.length).toBeGreaterThan(0);
-      expect(view.writeup?.aiRunId ?? null).toBeNull();
-      const everything = JSON.stringify(view.transcript) + JSON.stringify(view.writeup);
-      expect(everything).not.toMatch(/\bplans?\b|credit|upgrade|AI help|used up/i);
+      expect(JSON.stringify(end.transcript) + JSON.stringify(end.review)).not.toMatch(/\bplans?\b|credit|upgrade|AI help|used up/i);
       expect(await conversationSubmit(container, ref)).toBe(true);
       await container.drain();
       scr = await screenOf(a.id);
       expect(scr.status).toBe("completed");
-      expect((await runsOf(job.id)).filter((r) => ["screen.turn", "screen.writeup", "screen.assess"].includes(r.task))).toEqual([]);
+      expect((await applicationOf(a.id)).stage).toBe("screen_complete");
+      expect((await runsOf(job.id)).filter((r) => ["screen.turn", "screen.assess"].includes(r.task))).toEqual([]);
 
-      // the scorecard waits for the company's signal, and the screen says so; nothing failed and nobody was paged about them
+      // the scorecard waits for the company's signal, and the interview says so; nothing failed and nobody was paged
       expect(scr.progress.scoreWaitsForCredit).toBeTruthy();
       expect(scr.assessmentId).toBeNull();
       const run = await runOf("screen", a.id);
-      expect(run).toMatchObject({ status: "waiting", currentStep: "assess", attempts: 0 });
-      expect(run.wait).toMatchObject({ kind: "event", keys: [AI_CREDIT_AVAILABLE] });
+      expect(run).toMatchObject({ status: "waiting", currentStep: "score", attempts: 0 });
+      expect(run.wait).toMatchObject({ kind: "event", eventTypes: [AI_CREDIT_AVAILABLE] });
       await noFalseAlarm(job.id, [a.id]);
       expect(await creditNotes(job.id)).toHaveLength(1);
-      expect((await container.db.select().from(notifications).where(eq(notifications.companyId, job.id))).filter((n) => JSON.stringify(n).includes("Eva"))).toEqual([]);
+      // the team is told she finished, as for anyone, and nothing else about her was written
+      expect((await container.db.select().from(notifications).where(eq(notifications.companyId, job.id))).filter((n) => JSON.stringify(n).includes("Eva")).map((n) => n.title)).toEqual(["Eva Noor finished the AI interview"]);
 
-      // no score can come for now: nothing promises one, not the page they sent it from and not their record, whatever the time
-      const decoded = async (path: string) => (await (await app.request(path)).text()).replace(/&#39;/g, "'");
-      const closing = () => decoded(`/c/screen/${ref.token}`);
-      const record = () => decoded(`/c/status/${a.statusToken}`);
-      expect(await closing()).toContain(SENT_RECORD_NO_SCORE_LINE);
-      expect(await closing()).not.toContain("match score");
-      expect(await record()).not.toMatch(/match score|Not ready yet/i);
-      moveClock(Date.now() + 2 * 3_600_000);
-      try {
-        expect(await record()).not.toMatch(/match score|Not ready yet/i);
-      } finally {
-        moveClock(null);
-      }
+      // the candidate's pages say what they say for anyone: sent, and never a word about a score, a plan or money
+      const closed = await shown(`/c/screen/${ref.token}`);
+      expect(closed).toContain("Thanks, your answers are sent");
+      for (const page of [closed, await shown(`/c/status/${a.statusToken}`)]) expect(page.match(/\bscore|\bplans?\b|credit|upgrade|AI help|used up/i)).toBeNull();
 
-      // the team reads the answers, and every place that says "being scored" says to read it instead
-      const detail = await read<{ screens: Array<{ scorecard: string; answersShared: boolean; answers: Record<string, string> }>; placement: { doneLabel: string; reason: string; column: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
-      expect(detail.screens[0].scorecard).toBe("waiting_for_credit");
-      expect(detail.screens[0].answersShared).toBe(true);
-      expect(Object.values(detail.screens[0].answers)).toContain(ANSWER);
-      expect(detail.placement).toMatchObject({ column: null, doneLabel: "AI interview not scored" });
-      expect(detail.placement.reason).toMatch(/Read their answers/);
+      // the team reads the answers, and where the score would be it says why there is none; the resume's number never stands in for it
+      const waiting = await panelOf(job, a.id);
+      expect(waiting.aiInterview?.score).toMatchObject({ score: null, noScore: "ai_used_up", noScoreLabel: INTERVIEW_NO_SCORE_LABEL.ai_used_up });
+      expect(waiting.aiInterview?.answers.map((x) => x.answer)).toContain(ANSWER);
+      expect(typeof waiting.cvScore.score).toBe("number");
 
-      // after an upgrade it is scored, the mark goes, and the team hears as usual
+      // after an upgrade it is scored, the mark goes, and nothing failed
       await upgrade(job.id);
       scr = await screenOf(a.id);
       expect(scr.progress.scoreWaitsForCredit).toBeUndefined();
       expect(scr.assessmentId).toBeTruthy();
       expect((await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).map((x) => x.kind).sort()).toEqual(["screen", "triage"]);
-      const scored = await read<{ screens: Array<{ scorecard: string }>; placement: { doneLabel: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
-      expect(scored.screens[0].scorecard).toBe("ready");
-      expect((await runOf("screen", a.id)).status).not.toBe("failed");
+      const scored = (await panelOf(job, a.id)).aiInterview?.score;
+      expect(scored?.noScore).toBeNull();
+      expect(typeof scored?.score).toBe("number");
+      expect((await runOf("screen", a.id)).status).toBe("completed");
       await noFalseAlarm(job.id, [a.id]);
-      // and now both say so, as they do for anyone
-      expect(await closing()).toContain(SENT_RECORD_LINE);
-      expect(await record()).toContain("Your match score is ready");
+      // and the candidate's page reads as it did: nothing there ever depended on the score
+      expect(await shown(`/c/screen/${ref.token}`)).toContain("Thanks, your answers are sent");
     });
 
-    it("someone whose résumé was read before the credit ran out, and who sent the AI interview: while its scorecard waits nothing promises a score, the résumé's number never stands in for it, and it is never 'working out'; once the credit is back the score is there", async () => {
-      const job = await openJob();
-      const a = await apply(job, { first: "Rae", last: "Inge", email: "rae@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
-      expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toHaveLength(1);
-      await spend(job.id, "9.950000");
-      expect((await answerToTheEnd(ref)).phase).toBe("review");
-      expect(await ensureWriteup(container, ref)).toBe("written");
-      expect(await conversationSubmit(container, ref)).toBe(true);
-      await container.drain();
-      expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeTruthy();
-      const decoded = async (path: string) => (await (await app.request(path)).text()).replace(/&#39;/g, "'");
-      // the résumé's number would read low for someone who did what was asked (6 November 2026), and no other can come for now
-      const closed = await decoded(`/c/screen/${ref.token}`);
-      expect(closed).toContain(SENT_RECORD_NO_SCORE_LINE);
-      expect(closed).not.toContain("match score");
-      const record = await decoded(`/c/status/${a.statusToken}`);
-      expect(record).not.toMatch(/match score|Not ready yet/i);
-      expect(record).not.toContain("From your résumé only");
-      expect(record).not.toContain("Working out your match score");
-      // after an upgrade the scorecard is written, and the score they read counts their AI interview
-      await upgrade(job.id);
-      expect((await screenOf(a.id)).assessmentId).toBeTruthy();
-      expect(await decoded(`/c/screen/${ref.token}`)).toContain(SENT_RECORD_LINE);
-      const scored = await decoded(`/c/status/${a.statusToken}`);
-      expect(scored).toContain("Your match score is ready");
-      expect(scored).toContain("From your résumé and your AI interview");
-    });
-
-    /** A chat sent on a Basic job, its résumé read and $19.06 of the $20 settled, with `inFlight` held by a draft still running, its hold taken `heldAgoMs` ago. */
+    /** An AI interview sent on a Basic job, the resume read and `settled` of the $20 spent, with `inFlight` held by a draft still running, its hold taken `heldAgoMs` ago. */
     const sentOnBasic = async (who: { first: string; last: string; email: string }, settled: string, inFlight: string | null, heldAgoMs = 0) => {
       const job = await openJob();
       await usePlan(container, job.id, "basic");
-      const a = await apply(job, who);
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
+      const { a, ref } = await started(job, who);
       expect((await answerToTheEnd(ref)).phase).toBe("review");
       await spend(job.id, settled);
       if (heldAgoMs) await monthBegan(job.id, heldAgoMs + 3_600_000);
@@ -1076,13 +1026,11 @@ describe("the AI credit", () => {
       expect(scr.assessmentId).toBeNull();
       expect(scr.progress.scoreWaitsForCredit).toBeUndefined();
       const run = await runOf("screen", a.id);
-      expect(run).toMatchObject({ status: "waiting", currentStep: "assess", attempts: 0 });
-      expect(run.wait).toMatchObject({ kind: "event", keys: [AI_CREDIT_AVAILABLE] });
+      expect(run).toMatchObject({ status: "waiting", currentStep: "score", attempts: 0 });
+      expect(run.wait).toMatchObject({ kind: "event", eventTypes: [AI_CREDIT_AVAILABLE] });
       expect(Date.parse(run.wait!.until!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
       // everything says what is true: being scored, with 95% settled and not used up
-      const detail = await read<{ screens: Array<{ scorecard: string }>; placement: { doneLabel: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
-      expect(detail.screens[0].scorecard).toBe("writing");
-      expect(detail.placement.doneLabel).not.toBe("AI interview not scored");
+      expect((await panelOf(job, a.id)).aiInterview?.score).toMatchObject({ noScore: "being_scored", noScoreLabel: INTERVIEW_NO_SCORE_LABEL.being_scored });
       expect((await creditNotes(job.id)).map((n) => n.title)).toEqual(["80% of your plan's AI help used"]);
       const current = await planOf(job.cookie);
       expect(current.aiCredit).toMatchObject({ level: "warning", percent: 95 });
@@ -1107,7 +1055,7 @@ describe("the AI credit", () => {
       expect((await runOf("screen", a.id)).status).not.toBe("waiting");
     });
 
-    it("the same chat with the money really spent: it waits to the period's end, in the used-up words, and the owner is told", async () => {
+    it("the same interview with the money really spent: it waits to the period's end, in the used-up words, and the owner is told", async () => {
       // $19.86 settled and nothing running: the three readings' 6 cents make 19.92 whatever settles, and money spent never comes back
       const { job, a } = await sentOnBasic({ first: "Pia", last: "Wren", email: "pia@ai-credit.test" }, "19.860000", null);
       const scr = await screenOf(a.id);
@@ -1116,9 +1064,7 @@ describe("the AI credit", () => {
       const [credit] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, job.id), eq(entitlements.key, "ai_credit_monthly_cents")));
       expect(run.wait?.until).toBe(credit.periodEnd);
       expect(Date.parse(run.wait!.until!) - Date.now()).toBeGreaterThan(29 * DAY);
-      const detail = await read<{ screens: Array<{ scorecard: string }>; placement: { doneLabel: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
-      expect(detail.screens[0].scorecard).toBe("waiting_for_credit");
-      expect(detail.placement.doneLabel).toBe("AI interview not scored");
+      expect((await panelOf(job, a.id)).aiInterview?.score).toMatchObject({ noScore: "ai_used_up", noScoreLabel: INTERVIEW_NO_SCORE_LABEL.ai_used_up });
       expect((await creditNotes(job.id)).map((n) => n.title)).toContain("Your plan's AI help is used up");
       // ITS moves them to Pro while something big is running: nothing is used up any more, so the mark and its words go, and it looks again soon
       await spend(job.id, "59.950000", { status: "running" });
@@ -1126,6 +1072,7 @@ describe("the AI credit", () => {
       expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeUndefined();
       expect(Date.parse((await runOf("screen", a.id)).wait!.until!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
       expect((await screenOf(a.id)).assessmentId).toBeNull();
+      expect((await panelOf(job, a.id)).aiInterview?.score).toMatchObject({ noScore: "being_scored" });
     });
 
     it("a scorecard refused for a draft's hold whose process went away parks in the used-up words, which are true, and does not look again every 15 minutes for a day", async () => {
@@ -1137,12 +1084,10 @@ describe("the AI credit", () => {
       expect(scr.progress.scoreWaitsForCredit).toBeTruthy();
       const run = await runOf("screen", a.id);
       const [credit] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, job.id), eq(entitlements.key, "ai_credit_monthly_cents")));
-      expect(run).toMatchObject({ status: "waiting", currentStep: "assess", attempts: 0 });
+      expect(run).toMatchObject({ status: "waiting", currentStep: "score", attempts: 0 });
       expect(run.wait?.until).toBe(credit.periodEnd);
-      // the team reads "not scored", with the way to read the answers, and the owner is told it is used up, as the gate says
-      const detail = await read<{ screens: Array<{ scorecard: string }>; placement: { doneLabel: string | null } }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`));
-      expect(detail.screens[0].scorecard).toBe("waiting_for_credit");
-      expect(detail.placement.doneLabel).toBe("AI interview not scored");
+      // the team reads "not scored" where the score would be, with the answers to read, and the owner is told it is used up, as the gate says
+      expect((await panelOf(job, a.id)).aiInterview?.score).toMatchObject({ noScore: "ai_used_up" });
       expect((await creditNotes(job.id)).map((n) => n.title)).toContain("Your plan's AI help is used up");
       await noFalseAlarm(job.id, [a.id]);
     });
@@ -1161,30 +1106,9 @@ describe("the AI credit", () => {
       expect(await hold(0.06, "19.870000")).toBe(false);
     });
 
-    it("someone who leaves during the short wait is not read when it ends, and no credit is spent on them", async () => {
-      const { job, a } = await sentOnBasic({ first: "Rex", last: "Yule", email: "rex@ai-credit.test" }, "19.060000", "0.800000");
-      expect((await screenOf(a.id)).assessmentId).toBeNull();
-      const decided = await json(job.cookie, "POST", `/api/v1/applications/${a.id}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not this time." });
-      expect(decided.status, await decided.clone().text()).toBe(200);
-      await withPlatform(container.db, (tx) => tx.update(aiRuns).set({ status: "ok", costUsd: "0.100000" }).where(and(eq(aiRuns.companyId, job.id), eq(aiRuns.status, "running"))));
-      await atRealPrices(async (provider) => {
-        try {
-          moveClock(Date.now() + 16 * 60_000);
-          await container.drain();
-        } finally {
-          moveClock(null);
-        }
-        expect(provider.calls).toBe(0);
-      });
-      expect((await screenOf(a.id)).assessmentId).toBeNull();
-      expect((await runsOf(job.id)).filter((r) => r.task === "screen.assess")).toEqual([]);
-    });
-
     it("Change plan just after the refusal, before the step's own transaction: the run does not park for a month on a plan with room", async () => {
       const job = await openJob();
-      const a = await apply(job, { first: "Sia", last: "Zane", email: "sia@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
+      const { a, ref } = await started(job, { first: "Sia", last: "Zane", email: "sia@ai-credit.test" });
       expect((await answerToTheEnd(ref)).phase).toBe("review");
       await spend(job.id, "9.950000");
       // the refusal, and straight after it ITS moves the company to Basic, while the run is still "running", so the signal finds nobody
@@ -1219,7 +1143,7 @@ describe("the AI credit", () => {
       expect(run.status).toBe("waiting");
       expect(Date.parse(run.wait!.until!) - Date.now()).toBeLessThanOrEqual(15 * 60_000);
       expect((await screenOf(a.id)).progress.scoreWaitsForCredit).toBeUndefined();
-      expect(await read<{ screens: Array<{ scorecard: string }> }>(await json(job.cookie, "GET", `/api/v1/applications/${a.id}`)).then((d) => d.screens[0].scorecard)).toBe("writing");
+      expect((await panelOf(job, a.id)).aiInterview?.score).toMatchObject({ noScore: "being_scored" });
       try {
         moveClock(Date.now() + 16 * 60_000);
         await container.drain();
@@ -1241,32 +1165,9 @@ describe("the AI credit", () => {
       });
     });
 
-    it("someone who left while the AI work waited for credit is not read after an upgrade, and no credit is spent on them", async () => {
-      const job = await openJob();
-      await spend(job.id, "9.950000");
-      const a = await apply(job, { first: "Lou", last: "Park", email: "lou@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
-      expect((await answerToTheEnd(ref)).phase).toBe("review");
-      expect(await conversationSubmit(container, ref)).toBe(true);
-      await container.drain();
-      expect((await runOf("screen", a.id)).status).toBe("waiting");
-      expect((await runOf("application_intake", a.id)).status).toBe("waiting");
-      const decided = await json(job.cookie, "POST", `/api/v1/applications/${a.id}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not this time." });
-      expect(decided.status, await decided.clone().text()).toBe(200);
-      await upgrade(job.id);
-      expect((await runOf("screen", a.id)).status).toBe("completed");
-      expect((await runOf("application_intake", a.id)).status).toBe("completed");
-      expect((await runsOf(job.id)).filter((r) => ["resume.extract", "triage.assess", "screen.assess"].includes(r.task))).toEqual([]);
-      expect(await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id))).toEqual([]);
-      await noFalseAlarm(job.id, [a.id]);
-    });
-
     it("at real prices it uses the model while a turn's hold fits, then goes on in code, in the same chat", async () => {
       const job = await openJob();
-      const a = await apply(job, { first: "Kai", last: "Moss", email: "kai@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
+      const { a, ref } = await started(job, { first: "Kai", last: "Moss", email: "kai@ai-credit.test" });
       await spend(job.id, "9.700000");
       await atRealPrices(async (provider) => {
         expect((await conversationTurn(container, ref, { message: ANSWER })).kind).toBe("reply");
@@ -1287,12 +1188,9 @@ describe("the AI credit", () => {
       await noFalseAlarm(job.id, [a.id]);
     });
 
-    it("a turn that cannot read the credit in time says to send that again on the page it is on, never a raw error, and then goes on; a repeat's chat too", async () => {
+    it("a turn that cannot read the credit in time says to send that again on the page it is on, never a raw error, and then goes on", async () => {
       const job = await openJob();
-      const p = { first: "Tess", last: "Abel", email: "tess@ai-credit.test" };
-      const a = await apply(job, p);
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
+      const { ref } = await started(job, { first: "Tess", last: "Abel", email: "tess@ai-credit.test" });
       const gate = container.ai.credit!;
       const hold = gate.hold;
       // as the driver and the query builder report it, 15 seconds behind a long Change plan
@@ -1303,19 +1201,12 @@ describe("the AI credit", () => {
         expect(posted.status).toBe(302);
         const location = posted.headers.get("location")!;
         expect(location).toContain("error=trouble");
-        const page = (await (await app.request(location)).text()).replace(/&#39;/g, "'").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<script[\s\S]*?<\/script>/g, " ");
+        const page = await shown(location);
         expect(page).toContain("Something went wrong on our end. Please send that again in a minute.");
         expect(page).not.toMatch(/\bplan\b|credit|upgrade|lock timeout/i);
         // no outage, no alert and nothing about money
         expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, AI_OUTAGE_ALERT_KIND))).toEqual([]);
         expect(await creditNotes(job.id)).toEqual([]);
-
-        // the same on a repeat submission's chat
-        const res = await postApplication(job, p);
-        const { token } = await followApply(app, res, container);
-        const detached = (await findConversation(container.db, token!))!;
-        await conversationStart(container, detached);
-        expect(await conversationTurn(container, detached, { message: ANSWER })).toMatchObject({ kind: "error", message: "Sorry, something went wrong on our end. Please send that again in a minute." });
       } finally {
         gate.hold = hold;
       }
@@ -1323,95 +1214,23 @@ describe("the AI credit", () => {
       expect((await conversationTurn(container, ref, { message: ANSWER })).kind).toBe("reply");
     });
 
-    it("a skip and HUMAN work as ever: neither needs the model", async () => {
+    it("a skip and a request for a person work as ever: neither needs the model", async () => {
       const job = await openJob();
+      const { a, ref } = await started(job, { first: "Fay", last: "Oren", email: "fay@ai-credit.test" });
       await spend(job.id, "9.950000");
-      const a = await apply(job, { first: "Fay", last: "Oren", email: "fay@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
       const before = (await conversationView(container.db, ref))!;
       expect((await conversationTurn(container, ref, { skip: true })).kind).toBe("reply");
       const after = (await conversationView(container.db, ref))!;
       expect(after.current?.key).not.toBe(before.current?.key);
-      const human = await conversationTurn(container, ref, { message: "HUMAN" });
-      expect(human).toMatchObject({ kind: "reply", humanRequested: true });
-      expect((await screenOf(a.id)).status).toBe("human_requested");
-      // the team is told she asked, whatever the credit says
-      expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, job.id), eq(notifications.kind, "screen.human_requested")))).map((n) => n.title)).toEqual(["Fay Oren asked to talk to a person"]);
-    });
-
-    it("a chat paused by an outage finishes the turn in code when its retry finds no credit: it opens again, the email goes, and the team is not told a person is needed", async () => {
-      const job = await openJob();
-      const a = await apply(job, { first: "Gus", last: "Hale", email: "gus@ai-credit.test" });
-      const ref = await interviewOf(a.id);
-      await conversationStart(container, ref);
-      const fake = container.fake!;
-      // two failed turns pause it (E5); the third failure is the workflow's first retry, so it stays paused
-      for (let i = 0; i < 3; i++) fake.failNext("screen.turn", "throw");
-      expect((await conversationTurn(container, ref, { message: ANSWER })).kind).toBe("error");
-      expect(await conversationTurn(container, ref, { message: ANSWER })).toMatchObject({ kind: "reply", paused: true });
+      // HUMAN closes nothing: the chat says how to choose a person
+      expect(await conversationTurn(container, ref, { message: "HUMAN" })).toMatchObject({ kind: "reply", message: PERSON_REPLY });
+      expect((await screenOf(a.id)).status).toBe("in_progress");
+      // the choice itself, made on the page: the team is told she chose so, whatever the credit says
+      expect(await conversationPerson(container, ref)).toBeTruthy();
       await container.drain();
-      expect((await screenOf(a.id)).status).toBe("paused");
-      await spend(job.id, "9.950000");
-      const mailsBefore = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "gus@ai-credit.test").length;
-      try {
-        moveClock(Date.now() + 31 * 60_000);
-        await container.drain();
-      } finally {
-        moveClock(null);
-      }
-      const scr = await screenOf(a.id);
-      expect(scr.status).toBe("in_progress");
-      expect(scr.progress.pausedAt).toBeUndefined();
-      const mails = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "gus@ai-credit.test");
-      expect(mails.length).toBe(mailsBefore + 1);
-      expect(`${mails.at(-1)!.subject} ${mails.at(-1)!.text}`).toContain(`/c/screen/${scr.token}`);
-      expect(await container.db.select().from(notifications).where(and(eq(notifications.companyId, job.id), eq(notifications.kind, "screen.human_requested")))).toEqual([]);
-      // the candidate finishes
-      expect((await answerToTheEnd(ref)).phase).toBe("review");
-      expect(await conversationSubmit(container, ref)).toBe(true);
-    });
-
-    it("a repeat submission's detached chat reads the same, and its paused retry finishes in code too", async () => {
-      const job = await openJob();
-      await apply(job, { first: "Hal", last: "Ito", email: "hal@ai-credit.test" });
-      // applying again from the same address opens a detached chat on the page; it fails twice and pauses, with room in the credit
-      const res = await postApplication(job, { first: "Hal", last: "Ito", email: "hal@ai-credit.test" });
-      const { token } = await followApply(app, res, container);
-      expect(token).toBeTruthy();
-      const ref = (await findConversation(container.db, token!))!;
-      expect(ref.kind).not.toBe("screen");
-      await conversationStart(container, ref);
-      const fake = container.fake!;
-      for (let i = 0; i < 2; i++) fake.failNext("screen.turn", "throw");
-      expect((await conversationTurn(container, ref, { message: ANSWER })).kind).toBe("error");
-      expect(await conversationTurn(container, ref, { message: ANSWER })).toMatchObject({ kind: "reply", paused: true });
-      await spend(job.id, "9.950000");
-      const mailsBefore = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "hal@ai-credit.test").length;
-      try {
-        moveClock(Date.now() + 31 * 60_000);
-        await container.drain();
-      } finally {
-        moveClock(null);
-      }
-      expect((await conversationView(container.db, ref))!.status).toBe("in_progress");
-      const mails = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "hal@ai-credit.test");
-      expect(mails.length).toBe(mailsBefore + 1);
-      // the email that says to finish, never the offer of a person that a day's outage sends
-      expect(mails.at(-1)!.text).toContain("you can finish here");
-      expect(await container.db.select({ intent: unconfirmedScreens.intent }).from(unconfirmedScreens).where(eq(unconfirmedScreens.id, ref.id))).toEqual([{ intent: null }]);
-      // then the rest in code, with the same shape as a first application's chat, to Review & send
-      const before = (await conversationView(container.db, ref))!;
-      if (before.phase === "conversation") {
-        const turn = await conversationTurn(container, ref, { message: ANSWER });
-        expect(turn.kind).toBe("reply");
-        if (!(turn as { review?: boolean }).review) expect((turn as { message: string }).message).toMatch(/^Thanks\./);
-      }
-      expect((await answerToTheEnd(ref)).phase).toBe("review");
-      expect(await ensureWriteup(container, ref)).toBe("written");
-      expect(await conversationSubmit(container, ref)).toBe(true);
-      expect((await conversationView(container.db, ref))!.status).toBe("completed");
-      expect((await runsOf(job.id)).filter((r) => r.task === "screen.turn" && r.status === "running")).toEqual([]);
+      expect((await screenOf(a.id)).status).toBe("declined_by_candidate");
+      expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, job.id), eq(notifications.kind, "screen.declined_by_candidate")))).map((n) => n.title)).toEqual(["Fay Oren chose not to do the AI interview"]);
+      expect((await runsOf(job.id)).filter((r) => r.task === "screen.turn")).toEqual([]);
     });
   });
 
@@ -1518,7 +1337,7 @@ describe("the AI credit", () => {
         // a real call settles, and the owner and ITS hear about the line
         await runPromptDetached(container.db, runtime(new PricedProvider()), chatPrompt, INPUT, { companyId: id });
         const current = await planOf(cookie);
-        return { id, cookie, aiCredit: current.aiCredit, room: await read<{ ok: boolean; message: string }>(await json(cookie, "GET", "/api/v1/intake/room")) };
+        return { id, cookie, aiCredit: current.aiCredit, room: await roomOf(cookie) };
       };
       // $19.09: the draft's $0.80 still fits under $19.90, so nothing has stopped
       const fits = await homeAt("19.090000");
