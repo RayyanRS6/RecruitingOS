@@ -230,10 +230,10 @@ describe("rate limiting", () => {
 
     it("the tenant tier, the provider tier, the application form and the candidate pages each answer 429 (never 500) when they trip", async () => {
       // each scenario gets its own process with its own overrides
-      const mk = async (overrides: Record<string, number>, url: string) => { const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_SHARED_URL: url, RATE_LIMIT_OVERRIDES: JSON.stringify(overrides) } }); return { c, a: createApp(c) }; };
+      const mk = async (overrides: Record<string, number>) => { const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_OVERRIDES: JSON.stringify(overrides) } }); return { c, a: createApp(c) }; };
       // tenant tier: the whole company shares a budget
       {
-        const { c, a } = await mk({ "api.user": 100, "api.tenant": 3 }, "fake://tenant-tier");
+        const { c, a } = await mk({ "api.user": 100, "api.tenant": 3 });
         const r1 = await post(a, "/api/v1/auth/magic-link", { email: "t-owner@limits.test" }, { "x-forwarded-for": "198.51.100.30" });
         const { devLink } = (await r1.json()) as { devLink: string };
         const r2 = await post(a, "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token")! });
@@ -247,7 +247,7 @@ describe("rate limiting", () => {
       }
       // provider tier: only accepted deliveries spend the provider's budget; junk never does
       {
-        const { c, a } = await mk({ "webhook.provider": 2, "webhook.auth_failed": 50 }, "fake://provider-tier");
+        const { c, a } = await mk({ "webhook.provider": 2, "webhook.auth_failed": 50 });
         const bounce = (id: number) => JSON.stringify({ RecordType: "Bounce", ID: id, Type: "HardBounce", Email: "nobody@example.com", MessageID: `pm-${id}`, BouncedAt: new Date().toISOString(), Description: "mailbox does not exist" });
         const bad = { "content-type": "application/json", authorization: `Basic ${Buffer.from("postmark:wrong").toString("base64")}`, "x-forwarded-for": "192.0.2.5" };
         for (let i = 0; i < 5; i++) expect((await a.request("/webhooks/postmark/bounces", { method: "POST", headers: bad, body: bounce(100 + i) })).status).toBe(401);
@@ -262,7 +262,7 @@ describe("rate limiting", () => {
       }
       // the application form and the public candidate pages
       {
-        const { c, a } = await mk({ apply: 1, "candidate.pages": 3 }, "fake://public-tier");
+        const { c, a } = await mk({ apply: 1, "candidate.pages": 3 });
         const ip = { "x-forwarded-for": "203.0.113.200" };
         const statuses: number[] = [];
         for (let i = 0; i < 4; i++) statuses.push((await a.request("/privacy", { headers: { ...ip, accept: "text/html" } })).status);
@@ -280,7 +280,7 @@ describe("rate limiting", () => {
       expect(tokenLimit(POLICIES.screen)).toBe(200);
       expect(tokenLimit(POLICIES.screenHuman)).toBe(30);
       expect(POLICIES.apply.rules.find((r) => r.by === "ip")?.limit).toBe(60);
-      const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_SHARED_URL: "fake://conversation-tier", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen": 3, "candidate.screen_human": 2 }) } });
+      const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen": 3, "candidate.screen_human": 2 }) } });
       try {
         const a = createApp(c);
         const post = (path: string, ip: string) => a.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html", "x-forwarded-for": ip }, body: new URLSearchParams({ message: "Hello" }).toString() });
