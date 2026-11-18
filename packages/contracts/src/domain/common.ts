@@ -22,24 +22,13 @@ export const SubjectType = z.enum([
   "role",
   "role_packet",
   "intake_session",
-  "posting",
   "candidate",
   "application",
   "screen",
-  "interview",
-  "scorecard",
-  "debrief",
-  "offer",
-  "onboarding",
   "communication",
   "workflow_run",
-  "approval_request",
-  "integration",
-  "policy",
   "ai_run",
-  "business_calendar",
   "document",
-  "application_link",
   "invitation",
 ]);
 export type SubjectType = z.infer<typeof SubjectType>;
@@ -58,42 +47,27 @@ export const Location = z.object({
 });
 export type Location = z.infer<typeof Location>;
 
-export const Money = z.object({
-  amount: z.number().nonnegative(),
-  currency: z.string().default("USD"),
-});
-
 export const Confidence = z.enum(["high", "medium", "low"]);
 export type Confidence = z.infer<typeof Confidence>;
 
-export const EvidenceSource = z.enum([
-  "resume",
-  "application",
-  "screen",
-  "interview",
-  "candidate_statement",
-  "verified",
-  "playbook",
-  "benchmark",
-  "owner_statement",
-  // A recruiter's notes from a call that finished a screening conversation (plan E3): never the candidate's own words.
-  "recruiter_note",
-]);
+/**
+ * Where a quote came from: the CV, the application form's answers, the AI interview, or something the candidate or the
+ * owner stated.
+ */
+export const EvidenceSource = z.enum(["resume", "application", "screen", "candidate_statement", "verified", "owner_statement"]);
 export type EvidenceSource = z.infer<typeof EvidenceSource>;
 
 /** Where a quote is from, in the app's own words, for the sources a quote of the candidate's is checked against. */
 const QUOTE_FROM: Partial<Record<EvidenceSource, string>> = {
-  resume: "from the résumé",
+  resume: "from the CV",
   application: "from the application",
   candidate_statement: "from the application",
   screen: "in the AI interview",
-  recruiter_note: "from the recruiter's call notes",
 };
 
 /**
- * A quote with where it is from after it, `"…", from the résumé`, as the interviewer's brief shows each must-have's
- * quote on the sheet and in the email (the second review of the live-test fixes, 12 November 2026): a résumé line never
- * reads as the candidate's words in the AI interview. Just the quote for a source with no such words.
+ * A quote with where it is from after it, `"…", from the CV`, so a CV line never reads as the candidate's words in the AI
+ * interview. Just the quote for a source with no such words.
  */
 export function quoteWithSource(quote: string, source: string | null | undefined): string {
   const from = source ? QUOTE_FROM[source as EvidenceSource] : undefined;
@@ -102,7 +76,7 @@ export function quoteWithSource(quote: string, source: string | null | undefined
 
 /**
  * A claim must point at where it came from. Quotes are verified against the source text in code.
- * `confidence` and `context` (date, role, employer) let the reader judge the evidence, not just find it (docs/FOUNDER-CONTEXT.md §10).
+ * `context` (date, role, employer) lets the reader judge the evidence, not just find it.
  */
 export const Evidence = z.object({
   source: EvidenceSource,
@@ -110,9 +84,20 @@ export const Evidence = z.object({
   ref: z.string().optional(),
   confidence: Confidence.optional(),
   context: z.string().optional(),
-  /** Set in code, never trusted from the model: a claim about the candidate with nothing verified quoted from them (shown as "no quote"). */
+  /** Set in code, never trusted from the model: a claim about the candidate with nothing verified quoted from them. */
   unquoted: z.boolean().optional(),
 });
 export type Evidence = z.infer<typeof Evidence>;
 
+/** Whether a piece of evidence carries a quote the code checked against the candidate's own words. */
+export function hasCheckedQuote(evidence: { quote?: string | null; unquoted?: boolean | null } | null | undefined): boolean {
+  return !!evidence?.quote?.trim() && !evidence.unquoted;
+}
+
 export const ISODate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD");
+
+/** A calendar date (YYYY-MM-DD) that exists: 2026-02-30 is refused here, before anything reads it as March 2. */
+export const CalendarDate = ISODate.refine((d) => {
+  const t = new Date(`${d}T00:00:00Z`);
+  return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === d;
+}, "That date does not exist.");

@@ -1,95 +1,42 @@
 import { z } from "zod";
 import { Actor, Subject } from "./common";
 
-/** The event taxonomy (docs/04). Payloads are validated where they matter; others are open objects. */
+/** Every fact the product records about itself. Payloads are validated where they matter; others are open objects. */
 export const EventType = z.enum([
-  "company.created", "company.updated", "user.invited", "user.joined", "membership.changed",
-  // The one-time ITS check of a self-serve company (founder decision B7): confirmed, or the confirmation taken back.
-  "company.verified", "company.unverified",
-  // First sign-in asks for approval (6 November 2026): an administrator accepted or declined the person's request, or took
-  // an accepted company's access away (everyone on it declined; Accept is the undo).
-  "company.access_accepted", "company.access_declined", "company.access_removed",
-  // Team membership through invitations (docs/spec/21, area A): someone joined on an invitation, was removed, or an invitation was withdrawn.
-  "member.joined", "member.removed", "invitation.revoked",
-  "integration.connected", "integration.failed", "policy.changed", "plan.changed", "entitlement.exceeded",
-  // The Trial plan's 30 days (founder decision L-02 B): started (at the ITS check, by the hourly check, or on a change
-  // back to Trial), extended by ITS from the console with a reason, and ended (ITS and the owners told once).
-  "trial.started", "trial.extended", "trial.ended",
-  "intake.started", "intake.turn_completed", "intake.compiled", "intake.abandoned",
-  // The job builder (Wave C): tapped answers applied, the draft written beside the conversation, pay set or confirmed by a
-  // person, a draft taken over by an owner or admin, approval asked for, and a flagged phrase kept with a reason.
-  "intake.answered", "intake.drafted", "intake.pay_confirmed", "intake.taken_over", "intake.approval_requested", "packet.flag_kept",
-  // Changing a packet by chat (C10): the assistant proposed a change, a person confirmed it, or set it aside. The
-  // requirements check (C16): a person applied the fixes they tapped.
-  "packet.revision_proposed", "packet.revision_applied", "packet.revision_discarded", "packet.check_applied",
-  "role.created", "role_packet.proposed", "role_packet.approved", "role_packet.edited",
-  "role.approved", "role.opened", "role.paused", "role.resumed", "role.filled", "role.closed",
-  // A packet approval was rejected or ran out of time (the role goes back to draft), or was replaced by a newer version.
-  "role.sent_back", "approval.cancelled",
-  "role.applications_closed", "role.applications_reopened", "role.volume_high",
-  "posting.requested", "posting.published", "posting.awaiting_verification", "posting.manual_action_required", "posting.not_connected", "posting.failed", "posting.expired", "posting.spend_recorded",
-  // Job distribution (docs/spec/20): one event per posting state, plus the closure checklist and a failed check.
-  "posting.draft", "posting.approved", "posting.ready_to_post", "posting.posted_manually", "posting.submitted_integration", "posting.live_verified", "posting.paused", "posting.closed",
-  "posting.verification_failed", "posting.closure_required", "posting.closure_confirmed",
-  // Publishing (plan Wave D): a board still shows an earlier version after an approved edit, and was brought up to
-  // date; the boards a person chose for the role; the closing date set, changed or taken off.
-  "posting.update_required", "posting.updated", "role.boards_chosen", "role.closing_date_set",
-  "application_link.created", "application_link.disabled",
-  "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created", "candidate.merged",
-  "resume.ingested", "resume.extraction_failed", "document.upload_authorized", "document.upload_used", "document.uploaded", "document.validated", "document.rejected", "document.deleted", "eligibility.evaluated", "application.ineligible", "application.hold_reminded", "application.triaged",
-  "assessment.created", "application.stage_changed", "application.inactive", "application.withdrawn", "application.rejected",
-  "application.moved_to_talent_pool",
-  // Private marks (Longlist, Shortlist, On hold, Not a fit for now) and the candidate being told a decision (founder decisions B3, B6).
-  "application.marked", "application.mark_cleared", "application.told",
+  // Companies and their teams. Access: an administrator accepted or declined a company's request, or took an accepted
+  // company's access away (Accept is the undo). Accepting is the one gate that makes a company live.
+  "company.created", "company.updated", "company.access_accepted", "company.access_declined", "company.access_removed",
+  "user.invited", "member.joined", "member.removed", "membership.changed", "invitation.revoked",
+  // Plans, limits and the Trial plan's 30 days.
+  "plan.changed", "entitlement.exceeded", "entitlement.warning", "trial.started", "trial.extended", "trial.ended",
+  // The job builder: a draft started, a turn of the conversation, tapped answers applied, pay set or confirmed by a
+  // person, the job written, a draft taken over or set aside, the draft published as a job, a flagged phrase kept.
+  "intake.started", "intake.turn_completed", "intake.answered", "intake.pay_confirmed", "intake.drafted", "intake.taken_over", "intake.abandoned", "intake.compiled", "packet.flag_kept",
+  // Jobs: created and opened by publishing, a new version saved by an edit, paused, resumed, closed; applications
+  // stopped by the closing date and taken again; the closing date set, changed or taken off.
+  "role.created", "role_packet.approved", "role_packet.edited", "role.opened", "role.paused", "role.resumed", "role.closed",
+  "role.applications_closed", "role.applications_reopened", "role.closing_date_set",
+  // Applying: an application and its CV file.
+  "application.received", "application.acknowledged", "application.duplicate_detected", "candidate.created",
+  "document.upload_authorized", "document.upload_used", "document.uploaded", "document.validated", "document.rejected", "document.deleted",
   // Past the plan's candidates per job when it came in, with its place in arrival order and never a name; opened to the
-  // team by a change of plan, oldest first (the plans of 5 November 2026, Rule 2).
+  // team by a change of plan, oldest first.
   "application.locked", "application.unlocked",
-  // The untold safety net (Q27): five working days on, the standard message went by itself, or the team was told it must
-  // tell them; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
-  "application.untold_fallback", "role.closing_message",
-  // The Cancelled column (founder decisions 1A to 4A): someone went under Cancelled (a candidate's cancel, a no-show, or
-  // back after a decision was taken back) or left it; new times went to them, or the automatic set did not go. All on
-  // the application, so the candidate's history and data export read them; the team's send to many is one fact on the role.
-  "application.moved_to_cancelled", "application.left_cancelled", "interview.new_times_sent", "interview.new_times_not_sent", "interview.new_times_batch",
-  // Review and apply on the pool board (plan F8): one fact per batch, with what the board suggested and what a person chose.
-  "pool.batch_applied",
-  // A private team note on a candidate written, changed or removed by its author (plan H3). Never carries the note's words.
-  "note.added", "note.updated",
-  "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
-  // Wave E: the conversation in the same visit as applying. Sent without it, closed part-way after a reminder, paused while
-  // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, and how a role's
-  // applicants meet the conversation (set by ITS).
-  "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited",
-  "screen.repeat_started", "screen.repeat_confirmation_sent", "screen.repeat_confirmed", "screen.repeat_discarded",
-  // A person's "Send a reminder" about an open AI interview link (20 Oct 2026, R20-7), once a day at most.
-  "screen.reminded",
-  // A conversation reached the most model calls it may make and ended in code (to "check your answers", or closed).
-  "screen.turn_cap_reached",
-  // The plan's screening conversations stayed used up for the whole wait (Q17): the link never went; the candidate and the team are told.
-  "screen.allowance_lapsed",
-  "role.apply_mode_changed", "company.apply_flow_changed", "entitlement.warning",
-  "candidate.recommended", "interview.requested", "interview.scheduling_started", "interview.slots_offered", "interview.scheduled",
-  "interview.rescheduled", "interview.cancelled", "interview.no_show", "interview.brief_sent", "interview.recording_consented",
-  "interview.recording_declined", "interview.completed", "interview.transcribed", "scorecard.drafted", "scorecard.submitted",
-  "debrief.completed", "candidate.finalist", "reference.requested", "reference.received", "background_check.ordered", "background_check.completed",
-  "offer.created", "offer.approval_requested", "offer.approved", "offer.rejected_internally", "offer.sent", "offer.viewed",
-  "offer.counter_received", "offer.revised", "offer.accepted", "offer.declined", "offer.expired", "offer.rescinded",
-  "onboarding.started", "handoff.packet_sent", "employee.created", "employee.creation_failed", "onboarding.task_completed",
-  "onboarding.completed", "start.confirmed", "start.no_show", "outcome.recorded", "outcome.corrected",
-  "message.queued", "message.sent", "message.delivered", "message.bounced", "message.complained", "message.retried", "message.suppressed", "message.failed", "message.received",
-  // A decision message withdrawn from the outbox before it left: the decision it carried no longer applies.
-  "message.cancelled",
-  // A message to a candidate waiting for the ITS company check, and its release once ITS confirms the company.
-  "message.held", "message.released",
-  "consent.granted", "consent.revoked", "candidate.opted_out", "candidate.data_request", "candidate.data_request_fulfilled", "candidate.anonymized", "candidate.complaint",
-  "workflow.started", "workflow.step_completed", "workflow.waiting", "workflow.resumed", "workflow.retried", "workflow.failed", "workflow.completed",
-  "workflow.cancelled", "approval.requested", "approval.granted", "approval.denied", "approval.expired",
-  "ai.run_completed", "ai.run_failed", "ai.output_invalid", "ai.refused", "human.override",
-  "intervention.sent", "intervention.responded", "brief.sent",
-  "integration.connected", "integration.disconnected", "integration.credentials_deleted", "integration.deletion_failed", "integration.health_changed",
-  "availability.updated", "interview.requested", "interview.slots_offered", "interview.slots_reminded", "interview.offer_expired", "interview.candidate_availability",
-  "interview.slot_selected", "interview.slot_taken", "interview.booked", "interview.confirmed", "interview.reminder_sent", "interview.rescheduled", "interview.cancelled",
-  "interview.completed", "interview.outcome_recorded", "interview.decision_recorded", "calendar.event_created", "calendar.event_cancelled", "calendar.needs_attention",
+  // Reading the CV.
+  "resume.ingested", "resume.extraction_failed", "assessment.created", "application.triaged",
+  // Moving through the process: every stage change, and its three named ends; the candidate being told a decision; a hire recorded.
+  "application.stage_changed", "application.rejected", "application.withdrawn", "application.told", "outcome.recorded", "human.override",
+  // The AI interview: sent (by Shortlist), reminded, started, a question skipped or tapped, an answer changed before
+  // sending, the model-call cap reached, answers sent, scored, the link closed, the candidate chose not to do it, cancelled.
+  "screen.invited", "screen.reminded", "screen.started", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited", "screen.turn_cap_reached",
+  "screen.completed", "screen.assessed", "screen.expired", "screen.declined_by_candidate", "screen.cancelled",
+  // Email through the outbox. `message.cancelled`: a decision email taken back before it left.
+  "message.queued", "message.sent", "message.delivered", "message.bounced", "message.complained", "message.retried", "message.suppressed", "message.failed", "message.cancelled",
+  // Consent and privacy requests.
+  "consent.granted", "consent.revoked", "candidate.opted_out", "candidate.data_request", "candidate.data_request_fulfilled", "candidate.anonymized",
+  // The workflow engine and AI runs.
+  "workflow.started", "workflow.step_completed", "workflow.waiting", "workflow.resumed", "workflow.retried", "workflow.failed", "workflow.completed", "workflow.cancelled",
+  "ai.run_failed", "ai.output_invalid",
 ]);
 export type EventType = z.infer<typeof EventType>;
 

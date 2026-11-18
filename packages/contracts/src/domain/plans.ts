@@ -15,7 +15,7 @@ export function isPublicPlanKey(key: string | null | undefined): key is PublicPl
   return (PUBLIC_PLAN_KEYS as readonly string[]).includes(key ?? "");
 }
 
-/** Jobs at a time: while a job waits for approval, is sent back, is open or is paused. Closing one gives its place back. */
+/** Jobs at a time: while a job is a draft, open or paused. Closing one gives its place back. */
 export const ACTIVE_ROLES = "active_roles";
 /** Jobs ever, counted live from the roles: one that ever went live counts for good; one closed before it opened gives its place back. */
 export const JOBS_TOTAL = "jobs_total";
@@ -153,18 +153,11 @@ export function moreAppliedTitle(roleTitle: string): string {
 /** Why an Upgrade is asked for when it is more candidates the company wants to see. */
 export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more candidates.";
 
-/**
- * What closing a job does for the people past the plan's candidates per job still in process (Rule 2), a number and never who:
- * it moves them too, and the closing message goes to them by itself, at the latest five working days on, whatever the settings
- * say (`runUntoldSafetyNet`), or when someone sends it to the others. They are not kept in the talent pool, so it never says
- * they move there. On the hire sheet, the close card and the toast after a close (the release review, 11 November 2026).
- */
-export function lockedClosingLine(n: number): string {
-  return `The closing message goes by itself, within 5 working days, to the ${n === 1 ? "1 more person" : `${n} more people`} you cannot see yet.`;
-}
+/** Why an Upgrade is asked for when the month's AI interviews are used up. */
+export const MORE_INTERVIEWS_UPGRADE_QUESTION = "We would like to send more AI interviews.";
 
 /** Why nothing starts for someone locked: the route's refusal, behind the door that already refuses the team. */
-export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help, no AI interview and no interview until an upgrade opens them.";
+export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help and no AI interview until an upgrade opens them.";
 
 /** One locked person on a job's list: where they came in, and when. Nothing else about them. */
 export type LockedCard = { position: number; appliedAt: string };
@@ -197,15 +190,10 @@ export const AI_HELP_LINE = {
   /** Writing the job's draft, the dearest call: what they confirmed is kept. */
   draft: `${USED_UP} Everything you confirmed is kept. Upgrade to write the draft.`,
   draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. Upgrade to write the draft.`,
-  /** Changing a job by chat: the editor needs no AI. */
-  revise: `${USED_UP} Nothing was changed. You can still make the change in the editor.`,
-  /**
-   * Changing a draft by chat, before the job exists: no editor is named, since a draft's Edit changes the answers and
-   * writing the draft again with them needs AI help too (live test, 12 Nov 2026).
-   */
-  reviseDraft: `${USED_UP} Nothing was changed.`,
   /** The text about the company: the person can write it. */
   about: `${USED_UP} You can write this text yourself; it shows the same way.`,
+  /** The LinkedIn and Indeed posts on a job's Share tab: the person can write them. */
+  posts: `${USED_UP} You can write these posts yourself.`,
   /** A new job, before anyone types. */
   newJob: `${USED_UP} Upgrade to keep going.`,
   newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
@@ -223,9 +211,8 @@ export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: str
     turn: `${USED_UP} Your draft is saved. ${way}`,
     draft: `${USED_UP} Everything you confirmed is kept. ${way}`,
     draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`,
-    revise: AI_HELP_LINE.revise,
-    reviseDraft: AI_HELP_LINE.reviseDraft,
     about: AI_HELP_LINE.about,
+    posts: AI_HELP_LINE.posts,
     newJob: `${USED_UP} ${way}`,
     newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. ${way}`,
   };
@@ -236,8 +223,6 @@ export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: str
 export const AI_HELP_BUSY_LINE = {
   turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,
   draft: `${BUSY} Everything you confirmed is kept. Try again in a few minutes.`,
-  revise: `${BUSY} Nothing was changed. Try again in a few minutes, or make the change in the editor.`,
-  reviseDraft: `${BUSY} Nothing was changed. Try again in a few minutes.`,
   about: `${BUSY} Try again in a few minutes, or write this text yourself; it shows the same way.`,
 } as const;
 
