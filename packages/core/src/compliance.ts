@@ -82,7 +82,7 @@ export function payTransparencyApplies(notices: Notice[]): boolean {
 /**
  * Whether candidates see the pay range (Wave 0 item 0.8): when the owner chose to show it, and always where a pay
  * transparency law covers the job, since that notice tells the candidate the range is "shown above". The job page, the
- * apply form, the feeds, the board packages, the screening assistant and the owner's role page all ask this one question.
+ * apply form, the screening assistant and the owner's role page all ask this one question.
  */
 export function payShown(compensation: { discloseRange: boolean }, notices: Notice[]): boolean {
   return compensation.discloseRange || payTransparencyApplies(notices);

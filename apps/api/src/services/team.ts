@@ -117,7 +117,7 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
     const seats = await entitlements.seatRoom(tx, tenant.companyId, { now, exceptEmail: email });
     if (!seats.ok && seats.limit !== null) throw new HttpError(409, "seats_full", seatsFullLine(seats.limit, seats.planKey), { seats: { used: seats.used, limit: seats.limit } });
     // A new invitation replaces any open one for the same address (core createInvitation), which withdraws it: the same
-    // ranks as withdrawing it directly apply, so nobody below that rank replaces an admin or owner invitation with a lower one.
+    // rank as withdrawing it directly applies, so an admin does not replace an owner invitation with a lower one.
     const open = await tx.select({ role: invitations.role }).from(invitations).where(and(eq(invitations.companyId, tenant.companyId), eq(invitations.email, email), eq(invitations.status, "pending")));
     for (const o of open) assertMayWithdraw(tenant, o.role);
     const companyName = await companyNameOf(tx, tenant.companyId);
@@ -130,19 +130,13 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
 }
 
 /**
- * Only an owner grants the owner role, and only an owner or an admin grants the admin role (plan B7), whichever way it
- * is granted: an invitation accepted at sign-in creates the membership with the invited role, so inviting someone as
- * owner or admin is refused exactly as promoting them is. Either needs a recent sign-in.
+ * Only an owner grants the owner role (plan B7), whichever way it is granted: an invitation accepted at sign-in creates
+ * the membership with the invited role, so inviting someone as owner is refused exactly as promoting them is. Granting
+ * owner or admin needs a recent sign-in.
  */
 function assertMayInviteAs(team: Team, role: string): void {
   if (role === "owner" && team.tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can invite another owner.");
-  if (role === "admin" && !mayGrantAdmin(team.tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can invite an admin.");
   if (role === "owner" || role === "admin") assertRecentSignIn(team);
-}
-
-/** Who may make someone an admin, or change or remove an admin. */
-function mayGrantAdmin(tenant: Tenant): boolean {
-  return tenant.role === "owner" || tenant.role === "admin";
 }
 
 /** The same rule and the same refusal as middleware/reauth.ts, which Setup turns into "Confirm it's you". */
@@ -180,10 +174,9 @@ export async function resendMemberInvitation(team: Team, input: { invitationId: 
 }
 
 /**
- * Withdraws an open invitation. An invitation that would make someone an owner or an admin is withdrawn only by those who
- * may grant that role (audit 01-platform B12): an owner's by an owner, an admin's by an owner or an admin, the same ranks
- * as sending it again; withdrawing needs no recent sign-in, as taking a role away does not. The refusal rolls the
- * withdrawal and its audit record back, so the invitation stays open.
+ * Withdraws an open invitation. An invitation that would make someone an owner is withdrawn only by an owner (audit
+ * 01-platform B12), the same rank as sending it again; withdrawing needs no recent sign-in, as taking a role away does
+ * not. The refusal rolls the withdrawal and its audit record back, so the invitation stays open.
  */
 export async function revokeMemberInvitation(team: Team, input: { invitationId: string }) {
   const { container, tenant, actor } = team;
@@ -199,15 +192,13 @@ export async function revokeMemberInvitation(team: Team, input: { invitationId: 
 
 function assertMayWithdraw(tenant: Tenant, role: string): void {
   if (role === "owner" && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can withdraw an invitation to become an owner.");
-  if (role === "admin" && !mayGrantAdmin(tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can withdraw an invitation to become an admin.");
 }
 
 /**
  * A role change or a removal. The rules, in the order they are checked: the target must be an active member (404);
  * nobody changes their own membership (409 self_change); the last active owner is neither demoted nor removed
- * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only); only an owner
- * or an admin grants or takes the admin role, including by removal (403 admin_only); granting admin or owner needs a
- * recent sign-in (403 reauth_required). Either change ends the person's sessions so it applies at once.
+ * (409 last_owner); only an owner grants or takes the owner role, including by removal (403 owner_only); granting admin
+ * or owner needs a recent sign-in (403 reauth_required). Either change ends the person's sessions so it applies at once.
  */
 export async function updateMember(team: Team, input: { userId: string; body: UpdateMember }) {
   const { container, tenant, actor } = team;
@@ -232,7 +223,6 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       if (Number(owners?.n ?? 0) <= 1) throw new HttpError(409, "last_owner", "This is the only owner. Make someone else an owner first.");
     }
     if ((target.role === "owner" || newRole === "owner") && tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can make someone an owner, or change an owner's role.");
-    if ((target.role === "admin" || newRole === "admin") && !mayGrantAdmin(tenant)) throw new HttpError(403, "admin_only", "Only an owner or an admin can make someone an admin, or change or remove an admin.");
     // Granting admin or owner needs a recent sign-in (plan B7); taking either away, or removing someone, does not.
     if (!removing && roleChanges && (newRole === "admin" || newRole === "owner")) assertRecentSignIn(team);
     if (!removing) {

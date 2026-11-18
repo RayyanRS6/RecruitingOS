@@ -79,7 +79,7 @@ companyRoutes.get("/current", requireTenant, async (c) => {
 // PATCH /current (the typed company preferences), GET /current/audit and /current/audit.csv (the customer's own history)
 // and POST /current/members/:userId/sign-out live in routes/company-settings.ts, mounted after this router.
 
-/** The team (docs/spec/21, area A): active members with their scheduling readiness; never a credential or its reference. */
+/** The team: its active members, each with their role. */
 companyRoutes.get("/current/members", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");

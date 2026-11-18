@@ -78,7 +78,7 @@ export function signupDoor(env: Pick<Env, "SIGNUP_MODE" | "SIGNUP_ALLOWED_EMAILS
  *
  * `request` (SIGNUP_MODE=approval): the owner's membership starts as `requested`, not `active`, so they have no tenant and
  * every `requireTenant` route refuses them. A request is never confirmed by `autoVerify`, whatever COMPANY_CHECK says:
- * a request or a declined company is unconfirmed, so every public page and feed answers as if it did not exist. It holds
+ * a request or a declined company is unconfirmed, so every public page answers as if it did not exist. It holds
  * a neutral address (`requestSlug`) until it is accepted, never the careers address of its name.
  *
  * A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): unless `mayOpenAnother` (a

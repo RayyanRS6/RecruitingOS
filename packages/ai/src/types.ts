@@ -16,11 +16,7 @@ export type TaskKey =
   | "screen.assess"
   | "screen.writeup"
   | "brief.compose"
-  | "owner.reply"
-  | "interview.brief"
-  | "scorecard.draft"
-  | "debrief.compose"
-  | "offer.propose";
+  | "owner.reply";
 
 export type SystemBlock = { text: string; cache?: boolean };
 

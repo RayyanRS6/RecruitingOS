@@ -5,7 +5,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { trialPaused, trialStanding } from "@ros/contracts";
 import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, entitlements, noticesFor } from "@ros/core";
 import { rolePackets, roles, withTenant, type companies } from "@ros/db";
-import { LOGO_FILE, jobPostingJsonLd } from "@ros/integrations";
+import { LOGO_FILE } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
@@ -15,6 +15,7 @@ import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { CompanyLine, HelpLine, JobPage, type JobPageCompany, type JobPageRole } from "./job-page";
+import { jobPostingJsonLd } from "./job-structured-data";
 import { Layout } from "./layout";
 
 /**
@@ -151,17 +152,15 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   const trial = trialStanding(company, container.engine.clock());
   const trialEnded = trial?.ended === true;
   // A trial that ended (L-02 B) stops the job taking applications on the day it ended, so search engines stop listing it
-  // as the feeds and the sitemap already do.
+  // as the sitemap already does.
   const datedRole = trialEnded && trial?.endsAt && role.acceptingApplications ? { ...role, acceptingApplications: false, applicationsClosedAt: trial.endsAt } : role;
   // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4). validThrough is a real date only: the
   // closing day, the day the role stopped taking applications, or its closing date; an open role with none carries none.
   const jsonLd = jobPostingJsonLd({
     roleId: role.id,
     companyName: company.name,
-    companySlug: company.slug,
     packet,
     jobUrl: urls.job,
-    applyUrl: urls.apply,
     datePosted: (role.openedAt ?? role.createdAt).slice(0, 10),
     validThrough: roleValidThrough(datedRole) ?? null,
     showPay: payShown(packet, allNotices),
@@ -189,7 +188,6 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
 candidatePages.get("/privacy", async (c) => {
   const n = noticesFor(["*"]).find((x) => x.key === "privacy");
   const privacyEmail = c.get("container").env.PRIVACY_EMAIL;
-  const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
       <h1>How we handle your information</h1>
@@ -204,9 +202,7 @@ candidatePages.get("/privacy", async (c) => {
             <li>Hosting: runs this website and the work behind it.</li>
             <li>Database and file storage: keeps your application and your resume, privately.</li>
             <li>Email delivery: sends the emails about your application and receives your replies.</li>
-            <li>An AI service: reads applications and screening answers to help organize and summarize them for the hiring team. It does not decide anything.</li>
-            {smsEnabled ? <li>Text messages: sends and receives texts, only if you agreed to them.</li> : null}
-            <li>Calendars (Google or Microsoft): only the interviewers' own calendars, to book an interview time with you.</li>
+            <li>An AI service: reads applications and screening answers to help organize and summarize them for the hiring team. It does not decide anything.</li>            <li>Calendars (Google or Microsoft): only the interviewers' own calendars, to book an interview time with you.</li>
           </ul>
         </li>
       </ul>

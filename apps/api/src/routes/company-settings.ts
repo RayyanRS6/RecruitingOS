@@ -410,8 +410,8 @@ companySettingsRoutes.get("/current/audit.csv", requireTenant, async (c) => {
 /* ---------------------------------------------------------------------------------------------------------- */
 
 /**
- * Owners and admins sign a teammate out; HR, who otherwise manages the team, does not (the same ranks as a role change
- * in services/team.ts: only an owner touches an owner). Sessions belong to the person, not to a company, so only the
+ * Owners and admins sign a teammate out, by the same ranks as a role change in services/team.ts: only an owner touches
+ * an owner. Sessions belong to the person, not to a company, so only the
  * sessions working in this company (or in none) are ended (core `revokeSessionsForCompany`): a person who also works in
  * another company keeps their sessions there. The answer says, without telling whether that is the case, that sessions in
  * another company stay open and that removing them from the team is what keeps them out.
@@ -419,7 +419,6 @@ companySettingsRoutes.get("/current/audit.csv", requireTenant, async (c) => {
 companySettingsRoutes.post("/current/members/:userId/sign-out", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
-  if (t.role !== "owner" && t.role !== "admin") throw new HttpError(403, "admin_only", "Only an owner or an admin can sign a teammate out.");
   const userId = c.req.param("userId") ?? "";
   if (!UUID.test(userId)) throw new HttpError(404, "not_found", "That person is not an active member of your team.");
   if (userId === t.userId) throw new HttpError(400, "self_sign_out", "To sign yourself out everywhere, use \"Sign out everywhere else\" under Your sessions.");

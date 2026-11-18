@@ -35,7 +35,7 @@ export async function failedScorecards(tx: Tx, screens: ReadonlyArray<Pick<Scree
 /**
  * The screens of these applications as the score's label reads them (`interviewInScore`), newest first: with
  * `scoreWaitsForCredit` (its scorecard waits for the company's AI credit) and `scoreFailed` (it could not be written, for
- * good: the lead's D2, 11 November 2026), so the list, the board, Compare and the panel all label it the same way.
+ * good: the lead's D2, 11 November 2026), so the list and the panel label it the same way.
  */
 export async function screensForScore(tx: Tx, applicationIds: readonly string[]) {
   if (!applicationIds.length) return [];

@@ -2,14 +2,13 @@
 /** @jsxImportSource hono/jsx */
 import { formatPayRange, type DraftRolePacket, type RolePacket } from "@ros/contracts";
 import { payShown as payShownByRule, type Notice } from "@ros/core";
-import { jobValidThrough } from "@ros/integrations";
 import { EMPLOYMENT_LABEL as EMPLOYMENT, WORK_MODEL_LABEL as WORK_MODEL } from "../services/job-preview";
 import { Icon, type CandidateIconName } from "./icons";
+import { jobValidThrough } from "./job-structured-data";
 
 /**
  * The plain facts every public job surface states the same way (Wave 0 item 0.8, plan D10): every place, how, what
- * kind of job, the pay, the schedule and the day it was posted, and the one end date search engines and boards are
- * given. The labels are shared with the job builder's preview (services/job-preview.ts), so the preview names things as
+ * kind of job, the pay, the schedule and the day it was posted, and the one end date search engines are given. The labels are shared with the job builder's preview (services/job-preview.ts), so the preview names things as
  * the page does.
  */
 
