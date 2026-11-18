@@ -45,7 +45,7 @@ const hostedStaging = () => process.env.VERCEL_ENV === "preview" || process.env.
  */
 const config: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai", "@ros/playbooks"],
+  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai"],
   serverExternalPackages: ["@electric-sql/pglite", "pg", "@anthropic-ai/sdk"],
   // Production boot compares the database with the migration files (a release migrates first, docs/14), so the SQL
   // files ship with every server function. Traced from the workspace root, they land at
