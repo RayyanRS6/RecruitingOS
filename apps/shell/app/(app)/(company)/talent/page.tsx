@@ -1,5 +1,6 @@
-import { People } from "@ros/web/src/pages/People";
+import { Candidates } from "@ros/web/src/pages/Candidates";
 
-export default function TalentPage() {
-  return <People />;
+/** Candidates in the side rail: the same list, with a job picker (?job=<id>). */
+export default function CandidatesPage() {
+  return <Candidates />;
 }

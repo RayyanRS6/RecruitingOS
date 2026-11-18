@@ -1,5 +1,6 @@
-import { Interviews } from "@ros/web/src/pages/Interviews";
+import { redirect } from "next/navigation";
 
-export default function InterviewsPage() {
-  return <Interviews />;
+/** The Interviews page is gone; an old link lands on Candidates, where each job's AI interviews are. */
+export default function InterviewsRedirect() {
+  redirect("/talent");
 }
