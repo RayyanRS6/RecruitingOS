@@ -1605,6 +1605,9 @@ describe("taking an accepted company's access away", () => {
     const co = await inUse("pat.undo@listed-domain.test", "Undo Dental", "una.mate@stranger.test");
     expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
     const mailsBefore = w.mail().sent.length;
+    // the owner's first Accept told them their request was approved, once; the undo does not say so again
+    const approvals = async () => (await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_accepted").length;
+    const approvalsBefore = await approvals();
     const undone = await w.decide(adminCookie, co.id, "accept");
     expect(await w.read<CustomerAccessAnswer>(undone)).toMatchObject({ status: "active", changed: true, message: "Undo Dental has access again." });
     await w.container.drain();
@@ -1614,7 +1617,7 @@ describe("taking an accepted company's access away", () => {
     // each of them hears their access is back, in those words: the notice has a kind of its own, so its email says the same
     const back = (await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_restored");
     expect(back.map((n) => n.title)).toEqual(["Your access is back", "Your access is back"]);
-    expect((await w.noticesOf(co.id)).filter((n) => n.kind === "company.access_accepted")).toEqual([]);
+    expect([approvalsBefore, await approvals()]).toEqual([1, 1]);
     // the email too, to the owner and the teammate alike: nobody made a request (the release review, 11 November 2026, L3-4)
     const told = w.mail().sent.slice(mailsBefore).filter((m) => ["pat.undo@listed-domain.test", "una.mate@stranger.test"].includes(m.to) && /^Your (access is back|request was approved)/.test(m.subject));
     expect(told.map((m) => [m.to, m.subject]).sort()).toEqual([["pat.undo@listed-domain.test", "Your access is back"], ["una.mate@stranger.test", "Your access is back"]]);

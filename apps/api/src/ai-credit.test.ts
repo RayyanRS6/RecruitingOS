@@ -3,7 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AI_CREDIT_USED_UP, creditHoldUsd, estimateCostUsd, outOfCredit, runPromptDetached, runPromptsDetached, type AiProvider, type AiRuntime, type PromptDef, type StructuredRequest, type StructuredResult, type Usage } from "@ros/ai";
 import { INTAKE_COMPILE_MAX_TOKENS, runIntakeTurn, startIntakeSession } from "@ros/agents";
-import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION } from "@ros/contracts";
+import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION, type AiCreditView, type CompanyView, type UsageLine } from "@ros/contracts";
 import { AI_CREDIT_DRAFT_HOLD_USD, AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
@@ -72,8 +72,14 @@ describe("the AI credit", () => {
 
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "test" }, body: body === undefined ? undefined : JSON.stringify(body) });
   const read = async <T>(r: Response) => (await r.json()) as T;
-  const errorOf = async (r: Response) => (await read<{ error: { code: string; message: string; details: { upgrade?: boolean; actions: Array<{ label: string; path: string; body: Record<string, unknown> }>; room?: { ok: boolean; aiHelp?: boolean; upgrade?: boolean; message: string } } } }>(r)).error;
+  const errorOf = async (r: Response) => (await read<{ error: { code: string; message: string; details: { upgrade?: boolean; ask: { label: string; reason: string } | null; room?: { ok: boolean; aiHelp?: boolean; upgrade?: boolean; message: string } } } }>(r)).error;
   const moveClock = (at: number | null) => { (container.engine as unknown as { now: () => Date }).now = at === null ? () => new Date() : () => new Date(at); };
+  /** The company's plan as its own people read it in Settings: the AI help as a level, a percentage and words, and the usage lines by key. */
+  const planOf = async (cookie: string): Promise<{ aiCredit: Omit<AiCreditView, "notice"> & { notice: NonNullable<AiCreditView["notice"]> }; usage: Record<string, UsageLine> }> => {
+    const { plan } = await read<CompanyView>(await json(cookie, "GET", "/api/v1/companies/current"));
+    const credit = plan.aiCredit ?? { level: null, percent: 0, resetsAt: null, notice: null };
+    return { aiCredit: { ...credit, notice: credit.notice ?? { title: "", body: "" } }, usage: Object.fromEntries(plan.usage.map((l) => [l.key, l])) };
+  };
 
   /** A company of its own on Free, signed in from an address of its own (the route's limit per address). */
   const newCompany = async () => {
@@ -424,7 +430,7 @@ describe("the AI credit", () => {
       // five such applicants: nobody is told anything, and Home and ITS's page read what was really billed
       expect(await creditNotes(id)).toEqual([]);
       expect(await creditAlerts(id)).toEqual([]);
-      const current = await read<{ aiCredit: { level: string | null; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: null, percent: 0 });
       // a stream that started and was cut still counts, at its hold of about 1.6 cents, so the real money in an outage stays in the sum
       provider.answer = (_req, model) => ({ kind: "invalid", error: "provider error: terminated", model, usage: NO_USAGE, latencyMs: 5, final: true, usageUnknown: true });
@@ -442,8 +448,8 @@ describe("the AI credit", () => {
       expect(await runPromptDetached(container.db, runtime(provider), chatPrompt, INPUT, { companyId: id })).toMatchObject({ ok: false, reason: "no_credit" });
       const failures = async () => (await read<{ failedAi: Array<{ task: string; companyId: string }> }>(await json(admin, "GET", "/api/v1/admin/failures"))).failedAi.filter((r) => r.companyId === id);
       expect(await failures()).toEqual([]);
-      const listed = (await read<Array<{ companyId: string; status: string }>>(await json(admin, "GET", "/api/v1/admin/ai-runs"))).filter((r) => r.companyId === id);
-      expect(listed.map((r) => r.status)).toEqual(["running"]);
+      // still running: it holds its place in the credit and is on nobody's list of failures
+      expect(await container.db.select({ status: aiRuns.status }).from(aiRuns).where(and(eq(aiRuns.companyId, id), eq(aiRuns.status, "running")))).toHaveLength(1);
       // the daily sweep: an hour on, nothing can still be running; its hold stays as its cost
       const report = await runMaintenance(container.db, new Date(Date.now() + 2 * 3600_000));
       expect(report.interruptedAiRuns).toBeGreaterThanOrEqual(1);
@@ -512,7 +518,7 @@ describe("the AI credit", () => {
         expect(r.status, path).toBe(402);
         const error = await errorOf(r);
         expect(error).toMatchObject({ code: "limit_reached", message: AI_HELP_LINE.newJob, details: { upgrade: true } });
-        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } });
+        expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
       }
       expect(await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, id))).toEqual([]);
       expect(await runsOf(id)).toEqual([]);
@@ -567,7 +573,7 @@ describe("the AI credit", () => {
         expect(r.status, path).toBe(402);
         const error = await errorOf(r);
         expect(error).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draft, details: { upgrade: true } });
-        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", body: { reason: AI_HELP_UPGRADE_QUESTION } });
+        expect(error.details.ask).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
       }
       const { session } = await read<{ session: { progress: unknown; messages: unknown[] } }>(await json(cookie, "GET", `/api/v1/intake/sessions/${sessionId}`));
       expect(session.progress).toBeNull();
@@ -679,7 +685,7 @@ describe("the AI credit", () => {
         expect(provider.calls).toBe(0);
       });
       // Home, Settings, ITS's line and Start a hire read the same $19.86: 99%, and a new job has stopped
-      const current = await read<{ usage: { ai_credit_monthly_cents: { used: number } }; aiCredit: { level: string; percent: number; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: "warning", percent: 99 });
       expect(current.aiCredit.notice.body).toBe("New jobs have stopped: writing one needs more than is left. Upgrade before the rest runs out.");
       expect(current.usage.ai_credit_monthly_cents.used).toBe(99);
@@ -726,7 +732,7 @@ describe("the AI credit", () => {
       const r = await json(cookie, "POST", "/api/v1/companies/current/about/draft", {});
       expect(r.status).toBe(402);
       expect(await errorOf(r)).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.about, details: { upgrade: true } });
-      const own = await json(cookie, "POST", "/api/v1/companies/current/about/approve", { text: "We are a friendly dental practice in Irvine, looking after families for twenty years." });
+      const own = await json(cookie, "POST", "/api/v1/companies/current/about", { text: "We are a friendly dental practice in Irvine, looking after families for twenty years." });
       expect(own.status, await own.clone().text()).toBe(200);
     });
 
@@ -737,7 +743,7 @@ describe("the AI credit", () => {
       await usePlan(container, id, "ultra");
       // Ultra's $200 a month, with $199.95 spent: a small call no longer fits under $199.90, so it is used up
       await spend(id, "199.950000");
-      const home = await read<{ aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const home = await planOf(cookie);
       expect(home.aiCredit.level).toBe("used_up");
       // the day it starts again, in the words Home already uses
       const day = /until it starts again on (\w+, \w+ \d+)\.$/.exec(home.aiCredit.notice.body)?.[1];
@@ -748,6 +754,8 @@ describe("the AI credit", () => {
         expect(actions).toHaveLength(1);
         expect(actions[0]).toMatchObject({ label: "Talk to ITS", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } });
       };
+      /** The same request as a 402 carries it: the button's words, and the reason sent with POST /api/v1/plans/request. */
+      const asksIts = (ask: { label: string; reason: string } | null) => expect(ask).toEqual({ label: "Talk to ITS", reason: AI_HELP_UPGRADE_QUESTION });
       const runs = (await runsOf(id)).length;
       const said: string[] = [];
 
@@ -759,8 +767,8 @@ describe("the AI credit", () => {
       expect(start.status).toBe(402);
       const refused = await errorOf(start);
       expect(refused).toMatchObject({ code: "limit_reached", message: room.message, details: { upgrade: true, room: { nothingAbove: true } } });
-      talksToIts(refused.details.actions);
-      said.push(refused.message, ...refused.details.actions.map((a) => a.label));
+      asksIts(refused.details.ask);
+      said.push(refused.message, refused.details.ask?.label ?? "");
 
       // a turn on the draft, here and through the conversation: their words saved, and the way on is ITS
       const turn = await read<{ reply: { recovery: string; upgrade: boolean; proposedActions: Array<{ label: string; path: string; body: Record<string, unknown> }> } }>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
@@ -775,16 +783,16 @@ describe("the AI credit", () => {
       expect(draft.status).toBe(402);
       const draftRefused = await errorOf(draft);
       expect(draftRefused).toMatchObject({ code: "ai_credit_used_up", message: `Your plan's AI help is used up. Everything you confirmed is kept. ${way}`, details: { upgrade: true } });
-      talksToIts(draftRefused.details.actions);
+      asksIts(draftRefused.details.ask);
       for (const [path, body, line] of [[`/api/v1/intake/sessions/${sessionId}/revisions`, { message: "Make the summary shorter." }, AI_HELP_LINE.reviseDraft], ["/api/v1/companies/current/about/draft", {}, AI_HELP_LINE.about]] as const) {
         const r = await json(cookie, "POST", path, body);
         expect(r.status, path).toBe(402);
         const e = await errorOf(r);
         expect(e, path).toMatchObject({ code: "ai_credit_used_up", message: line });
-        talksToIts(e.details.actions);
-        said.push(e.message, ...e.details.actions.map((a) => a.label));
+        asksIts(e.details.ask);
+        said.push(e.message, e.details.ask?.label ?? "");
       }
-      said.push(draftRefused.message, ...draftRefused.details.actions.map((a) => a.label));
+      said.push(draftRefused.message, draftRefused.details.ask?.label ?? "");
       for (const words of said) expect(words).not.toMatch(/upgrade/i);
       // and no model was asked
       expect((await runsOf(id)).length).toBe(runs);
@@ -1076,7 +1084,7 @@ describe("the AI credit", () => {
       expect(detail.screens[0].scorecard).toBe("writing");
       expect(detail.placement.doneLabel).not.toBe("AI interview not scored");
       expect((await creditNotes(job.id)).map((n) => n.title)).toEqual(["80% of your plan's AI help used"]);
-      const current = await read<{ aiCredit: { level: string; percent: number } }>(await json(job.cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(job.cookie);
       expect(current.aiCredit).toMatchObject({ level: "warning", percent: 95 });
       expect(await creditAlerts(job.id).then((rows) => rows.map((r) => r.kind))).toEqual(["billing.ai_credit_warning"]);
       await noFalseAlarm(job.id, [a.id]);
@@ -1430,7 +1438,7 @@ describe("the AI credit", () => {
       expect(await creditNotes(id)).toHaveLength(1);
       expect(await creditAlerts(id)).toHaveLength(1);
       // Home's row and Settings read it: a level, a percentage and words
-      let current = await read<{ aiCredit: { level: string; percent: number; resetsAt: string | null; notice: { title: string } }; usage: Record<string, unknown> }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      let current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: "warning", percent: 80, resetsAt: null, notice: { title: "80% of your plan's AI help used" } });
 
       // used up: the first small call refused
@@ -1444,11 +1452,11 @@ describe("the AI credit", () => {
       expect(alerts.map((a) => [a.kind, a.severity]).sort()).toEqual([["billing.ai_credit_used_up", "high"], ["billing.ai_credit_warning", "info"]]);
       expect(alerts.every((a) => a.severity !== "critical")).toBe(true);
       expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, AI_OUTAGE_ALERT_KIND))).toEqual([]);
-      current = await read(await json(cookie, "GET", "/api/v1/companies/current"));
+      current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: "used_up", notice: { title: "Your plan's AI help is used up" } });
 
       // customers never read an amount, in words or in the page's data; events and notices carry none either
-      const raw = JSON.stringify(current);
+      const raw = JSON.stringify(await read(await json(cookie, "GET", "/api/v1/companies/current")));
       expect(raw).not.toMatch(/"ai_credit_(?:total|monthly)_cents":\s*(?:\d{2,})/);
       expect(raw).not.toContain("spent");
       for (const n of notes) expect(`${n.title} ${n.body}`, n.title).not.toMatch(money);
@@ -1468,7 +1476,7 @@ describe("the AI credit", () => {
       const { id, cookie } = await newCompany();
       await usePlan(container, id, "basic");
       const figures = async () => {
-        const c = await read<{ usage: { ai_credit_monthly_cents: { used: number } }; aiCredit: { percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+        const c = await planOf(cookie);
         return [c.usage.ai_credit_monthly_cents.used, c.aiCredit.percent];
       };
       // $5.00 of Basic's $20, then a draft holds about $0.80 for two minutes
@@ -1509,7 +1517,7 @@ describe("the AI credit", () => {
         await spend(id, settled);
         // a real call settles, and the owner and ITS hear about the line
         await runPromptDetached(container.db, runtime(new PricedProvider()), chatPrompt, INPUT, { companyId: id });
-        const current = await read<{ aiCredit: { level: string; percent: number; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+        const current = await planOf(cookie);
         return { id, cookie, aiCredit: current.aiCredit, room: await read<{ ok: boolean; message: string }>(await json(cookie, "GET", "/api/v1/intake/room")) };
       };
       // $19.09: the draft's $0.80 still fits under $19.90, so nothing has stopped
@@ -1537,7 +1545,7 @@ describe("the AI credit", () => {
     it("at $9.89 on Free the percentage says 98 while Home's level says used up, because the two cents a small call needs pass the $9.90: Settings reads the level", async () => {
       const { id, cookie } = await newCompany();
       await spend(id, "9.890000");
-      const current = await read<{ usage: { ai_credit_total_cents: { used: number } }; aiCredit: { level: string; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(cookie);
       expect(current.usage.ai_credit_total_cents.used).toBe(98);
       expect(current.aiCredit).toMatchObject({ level: "used_up", percent: 98 });
     });
@@ -1548,11 +1556,11 @@ describe("the AI credit", () => {
       const call = () => runPromptDetached(container.db, runtime(new PricedProvider()), chatPrompt, INPUT, { companyId: id });
       await spend(id, "170.000000");
       expect((await call()).ok).toBe(true);
-      const at85 = await read<{ aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const at85 = await planOf(cookie);
       expect(at85.aiCredit).toMatchObject({ level: "warning", notice: { body: "Nothing has stopped. Talk with ITS before it runs out." } });
       await spend(id, "29.950000");
       expect(outOfCredit(await call())).toBe(true);
-      const gone = await read<{ timezone: string; aiCredit: { level: string; notice: { body: string } } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const gone = await planOf(cookie);
       expect(gone.aiCredit.level).toBe("used_up");
       expect(gone.aiCredit.notice.body).toMatch(/^Applications still come in and candidates can still finish\. New applicants are not read by AI until it starts again on \w+, \w+ \d+\.$/);
       const notes = await creditNotes(id);
@@ -1598,7 +1606,7 @@ describe("the AI credit", () => {
       expect((await creditAlerts(id)).map((a) => a.status)).toEqual(["open"]);
       await upgrade(id);
       expect((await creditAlerts(id)).map((a) => a.status)).toEqual(["resolved"]);
-      const current = await read<{ aiCredit: { level: string | null; percent: number; resetsAt: string | null } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: null, percent: 0 });
       expect(Date.parse(current.aiCredit.resetsAt!)).toBeGreaterThan(Date.now());
       expect((await container.db.select().from(companies).where(eq(companies.id, id)))[0].settings.aiCreditTold).toBeUndefined();
@@ -1655,7 +1663,7 @@ describe("the AI credit", () => {
       expect((await container.db.select().from(companies).where(eq(companies.id, id)))[0].settings.aiCreditTold).toBeUndefined();
       expect(await creditNotes(id)).toEqual([]);
       expect(await creditAlerts(id)).toEqual([]);
-      const current = await read<{ aiCredit: { level: string | null; percent: number } }>(await json(cookie, "GET", "/api/v1/companies/current"));
+      const current = await planOf(cookie);
       expect(current.aiCredit).toMatchObject({ level: null, percent: 33 });
       expect(await withTenant(container.db, id, (tx) => aiCreditRoomForJob(tx, id))).toBe("ok");
     });

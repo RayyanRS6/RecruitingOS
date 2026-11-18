@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import type { AdminFailures, AdminQueue, CompanyCreated, CompanyView } from "@ros/contracts";
 import { aiRuns, applications, assessments, candidates, communications, documents, entitlements, events, jobs, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
@@ -80,17 +81,17 @@ describe("Slice 1 API", () => {
   it("creates the company on the Free plan, with no clock", async () => {
     const r = await json("POST", "/api/v1/companies", { name: "Brightline Dental Group", vertical: "dental", sizeBand: "50-99", ownerName: "Dana Whitfield", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(r.status).toBe(201);
-    const co = (await r.json()) as { id: string; slug: string; planKey: string };
-    companySlug = co.slug;
-    expect(co.planKey).toBe("free");
+    const co = (await r.json()) as CompanyCreated;
+    expect(co).toEqual({ id: co.id, name: "Brightline Dental Group", accessRequest: null });
     // This suite follows the later path: the form now, the screening invitation by email after the résumé is read (plan Wave E).
     await useLaterApplyFlow(container, co.id);
     const cur = await json("GET", "/api/v1/companies/current");
     expect(cur.status).toBe(200);
     // the Free plan's 2 people, counted live: the owner is the one in use (known bug 128)
-    const body = (await cur.json()) as { usage: Record<string, { used: number; limit: number | null }>; trial: { started: boolean; ended: boolean } | null };
-    expect(body.usage.seats).toEqual({ used: 1, limit: 2 });
-    expect(body.trial).toBeNull();
+    const body = (await cur.json()) as CompanyView;
+    companySlug = body.slug;
+    expect(body.plan).toMatchObject({ key: "free", name: "Free", trial: null });
+    expect(body.plan.usage.find((l) => l.key === "seats")).toMatchObject({ used: 1, limit: 2 });
   });
 
   it("runs the intake conversation and compiles a role packet", async () => {
@@ -413,28 +414,31 @@ describe("Slice 1 API", () => {
     expect((await container.db.select().from(aiRuns)).length).toBe(runsBefore);
   });
 
-  it("blocks admin routes for non-admins and exposes runs to admins", async () => {
-    expect((await json("GET", "/api/v1/admin/runs")).status).toBe(403);
+  it("blocks admin routes for non-admins and shows the queue, the failures and the costs to admins", async () => {
+    expect((await json("GET", "/api/v1/admin/queue")).status).toBe(403);
     const { users } = await import("@ros/db");
     const { grantPlatformRole } = await import("@ros/core");
     const [dana] = await container.db.select().from(users).where(eq(users.email, "dana@brightline.test"));
     await grantPlatformRole(container.db, { userId: dana.id, role: "platform_admin", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
     // the role alone is not enough (21 Sep, item 2): the email-link session has no second factor
-    const noMfa = await json("GET", "/api/v1/admin/runs", undefined, { "x-admin-reason": "test" });
+    const noMfa = await json("GET", "/api/v1/admin/queue", undefined, { "x-admin-reason": "test" });
     expect(noMfa.status).toBe(403);
     expect(((await noMfa.json()) as { error: { code: string } }).error.code).toBe("mfa_required");
     const { signInWithIdentity } = await import("./test-helpers");
     const adminCookie = await signInWithIdentity(app, container, { email: "dana@brightline.test", provider: "azure", aal2: true });
     const asAdmin = (method: string, path: string) => json(method, path, undefined, { "x-admin-reason": "test", cookie: adminCookie });
-    const r = await asAdmin("GET", "/api/v1/admin/runs");
+    const r = await asAdmin("GET", "/api/v1/admin/queue");
     expect(r.status).toBe(200);
-    const runs = (await r.json()) as Array<{ id: string; workflowKey: string }>;
-    const detail = (await (await asAdmin("GET", `/api/v1/admin/runs/${runs[0].id}`)).json()) as { steps: unknown[]; events: unknown[] };
-    expect(detail.steps.length).toBeGreaterThan(0);
-    expect(detail.events.length).toBeGreaterThan(0);
+    const queue = (await r.json()) as AdminQueue;
+    expect(queue.definitions.length).toBeGreaterThan(0);
+    expect(typeof queue.queued).toBe("number");
+    const failures = (await (await asAdmin("GET", "/api/v1/admin/failures")).json()) as AdminFailures;
+    expect(Object.keys(failures).sort()).toEqual(["alerts", "failedAi", "failedJobs", "failedRuns"]);
+    // what failed is named by what it was and its error: never a run's state, a job's payload or an AI call's output
+    expect(JSON.stringify(failures)).not.toMatch(/"(state|payload|output|outputRef|inputRef)":/);
     const costs = (await (await asAdmin("GET", "/api/v1/admin/costs")).json()) as Array<{ task: string }>;
     expect(costs.some((c) => c.task === "intake.turn")).toBe(true);
-    // ?since= (the console's "this month", Wave S6): only the runs from that day on; a day before every run gives the
+    // ?since= (the dashboard's "this month"): only the runs from that day on; a day before every run gives the
     // same answer as no filter, a day after them none, and anything but a real date is refused
     const sorted = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).sort();
     const sinceLongAgo = (await (await asAdmin("GET", "/api/v1/admin/costs?since=2000-01-01")).json()) as unknown[];

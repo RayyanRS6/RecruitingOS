@@ -21,11 +21,10 @@ const ALLOWED: Record<string, number> = {
   "apps/api/src/pages/application-record.tsx": 4, // the status page's forms look up their status token before any tenant is known
   "apps/api/src/pages/candidate-shared.tsx": 1, // whether the person behind a link was deleted
   "apps/api/src/pages/conversation-frame.tsx": 1, // the application a conversation link names
-  "apps/api/src/routes/admin.ts": 7,
   "apps/api/src/routes/auth-mfa.tsx": 3,
   "apps/api/src/routes/auth-shared.ts": 1,
-  "apps/api/src/routes/auth.ts": 2,
-  "apps/api/src/routes/privacy-requests.ts": 4,
+  "apps/api/src/routes/auth.ts": 1,
+  "apps/api/src/routes/privacy-requests.ts": 2,
   "apps/api/src/test-helpers.ts": 3, // statusTokenFor reads a test application's link, which travels only by email
 };
 

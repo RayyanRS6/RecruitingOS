@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { entitlements as allowance } from "@ros/core";
-import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type PlanRoom } from "@ros/contracts";
+import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type CompanyView, type InviteAnswer, type PlanChangeAnswer, type PlanRoom, type UsageLine } from "@ros/contracts";
 import { adminAlerts, aiRuns, auditRecords, companies, entitlements, events, intakeSessions, invitations, memberships, notifications, roles, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -13,7 +13,6 @@ const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour
 const ONE_JOB = "Your Free plan includes one job. Upgrade to post more.";
 const DAY = 86_400_000;
 
-type Current = { planKey: string; status: string; trial: unknown; settings: { trial?: unknown }; plan: { key: string; name: string; limits: Record<string, number | null> }; usage: Record<string, { used: number; limit: number | null; resetsAt?: string | null; unit?: string }> };
 type ApiError = { code: string; message: string; details: { upgrade?: boolean; room: PlanRoom; actions: Array<{ label: string; method: string; path: string; body: Record<string, unknown> }> } };
 
 /**
@@ -32,7 +31,9 @@ describe("the Free plan's one job", () => {
   const read = async <T>(r: Response) => (await r.json()) as T;
   const errorOf = async (r: Response) => (await read<{ error: ApiError }>(r)).error;
   const room = async (cookie: string) => read<PlanRoom>(await json(cookie, "GET", "/api/v1/intake/room"));
-  const current = async (cookie: string) => read<Current>(await json(cookie, "GET", "/api/v1/companies/current"));
+  /** The company's plan as its own people read it in Settings, and one of its usage lines (none when the plan sets no such limit). */
+  const plan = async (cookie: string) => (await read<CompanyView>(await json(cookie, "GET", "/api/v1/companies/current"))).plan;
+  const usageLine = async (cookie: string, key: string): Promise<UsageLine | undefined> => (await plan(cookie)).usage.find((l) => l.key === key);
   const roleOf = async (id: string) => (await container.db.select().from(roles).where(eq(roles.id, id)))[0];
   const runCount = () => container.db.select().from(aiRuns).then((r) => r.length);
 
@@ -77,11 +78,10 @@ describe("the Free plan's one job", () => {
   });
 
   describe("a new company", () => {
-    it("is on Free and active, with no clock and no trial event, and names every limit with nothing used", async () => {
+    it("is on Free, with no clock and no trial event, and names every limit with nothing used", async () => {
       const { cookie, id } = await newCompany();
-      const co = await current(cookie);
-      expect(co).toMatchObject({ planKey: "free", status: "active", trial: null, plan: { key: "free", name: "Free" } });
-      expect(co.settings.trial).toBeUndefined();
+      expect(await plan(cookie)).toMatchObject({ key: "free", name: "Free", trial: null, mayUpgrade: true, upgradeRequestedAt: null });
+      expect((await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, id)))[0].settings.trial).toBeUndefined();
       expect(await container.db.select().from(events).where(and(eq(events.companyId, id), eq(events.type, "trial.started")))).toHaveLength(0);
       const rows = await container.db.select().from(entitlements).where(eq(entitlements.companyId, id));
       expect(rows.map((r) => r.key).sort()).toEqual(["active_roles", "ai_credit_monthly_cents", "ai_credit_total_cents", "candidates_per_job", "jobs_total", "seats", "text_screens"]);
@@ -90,16 +90,16 @@ describe("the Free plan's one job", () => {
 
     it("reads its usage in counts and a percentage: no dollars, and no line for what is not a count", async () => {
       const { cookie } = await newCompany();
-      const co = await current(cookie);
-      expect(co.usage.jobs_total).toEqual({ used: 0, limit: 1 });
-      expect(co.usage.active_roles).toEqual({ used: 0, limit: 1 });
-      expect(co.usage.seats).toEqual({ used: 1, limit: 2 });
-      expect(co.usage.ai_credit_total_cents).toEqual({ used: 0, limit: 100, unit: "percent" });
-      for (const key of ["candidates_per_job", "ai_credit_monthly_cents"]) expect(co.usage, key).not.toHaveProperty(key);
-      // and the plan's own limits carry no credit in money
-      expect(co.plan.limits).toMatchObject({ jobs_total: 1, candidates_per_job: 5, seats: 2 });
-      expect(co.plan.limits).not.toHaveProperty("ai_credit_total_cents");
-      expect(co.plan.limits).not.toHaveProperty("ai_credit_monthly_cents");
+      const mine = await plan(cookie);
+      const line = (key: string) => mine.usage.find((l) => l.key === key);
+      expect(line("jobs_total")).toEqual({ key: "jobs_total", label: "Jobs in all", used: 0, limit: 1, unit: "count", resetsAt: null, words: "0 of 1 jobs in all" });
+      expect(line("active_roles")).toMatchObject({ used: 0, limit: 1, unit: "count", words: "0 of 1 jobs at a time" });
+      expect(line("seats")).toMatchObject({ used: 1, limit: 2, unit: "count", words: "1 of 2 people" });
+      expect(line("ai_credit_total_cents")).toEqual({ key: "ai_credit_total_cents", label: "AI help", used: 0, limit: 100, unit: "percent", resetsAt: null, words: "AI help: 0% used" });
+      for (const key of ["candidates_per_job", "ai_credit_monthly_cents", "text_screens"]) expect(line(key), key).toBeUndefined();
+      // and nothing of the plan is said in money: no limit in cents, no dollars
+      expect(mine).not.toHaveProperty("limits");
+      expect(JSON.stringify(mine)).not.toMatch(/Usd|\b1000\b|\$\d/);
     });
 
     it("reads a limit that is not a count by its key, and follows the plan", async () => {
@@ -164,9 +164,8 @@ describe("the Free plan's one job", () => {
       expect((await roleOf(roleId)).openedAt).toBeTruthy();
       await closeOk(cookie, roleId);
       expect(await room(cookie)).toEqual({ ok: false, limit: 1, used: 1, holding: [], message: ONE_JOB, upgrade: true });
-      const usage = (await current(cookie)).usage;
-      expect(usage.jobs_total).toEqual({ used: 1, limit: 1 });
-      expect(usage.active_roles).toEqual({ used: 0, limit: 1 });
+      expect(await usageLine(cookie, "jobs_total")).toMatchObject({ used: 1, limit: 1, words: "1 of 1 jobs in all" });
+      expect(await usageLine(cookie, "active_roles")).toMatchObject({ used: 0, limit: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.JOBS_TOTAL))).toEqual({ ok: false, limit: 1, used: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.jobsCounted(tx, id))).toBe(1);
       // the running total is only ever counted from the roles: nothing was written beside it
@@ -180,7 +179,7 @@ describe("the Free plan's one job", () => {
       expect((await room(cookie)).ok).toBe(false);
       await closeOk(cookie, cancelled);
       expect(await room(cookie)).toMatchObject({ ok: true, used: 0, message: null });
-      expect((await current(cookie)).usage.jobs_total).toEqual({ used: 0, limit: 1 });
+      expect(await usageLine(cookie, "jobs_total")).toMatchObject({ used: 0, limit: 1 });
       const next = await jobWaiting(cookie);
       await approve(cookie, next);
       expect((await roleOf(next)).status).toBe("open");
@@ -209,11 +208,11 @@ describe("the Free plan's one job", () => {
       expect((await room(cookie)).upgrade).toBe(true);
       const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
       expect(moved.status, await moved.clone().text()).toBe(200);
-      expect(await read(moved)).toMatchObject({ planKey: "basic", status: "active" });
+      expect(await read<PlanChangeAnswer>(moved)).toEqual({ trialEnded: false, unlocked: 0, aiCreditMonthStarted: true });
       const after = await room(cookie);
       expect(after).toMatchObject({ ok: true, limit: 3, used: 1 });
       expect(after.upgrade).toBeUndefined();
-      expect((await current(cookie)).usage).not.toHaveProperty("jobs_total");
+      expect(await usageLine(cookie, "jobs_total")).toBeUndefined();
     });
 
     it("a company with no row for the limit is unmetered, so existing companies do not change until their plan does", async () => {
@@ -222,7 +221,7 @@ describe("the Free plan's one job", () => {
       await withPlatform(container.db, (tx) => tx.delete(entitlements).where(and(eq(entitlements.companyId, id), inArray(entitlements.key, [allowance.JOBS_TOTAL, allowance.ACTIVE_ROLES]))));
       expect(await room(cookie)).toMatchObject({ ok: true, limit: null, used: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.JOBS_TOTAL))).toEqual({ ok: true, limit: null, used: 0 });
-      expect((await current(cookie)).usage).not.toHaveProperty("jobs_total");
+      expect(await usageLine(cookie, "jobs_total")).toBeUndefined();
     });
   });
 
@@ -290,17 +289,21 @@ describe("the Free plan's one job", () => {
   });
 
   describe("a change of plan", () => {
-    it("any plan other than Trial and Design Partner reads as active, from Design Partner too", async () => {
-      const { id } = await newCompany();
-      const to = async (planKey: string) => read<{ status: string; planKey: string }>(await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey, reason: "A change for this test." }));
-      expect(await to("design_partner")).toMatchObject({ planKey: "design_partner", status: "design_partner" });
-      expect(await to("free")).toMatchObject({ planKey: "free", status: "active" });
-      expect(await to("pro")).toMatchObject({ planKey: "pro", status: "active" });
-      expect(await to("design_partner")).toMatchObject({ status: "design_partner" });
-      expect(await to("ultra")).toMatchObject({ planKey: "ultra", status: "active" });
+    it("answers the three facts the dashboard shows, and the company reads its new plan at once, from Design Partner too", async () => {
+      const { cookie, id } = await newCompany();
+      const to = async (planKey: string) => read<PlanChangeAnswer>(await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey, reason: "A change for this test." }));
+      expect(await to("design_partner")).toEqual({ trialEnded: false, unlocked: 0, aiCreditMonthStarted: false });
+      expect(await plan(cookie)).toMatchObject({ key: "design_partner", name: "Design Partner", trial: null });
+      expect(await to("free")).toEqual({ trialEnded: false, unlocked: 0, aiCreditMonthStarted: false });
+      expect(await plan(cookie)).toMatchObject({ key: "free", name: "Free" });
+      // a monthly AI credit starts its first month with the plan that brings it
+      expect(await to("pro")).toEqual({ trialEnded: false, unlocked: 0, aiCreditMonthStarted: true });
+      expect(await to("design_partner")).toMatchObject({ aiCreditMonthStarted: false });
+      expect(await to("ultra")).toMatchObject({ trialEnded: false, unlocked: 0 });
+      expect(await plan(cookie)).toMatchObject({ key: "ultra", name: "Ultra", trial: null });
     });
 
-    it("the retired plans are refused; the console lists the four and Design Partner", async () => {
+    it("the retired plans are refused; the dashboard lists the four and Design Partner", async () => {
       const { id } = await newCompany();
       for (const planKey of ["trial", "core", "growth", "company"]) {
         const r = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey, reason: "A change for this test." });
@@ -322,16 +325,16 @@ describe("the Free plan's one job", () => {
 
   describe("the AI credit, counted live and never in dollars", () => {
     const spend = (companyId: string, costUsd: string, createdAt?: string) => withPlatform(container.db, (tx) => tx.insert(aiRuns).values({ companyId, agent: "intake", task: "intake.turn", provider: "fake", model: "fake", promptKey: "intake.turn", promptVersion: 1, promptHash: "x", costUsd, ...(createdAt ? { createdAt } : {}) }));
-    const credit = (cookie: string, key: "ai_credit_total_cents" | "ai_credit_monthly_cents") => current(cookie).then((c) => c.usage[key]);
+    const credit = async (cookie: string, key: "ai_credit_total_cents" | "ai_credit_monthly_cents") => (await usageLine(cookie, key))!;
     const rowOf = async (id: string, key: string) => (await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, id), eq(entitlements.key, key))))[0];
 
     it("Free reads its total as a percentage for the customer and in cents for the server; `used` stays 0", async () => {
       const { cookie, id } = await newCompany();
       await spend(id, "2.500000");
-      expect(await credit(cookie, "ai_credit_total_cents")).toEqual({ used: 25, limit: 100, unit: "percent" });
+      expect(await credit(cookie, "ai_credit_total_cents")).toMatchObject({ used: 25, limit: 100, unit: "percent", words: "AI help: 25% used" });
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.AI_CREDIT_TOTAL_CENTS))).toEqual({ ok: true, limit: 1000, used: 250 });
       expect((await rowOf(id, allowance.AI_CREDIT_TOTAL_CENTS)).used).toBe(0);
-      expect(Object.values((await current(cookie)).usage).map((line) => line.used)).not.toContain(250);
+      expect((await plan(cookie)).usage.map((line) => line.used)).not.toContain(250);
       // a fraction of a cent counts: rounded up, so the money is never undercounted
       await spend(id, "0.000800");
       expect(await withTenant(container.db, id, (tx) => allowance.aiCreditSpentCents(tx, id))).toBe(251);
@@ -366,13 +369,13 @@ describe("the Free plan's one job", () => {
       const line = await credit(cookie, "ai_credit_monthly_cents");
       expect(line).toMatchObject({ used: 20, limit: 100, unit: "percent" });
       expect(Date.parse(line.resetsAt ?? "") - Date.now()).toBeGreaterThan(29 * DAY);
-      expect((await current(cookie)).usage).not.toHaveProperty("ai_credit_total_cents");
+      expect(await usageLine(cookie, "ai_credit_total_cents")).toBeUndefined();
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.AI_CREDIT_MONTHLY_CENTS))).toEqual({ ok: true, limit: 2000, used: 400 });
       // a new period starts from nothing by date alone, with nobody writing anything
       const row = await rowOf(id, allowance.AI_CREDIT_MONTHLY_CENTS);
       const later = new Date(Date.parse(row.periodEnd!) + DAY);
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.AI_CREDIT_MONTHLY_CENTS, 1, { now: later }))).toEqual({ ok: true, limit: 2000, used: 0 });
-      expect(await withTenant(container.db, id, (tx) => allowance.usageOf(tx, id, { now: later })).then((u) => u.ai_credit_monthly_cents)).toMatchObject({ used: 0, resetsAt: new Date(Date.parse(row.periodEnd!) + 30 * DAY).toISOString() });
+      expect(await withTenant(container.db, id, (tx) => allowance.usageOf(tx, id, { now: later })).then((u) => u.find((l) => l.key === "ai_credit_monthly_cents"))).toMatchObject({ used: 0, resetsAt: new Date(Date.parse(row.periodEnd!) + 30 * DAY).toISOString() });
       // a move between paid plans keeps the month, like every other allowance: what was spent stays spent, and the date stays
       await usePlan(container, id, "pro");
       expect(await rowOf(id, allowance.AI_CREDIT_MONTHLY_CENTS)).toMatchObject({ limit: 6000, periodStart: row.periodStart, periodEnd: row.periodEnd });
@@ -385,15 +388,14 @@ describe("the Free plan's one job", () => {
       await spend(id, "9.500000");
       await usePlan(container, id, "free");
       expect((await credit(cookie, "ai_credit_total_cents")).used).toBe(95);
-      expect((await current(cookie)).usage).not.toHaveProperty("ai_credit_monthly_cents");
+      expect(await usageLine(cookie, "ai_credit_monthly_cents")).toBeUndefined();
     });
 
     it("a plan with no credit, like Design Partner, has no line and no limit", async () => {
       const { cookie, id } = await newCompany();
       await usePlan(container, id, "design_partner");
       await spend(id, "50.000000");
-      const usage = (await current(cookie)).usage;
-      for (const key of ["ai_credit_total_cents", "ai_credit_monthly_cents"]) expect(usage, key).not.toHaveProperty(key);
+      for (const key of ["ai_credit_total_cents", "ai_credit_monthly_cents"]) expect(await usageLine(cookie, key), key).toBeUndefined();
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.AI_CREDIT_TOTAL_CENTS))).toMatchObject({ ok: true, limit: null });
     });
   });
@@ -422,13 +424,13 @@ describe("the Free plan's one job", () => {
 
     it("an invitation carried at sign-in into a full company is refused in the plan's words", async () => {
       const { cookie, id } = await newCompany();
-      const sent = await read<{ devLink: string }>(await invite(cookie, "late@free-plan.test"));
+      const sent = await read<InviteAnswer>(await invite(cookie, "late@free-plan.test"));
       // the second place goes to someone who joined outside an invitation
       await withPlatform(container.db, async (tx) => {
         const [joined] = await tx.insert(users).values({ email: "joined@free-plan.test", name: "Joined" }).returning();
         await tx.insert(memberships).values({ companyId: id, userId: joined.id, role: "hiring_manager", status: "active" });
       });
-      const page = await app.request(sent.devLink.replace(container.env.APP_BASE_URL, ""));
+      const page = await app.request(sent.link.replace(container.env.APP_BASE_URL, ""));
       const inviteCookie = page.headers.getSetCookie().find((c) => c.startsWith("ros_invite="))?.split(";")[0] ?? "";
       const token = (container.integrations.identity as FakeIdentityProvider).mint({ email: "late@free-plan.test", name: "Late", provider: "google" });
       const r = await app.request("/api/v1/auth/session", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.77", cookie: inviteCookie }, body: JSON.stringify({ accessToken: token }) });
@@ -447,38 +449,39 @@ describe("the Free plan's one job", () => {
   });
 });
 
-/** With the ITS check on, as in production: confirming a company on Free starts nothing, and the hourly check never finds it. */
-describe("the ITS check on the Free plan", () => {
+/** Sign-up by approval, as in production: accepting a company on Free starts no clock, and the hourly check never finds it. */
+describe("accepting a company on the Free plan", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", SIGNUP_MODE: "approval", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
   });
   afterAll(async () => {
     await container.close();
   });
 
-  it("confirming it starts no clock and says nothing about one", async () => {
+  it("starts no clock and says nothing about one", async () => {
     const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "test" }, body: body === undefined ? undefined : JSON.stringify(body) });
     const owner = await signInWithIdentity(app, container, { email: "owner@free-check.test", name: "Owner", provider: "google", aal2: false });
     const admin = await signInAdmin(app, container, "ana.admin@identifiedtalent.com", "Ana Admin");
     const made = await json(owner, "POST", "/api/v1/companies", { name: "Free Check Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] });
     expect(made.status, await made.clone().text()).toBe(201);
     const { id } = (await made.json()) as { id: string };
-    const confirmed = await json(admin, "POST", `/api/v1/admin/customers/${id}/verification`, { verified: true, reason: "Kick-off call with the owner.", confirm: true });
-    expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+    const accepted = await json(admin, "POST", `/api/v1/admin/customers/${id}/access`, { decision: "accept", from: "requested", confirm: true });
+    expect(accepted.status, await accepted.clone().text()).toBe(200);
     await container.drain();
-    const [co] = await container.db.select({ planKey: companies.planKey, status: companies.status, settings: companies.settings }).from(companies).where(eq(companies.id, id));
-    expect(co).toMatchObject({ planKey: "free", status: "active" });
-    expect(co.settings.verifiedAt).toBeTruthy();
+    const [co] = await container.db.select({ planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, id));
+    expect(co.planKey).toBe("free");
     expect(co.settings.trial).toBeUndefined();
     expect(await container.db.select().from(events).where(and(eq(events.companyId, id), eq(events.type, "trial.started")))).toHaveLength(0);
-    const told = await container.db.select().from(notifications).where(and(eq(notifications.companyId, id), eq(notifications.kind, "company.verified")));
-    expect(told.length).toBeGreaterThanOrEqual(1);
-    for (const n of told) expect(n.body).not.toMatch(/trial/i);
+    const told = await container.db.select().from(notifications).where(and(eq(notifications.companyId, id), eq(notifications.kind, "company.access_accepted")));
+    expect(told).toHaveLength(1);
+    expect(told[0].body).toBe("You can start now.");
     expect(await withPlatform(container.db, (tx) => settleTrials(tx, container.engine.clock()))).toMatchObject({ started: 0 });
     expect((await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, id)))[0].settings.trial).toBeUndefined();
+    // and the company reads its plan as Free, with nothing about a trial
+    expect(((await (await json(owner, "GET", "/api/v1/companies/current")).json()) as CompanyView).plan).toMatchObject({ key: "free", name: "Free", trial: null });
   });
 });

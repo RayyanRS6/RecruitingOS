@@ -146,7 +146,8 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
 
     const skip = await h.post(jar, "/api/v1/auth/mfa/skip");
     expect(skip.status).toBe(302);
-    expect(skip.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    // a platform administrator's home is the admin dashboard
+    expect(skip.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/admin`);
     expect(jar.ros_mfa).toBeUndefined();
   });
 
@@ -171,7 +172,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(setupKeyOf(await (await h.get(jar, "/api/v1/auth/mfa/backup")).text())).toBe(backupSecret);
     const done = await h.postCode(jar, totp(backupSecret));
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/admin`);
     expect(jar.ros_mfa).toBeUndefined();
     expect((await h.auditsOf("mfa.backup_enrolled")).length).toBe(1);
     const [user] = await container.db.select().from(users).where(eq(users.email, NADINE));
@@ -184,7 +185,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     await h.get(jar, "/api/v1/auth/mfa");
     const done = await h.postCode(jar, totp(backupSecret));
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/admin`);
     expect((await h.meJson(jar)).auth.aal).toBe("aal2");
     expect(jar.ros_mfa).toBeUndefined();
   });
@@ -267,7 +268,8 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     expect(customer.jar.ros_session).toBeTruthy();
     expect(customer.jar.ros_mfa).toBeUndefined();
     const staffAal2 = await h.browserSignIn({ email: "pat.staff@identifiedtalent.com", name: "Pat", provider: "azure", aal2: true });
-    expect(staffAal2.res.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    // staff with no platform role and no company land where anyone without a company does
+    expect(staffAal2.res.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup/company`);
     expect(staffAal2.jar.ros_mfa).toBeUndefined();
     const staffGoogle = await h.browserSignIn({ email: "pat.staff@identifiedtalent.com", name: "Pat", provider: "google", aal2: false });
     expect(staffGoogle.res.headers.get("location")).toContain("/login?error=staff_provider_required");
@@ -288,7 +290,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     const customer = await h.browserSignIn({ email: "eve@brightline.test", name: "Eve", provider: "google", aal2: false });
     const stolen: Jar = { ros_mfa: jar.ros_mfa!, ros_session: customer.jar.ros_session! };
     const r = await h.get(stolen, "/api/v1/auth/mfa/backup");
-    expect(r.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    expect(r.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup/company`);
     expect(stolen.ros_mfa).toBeUndefined();
     // no session at all: home, nothing enrolled
     const noSession: Jar = { ros_mfa: jar.ros_mfa! };
@@ -397,18 +399,23 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
     const pat = await h.browserSignIn({ email: "pat.staff@identifiedtalent.com", name: "Pat", provider: "azure", aal2: true });
     expect((await h.me(pat.jar)).status).toBe(200);
     const [patRow] = await container.db.select().from(users).where(eq(users.email, "pat.staff@identifiedtalent.com"));
-    const call = (body: unknown) => app.request(`/api/v1/admin/users/${patRow!.id}/sessions/revoke`, { method: "POST", headers: { cookie: cookieHeader(admin), "content-type": "application/json", "x-admin-reason": "lost device" }, body: JSON.stringify(body) });
-    expect((await call({ confirm: true })).status).toBe(400);
-    expect((await call({ reason: "lost device, owner reset done", confirm: false })).status).toBe(400);
-    const ok = await call({ reason: "lost device, owner reset done", confirm: true });
+    // by the address they sign in with, with a reason and a confirmation
+    const byEmail = (body: unknown) => app.request("/api/v1/admin/sessions/revoke", { method: "POST", headers: { cookie: cookieHeader(admin), "content-type": "application/json", "x-admin-reason": "lost device" }, body: JSON.stringify(body) });
+    expect((await byEmail({ email: "pat.staff@identifiedtalent.com", confirm: true })).status).toBe(400);
+    expect((await byEmail({ email: "pat.staff@identifiedtalent.com", reason: "lost device, owner reset done", confirm: false })).status).toBe(400);
+    expect((await byEmail({ reason: "lost device, owner reset done", confirm: true })).status).toBe(400);
+    expect((await h.me(pat.jar)).status).toBe(200);
+    const ok = await byEmail({ email: "pat.staff@identifiedtalent.com", reason: "lost device, owner reset done", confirm: true });
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as { sessionsEnded: number }).sessionsEnded).toBeGreaterThanOrEqual(1);
     expect((await h.me(pat.jar)).status).toBe(401);
-    expect((await h.auditsOf("session.revoked")).some((r) => (r.target as { id?: string }).id === patRow!.id && (r.details as { by?: string }).by === "administrator")).toBe(true);
-    // the console asks for the address they sign in with, not an id: the same rules, and an unknown address says so
+    expect((await h.auditsOf("session.revoked")).some((r) => (r.target as { id?: string }).id === patRow!.id && r.reason === "lost device, owner reset done" && (r.details as { by?: string }).by === "administrator")).toBe(true);
+    // someone who is not a platform administrator signs nobody out
+    const outsider = await h.browserSignIn({ email: "dora@brightline.test", name: "Dora", provider: "google", aal2: false });
+    expect((await app.request("/api/v1/admin/sessions/revoke", { method: "POST", headers: { cookie: cookieHeader(outsider.jar), "content-type": "application/json" }, body: JSON.stringify({ email: NADINE, reason: "not theirs to do", confirm: true }) })).status).toBe(403);
+    // signed in again: an unknown address says so, and the address is read as typed, in any case and with spaces around it
     const again = await h.browserSignIn({ email: "pat.staff@identifiedtalent.com", name: "Pat", provider: "azure", aal2: true });
     expect((await h.me(again.jar)).status).toBe(200);
-    const byEmail = (body: unknown) => app.request("/api/v1/admin/sessions/revoke", { method: "POST", headers: { cookie: cookieHeader(admin), "content-type": "application/json", "x-admin-reason": "lost device" }, body: JSON.stringify(body) });
     expect((await byEmail({ email: "pat.staff@identifiedtalent.com", reason: "lost laptop", confirm: false })).status).toBe(400);
     expect((await byEmail({ email: "nobody@identifiedtalent.com", reason: "lost laptop", confirm: true })).status).toBe(404);
     const done = await byEmail({ email: " Pat.Staff@IdentifiedTalent.com ", reason: "lost laptop", confirm: true });

@@ -143,7 +143,8 @@ describe("updates and the one email switch", () => {
     await tell({ companyId, kind: "candidate.withdrawn", title: "Priya Shah withdrew", body: "From Front Desk Coordinator.", action: { label: "Open", href: `/roles/${roleB}/talent` }, userIds: [managerId] });
     await container.drain();
     const mine = (await alertsTo(managerId)).slice(before);
-    expect(mine.map((m) => m.subject)).toEqual(["ITS changed your plan", "Someone left your team"]);
+    // both of them, and only them (the worker sends what one drain holds in no promised order)
+    expect(mine.map((m) => m.subject).sort()).toEqual(["ITS changed your plan", "Someone left your team"]);
     for (const m of mine) {
       expect(m.text).toContain(ALWAYS_EMAILED_LINE);
       expect(m.text).not.toContain("Turn it off in Settings");

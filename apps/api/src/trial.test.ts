@@ -242,7 +242,7 @@ describe("the Trial plan's 30 days", () => {
     const dan = await plantApplicant(container, { companyId, roleId: roleA, mark: "Dan" });
     const shortlist = await act(dan, "shortlist");
     expect(shortlist.status, await shortlist.clone().text()).toBe(402);
-    expect(await errorOf(shortlist)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE, details: { upgrade: true, ask: { label: "Ask ITS to choose a plan" } } });
+    expect(await errorOf(shortlist)).toMatchObject({ code: "limit_reached", message: TRIAL_ENDED_LINE, details: { upgrade: true, ask: { label: "Ask ITS to choose a plan" } } });
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, dan))).toHaveLength(0);
     expect((await applicationOf(dan)).stage).toBe("triaged");
     // a decision on someone already here is made and told as ever

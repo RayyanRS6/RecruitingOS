@@ -129,7 +129,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
     expect(noCookie.headers.get("location")).toContain("/login?error=signin_incomplete");
     const done = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: pkce } });
     expect(done.status).toBe(302);
-    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/`);
+    expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup/company`);
     const cookies = done.headers.get("set-cookie") ?? "";
     expect(cookies).toContain("ros_session=");
     const replay = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: pkce } });

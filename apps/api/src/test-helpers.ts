@@ -108,7 +108,7 @@ export async function followApply(app: ReturnType<typeof createApp>, res: Respon
  */
 async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
   await withPlatform(container.db, async (tx) => {
-    // One JSON merge, as the console's own write is, so the trial dates and the ITS check written beside it are kept.
+    // One JSON merge, so everything else kept in the company's settings stays as it is.
     const [co] = await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('applyFlowDefault', ${flow}::text)` }).where(eq(companies.id, companyId)).returning({ id: companies.id });
     if (!co) throw new Error(`no company ${companyId}`);
   });

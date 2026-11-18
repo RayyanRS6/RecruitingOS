@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
+import { REMOVED_RUN_OUTPUT, checkPrivacyRequestDeadlines, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, unconfirmedScreens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -362,28 +362,23 @@ describe("candidate privacy requests", () => {
     expect(((await again.json()) as { confirmationSentAt: string | null }).confirmationSentAt).toBeTruthy();
   });
 
-  it("deadlines raise an alert ten days before and again when overdue, once each", async () => {
+  it("the daily check raises an alert ten days before a deadline and again when it is overdue, once each; nobody sets it off by hand", async () => {
     const created = await json(admin, "POST", "/api/v1/admin/data-requests", { companyId, requesterEmail: "someone@example.com", kind: "access" });
     const req = (await created.json()) as { id: string };
-    const soon = new Date(Date.now() + 40 * 86_400_000);
-    (container.engine as unknown as { now: () => Date }).now = () => soon;
-    // the check writes (alerts, and the record of them), so it is a POST: a link from another site (a GET, which carries
-    // the Lax cookie) cannot set it off, and a post from another site is refused (middleware/same-site.ts)
     const deadlineAlerts = async () => (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"))).length;
     const before = await deadlineAlerts();
-    expect((await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).status).toBe(404);
-    expect((await app.request("/api/v1/admin/data-requests/deadlines/check", { method: "POST", headers: { cookie: admin, "x-admin-reason": "privacy test", "sec-fetch-site": "cross-site" } })).status).toBe(403);
+    // the worker's daily job runs the check; no route does
+    for (const method of ["GET", "POST"]) expect((await json(admin, method, "/api/v1/admin/data-requests/deadlines/check")).status, method).toBe(404);
     expect(await deadlineAlerts()).toBe(before);
-    const first = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number; overdue: number };
+    const check = (at: Date) => withPlatform(container.db, (tx) => checkPrivacyRequestDeadlines(tx, at));
+    const soon = new Date(Date.now() + 40 * 86_400_000);
+    const first = await check(soon);
     expect(first.soon).toBeGreaterThanOrEqual(1);
-    const again = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number };
-    expect(again.soon).toBe(0);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date(Date.now() + 50 * 86_400_000);
-    const late = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { overdue: number };
+    expect((await check(soon)).soon).toBe(0);
+    const late = await check(new Date(Date.now() + 50 * 86_400_000));
     expect(late.overdue).toBeGreaterThanOrEqual(1);
     const alerts = await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"));
     expect(alerts.some((a) => a.severity === "critical" && (a.details as { requestId: string }).requestId === req.id)).toBe(true);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date();
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/decline`, { resolution: "We could not match this address to any application." })).status).toBe(200);
   });
 
@@ -451,7 +446,7 @@ describe("candidate privacy requests", () => {
     expect(redactString(`POST /c/status/${token}/privacy 302`)).not.toContain(token);
     expect(redactString(`POST /c/status/${token}/privacy 302`)).toContain("/c/status/");
     expect(redactString(`GET /api/v1/auth/consume?token=${token}`)).not.toContain(token);
-    expect(redactString("GET /api/v1/admin/data-requests/lookup/candidate?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
+    expect(redactString("GET /c/link-request?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
     // a withdrawal needs the explicit confirmation (no inline script on the page); without it nothing changes
     const noConfirm = await form(`/c/status/${token}/withdraw`, {});
     expect(noConfirm.status).toBe(302);

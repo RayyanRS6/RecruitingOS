@@ -9,7 +9,6 @@ export type AuditAction =
   | "membership.changed"
   | "data.deleted"
   | "admin.bypass"
-  | "notice.changed"
   | "session.revoked"
   | "assessment.flagged"
   | "plan.changed"
@@ -72,23 +71,20 @@ export type AuditAction =
   | "invitation.accepted"
   /** The role report's applicant list or figures left as a file (docs/spec/21 section 7, P1): who, which role, how many rows. */
   | "report.exported"
-  /** Company preferences changed by an owner or admin (audit finding A8): which keys, never the old and new text of a notice (notice.changed carries the versions). */
+  /** A company's details changed by an owner or an admin: which fields, never what was written in them. */
   | "company.updated"
   /** The one gate: an administrator accepted or declined a company's request, or took an accepted company's access away. */
   | "company.access_accepted"
   | "company.access_declined"
   | "company.access_removed"
-  /** The customer's own audit history left as a file (audit finding A9): who, how many rows, which filters. */
-  | "audit.exported"
-  /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
+  /** The holder of a session confirmed with their sign-in provider again, before making someone an admin or an owner. */
   | "session.reauthenticated"
   /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
   | "message.undone"
   /** A person turned their "Email me updates" switch on or off: before and after. Never anything else. */
   | "notification.preferences_changed"
-  /** Wave E: ITS changed how a role or a company's roles meet the conversation. */
-  | "role.apply_mode_changed"
-  | "company.apply_flow_changed";
+  /** Wave E: how a role meets the conversation was changed. */
+  | "role.apply_mode_changed";
 
 /** Privileged and access actions. Distinct from domain events: this answers "who looked at what, and why." */
 export async function audit(

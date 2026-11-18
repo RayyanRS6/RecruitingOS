@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, queueCommunication, sweepStaleSending } from "@ros/agents";
-import { adminAlerts, communications, events, jobs, notifications, uuidv7, withTenant } from "@ros/db";
+import { setCompanyLive } from "@ros/core";
+import { adminAlerts, candidates, communications, events, jobs, notifications, uuidv7, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -129,6 +130,35 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
     expect(row.error).toMatch(/suppressed/);
     expect(row.sendAttempts).toBe(1);
     expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "message.delivery_failed"))).some((a) => a.target?.id === queued.communicationId)).toBe(false);
+  });
+
+  it("an email to a candidate of a company that is not live is cancelled at send time, with the reason; the team's mail and the answer to a privacy request still go, and nothing waits for later", async () => {
+    const candidateId = await withTenant(container.db, companyId, async (tx) => (await tx.insert(candidates).values({ companyId, firstName: "Cal", lastName: "Waiting", email: "cal.waiting@example.com", firstSource: "direct" }).returning({ id: candidates.id }))[0].id);
+    const byKey = async (key: string) => (await container.db.select().from(communications).where(eq(communications.idempotencyKey, key)))[0];
+    // the company's access is taken away (the one writer of the fact, as the admin dashboard's route calls it)
+    await withPlatform(container.db, (tx) => setCompanyLive(tx, companyId, false, container.engine.clock()));
+    const before = fake().sent.length;
+    await withTenant(container.db, companyId, async (tx) => {
+      await queueCommunication(tx, container.integrations, draft("offline-candidate", { to: "cal.waiting@example.com", candidateId }));
+      await queueCommunication(tx, container.integrations, draft("offline-privacy", { to: "cal.waiting@example.com", candidateId, templateKey: "privacy_ack" }));
+      await queueCommunication(tx, container.integrations, draft("offline-team", { to: "owner@outbox.test" }));
+    });
+    await container.drain();
+    const stopped = await byKey("offline-candidate");
+    expect(stopped).toMatchObject({ status: "cancelled", error: "the company is not live", sendAttempts: 0 });
+    expect((await byKey("offline-privacy")).status).toBe("sent");
+    expect((await byKey("offline-team")).status).toBe("sent");
+    expect(fake().sent.slice(before).map((m) => m.subject).sort()).toEqual(["Subject offline-privacy", "Subject offline-team"]);
+    const cancelled = await container.db.select().from(events).where(and(eq(events.type, "message.cancelled"), eq(events.subjectId, stopped.id)));
+    expect(cancelled.map((e) => e.payload.reason)).toEqual(["the company is not live"]);
+    // accepted again: the stopped email stays stopped (nothing was held to go later), and a new one goes
+    await withPlatform(container.db, (tx) => setCompanyLive(tx, companyId, true, container.engine.clock()));
+    await container.drain();
+    expect((await byKey("offline-candidate")).status).toBe("cancelled");
+    await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, draft("online-candidate", { to: "cal.waiting@example.com", candidateId })));
+    await container.drain();
+    expect((await byKey("online-candidate")).status).toBe("sent");
+    expect(fake().sent.slice(before).map((m) => m.subject)).not.toContain("Subject offline-candidate");
   });
 
   it("a message interrupted while sending is reported, never re-sent on a guess", async () => {

@@ -36,11 +36,9 @@ const CANDIDATE_READERS: Record<string, number> = {
   // Lists and body ids, each filtered in its query: `visibleTo` or `notLocked` beside the read of applications that names the people.
   "apps/api/src/routes/roles.ts": 2,
   "apps/api/src/services/brief.ts": 8,
-  // Home's "emails to candidates did not arrive": `notLocked` in the query that names them.
-  "apps/api/src/services/email-health.ts": 1,
   "apps/api/src/services/pool.ts": 1,
-  // The console and privacy requests: ITS is not the paying customer (Rule 3, item 6).
-  "apps/api/src/routes/privacy-requests.ts": 3,
+  // Privacy requests, which only a platform administrator reads: ITS is not the paying customer (Rule 3, item 6).
+  "apps/api/src/routes/privacy-requests.ts": 2,
   "packages/core/src/privacy-requests.ts": 5,
   // A candidate's own pages behind their own token: they read themselves.
   "apps/api/src/pages/application-record.tsx": 3,
