@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, appPaths, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, emit, errorForLog, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
+import { SCREEN_ACTIVE_STATUSES, appPaths, type Actor } from "@ros/contracts";
+import { DECISION_STAGES, emit, errorForLog, isCompanyLive, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
 import { applications, candidates, communications, companies, events, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -18,12 +18,9 @@ import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
  * Routes that send outside any transaction (a sign-in link, an invitation, an administrator's notice) may still call the
  * adapter directly: nothing can roll back underneath them.
  *
- * A message to a candidate from a company ITS has not confirmed yet (founder decision B7) is not sent: it is written as
- * `held`, with no send job, and waits. When ITS confirms the company, `releaseHeldCommunications` queues every held
- * message in the order it was written. The worker checks again before it sends, so a company whose confirmation was taken
- * back holds its queued messages too. Team mail is never held, and neither is the answer to a privacy request. Before a
- * release and before a send, a message that must no longer go (the candidate left the process, or the step its link
- * opens ended, while it waited) is cancelled with its reason.
+ * Just before a send, a message to a candidate that must no longer go (the company is not live, the candidate left the
+ * process, or the step its link opens ended, while it waited) is cancelled with its reason. Team mail and the answer to a
+ * privacy request always go.
  */
 export const SEND_JOB_KIND = "communication.send";
 /**
@@ -76,7 +73,7 @@ export type QueueEmailInput = QueueBase & {
 export type QueueResult = SendResult & { communicationId: string };
 
 /**
- * A tag on a message whose delivery failure raises no operator alert (`NOTIFY_QUIET_ON_FAILURE` in @ros/core). It is still
+ * A tag on a message whose delivery failure raises no operator alert (`QUIET_ON_FAILURE` in packages/workflows/src/notification-email.ts). It is still
  * marked failed or unknown, recorded and reported as any other message is; only the alert stays away.
  */
 export const QUIET_ON_FAILURE_TAG = "quietOnFailure";
@@ -86,13 +83,8 @@ function quietOnFailure(row: { tags?: Record<string, string> | null }): boolean 
   return row.tags?.[QUIET_ON_FAILURE_TAG] === "true";
 }
 
-/** The status of a message to a candidate waiting for the ITS company check. */
-export const HELD_STATUS = "held";
-/** What a caller hears about such a message. */
-export const HELD_REASON = "held until ITS confirms the company";
-
-/** Statuses of a message that has not left yet: waiting for the ITS company check, queued, or being sent. */
-const NOT_LEFT: readonly string[] = ["queued", HELD_STATUS, "sending"];
+/** Statuses of a message that has not left yet: queued, or being sent. */
+const NOT_LEFT: readonly string[] = ["queued", "sending"];
 
 /**
  * B7: of these screens, the ones whose link email has not left yet. The email that carries a screen's link is its own
@@ -119,31 +111,15 @@ export function sendResultOf(row: Pick<CommunicationRow, "status" | "providerMes
   if (row.status === "failed" || row.status === "bounced" || row.status === "complained" || row.status === "unknown") return { status: "failed", error: row.error ?? "delivery failed", retryable: false };
   // Withdrawn before it left (Undo, or the reason for it went away): it will never go.
   if (row.status === "cancelled") return { status: "failed", error: row.error ?? "withdrawn before it was sent", retryable: false };
-  if (row.status === HELD_STATUS) return { status: "pending", reason: HELD_REASON };
   return { status: "pending", reason: "queued for delivery" };
 }
 
 /**
- * Whether a message waits for the ITS company check: anything to a candidate, except the answer to a privacy request,
- * which the law requires whoever runs the process to give.
+ * Whether a message is one to a candidate that may be stopped before it leaves: anything to a candidate, except the
+ * answer to a privacy request, which the law requires whoever runs the process to give.
  */
-export function waitsForCompanyCheck(message: { candidateId?: string | null; templateKey?: string | null }): boolean {
+function mayBeStopped(message: { candidateId?: string | null; templateKey?: string | null }): boolean {
   return !!message.candidateId && !(message.templateKey ?? "").startsWith("privacy_");
-}
-
-/**
- * Whether ITS has confirmed the company (its settings carry verifiedAt). "Not confirmed" is read a second time under a
- * share lock on the company row before it counts. ITS confirming the company holds that row until it commits
- * (company-trust.ts), so the second read waits and then sees the confirmation; and a confirmation that starts after
- * the lock waits for this transaction, so its release finds whatever this one held. Without the lock, a message held
- * while the confirmation committed would be missed by the release and wait for good. A confirmed company takes no lock.
- */
-export async function companyConfirmed(q: Queryable, companyId: string): Promise<boolean> {
-  const [co] = await q.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  if (!co) return false;
-  if (isCompanyVerified(co.settings)) return true;
-  const [locked] = await q.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1).for("share");
-  return !!locked && isCompanyVerified(locked.settings);
 }
 
 /**
@@ -159,18 +135,19 @@ const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder", "scre
 type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId" | "idempotencyKey">;
 
 /**
- * Messages to candidates that waited (held for the ITS check, or queued for a later hour) and must no longer go, with
- * the reason: their details were deleted at their request, an invitation to a next step whose person has since left
- * the process (the decision message still goes), a link to a step that has ended since (a screening conversation no
- * longer open: the closing note of the step still goes), a decision message whose decision no longer applies, or a
- * close-out note to someone a change of plan has opened since: it says nobody has reviewed them, and the team can now.
- * Read again just before a release and just before a send, because a message can wait for days. The answer to a
- * privacy request always goes.
+ * Messages to candidates that waited in the queue and must no longer go, with the reason: the company is not live (it
+ * was declined, or its access was taken away, so nothing of it is emailed to candidates), their details were deleted at
+ * their request, an invitation to a next step whose person has since left the process (the decision message still
+ * goes), a link to a step that has ended since (a screening conversation no longer open: the closing note of the step
+ * still goes), a decision message whose decision no longer applies, or a close-out note to someone a change of plan has
+ * opened since: it says nobody has reviewed them, and the team can now. Read just before a send, because a message can
+ * wait in the queue. The answer to a privacy request always goes.
  */
 export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  const relevant = rows.filter((r) => waitsForCompanyCheck(r));
+  const relevant = rows.filter((r) => mayBeStopped(r));
   if (!relevant.length) return out;
+  const live = new Set((await q.select({ id: companies.id, settings: companies.settings }).from(companies).where(inArray(companies.id, [...new Set(relevant.map((r) => r.companyId))]))).filter((c) => isCompanyLive(c.settings)).map((c) => c.id));
   const candidateIds = [...new Set(relevant.map((r) => r.candidateId).filter((x): x is string => !!x))];
   const applicationIds = [...new Set(relevant.map((r) => r.applicationId).filter((x): x is string => !!x))];
   const people = new Map((candidateIds.length ? await q.select({ id: candidates.id, anonymizedAt: candidates.anonymizedAt }).from(candidates).where(inArray(candidates.id, candidateIds)) : []).map((c) => [c.id, c]));
@@ -184,7 +161,8 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
     const who = r.candidateId ? people.get(r.candidateId) : undefined;
     const stage = r.applicationId ? stages.get(r.applicationId) : undefined;
     const template = r.templateKey ?? "";
-    const reason = who?.anonymizedAt ? "the candidate's details were deleted at their request"
+    const reason = !live.has(r.companyId) ? "the company is not live"
+      : who?.anonymizedAt ? "the candidate's details were deleted at their request"
       : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId) ? "the step it invites to has ended since it was written"
       : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
@@ -197,21 +175,17 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
 
 /** Withdraws a waiting message that must no longer go; a decision message among them leaves its candidate not told. */
 async function cancelWaiting(q: Queryable, row: WaitingRow, reason: string, actor: Actor, now: Date): Promise<boolean> {
-  const [done] = await q.update(communications).set({ status: "cancelled", error: reason }).where(and(eq(communications.id, row.id), inArray(communications.status, ["queued", HELD_STATUS]))).returning({ id: communications.id });
+  const [done] = await q.update(communications).set({ status: "cancelled", error: reason }).where(and(eq(communications.id, row.id), eq(communications.status, "queued"))).returning({ id: communications.id });
   if (!done) return false;
   await emit(q, { type: "message.cancelled", companyId: row.companyId, actor, subject: { type: "communication", id: row.id }, payload: { template: row.templateKey, channel: row.channel, applicationId: row.applicationId, reason }, correlationId: row.correlationId });
   await settleDecisionTold(q, row, "failed", now);
   return true;
 }
 
-/**
- * Records the message as queued inside the caller's transaction and hands it to the worker. Never calls a provider. A
- * message to a candidate of a company ITS has not confirmed yet is recorded as held instead, with no job (see above).
- */
+/** Records the message as queued inside the caller's transaction and hands it to the worker. Never calls a provider. */
 export async function queueCommunication(q: Queryable, integrations: Integrations, input: QueueEmailInput, now: Date = integrations.clock()): Promise<QueueResult> {
   const [existing] = await q.select().from(communications).where(eq(communications.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing) return { ...sendResultOf(existing), communicationId: existing.id };
-  const held = waitsForCompanyCheck(input) && !(await companyConfirmed(q, input.companyId));
   const [row] = await q
     .insert(communications)
     .values({
@@ -228,7 +202,7 @@ export async function queueCommunication(q: Queryable, integrations: Integration
       bodyHtml: input.html ?? null,
       templateKey: input.templateKey,
       provider: integrations.email.id,
-      status: held ? HELD_STATUS : "queued",
+      status: "queued",
       disclosureIncluded: input.disclosureIncluded ?? false,
       sentBy: input.actor,
       aiRunId: input.aiRunId ?? null,
@@ -240,10 +214,6 @@ export async function queueCommunication(q: Queryable, integrations: Integration
       retryAttempt: input.retryAttempt ?? 0,
     })
     .returning({ id: communications.id });
-  if (held) {
-    await emit(q, { type: "message.held", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null, reason: "company_check" }, correlationId: input.correlationId ?? null });
-    return { status: "pending", reason: HELD_REASON, communicationId: row.id };
-  }
   const runAt = input.sendAt && input.sendAt.getTime() > now.getTime() ? input.sendAt : now;
   await q.insert(jobs).values({ kind: SEND_JOB_KIND, payload: { communicationId: row.id, companyId: input.companyId }, runAt: runAt.toISOString(), maxAttempts: SEND_MAX_ATTEMPTS });
   await emit(q, { type: "message.queued", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null, ...(runAt !== now ? { sendAt: runAt.toISOString() } : {}) }, correlationId: input.correlationId ?? null });
@@ -252,7 +222,7 @@ export async function queueCommunication(q: Queryable, integrations: Integration
 
 /** Why an Undo was refused, in the sender's words. */
 export class UndoError extends Error {
-  constructor(public readonly code: "not_found" | "already_sent" | "not_yours" | "not_undoable", message: string) {
+  constructor(public readonly code: "not_found" | "already_sent" | "not_yours", message: string) {
     super(message);
   }
 }
@@ -266,8 +236,8 @@ export function heldForUndo(templateKey: string | null | undefined): boolean {
  * Undo (plan G9): a message someone on the team sent is withdrawn
  * during its Undo window, while it still waits in the outbox. Only the messages a person's Send holds for that window
  * (`heldForUndo`), and only until the moment its Send set (`sendAt` on its `message.queued` fact): an invitation or a
- * note a workflow sent for them, a message an approver let go at once, or one saved for the ITS company check has no
- * window, so a waiting workflow never waits for a message that was taken back. A decision message withdrawn this way
+ * note a workflow sent for them has no window, so a waiting workflow never waits for a message that was taken back. A
+ * decision message withdrawn this way
  * leaves the candidate not told, as before the Send. Recorded as `message.cancelled` with the reason "undone".
  */
 export async function undoQueuedMessage(q: Queryable, input: { communicationId: string; applicationId: string; actor: Actor; now: Date }): Promise<{ templateKey: string | null }> {
@@ -275,7 +245,6 @@ export async function undoQueuedMessage(q: Queryable, input: { communicationId: 
   if (!row) throw new UndoError("not_found", "That message was not found.");
   if (row.sentBy.kind !== "user" || !heldForUndo(row.templateKey)) throw new UndoError("not_yours", "Only a message someone on the team sent can be undone; this one was sent by the product.");
   if (row.status === "cancelled") throw new UndoError("already_sent", "That message was already withdrawn.");
-  if (row.status === HELD_STATUS) throw new UndoError("not_undoable", "This message is saved until ITS confirms your company, and Undo works only in the seconds after Send.");
   const [queued] = await q.select({ payload: events.payload }).from(events).where(and(eq(events.type, "message.queued"), eq(events.subjectId, row.id))).limit(1);
   const sendAt = typeof queued?.payload.sendAt === "string" ? Date.parse(queued.payload.sendAt) : Number.NaN;
   if (row.status !== "queued" || !(sendAt > input.now.getTime())) throw new UndoError("already_sent", "Too late to undo: the message has already gone.");
@@ -287,7 +256,7 @@ export async function undoQueuedMessage(q: Queryable, input: { communicationId: 
 }
 
 /** A message in one of these never left us, so nothing it says has reached them. */
-const NEVER_LEFT = ["queued", HELD_STATUS, "failed", "cancelled"];
+const NEVER_LEFT = ["queued", "failed", "cancelled"];
 /**
  * A message in one of these did not reach them: it never left us, or it came back (`bounced`, from the provider's webhook,
  * email-failures.ts). A soft bounce is tried again as a new message (`retryOf`); one of those that arrives reached them.
@@ -319,44 +288,7 @@ export async function reachedOnRetry(q: Queryable, ids: readonly string[]): Prom
   return out;
 }
 
-/**
- * ITS confirmed the company: every message to a candidate that waited for the check goes into the queue, oldest first,
- * through the same send job as any other. One that must no longer go (the candidate left the process, or the step its
- * link opens ended, while it waited: `reasonsNotToSend`) is cancelled instead, with its reason: someone held for a week
- * never gets an invitation, its reminder and the note that the link closed all at once. Returns how many were released.
- */
-export async function releaseHeldCommunications(q: Queryable, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
-  const waiting = await q.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.companyId, input.companyId), eq(communications.status, HELD_STATUS)));
-  if (!waiting.length) return 0;
-  const stale = await reasonsNotToSend(q, waiting);
-  for (const r of waiting) {
-    const reason = stale.get(r.id);
-    if (reason) await cancelWaiting(q, r, reason, input.actor, input.now);
-  }
-  const ids = waiting.filter((r) => !stale.has(r.id)).map((r) => r.id);
-  if (!ids.length) return 0;
-  const rows = await q.update(communications).set({ status: "queued", error: null }).where(and(inArray(communications.id, ids), eq(communications.status, HELD_STATUS))).returning({ id: communications.id, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, correlationId: communications.correlationId, createdAt: communications.createdAt });
-  if (!rows.length) return 0;
-  for (const r of rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
-    await q.insert(jobs).values({ kind: SEND_JOB_KIND, payload: { communicationId: r.id, companyId: input.companyId }, runAt: input.now.toISOString(), maxAttempts: SEND_MAX_ATTEMPTS });
-    await emit(q, { type: "message.released", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: r.id }, payload: { template: r.templateKey, channel: r.channel, applicationId: r.applicationId }, correlationId: r.correlationId });
-  }
-  return rows.length;
-}
-
-/**
- * The worker's check before a send: a queued message to a candidate of a company that is not confirmed (any more) is
- * held instead of sent. True when it was held.
- */
-async function holdIfUnconfirmed(tx: Queryable, input: { communicationId: string; companyId: string }): Promise<boolean> {
-  const [row] = await tx.select({ candidateId: communications.candidateId, templateKey: communications.templateKey, status: communications.status }).from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.companyId, input.companyId))).limit(1);
-  if (row?.status !== "queued" || !waitsForCompanyCheck(row) || (await companyConfirmed(tx, input.companyId))) return false;
-  const [held] = await tx.update(communications).set({ status: HELD_STATUS }).where(and(eq(communications.id, input.communicationId), eq(communications.status, "queued"))).returning({ id: communications.id, channel: communications.channel, templateKey: communications.templateKey, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId });
-  if (held) await emit(tx, { type: "message.held", companyId: input.companyId, actor: held.sentBy, subject: { type: "communication", id: held.id }, payload: { template: held.templateKey, channel: held.channel, applicationId: held.applicationId, reason: "company_check" }, correlationId: held.correlationId });
-  return !!held;
-}
-
-/** The worker's other check before a send: a queued message that must no longer go (`reasonsNotToSend`) is cancelled. */
+/** The worker's check before a send: a queued message that must no longer go (`reasonsNotToSend`) is cancelled. */
 async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string; companyId: string }, now: Date): Promise<boolean> {
   const [row] = await tx.select({ id: communications.id, companyId: communications.companyId, channel: communications.channel, templateKey: communications.templateKey, candidateId: communications.candidateId, applicationId: communications.applicationId, sentBy: communications.sentBy, correlationId: communications.correlationId, idempotencyKey: communications.idempotencyKey }).from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.companyId, input.companyId), eq(communications.status, "queued"))).limit(1);
   if (!row) return false;
@@ -365,7 +297,7 @@ async function cancelIfUnwanted(tx: Queryable, input: { communicationId: string;
 }
 
 /** `unknown`: the provider may have taken it but its reply was cut off; marked unknown, alerted, never re-sent. */
-export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "held" | "cancelled" | "unknown";
+export type SendOutcome = "sent" | "failed" | "skipped" | "retry" | "cancelled" | "unknown";
 
 /** The alert ITS gets when the email provider refuses an email for good for a reason that is not one address. */
 export const PROVIDER_REFUSED_ALERT = "message.provider_refused";
@@ -391,7 +323,6 @@ async function tellTeamItDidNotArrive(tx: Queryable, claimed: CommunicationRow):
  */
 export async function sendQueuedCommunication(db: Db, integrations: Integrations, input: { communicationId: string; companyId: string }, ctx: { attempt: number; maxAttempts: number; now: Date }): Promise<SendOutcome> {
   const claimed = await withTenant(db, input.companyId, async (tx) => {
-    if (await holdIfUnconfirmed(tx, input)) return HELD_STATUS;
     if (await cancelIfUnwanted(tx, input, ctx.now)) return "cancelled" as const;
     const [row] = await tx
       .update(communications)
@@ -400,7 +331,6 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
       .returning();
     return row ?? null;
   });
-  if (claimed === HELD_STATUS) return "held";
   if (claimed === "cancelled") return "cancelled";
   if (!claimed) return "skipped";
   if (!claimed.toAddress) {

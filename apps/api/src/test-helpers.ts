@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { TRIAL_PLAN_KEY, isCompanyVerified, newTrialTerm, type MembershipRole } from "@ros/contracts";
-import { entitlements, grantPlatformRole } from "@ros/core";
+import { TRIAL_PLAN_KEY, newTrialTerm, type MembershipRole } from "@ros/contracts";
+import { entitlements, grantPlatformRole, isCompanyLive } from "@ros/core";
 import { applications, candidates, companies, memberships, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
@@ -128,16 +128,15 @@ export async function usePlan(container: Container, companyId: string, planKey =
 
 /**
  * Puts a company on the Trial plan, as one that signed up before the plans of 5 November 2026 is: a new company starts on
- * Free, so a suite about Trial says so. Its 30 days run from now when the company is already confirmed (COMPANY_CHECK=auto),
- * as they did at sign-up, and otherwise start at the ITS check.
+ * Free, so a suite about Trial says so. Its 30 days run from now when the company is live; a request waiting for an
+ * administrator gets no dates.
  */
 export async function useTrial(container: Container, companyId: string): Promise<void> {
   await withPlatform(container.db, async (tx) => {
     await entitlements.applyPlan(tx, companyId, TRIAL_PLAN_KEY, "trial");
     const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
     if (!co) throw new Error(`no company ${companyId}`);
-    const settings = isCompanyVerified(co.settings) && !co.settings.trial ? { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } : co.settings;
-    await tx.update(companies).set({ status: "trial", settings }).where(eq(companies.id, companyId));
+    if (isCompanyLive(co.settings) && !co.settings.trial) await tx.update(companies).set({ settings: { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } }).where(eq(companies.id, companyId));
   });
 }
 

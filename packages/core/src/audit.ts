@@ -74,10 +74,7 @@ export type AuditAction =
   | "report.exported"
   /** Company preferences changed by an owner or admin (audit finding A8): which keys, never the old and new text of a notice (notice.changed carries the versions). */
   | "company.updated"
-  /** The one-time ITS check of a self-serve company (founder decision B7): confirmed, or taken back, by whom and why. */
-  | "company.verified"
-  | "company.unverified"
-  /** First sign-in asks for approval (6 November 2026): an administrator accepted or declined a person's request, or took an accepted company's access away. */
+  /** The one gate: an administrator accepted or declined a company's request, or took an accepted company's access away. */
   | "company.access_accepted"
   | "company.access_declined"
   | "company.access_removed"
