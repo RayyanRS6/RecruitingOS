@@ -2,8 +2,8 @@
 /** @jsxImportSource hono/jsx */
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { isCompanyVerified, trialPaused, type RolePacket } from "@ros/contracts";
-import { jobNoticesFor, jobPastItsLimit, type Notice } from "@ros/core";
+import { trialPaused, type RolePacket } from "@ros/contracts";
+import { isCompanyLive, jobNoticesFor, jobPastItsLimit, type Notice } from "@ros/core";
 import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
@@ -11,9 +11,8 @@ import { APPLY_FLOW, type ApplyFlowView } from "../services/job-preview";
 import { Layout } from "./layout";
 
 /**
- * What every part of the candidate pages shares (Wave S7, S7-0: moved as it was from pages/candidate.tsx): the job a
- * public address names, the company it belongs to, the conversation's address and its cookie, the masked email, and the
- * page a link shows once the person behind it was deleted. Owned by no slice: a change here goes through the integrator.
+ * What every part of the candidate pages shares: the job a public address names, the company it belongs to, the AI
+ * interview's address, the masked email, and the page a link shows once the person behind it was deleted.
  */
 
 /** The notices a public page of this job carries, for its jurisdictions and the company's own wording. */
@@ -34,15 +33,6 @@ export function maskEmail(email: string): string {
   if (at < 1 || at === e.length - 1) return "the email address you gave";
   return `${e[0]}***@${e.slice(at + 1)}`;
 }
-
-/**
- * The conversation's introduction says the application went through, and where its link went, the way the receipt does
- * (plan E1): the masked address that was typed rides in a sealed cookie for that one conversation's pages, never in the
- * URL. A repeat submission's conversation gets the same, so the two read alike.
- */
-export const CONVERSATION_COOKIE = "ros_applied_to";
-export const CONVERSATION_PURPOSE = "application-conversation";
-export type ConversationPayload = { v: 1; token: string; to: string; exp: number };
 
 export function screenPath(token: string): string {
   return `/c/screen/${token}`;
@@ -67,13 +57,13 @@ export function jobTakesApplications(job: { role: { status: string; acceptingApp
 }
 
 /**
- * A company's public pages (the careers page, its job pages, the apply form and its receipt) exist only once ITS has
- * confirmed the company (founder decision B7). Until then they answer exactly as a company that does not exist, so
- * nothing about an unconfirmed company is public, its JobPosting data included.
+ * A company's public pages (the careers page, its job pages, the apply form and its receipt) exist only while the
+ * company is live (`isCompanyLive`). Otherwise they answer exactly as a company that does not exist, so nothing about it
+ * is public, its JobPosting data included.
  */
 export async function loadPublicCompany(db: Vars["Variables"]["container"]["db"], slug: string) {
   const [company] = await db.select().from(companies).where(eq(companies.slug, slug)).limit(1);
-  return company && isCompanyVerified(company.settings) ? company : null;
+  return company && isCompanyLive(company.settings) ? company : null;
 }
 
 export async function loadJob(db: Vars["Variables"]["container"]["db"], slug: string, roleId: string) {

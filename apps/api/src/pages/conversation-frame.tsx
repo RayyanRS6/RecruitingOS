@@ -5,7 +5,7 @@ import { TapAnswer, type TapFormat } from "@ros/contracts";
 import { MOVED_ON_MESSAGE, SKIPPED_MESSAGE } from "@ros/agents";
 import { applications } from "@ros/db";
 import type { Container } from "../container";
-import { findConversation, type ConversationRef, type ConversationView, type TurnAction } from "../services/apply-conversation";
+import { findConversation, type ConversationRef, type ConversationView, type TurnAction } from "../services/screens";
 import { anonymizedFor } from "./candidate-shared";
 import { Icon } from "./icons";
 import { Layout, currentNonce } from "./layout";
@@ -13,15 +13,10 @@ import { FOOT_CSS } from "./signin-link";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
 /**
- * The frame every conversation page is drawn in (Wave S7, S7-0: moved as it was from pages/candidate.tsx), shared by the
- * chat (pages/chat-pages.tsx) and Review & send (pages/review-page.tsx): the styles, the AI line, the page around each
- * conversation page and its one script, the progress bar, the answer forms, the quiet actions, the error lines, and
- * reading what a form sent.
+ * The frame every page of the AI interview is drawn in, shared by the chat (pages/chat-pages.tsx) and "Check your
+ * answers" (pages/review-page.tsx): the styles, the AI line, the page around each of them and its one script, the answer
+ * forms, the way to a person, the error lines, and reading what a form sent. Server-rendered; works without JavaScript.
  */
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The screening conversation (plan Wave E): server-rendered, works without JavaScript, one question at a time.  */
-/* ------------------------------------------------------------------------------------------------------------ */
 
 /** The chat's bubbles: the assistant's messages on the left in white, the candidate's own in peach on the right, a system line centred. */
 export const CHAT_BUBBLE_CSS = `
@@ -116,10 +111,7 @@ ${FOOT_CSS}
 }
 `;
 
-/**
- * The conversation a link opens (a screen, or a repeat submission's detached copy; services/apply-conversation.ts), and
- * whether the person behind it had their information deleted, in which case the link is dead (docs/readiness/14).
- */
+/** The AI interview a link opens, and whether the person behind it had their information deleted, in which case the link is dead. */
 export async function openConversation(container: Container, token: string): Promise<{ ref: ConversationRef; gone: boolean } | null> {
   const ref = await findConversation(container.db, token);
   if (!ref) return null;
@@ -271,16 +263,6 @@ export function WhereAnswersGo(props: { companyName: string }) {
   return <p class="where-go"><Icon name="eye" /><span>Your replies go to {props.companyName} only when you press Send my answers at the end.</span></p>;
 }
 
-/** "Question 2 of 5" over a thin bar. */
-export function Progress(props: { at: number; total: number; text: string }) {
-  return (
-    <div class="progress">
-      <label for="progress">{props.text}</label>
-      <progress id="progress" max={Math.max(1, props.total)} value={Math.min(props.at, Math.max(1, props.total))}>{props.text}</progress>
-    </div>
-  );
-}
-
 /**
  * "Skip this question" (E11): a second submit button that needs nothing typed, no check by the browser and no script.
  * While the assistant follows up on an answer already given, the same button moves on and keeps that answer, and says so.
@@ -373,12 +355,11 @@ export function AnswerForms(props: { action: string; tap: TapFormat | null; abou
   );
 }
 
-/** Always there, and quiet: a person instead (E3), and the link by email to finish later (E2, E4). */
-export function AsideActions(props: { base: string; later: boolean }) {
+/** Always there, and quiet: a person instead. */
+export function AsideActions(props: { base: string }) {
   return (
     <div class="aside-actions">
       <a class="link-action" href={`${props.base}/person`}>I'd rather talk to a person</a>
-      {props.later ? <form method="post" action={`${props.base}/later`}><button class="link-action" type="submit">Finish later: email me the link</button></form> : null}
     </div>
   );
 }

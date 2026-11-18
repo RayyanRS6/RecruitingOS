@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
-import { SCREEN_PERSON_ROUTE_STATUSES, inspectResumeFile, trialPaused, type Actor } from "@ros/contracts";
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { SCREEN_ACTIVE_STATUSES, appPaths, inspectResumeFile, trialPaused, type Actor, type FormAnswers } from "@ros/contracts";
 import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
-import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, errorForLog, fulfilWithdrawal, jobPastItsLimit, normalizeEmailForDedupe, normalizePhone, tellMoreApplied, transition } from "@ros/core";
-import { applications, candidates, companies, documents, events, interviews, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
+import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, errorForLog, fulfilWithdrawal, jobPastItsLimit, mayWithdraw, normalizeEmailForDedupe, normalizePhone, notify, tellMoreApplied, transition } from "@ros/core";
+import { applications, candidates, companies, documents, events, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
+import { cancelAiInterview } from "@ros/workflows";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
-import { linkResumeReading } from "./apply-details";
 
 type Application = typeof applications.$inferSelect;
 type Candidate = typeof candidates.$inferSelect;
@@ -15,91 +15,60 @@ type Candidate = typeof candidates.$inferSelect;
 export type NewApplication = {
   companyId: string;
   roleId: string;
-  /** The source vocabulary of packages/core/src/application-links.ts; also the candidate's first source when new. */
+  /** Where they came from: the job page's `?src=` word (`applySourceLabel` names it); also the candidate's first source when new. */
   source: string;
-  /** A referrer's name, a campaign label; never a tracking token (docs/spec/20 item 19). */
-  sourceDetail?: string | null;
-  /** The tracked link the candidate came through, resolved from the sealed cookie; never the token. */
-  linkId?: string | null;
   firstName: string;
   lastName: string;
-  email: string | null;
+  email: string;
   phone: string | null;
-  locationText?: string | null;
-  smsConsent: boolean;
   consentSource: string;
   noticeVersionsShown: string[];
-  /** The apply form's affirmative acknowledgment (docs/readiness/20 section D item 10); absent for email-in and manual adds, which have no form. */
-  acknowledgment?: ApplicationAcknowledgment | null;
-  eligibilityAnswers: Record<string, unknown>;
-  noResumeAnswers?: Record<string, string>;
-  /** Wave S7: the company's quick questions (choice and number) as answered on the form, by question key. */
-  quickAnswers?: Record<string, string>;
-  /** Wave S7: the checked summary of their work that the résumé reading filled in. */
-  workSummary?: string | null;
-  /** Wave S7: the form fields the résumé filled in (or suggested) and the candidate kept. */
-  fromCv?: string[];
-  /**
-   * Wave S7: the form's upload, which it may have read before it was sent (services/apply-details.ts). The reading's AI
-   * run, found by the upload, is tied to the new document so the intake workflow reuses it once the file is checked; only
-   * for the very upload it read. None yet (20 Oct, R20-1): the intake looks for it by the upload, and waits a little for
-   * one still running (`readAskedAt`, epoch seconds, when the form asked for it).
-   */
-  formReading?: { uploadId: string; storageKey: string; readAskedAt?: number | null } | null;
+  /** The apply form's affirmative acknowledgment: when it was ticked, and which notice versions stood above it. */
+  acknowledgment: ApplicationAcknowledgment;
+  /** Their answers to the job's screening questions, by question key. */
+  answers: FormAnswers;
   resume?: ResumeInput | null;
   ip?: string;
-  note?: string;
 };
 
 /**
- * A résumé arrives one of two ways: as bytes the application received itself (the no-script apply form, an inbound
- * email attachment), or already in storage under a quarantine key the browser uploaded to directly. Either way the
+ * A CV arrives one of two ways: as bytes the application received itself (the apply form sent without script), or
+ * already in storage under a quarantine key the browser uploaded to directly. Either way the
  * document starts as `quarantined`; the worker inspects and scans it, moves it to its final key and extracts the text.
  */
 export type ResumeInput =
-  | { kind: "bytes"; filename: string; mime: string; bytes: Uint8Array; via: "server" | "email" }
-  | { kind: "stored"; filename: string; mime: string; storageKey: string; sizeBytes: number; via: "direct" | "server" };
+  | { kind: "bytes"; filename: string; mime: string; bytes: Uint8Array; via: "server" }
+  | { kind: "stored"; filename: string; mime: string; storageKey: string; sizeBytes: number; via: "direct" };
 
 /**
- * Creates the candidate (when the address is new) and the application, stores the resume, records consent, emits
- * the facts, and starts the application_intake workflow. Shared by the apply page, the inbound-email webhook, and
- * manual adds. Must run inside a tenant transaction.
+ * Creates the candidate (when the address is new) and the application, stores the CV, records the consent, emits the
+ * facts, and starts the application_intake workflow. Must run inside a tenant transaction.
  *
- * A submission never changes a person the company already has (Wave 0 item 0.1): anyone can type anyone's address
- * into a public form, so an existing record keeps its consent, phone, location and résumé exactly as they were. A
- * repeat submission for the same role creates nothing at all: the uploaded file is discarded, the team sees
- * `application.duplicate_detected`, and the address on file gets its own status link by email (at most once a day).
- * The caller shows the same receipt either way and never the existing application's link.
+ * A submission never changes a person the company already has: anyone can type anyone's address into a public form, so
+ * an existing record keeps its consent, phone and CV exactly as they were. A repeat submission for the same job creates
+ * nothing at all: the uploaded file is discarded, the fact is recorded, and the address on file gets its own status link
+ * by email (at most once a day). The caller shows the same receipt either way and never the existing application's link.
  *
- * Only a role that is open and taking applications admits a submission, the same rule as the apply form; email that
- * arrives while a role is paused or switched off is held by the webhook instead (C19) and replayed later.
+ * Only a job that is open and taking applications admits a submission, the same rule as the apply form.
  *
- * `intoTalentPool` is for an application that arrived by email while the role was paused or closed to applications
- * and was held (C19), when the role then closes instead of reopening: it is admitted to the closed role and moved at
- * once to the talent pool, exactly where the role's other active candidates went when it closed. It is never
- * acknowledged as if the role were still hiring (the intake workflow only acknowledges a fresh application); its
- * résumé is still scanned and read so the person can be found for a later opening.
- *
- * The only place applications are born, so the only place a place is decided (the plans of 5 November 2026, Rule 2): past
- * the plan's candidates per job, in arrival order, the application is locked. A repeat is not a new row and keeps what it
- * has. `onFile`: what the page says next, from the job and never from the address typed (Q14), so a repeat on a job past
- * its limit reads as a new address does.
+ * The only place applications are born, so the only place a place is decided: past the plan's candidates per job, in
+ * arrival order, the application is locked. A repeat is not a new row and keeps what it has. `onFile`: what the page
+ * says next, from the job and never from the address typed, so a repeat on a job past its limit reads as a new address does.
  */
-export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { intoTalentPool?: boolean; closingGrace?: boolean; trialGrace?: boolean; files?: KeptBytes[] } = {}) {
+export async function createApplication(tx: Tx, container: Container, input: NewApplication, actor: Actor, opts: { closingGrace?: boolean; trialGrace?: boolean; files?: KeptBytes[] } = {}) {
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
-  // `closingGrace`: a form opened before the role's closing date passed may still be sent (plan D7; services/closing-date.ts).
-  const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.intoTalentPool && role.status === "closed") || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
+  // `closingGrace`: a form opened before the job's closing date passed may still be sent (services/closing-date.ts).
+  const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
   if (!admits || !role.currentPacketVersion) throw new Error("role is not accepting applications");
-  // A trial that ended takes no new application (founder decision L-02 B), refused the way a job not taking applications
-  // is: `trialGrace` for a form opened before the end (pages/apply-form.tsx), and held emails going to the talent pool
-  // when their role closed (`intoTalentPool`), are the only ones still taken.
-  if (!opts.trialGrace && !opts.intoTalentPool) {
+  // A trial that ended takes no new application, refused the way a job not taking applications is; `trialGrace` is for a
+  // form opened before the end (pages/apply-form.tsx).
+  if (!opts.trialGrace) {
     const [company] = await tx.select({ planKey: companies.planKey, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     if (company && trialPaused(company, container.engine.clock())) throw new Error("role is not accepting applications");
   }
 
-  const email = input.email ? input.email.trim().toLowerCase() : null;
+  const email = input.email.trim().toLowerCase();
   const phone = normalizePhone(input.phone);
   const key = dedupeKey(email, phone);
   const now = new Date().toISOString();
@@ -109,13 +78,10 @@ export async function createApplication(tx: Tx, container: Container, input: New
   // file nor adds what was typed to their record without the address owner's say-so (services/apply-conversation.ts).
   let knownPerson = !!candidate;
   if (!candidate) {
-    const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, locationText: input.locationText ?? null, dedupeKey: key, firstSource: input.source, consent: consentOf(input, now) });
+    const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, dedupeKey: key, firstSource: input.source, consent: consentOf(input, now) });
     candidate = created.candidate;
     knownPerson = !created.inserted;
-    if (created.inserted) {
-      await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
-      if (input.smsConsent) await emit(tx, { type: "consent.granted", companyId: input.companyId, actor: { kind: "candidate", id: candidate.id }, subject: { type: "candidate", id: candidate.id }, payload: { purpose: "sms", source: input.consentSource } });
-    }
+    if (created.inserted) await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
   }
 
   const [existing] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
@@ -128,7 +94,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
   // or if the caller's transaction then does not commit (`opts.files`, from `withNewApplication`).
   const kept = input.resume?.kind === "bytes" ? await keepResumeBytes(container, input.companyId, role.id, input.resume) : null;
   try {
-    const placed = await placeApplication(tx, container, { input, actor, opts, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
+    const placed = await placeApplication(tx, container, { input, actor, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
     if (kept && !placed.duplicate) opts.files?.push(kept);
     return placed;
   } catch (err) {
@@ -175,8 +141,8 @@ async function dropKept(container: Container, kept: KeptBytes | null): Promise<v
 }
 
 /** The new application behind the job's lock, with its place, its résumé and its intake (`createApplication`). */
-async function placeApplication(tx: Tx, container: Container, args: { input: NewApplication; actor: Actor; opts: { intoTalentPool?: boolean }; role: typeof roles.$inferSelect; packetVersion: number; candidate: Candidate; knownPerson: boolean; kept: KeptBytes | null }) {
-  const { input, actor, opts, role, packetVersion, candidate, knownPerson, kept } = args;
+async function placeApplication(tx: Tx, container: Container, args: { input: NewApplication; actor: Actor; role: typeof roles.$inferSelect; packetVersion: number; candidate: Candidate; knownPerson: boolean; kept: KeptBytes | null }) {
+  const { input, actor, role, packetVersion, candidate, knownPerson, kept } = args;
   // Decided behind the job's lock, held until this commits: two people applying at the same moment take different places.
   const locked = await decideLock(tx, { companyId: input.companyId, roleId: role.id });
   // Two submissions for the same role and person at the same moment (a double press): the second waits for the first's
@@ -189,19 +155,8 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
       candidateId: candidate.id,
       packetVersion,
       source: input.source,
-      sourceDetail: input.sourceDetail ?? null,
-      linkId: input.linkId ?? null,
       stage: "applied",
-      answers: {
-        eligibility: input.eligibilityAnswers,
-        noResume: input.noResumeAnswers,
-        noticeVersionsShown: input.noticeVersionsShown,
-        ...(input.acknowledgment ? { acknowledgment: input.acknowledgment } : {}),
-        // Wave S7 (additive): kept only when there is something to keep, so an application from an older form reads as before.
-        ...(input.quickAnswers && Object.keys(input.quickAnswers).length ? { quick: input.quickAnswers } : {}),
-        ...(input.workSummary ? { workSummary: input.workSummary } : {}),
-        ...(input.fromCv?.length ? { fromCv: input.fromCv } : {}),
-      },
+      answers: { form: input.answers, noticeVersionsShown: input.noticeVersionsShown, acknowledgment: input.acknowledgment },
       statusToken: randomToken(24),
       // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
       replyToken: lowercaseToken(16),
@@ -217,8 +172,6 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
     return { application: raced, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
   let application = inserted;
-  // The upload the form sent with its reading (Wave S7; 20 Oct, R20-1), for the intake to find that reading by.
-  let formUpload: { uploadId: string; readAskedAt?: number | null } | null = null;
 
   if (input.resume) {
     const r = input.resume;
@@ -239,18 +192,12 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
         .returning();
       await tx.update(applications).set({ resumeDocumentId: doc.id }).where(eq(applications.id, application.id));
       application = { ...application, resumeDocumentId: doc.id };
-      // The form read this very file first (Wave S7): its reading belongs to the application from now on.
-      const read = input.formReading;
-      if (read && r.kind === "stored" && r.storageKey === read.storageKey) {
-        await linkResumeReading(tx, { companyId: input.companyId, uploadId: read.uploadId, applicationId: application.id, documentId: doc.id });
-        formUpload = read;
-      }
       await emit(tx, { type: "document.uploaded", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { documentId: doc.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
       await audit(tx, { companyId: input.companyId, actor, action: "document.uploaded", target: { type: "document", id: doc.id }, ip: input.ip, details: { applicationId: application.id, via: r.via, sizeBytes: stored.sizeBytes, mime: stored.mime } });
     }
   }
 
-  await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, linkId: input.linkId ?? null, hasResume: !!application.resumeDocumentId, note: input.note ?? null } });
+  await emit(tx, { type: "application.received", companyId: input.companyId, actor, subject: { type: "application", id: application.id }, payload: { roleId: role.id, source: input.source, hasResume: !!application.resumeDocumentId } });
   // The reason must be provable, and is arrival order alone: the place, the limit and the plan. No name, never a score.
   if (locked) {
     await emit(tx, { type: "application.locked", companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, subject: { type: "application", id: application.id }, payload: locked });
@@ -258,43 +205,16 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
     // All the team hears of it (Rule 3): behind the job's lock, so two at the same moment send one.
     await tellMoreApplied(tx, { companyId: input.companyId, roleId: role.id, roleTitle: role.title });
   }
-  if (opts.intoTalentPool) {
-    await transition(tx, { applicationId: application.id, companyId: input.companyId, to: "talent_pool", by: "system", actor, reason: "the role closed while this emailed application was held" });
-    application = { ...application, stage: "talent_pool" };
-  }
-  await container.engine.start(tx, {
-    workflowKey: "application_intake",
-    companyId: input.companyId,
-    subject: { type: "application", id: application.id },
-    state: {
-      applicationId: application.id,
-      roleId: role.id,
-      ...(formUpload ? { formUploadId: formUpload.uploadId, ...(formUpload.readAskedAt ? { formReadAskedAt: new Date(formUpload.readAskedAt * 1000).toISOString() } : {}) } : {}),
-    },
-    idempotencyKey: `application_intake:${application.id}`,
-    actor,
-  });
+  await container.engine.start(tx, { workflowKey: "application_intake", companyId: input.companyId, subject: { type: "application", id: application.id }, state: { applicationId: application.id, roleId: role.id }, idempotencyKey: `application_intake:${application.id}`, actor });
   return { application, candidate, duplicate: false, knownPerson, onFile: !!locked };
 }
 
-/**
- * What the new person's consent record says, honestly by channel (known-bugs row 16). The apply form showed the
- * application terms and the AI notice and the person ticked the box, so both are recorded with the versions shown. An
- * application that arrived by email saw no form: nothing is recorded as granted. What they do get is the acknowledgment
- * email, queued in the intake workflow's first step, which carries the AI disclosure line and their status link (whose
- * page has "How AI is used"); `notices_by_email` says so, with `granted: false` because nothing was agreed to. No AI
- * reads their application until that email has actually gone (the intake workflow's `ai_notice` step, which then moves
- * `at` to when it went); if it never goes, nothing is read by AI and the team reviews it.
- */
-export function consentOf(input: Pick<NewApplication, "consentSource" | "acknowledgment" | "noticeVersionsShown" | "smsConsent" | "ip">, now: string): ConsentRecord {
-  const out: ConsentRecord = {};
-  if (input.consentSource === "email_in") out.notices_by_email = { granted: false, at: now, source: input.consentSource, noticeVersion: "acknowledgment_email" };
-  else {
-    out.application_terms = { granted: true, at: now, source: input.consentSource, ip: input.ip, ...(input.acknowledgment ? { acknowledged: true } : {}) };
-    out.ai_notice = { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") };
-  }
-  if (input.smsConsent) out.sms = { granted: true, at: now, source: input.consentSource, ip: input.ip };
-  return out;
+/** What the new person's consent record says: the apply form showed the application terms and the AI notice and the person ticked the box, so both are recorded with the versions shown. */
+export function consentOf(input: Pick<NewApplication, "consentSource" | "noticeVersionsShown" | "ip">, now: string): ConsentRecord {
+  return {
+    application_terms: { granted: true, at: now, source: input.consentSource, ip: input.ip, acknowledged: true },
+    ai_notice: { granted: true, at: now, source: input.consentSource, noticeVersion: input.noticeVersionsShown.join(",") },
+  };
 }
 
 /**
@@ -412,13 +332,9 @@ export async function rotateStatusLink(container: Container, applicationId: stri
     const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
     const token = randomToken(24);
     const [fresh] = await tx.update(applications).set({ statusToken: token }).where(eq(applications.id, app.id)).returning();
-    // The links the old status page showed stop working too (Wave S5 review): the open screening chat and the interview
-    // scheduling pages get new random links, which the new status page shows; the old ones could still cancel or
-    // reschedule an interview, or carry on the chat.
-    for (const iv of await tx.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, ["scheduling", "scheduled"]), isNotNull(interviews.scheduleToken)))) {
-      await tx.update(interviews).set({ scheduleToken: randomToken(24) }).where(eq(interviews.id, iv.id));
-    }
-    for (const s of await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES])))) {
+    // The link the old status page showed to an open AI interview stops working too: it gets a new random one, which the
+    // new status page shows; the old one could still carry on the chat.
+    for (const s of await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, [...SCREEN_ACTIVE_STATUSES])))) {
       await tx.update(screens).set({ token: randomToken(24) }).where(eq(screens.id, s.id));
     }
     if (!candidate?.email || !company) return { emailedTo: null };
@@ -428,7 +344,7 @@ export async function rotateStatusLink(container: Container, applicationId: stri
 You asked for a new link to your application for ${roleTitle} at ${company.name}. Here it is:
 ${statusUrlFor(container.env.JOBS_BASE_URL, fresh)}
 
-The old link no longer works, so anyone you shared it with can no longer open your status page. The links in our earlier emails to your AI interview or your interview times have changed too: open them from your application page. Keep this email: there is no account or password.
+The old link no longer works, so anyone you shared it with can no longer open your status page. The link in our earlier emails to your AI interview has changed too: open it from your application page. Keep this email: there is no account or password.
 
 If you did not ask for this, reply to this email and a person will look into it.
 
@@ -441,7 +357,7 @@ The hiring team at ${company.name}`;
       applicationId: app.id,
       to: candidate.email,
       from: fromAddress(company, container.integrations),
-      replyTo: replyToFor(fresh, container.integrations),
+      replyTo: replyToFor(container.integrations),
       subject: `Your new application link: ${company.name}`,
       text,
       templateKey: "status_link_new",
@@ -455,11 +371,31 @@ The hiring team at ${company.name}`;
 }
 
 /**
- * A withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation email are the same
- * however the candidate withdrew: the status page's button, or "Yes, withdraw my application" in the screening chat
- * (known-bugs row 74). Runs as the platform after the withdrawal committed (the tenant role cannot write that table).
+ * The candidate withdraws, from their status page or inside the AI interview: the application moves to Withdrew, an AI
+ * interview still open is closed with its run, and the team gets one update saying they withdrew. In the caller's
+ * transaction; the recorded request and its confirmation email follow the commit (`recordWithdrawal`). False, and
+ * nothing done, when they may not withdraw any more (they were hired, told the decision, or already withdrew).
  */
-export async function recordWithdrawal(container: Container, app: { id: string; companyId: string; candidateId: string }, via: "status_page" | "screening_chat"): Promise<void> {
+export async function withdrawApplication(tx: Tx, container: Pick<Container, "engine">, input: { applicationId: string; via: "status_page" | "ai_interview" }): Promise<boolean> {
+  const [app] = await tx.select().from(applications).where(eq(applications.id, input.applicationId)).limit(1).for("update");
+  if (!app || !mayWithdraw(app.stage, app.toldState)) return false;
+  const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
+  const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const actor = { kind: "candidate" as const, id: app.candidateId };
+  const now = container.engine.clock();
+  await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "withdrawn", by: "candidate", actor, reason: input.via === "ai_interview" ? "withdrawn in the AI interview" : "withdrawn from the status page", now });
+  await emit(tx, { type: "application.withdrawn", companyId: app.companyId, actor, subject: { type: "application", id: app.id }, payload: { via: input.via, fromStage: app.stage } });
+  await cancelAiInterview(tx, container.engine, { applicationId: app.id, actor, reason: "the candidate withdrew", now });
+  await notify(tx, { companyId: app.companyId, about: app.id, kind: "candidate.withdrawn", title: `${`${cand?.firstName ?? ""} ${cand?.lastName ?? ""}`.trim() || "A candidate"} withdrew`, body: `They withdrew their application for ${role?.title ?? "the job"}${input.via === "ai_interview" ? " during the AI interview" : ""}.`, action: { label: "Open the candidate", href: appPaths.candidate(app.roleId, app.id) } });
+  return true;
+}
+
+/**
+ * A withdrawal is also a recorded request, fulfilled at once, so the audit trail and the confirmation email are the same
+ * however the candidate withdrew: the status page's button, or "Yes, withdraw my application" in the AI interview. Runs
+ * as the platform after the withdrawal committed (the tenant role cannot write that table).
+ */
+export async function recordWithdrawal(container: Container, app: { id: string; companyId: string; candidateId: string }, via: "status_page" | "ai_interview"): Promise<void> {
   await withPlatform(container.db, async (tx) => {
     const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
     const actor = { kind: "candidate" as const, id: app.candidateId };
@@ -471,7 +407,7 @@ export async function recordWithdrawal(container: Container, app: { id: string; 
       applicationId: app.id,
       channel: "status_page",
       verified: true,
-      ...(via === "screening_chat" ? { details: "Withdrawn in the AI interview.", verificationNote: "the request came through the candidate's own AI interview link" } : {}),
+      ...(via === "ai_interview" ? { details: "Withdrawn in the AI interview.", verificationNote: "the request came through the candidate's own AI interview link" } : {}),
       actor,
       now: container.engine.clock(),
     });

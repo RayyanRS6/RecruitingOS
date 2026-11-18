@@ -2,13 +2,13 @@
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
-import { trialPaused, trialStanding } from "@ros/contracts";
+import { ApplySource, applyLinkFor, trialPaused, trialStanding } from "@ros/contracts";
 import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, entitlements, noticesFor } from "@ros/core";
 import { rolePackets, roles, withTenant, type companies } from "@ros/db";
 import { LOGO_FILE } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
-import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
+import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse } from "../services/company-settings-profile";
 import { jobUrls } from "../services/job-urls";
 import { acceptingApplications, applyFlowOf, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
 import { descriptionExcerpt } from "./description";
@@ -37,13 +37,13 @@ function closedMessage(role: { status: string; applicationsClosedReason?: string
  * plans' own company line), our copy of the logo, and who answers before applying.
  */
 function publicCompany(company: typeof companies.$inferSelect, env: Container["env"]): JobPageCompany {
-  const logo = profileOf(company.settings).logo;
+  const logo = company.settings.logo;
   return { name: company.name, slug: company.slug, about: approvedAbout(company.settings), website: company.settings.website ?? null, logoSrc: logo ? logoPublicPath(company.slug, logo) : null, contact: contactLineFor(company.settings, env) };
 }
 
 /** The logo's full address for search engines and link previews: our stored copy, else an address typed before uploads existed. */
 function publicLogoUrl(company: typeof companies.$inferSelect, env: Container["env"]): string | null {
-  const logo = profileOf(company.settings).logo;
+  const logo = company.settings.logo;
   return logo ? logoPublicUrl(env, company.slug, logo) : company.settings.logoUrl ?? null;
 }
 
@@ -134,7 +134,7 @@ candidatePages.get("/careers/:slug/logo/:file", async (c) => {
   const file = c.req.param("file");
   if (!LOGO_FILE.test(file)) return c.notFound();
   const company = await loadPublicCompany(container.db, c.req.param("slug"));
-  const logo = company ? profileOf(company.settings).logo : undefined;
+  const logo = company?.settings.logo;
   if (!logo || logo.file !== file) return c.notFound();
   const bytes = await container.integrations.storage.get(logo.key);
   if (!bytes) return c.notFound();
@@ -168,16 +168,18 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     companyLogoUrl: logoUrl,
   });
   const excerpt = descriptionExcerpt(packet.description.publicJobDescription, 155);
+  // Where they came from (`?src=linkedin`) goes on to the application form, which records it with the application.
+  const src = ApplySource.safeParse(c.req.query("src"));
+  const applyHref = `/careers/${company.slug}/jobs/${role.id}/apply`;
   return c.html(
     <JobPage
       packet={packet}
       company={publicCompany(company, container.env)}
       role={jobRoleView(role, trialEnded)}
       notices={allNotices}
-      smsEnabled={container.env.SMS_ENABLED}
       flow={await applyFlowOf(container, job)}
       benefits={benefitsDescriptionFor(packet.compensation, company.settings)}
-      links={{ careers: `/careers/${company.slug}`, apply: `/careers/${company.slug}/jobs/${role.id}/apply` }}
+      links={{ careers: `/careers/${company.slug}`, apply: src.success ? applyLinkFor(applyHref, src.data) : applyHref }}
       jsonLd={jsonLd}
       description={excerpt}
       share={{ title: `${packet.identity.title} at ${company.name}`, description: excerpt, url: urls.job, siteName: company.name, image: logoUrl }}

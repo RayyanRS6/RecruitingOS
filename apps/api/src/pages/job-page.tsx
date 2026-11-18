@@ -157,7 +157,6 @@ export type JobPageProps = {
   role: JobPageRole;
   /** Every notice for the job's places; the page decides which it renders. */
   notices: Notice[];
-  smsEnabled: boolean;
   /** How applicants meet the AI interview (services/job-preview.ts `APPLY_FLOW`): what the time and the steps say. */
   flow: ApplyFlowView;
   /** The benefits the law (or the company) has the page describe: the role's own, else the company's (Setup). */
@@ -185,7 +184,7 @@ export function JobPage(props: JobPageProps) {
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   const niceToHaves = packet.requirements.niceToHaves.map((m) => m.text.trim()).filter(Boolean);
   const careers = props.links.careers;
-  const steps = applySteps(packet, { companyName: company.name, smsEnabled: props.smsEnabled, flow: props.flow });
+  const steps = applySteps(packet, { companyName: company.name, flow: props.flow });
   return (
     <Layout title={preview ? `Preview: ${title} at ${company.name}` : `${title} at ${company.name}`} jsonLd={preview ? undefined : props.jsonLd} wide description={preview ? undefined : props.description} share={preview ? undefined : props.share} noindex={!!preview}>
       {preview ? <PreviewNote preview={preview} /> : null}
