@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import { TRIAL_PLAN_KEY, newTrialTerm, type MembershipRole } from "@ros/contracts";
+import { RolePacket, TRIAL_PLAN_KEY, newTrialTerm, type ApplicationStage, type MembershipRole } from "@ros/contracts";
 import { entitlements, grantPlatformRole, isCompanyLive } from "@ros/core";
-import { applications, candidates, companies, memberships, users, withPlatform } from "@ros/db";
+import { applications, candidates, companies, memberships, rolePackets, roles, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
@@ -159,4 +159,42 @@ export async function signInAs(container: Container, app: ReturnType<typeof crea
   const sw = await app.request("/api/v1/auth/switch", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ companyId: input.companyId }) });
   if (sw.status !== 200) throw new Error(`could not enter company ${input.companyId} as ${input.role} (${sw.status}): ${await sw.text()}`);
   return cookie;
+}
+
+/**
+ * A job written straight into the tables, with its one version live: for suites whose subject is not the job builder
+ * (who may see a company's jobs, what is public, what an administrator reads). Open and taking applications unless
+ * `status` says otherwise; a draft has no opening day. Answers the job's id.
+ */
+export async function plantJob(container: Container, input: { companyId: string; title: string; status?: "draft" | "open" | "paused" | "closed" }): Promise<string> {
+  const status = input.status ?? "open";
+  const actor = { kind: "system" as const, id: "test_seed" };
+  const packet = RolePacket.parse({
+    identity: { title: input.title, locations: [{ city: "Irvine", region: "CA", country: "US" }], employmentType: "full_time", schedule: "Monday to Friday, 8 to 5", remotePolicy: "onsite" },
+    compensation: { basis: "hourly", currency: "USD", min: 24, max: 28, discloseRange: true },
+    description: { publicJobDescription: `We are hiring: ${input.title}. You will seat patients, take digital x-rays and keep the rooms ready.` },
+    requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }], niceToHaves: [] },
+    competencies: [{ key: "chairside", name: "Chairside skill", definition: "Anticipates the next step.", importance: "essential", indicators: [] }],
+    screening: { questions: [{ key: "recent", question: "Tell me about your most recent work." }, { key: "nervous", question: "Tell me about a nervous patient and what you did." }, { key: "available", question: "Which days and hours are you available?" }] },
+    communication: { tone: "warm", companyBlurb: "A family practice.", signature: "The team", disclosureText: "This message was sent with help from an AI assistant.", humanAlternativeText: "Reply to reach a person." },
+    compliance: {},
+    provenance: {},
+  });
+  return withPlatform(container.db, async (tx) => {
+    const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: input.title, status, currentPacketVersion: 1, acceptingApplications: status === "open", openedAt: status === "draft" ? null : container.engine.clock().toISOString(), createdBy: actor }).returning({ id: roles.id });
+    await tx.insert(rolePackets).values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: status === "draft" ? "proposed" : "approved", source: "human_edit", createdBy: actor });
+    return role.id;
+  });
+}
+
+/**
+ * A person with an application to a job, straight into the tables, carrying `mark` as their name and in their address,
+ * so a suite can see whether an answer holds anything of them. `locked`: past the plan's candidates per job.
+ */
+export async function plantApplicant(container: Container, input: { companyId: string; roleId: string; mark: string; stage?: ApplicationStage; locked?: boolean }): Promise<string> {
+  return withPlatform(container.db, async (tx) => {
+    const [person] = await tx.insert(candidates).values({ companyId: input.companyId, firstName: input.mark, lastName: input.mark, email: `${input.mark.toLowerCase()}@people.test`, firstSource: "direct" }).returning({ id: candidates.id });
+    const [application] = await tx.insert(applications).values({ companyId: input.companyId, roleId: input.roleId, candidateId: person.id, packetVersion: 1, source: "direct", stage: input.stage ?? "triaged", statusToken: randomBytes(16).toString("hex"), lockedAt: input.locked ? container.engine.clock().toISOString() : null }).returning({ id: applications.id });
+    return application.id;
+  });
 }

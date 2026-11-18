@@ -1,15 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
+import type { InviteAnswer, MemberChanged, TeamView } from "@ros/contracts";
 import { applications, auditRecords, candidates, events, invitations, memberships, notifications, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInWithIdentity, usePlan, useTrial } from "./test-helpers";
+import { plantJob, signInAs, signInWithIdentity, usePlan, useTrial } from "./test-helpers";
 
 /**
  * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
  * accepted by a Google or Microsoft sign-in with the invited address (never by an email-link session on its own);
- * member updates are validated with a last-owner guard; removal ends sessions; and every role is exercised over HTTP.
+ * member updates are validated with a last-owner guard; removal ends sessions; the team is read as one answer that
+ * says what the person looking may do; and every role is exercised over HTTP.
  */
 describe("team invitations, members and roles", () => {
   let container: Container;
@@ -28,7 +30,7 @@ describe("team invitations, members and roles", () => {
   const me = async (cookie: string) => (await (await json(cookie, "GET", "/api/v1/auth/me")).json()) as { user: { id: string; email: string }; activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> };
   const invite = (cookie: string, body: unknown) => json(cookie, "POST", "/api/v1/companies/current/members/invite", body);
   const errorCode = async (r: Response) => ((await r.json()) as { error: { code: string } }).error.code;
-  type InviteResponse = { ok: boolean; invitation: { id: string; email: string; role: string; status: string; expiresAt: string }; replaced: number; devLink: string };
+  const team = async (cookie: string) => (await (await json(cookie, "GET", "/api/v1/companies/current/members")).json()) as TeamView;
 
   let owner = "";
   let ownerId = "";
@@ -44,11 +46,6 @@ describe("team invitations, members and roles", () => {
       const [application] = await tx.insert(applications).values({ companyId, roleId: forRoleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomToken(16) }).returning();
       return application.id;
     });
-  /** A drafted role with its pending approval, the way the owner makes one: an intake conversation compiled into a packet. */
-  const compileRole = async () => {
-    const started = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-    return ((await (await json(owner, "POST", `/api/v1/intake/sessions/${started.session.id}/compile`)).json()) as { roleId: string }).roleId;
-  };
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
@@ -56,29 +53,29 @@ describe("team invitations, members and roles", () => {
     owner = await signInWithIdentity(app, container, { email: "dana@teamtest.test", name: "Dana Owner", provider: "google", aal2: false });
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Teamtest Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     companyId = co.id;
-    // This suite invites more than the Trial plan's 3 people (founder decision L-02 B); the seats have their own suite below.
+    // This suite invites more people than the Free plan's 2; the plan's people have their own suite below.
     await usePlan(container, companyId);
     ownerId = (await me(owner)).user.id;
-    roleId = await compileRole();
+    roleId = await plantJob(container, { companyId, title: "Dental Hygienist" });
   });
   afterAll(async () => {
     await container.close();
   });
 
-  it("invites a hiring manager: a row, and one email through the outbox that says who, the company, the role and seven days", async () => {
+  it("invites a member: a row, and one email through the outbox that says who, the company, the role and seven days", async () => {
     const r = await invite(owner, { email: "Hank.Manager@teamtest.test", role: "hiring_manager", name: "Hank" });
     expect(r.status).toBe(201);
-    const body = (await r.json()) as InviteResponse;
-    expect(body.invitation).toMatchObject({ email: "hank.manager@teamtest.test", role: "hiring_manager", status: "pending" });
+    const body = (await r.json()) as InviteAnswer;
+    expect(body).toMatchObject({ ok: true, emailed: true, invitation: { email: "hank.manager@teamtest.test", name: "Hank", role: "hiring_manager", roleLabel: "Member", invitedBy: "Dana Owner", emailState: "on_its_way" } });
     expect(Date.parse(body.invitation.expiresAt) - Date.now()).toBeGreaterThan(6.9 * 86_400_000);
-    expect(body.devLink).toMatch(/\/api\/v1\/auth\/invite\?token=/);
-    hankLink = body.devLink;
+    expect(body.link).toMatch(/\/api\/v1\/auth\/invite\?token=/);
+    hankLink = body.link;
     const sent = mail().sent.filter((m) => m.to === "hank.manager@teamtest.test");
     expect(sent).toHaveLength(1);
     expect(sent[0].subject).toBe("Dana Owner invited you to Teamtest Dental on Recruiting OS");
     expect(sent[0].text).toContain("Hi Hank,");
     expect(sent[0].text).toContain("Dana Owner invited you to Teamtest Dental's hiring workspace");
-    expect(sent[0].text).toContain("as a hiring manager");
+    expect(sent[0].text).toContain("as a member");
     expect(sent[0].text).toContain("seven days");
     expect(sent[0].text).toContain("Google or Microsoft");
     expect(sent[0].text).toContain(hankLink);
@@ -86,18 +83,18 @@ describe("team invitations, members and roles", () => {
     const [row] = await container.db.select().from(invitations).where(eq(invitations.email, "hank.manager@teamtest.test"));
     expect(sent[0].text).not.toContain(row.tokenHash);
     expect(JSON.stringify(body)).not.toContain(row.tokenHash);
-    const pending = (await (await json(owner, "GET", "/api/v1/companies/current/invitations")).json()) as Array<{ email: string; role: string; invitedBy: { name: string } }>;
-    expect(pending).toEqual([expect.objectContaining({ email: "hank.manager@teamtest.test", role: "hiring_manager", invitedBy: { name: "Dana Owner" } })]);
+    // the open invitation is on the team's one answer, with what became of its email
+    expect((await team(owner)).invitations).toEqual([expect.objectContaining({ id: body.invitation.id, email: "hank.manager@teamtest.test", role: "hiring_manager", invitedBy: "Dana Owner", emailState: "sent" })]);
     const audited = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "invitation.sent"));
     expect(audited).toHaveLength(1);
   });
 
-  it("the invitee accepts through Google in the browser: the page signs nobody in, the callback lands them in the company as hiring manager", async () => {
+  it("the invitee accepts through Google in the browser: the page signs nobody in, the callback lands them in the company as a member", async () => {
     const page = await app.request(pathOf(hankLink));
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("Join Teamtest Dental");
-    expect(html).toContain("as a hiring manager");
+    expect(html).toContain("as a member");
     expect(html).toContain("hank.manager@teamtest.test");
     expect(html).toContain("Continue with Google");
     expect(html).toContain("Continue with Microsoft");
@@ -130,14 +127,14 @@ describe("team invitations, members and roles", () => {
     expect(await container.db.select().from(events).where(and(eq(events.type, "member.joined"), eq(events.companyId, companyId)))).toHaveLength(1);
     expect(await container.db.select().from(auditRecords).where(eq(auditRecords.action, "invitation.accepted"))).toHaveLength(1);
     // in the team, out of the pending list
-    const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ email: string; role: string }>;
-    expect(members).toEqual(expect.arrayContaining([expect.objectContaining({ email: "hank.manager@teamtest.test", role: "hiring_manager" })]));
-    expect((await (await json(owner, "GET", "/api/v1/companies/current/invitations")).json()) as unknown[]).toEqual([]);
+    const after = await team(owner);
+    expect(after.members).toEqual(expect.arrayContaining([expect.objectContaining({ userId: who.user.id, email: "hank.manager@teamtest.test", role: "hiring_manager", roleLabel: "Member", you: false, mayChange: true, changeBlockedReason: null })]));
+    expect(after.invitations).toEqual([]);
     // the used link says so and parks nothing
     const again = await app.request(pathOf(hankLink));
     expect(await again.text()).toContain("already used");
     expect(cookieNamed(again, "ros_invite")).toBeNull();
-    // and as a hiring manager they see roles but cannot invite
+    // and as a member they see the jobs but cannot invite
     expect((await json(hank, "GET", "/api/v1/roles")).status).toBe(200);
     expect((await invite(hank, { email: "someone@teamtest.test", role: "hiring_manager" })).status).toBe(403);
   });
@@ -153,8 +150,8 @@ describe("team invitations, members and roles", () => {
   });
 
   it("refuses the invitation for a different address and keeps it for the right one", async () => {
-    const created = (await (await invite(owner, { email: "holly.hr@teamtest.test", role: "hiring_manager" })).json()) as InviteResponse;
-    const page = await app.request(pathOf(created.devLink));
+    const created = (await (await invite(owner, { email: "holly.hr@teamtest.test", role: "hiring_manager" })).json()) as InviteAnswer;
+    const page = await app.request(pathOf(created.link));
     const inviteCookie = cookieNamed(page, "ros_invite")!;
     const wrong = await session(idp().mint({ email: "stranger@elsewhere.test", name: "Someone Else", provider: "google" }), inviteCookie);
     expect(wrong.status).toBe(403);
@@ -185,25 +182,25 @@ describe("team invitations, members and roles", () => {
     expect(await errorCode(dup)).toBe("already_member");
     expect((await invite(owner, { email: "x@teamtest.test", role: "boss" })).status).toBe(400);
     expect((await invite(owner, { email: "not-an-email", role: "admin" })).status).toBe(400);
-    const first = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteResponse;
-    const second = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteResponse;
-    expect(second.replaced).toBe(1);
-    expect(second.devLink).not.toBe(first.devLink);
-    const pending = (await (await json(owner, "GET", "/api/v1/companies/current/invitations")).json()) as Array<{ email: string }>;
-    expect(pending.filter((p) => p.email === "ann.admin@teamtest.test")).toHaveLength(1);
-    const old = await app.request(pathOf(first.devLink));
+    const first = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteAnswer;
+    const second = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteAnswer;
+    // one link per address: the older invitation is withdrawn
+    expect((await container.db.select({ status: invitations.status }).from(invitations).where(eq(invitations.email, "ann.admin@teamtest.test"))).map((i) => i.status).sort()).toEqual(["pending", "revoked"]);
+    expect(second.link).not.toBe(first.link);
+    expect((await team(owner)).invitations.filter((p) => p.email === "ann.admin@teamtest.test")).toEqual([expect.objectContaining({ id: second.invitation.id, role: "admin", roleLabel: "Admin" })]);
+    const old = await app.request(pathOf(first.link));
     expect(await old.text()).toContain("withdrawn");
     expect(cookieNamed(old, "ros_invite")).toBeNull();
-    expect(await (await app.request(pathOf(second.devLink))).text()).toContain("Join Teamtest Dental");
-    annLink = second.devLink;
+    expect(await (await app.request(pathOf(second.link))).text()).toContain("Join Teamtest Dental");
+    annLink = second.link;
   });
 
   it("an expired invitation is refused on the page and at sign-in, and the cookie is dropped; sending it again revives it", async () => {
-    const created = (await (await invite(owner, { email: "eve.late@teamtest.test", role: "hiring_manager" })).json()) as InviteResponse;
-    const page = await app.request(pathOf(created.devLink));
+    const created = (await (await invite(owner, { email: "eve.late@teamtest.test", role: "hiring_manager" })).json()) as InviteAnswer;
+    const page = await app.request(pathOf(created.link));
     const inviteCookie = cookieNamed(page, "ros_invite")!;
     await withPlatform(container.db, (tx) => tx.update(invitations).set({ expiresAt: new Date(Date.now() - 1000).toISOString() }).where(eq(invitations.id, created.invitation.id)));
-    const expired = await app.request(pathOf(created.devLink));
+    const expired = await app.request(pathOf(created.link));
     expect(await expired.text()).toContain("This invitation has expired");
     expect(cookieNamed(expired, "ros_invite")).toBeNull();
     const r = await session(idp().mint({ email: "eve.late@teamtest.test", provider: "google" }), inviteCookie);
@@ -215,44 +212,45 @@ describe("team invitations, members and roles", () => {
     const plain = await session(idp().mint({ email: "eve.late@teamtest.test", provider: "google" }));
     expect(plain.status).toBe(200);
     expect(((await plain.json()) as { activeCompanyId: string | null }).activeCompanyId).toBeNull();
-    expect((await (await json(owner, "GET", "/api/v1/companies/current/invitations")).json() as Array<{ email: string }>).some((p) => p.email === "eve.late@teamtest.test")).toBe(false);
+    expect((await team(owner)).invitations.some((p) => p.email === "eve.late@teamtest.test")).toBe(false);
     // sent again: seven more days and a new link
     const resent = await json(owner, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/resend`);
     expect(resent.status).toBe(200);
-    const body = (await resent.json()) as InviteResponse;
+    const body = (await resent.json()) as InviteAnswer;
     expect(Date.parse(body.invitation.expiresAt)).toBeGreaterThan(Date.now() + 6 * 86_400_000);
-    expect(body.devLink).not.toBe(created.devLink);
-    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(body.link).not.toBe(created.link);
+    expect(await (await app.request(pathOf(body.link))).text()).toContain("Join Teamtest Dental");
   });
 
   it("resend issues a new link (the old one stops working) and revoke ends it", async () => {
     const [ann] = await container.db.select().from(invitations).where(and(eq(invitations.email, "ann.admin@teamtest.test"), eq(invitations.status, "pending")));
     const resent = await json(owner, "POST", `/api/v1/companies/current/invitations/${ann.id}/resend`);
     expect(resent.status).toBe(200);
-    const body = (await resent.json()) as InviteResponse;
-    expect(body.devLink).not.toBe(annLink);
+    const body = (await resent.json()) as InviteAnswer;
+    expect(body.link).not.toBe(annLink);
     expect(await (await app.request(pathOf(annLink))).text()).toContain("not valid");
-    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(await (await app.request(pathOf(body.link))).text()).toContain("Join Teamtest Dental");
     const sent = mail().sent.filter((m) => m.to === "ann.admin@teamtest.test");
     expect(sent).toHaveLength(3); // the first invitation, its replacement, and the reminder
     expect(sent[2].subject).toMatch(/^Reminder: /);
-    expect(sent[2].text).toContain(body.devLink);
+    expect(sent[2].text).toContain(body.link);
     expect(await container.db.select().from(auditRecords).where(eq(auditRecords.action, "invitation.resent"))).toHaveLength(2);
     // a member can neither withdraw it nor see the pending list, nor replace it by inviting the same address: refused, the
     // invitation stays open and no email goes out; the owner withdraws it
     const ivy = cookieNamed(await session(idp().mint({ email: "ivy.interviewer@teamtest.test", provider: "azure" })), "ros_session")!;
     expect((await json(ivy, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`)).status).toBe(403);
-    expect((await json(ivy, "GET", "/api/v1/companies/current/invitations")).status).toBe(403);
+    expect(await team(ivy)).toMatchObject({ invitations: [], viewer: { role: "hiring_manager", mayManage: false, grantableRoles: [] } });
     expect((await invite(ivy, { email: "ann.admin@teamtest.test", role: "hiring_manager" })).status).toBe(403);
     expect((await container.db.select().from(invitations).where(eq(invitations.id, ann.id)))[0].status).toBe("pending");
     expect((await container.db.select().from(invitations).where(eq(invitations.email, "ann.admin@teamtest.test"))).filter((i) => i.status === "pending")).toHaveLength(1);
     expect(mail().sent.filter((m) => m.to === "ann.admin@teamtest.test")).toHaveLength(3);
-    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(await (await app.request(pathOf(body.link))).text()).toContain("Join Teamtest Dental");
     const revoked = await json(owner, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`);
     expect(revoked.status).toBe(200);
-    expect(((await revoked.json()) as InviteResponse).invitation.status).toBe("revoked");
-    expect(await (await app.request(pathOf(body.devLink))).text()).toContain("withdrawn");
-    expect((await (await json(owner, "GET", "/api/v1/companies/current/invitations")).json() as Array<{ email: string }>).some((p) => p.email === "ann.admin@teamtest.test")).toBe(false);
+    expect(await revoked.json()).toEqual({ ok: true });
+    expect((await container.db.select().from(invitations).where(eq(invitations.id, ann.id)))[0].status).toBe("revoked");
+    expect(await (await app.request(pathOf(body.link))).text()).toContain("withdrawn");
+    expect((await team(owner)).invitations.some((p) => p.email === "ann.admin@teamtest.test")).toBe(false);
     expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${ann.id}/revoke`)).status).toBe(404);
     expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${ann.id}/resend`)).status).toBe(404);
     expect((await json(owner, "POST", "/api/v1/companies/current/invitations/nope/resend")).status).toBe(404);
@@ -264,8 +262,7 @@ describe("team invitations, members and roles", () => {
   });
 
   it("validates member changes: bad role, self-change, only an owner grants or takes the owner role, the last owner stays, a role change ends sessions", async () => {
-    const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ userId: string; email: string }>;
-    const hankId = members.find((m) => m.email === "hank.manager@teamtest.test")!.userId;
+    const hankId = (await team(owner)).members.find((m) => m.email === "hank.manager@teamtest.test")!.userId;
     const patch = (cookie: string, userId: string, body: unknown) => json(cookie, "PATCH", `/api/v1/companies/current/members/${userId}`, body);
     expect((await patch(owner, hankId, { role: "boss" })).status).toBe(400);
     expect((await patch(owner, hankId, { status: "invited" })).status).toBe(400);
@@ -304,9 +301,7 @@ describe("team invitations, members and roles", () => {
     expect((await json(olive, "GET", "/api/v1/auth/me")).status).toBe(200); // a refused change ends nobody's sessions
     const demote = await patch(owner, oliveId, { role: "admin" });
     expect(demote.status).toBe(200);
-    const demoted = (await demote.json()) as { role: string; status: string; sessionsEnded: number };
-    expect(demoted).toMatchObject({ role: "admin", status: "active" });
-    expect(demoted.sessionsEnded).toBeGreaterThanOrEqual(1);
+    expect((await demote.json()) as MemberChanged).toEqual({ ok: true, userId: oliveId, role: "admin", status: "active" });
     expect((await json(olive, "GET", "/api/v1/auth/me")).status).toBe(401);
     // signed in again, the new role applies; and the original owner is now the last one
     const oliveAgain = await signInAs(container, app, { companyId, role: "admin", email: "olive.owner@teamtest.test" });
@@ -318,7 +313,35 @@ describe("team invitations, members and roles", () => {
     expect((await patch(oliveAgain, hankId, { role: "hiring_manager" })).status).toBe(200); // no change, nothing ends
     const changed = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "membership.changed"), eq(auditRecords.companyId, companyId)));
     expect(changed.some((a) => a.reason === "role changed from owner to admin")).toBe(true);
-    expect(await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.reason, "role changed")))).toHaveLength(1);
+    const ended = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.reason, "role changed")));
+    expect(ended).toHaveLength(1);
+    expect(ended[0]).toMatchObject({ target: { type: "user", id: oliveId }, details: { scope: "company" } });
+    expect((ended[0].details as { sessionsEnded: number }).sessionsEnded).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the team is one answer that says what the person looking may do: an owner grants all three roles, an admin Admin and Member and changes no owner, a member nothing", async () => {
+    const asOwner = await team(owner);
+    expect(asOwner.viewer).toEqual({ userId: ownerId, role: "owner", mayManage: true, grantableRoles: ["owner", "admin", "hiring_manager"], mayLeave: false, leaveBlockedReason: "You are the only owner. Make someone else an owner first, then leave. To close the whole company, ask ITS." });
+    expect(asOwner.members.filter((m) => m.you)).toEqual([expect.objectContaining({ userId: ownerId, email: "dana@teamtest.test", name: "Dana Owner", role: "owner", roleLabel: "Owner", mayChange: false, changeBlockedReason: "You cannot change your own role or remove yourself. Ask another owner or admin to do it." })]);
+    expect(asOwner.members.filter((m) => !m.you).every((m) => m.mayChange && m.changeBlockedReason === null)).toBe(true);
+    // the plan's people: everyone active and every invitation still open; this plan sets no limit
+    expect(asOwner.seats).toEqual({ used: asOwner.members.length + asOwner.invitations.length, limit: null, full: false, line: null });
+    expect(asOwner.invitations.length).toBeGreaterThan(0);
+    const admin = await signInAs(container, app, { companyId, role: "admin", email: "adam.admin@teamtest.test" });
+    const asAdmin = await team(admin);
+    expect(asAdmin.viewer).toMatchObject({ role: "admin", mayManage: true, grantableRoles: ["admin", "hiring_manager"], mayLeave: true, leaveBlockedReason: null });
+    expect(asAdmin.members.find((m) => m.userId === ownerId)).toMatchObject({ mayChange: false, changeBlockedReason: "Only an owner can make someone an owner, or change an owner's role." });
+    expect(asAdmin.members.find((m) => m.email === "hank.manager@teamtest.test")).toMatchObject({ mayChange: true, changeBlockedReason: null });
+    expect(asAdmin.invitations).toEqual(asOwner.invitations);
+    // a member sees who is on the team, and nothing to press: no invitee's address, no change to anyone
+    const member = await signInAs(container, app, { companyId, role: "hiring_manager" });
+    const asMember = await team(member);
+    expect(asMember.viewer).toMatchObject({ role: "hiring_manager", mayManage: false, grantableRoles: [], mayLeave: true, leaveBlockedReason: null });
+    expect(asMember.invitations).toEqual([]);
+    expect(asMember.members.every((m) => !m.mayChange && m.changeBlockedReason === null)).toBe(true);
+    expect(asMember.members.map((m) => m.userId)).toEqual(expect.arrayContaining(asOwner.members.map((m) => m.userId)));
+    // and nothing of how anyone signs in, or of an invitation's link
+    expect(JSON.stringify([asOwner, asAdmin, asMember])).not.toMatch(/tokenHash|token_hash|authSubject|token=/);
   });
 
   it("only an owner invites an owner: an admin is refused (403 owner_only) on the invitation and on sending it again; the owner's goes out", async () => {
@@ -331,14 +354,14 @@ describe("team invitations, members and roles", () => {
     expect(await container.db.select().from(invitations).where(eq(invitations.email, "second.owner@teamtest.test"))).toHaveLength(0);
     expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(0);
     // the owner may, and only the owner may send it again: a refused resend rolls back, so the first link still works
-    const created = (await (await invite(owner, { email: "second.owner@teamtest.test", role: "owner" })).json()) as InviteResponse;
-    expect(created.invitation).toMatchObject({ role: "owner", status: "pending" });
+    const created = (await (await invite(owner, { email: "second.owner@teamtest.test", role: "owner" })).json()) as InviteAnswer;
+    expect(created.invitation).toMatchObject({ role: "owner", roleLabel: "Owner" });
     for (const cookie of [abby]) {
       const r = await json(cookie, "POST", `/api/v1/companies/current/invitations/${created.invitation.id}/resend`);
       expect(r.status).toBe(403);
       expect(await errorCode(r)).toBe("owner_only");
     }
-    expect(await (await app.request(pathOf(created.devLink))).text()).toContain("Join Teamtest Dental");
+    expect(await (await app.request(pathOf(created.link))).text()).toContain("Join Teamtest Dental");
     expect(mail().sent.filter((m) => m.to === "second.owner@teamtest.test")).toHaveLength(1);
     // nor withdraw it: an owner's invitation to a new owner is an owner's to withdraw (audit 01-platform B12)
     for (const cookie of [abby]) {
@@ -363,14 +386,13 @@ describe("team invitations, members and roles", () => {
     const wesId = (await me(wes)).user.id;
     const r = await json(owner, "PATCH", `/api/v1/companies/current/members/${wesId}`, { status: "removed" });
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { status: string; sessionsEnded: number };
-    expect(body).toMatchObject({ status: "removed" });
-    expect(body.sessionsEnded).toBeGreaterThanOrEqual(1);
+    expect((await r.json()) as MemberChanged).toEqual({ ok: true, userId: wesId, role: "hiring_manager", status: "removed" });
+    const [ended] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.reason, "removed from the team")));
+    expect(ended).toMatchObject({ target: { type: "user", id: wesId }, details: { sessionsEnded: 1, scope: "company" } });
     // the removed person's next request is refused outright
     expect((await json(wes, "GET", "/api/v1/auth/me")).status).toBe(401);
     // gone from the team; a fresh sign-in has no company and no tenant
-    const after = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ userId: string }>;
-    expect(after.some((m) => m.userId === wesId)).toBe(false);
+    expect((await team(owner)).members.some((m) => m.userId === wesId)).toBe(false);
     const fresh = await session(idp().mint({ email: "wes.leaving@teamtest.test", provider: "google" }));
     expect(fresh.status).toBe(200);
     expect(((await fresh.json()) as { activeCompanyId: string | null }).activeCompanyId).toBeNull();
@@ -389,8 +411,8 @@ describe("team invitations, members and roles", () => {
   });
 
   it("the email-link sign-in refuses a carried invitation for another address, records it, and spends nothing", async () => {
-    const created = (await (await invite(owner, { email: "mira.mail@teamtest.test", role: "hiring_manager" })).json()) as InviteResponse;
-    const inviteCookie = cookieNamed(await app.request(pathOf(created.devLink)), "ros_invite")!;
+    const created = (await (await invite(owner, { email: "mira.mail@teamtest.test", role: "hiring_manager" })).json()) as InviteAnswer;
+    const inviteCookie = cookieNamed(await app.request(pathOf(created.link)), "ros_invite")!;
     const asked = (await (await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "other.person@elsewhere.test" }) })).json()) as { devLink: string };
     const linkToken = new URL(asked.devLink).searchParams.get("token")!;
     const consume = (cookie?: string) => app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify({ token: linkToken }) });
@@ -410,8 +432,8 @@ describe("team invitations, members and roles", () => {
   });
 
   it("the invitation page's own sign-in link is limited per invitation, whoever holds the link", async () => {
-    const created = (await (await invite(owner, { email: "lena.link@teamtest.test", role: "hiring_manager" })).json()) as InviteResponse;
-    const token = new URL(created.devLink).searchParams.get("token")!;
+    const created = (await (await invite(owner, { email: "lena.link@teamtest.test", role: "hiring_manager" })).json()) as InviteAnswer;
+    const token = new URL(created.link).searchParams.get("token")!;
     const ask = () => app.request("/api/v1/auth/invite/email", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }).toString() });
     for (let i = 0; i < 3; i++) {
       const r = await ask();
@@ -429,11 +451,14 @@ describe("team invitations, members and roles", () => {
     /** true: succeeds (a 2xx answer); false: refused with 403. */
     const TABLE: Record<string, Record<Role, boolean>> = {
       "GET /roles": { hiring_manager: true, admin: true },
+      "GET /companies/current": { hiring_manager: true, admin: true },
+      "GET /companies/current/members": { hiring_manager: true, admin: true },
+      "PATCH /companies/current": { hiring_manager: false, admin: true },
+      "PUT /companies/current/hiring-contact": { hiring_manager: false, admin: true },
       "POST /companies/current/members/invite": { hiring_manager: false, admin: true },
       "POST /applications/:id/actions reject": { hiring_manager: true, admin: true },
-      "GET /companies/current/audit": { hiring_manager: true, admin: true },
-      // pending invitations only for those who manage the team (audit 01-platform B11)
-      "GET /companies/current/invitations": { hiring_manager: false, admin: true },
+      "GET /plans": { hiring_manager: true, admin: true },
+      "GET /notifications/preferences": { hiring_manager: true, admin: true },
     };
     const cookies: Partial<Record<Role, string>> = {};
     /** Declining changes state, so every role gets its own application. */
@@ -449,10 +474,14 @@ describe("team invitations, members and roles", () => {
       const cookie = cookies[role]!;
       const calls: Record<string, () => Response | Promise<Response>> = {
         "GET /roles": () => json(cookie, "GET", "/api/v1/roles"),
+        "GET /companies/current": () => json(cookie, "GET", "/api/v1/companies/current"),
+        "GET /companies/current/members": () => json(cookie, "GET", "/api/v1/companies/current/members"),
+        "PATCH /companies/current": () => json(cookie, "PATCH", "/api/v1/companies/current", { benefitsSummary: `Health and dental (${role}).` }),
+        "PUT /companies/current/hiring-contact": () => json(cookie, "PUT", "/api/v1/companies/current/hiring-contact", { email: `jobs.${role.replace(/_/g, "-")}@teamtest.test` }),
         "POST /companies/current/members/invite": () => invite(cookie, { email: `${role.replace(/_/g, "-")}-invitee@teamtest.test`, role: "hiring_manager" }),
-        "POST /applications/:id/actions reject": () => json(cookie, "POST", `/api/v1/applications/${applicationFor[role]}/actions`, { action: "reject", reason: "not_a_match_experience", note: "role coverage" }),
-        "GET /companies/current/audit": () => json(cookie, "GET", "/api/v1/companies/current/audit"),
-        "GET /companies/current/invitations": () => json(cookie, "GET", "/api/v1/companies/current/invitations"),
+        "POST /applications/:id/actions reject": () => json(cookie, "POST", `/api/v1/applications/${applicationFor[role]}/actions`, { action: "reject" }),
+        "GET /plans": () => json(cookie, "GET", "/api/v1/plans"),
+        "GET /notifications/preferences": () => json(cookie, "GET", "/api/v1/notifications/preferences"),
       };
       for (const [name, allowed] of Object.entries(TABLE).map(([k, v]) => [k, v[role]] as const)) {
         const r = await calls[name]!();
@@ -517,7 +546,7 @@ describe("leaving a company, and switching between companies", () => {
     expect((await json(hank, "POST", "/api/v1/companies/current/leave", {})).status).toBe(400);
     const r = await json(hank, "POST", "/api/v1/companies/current/leave", { confirm: true });
     expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ ok: true, left: "Alpha Dental", movedTo: { companyId: companyB, companyName: "Beta Dental" }, signedOut: false });
+    expect(await r.json()).toEqual({ ok: true, left: "Alpha Dental", movedTo: { companyId: companyB, companyName: "Beta Dental" }, signedOut: false });
     const after = await me(hank);
     expect(after.activeCompanyId).toBe(companyB);
     expect(after.memberships.map((m) => m.companyId)).toEqual([companyB]);
@@ -541,6 +570,25 @@ describe("leaving a company, and switching between companies", () => {
     expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
     const [row] = await container.db.select({ status: memberships.status }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(users.email, "ivy@leave.test"), eq(memberships.companyId, companyA)));
     expect(row.status).toBe("removed");
+  });
+
+  it("removing someone ends only their sessions working here: their work in another company goes on, and they cannot switch back", async () => {
+    // Pat is a member here and in another company, signed in twice: once working here, once there
+    const here = await signInAs(container, app, { companyId: companyA, role: "hiring_manager", email: "pat@leave.test", name: "Pat Two" });
+    const there = await signInAs(container, app, { companyId: companyB, role: "hiring_manager", email: "pat@leave.test", name: "Pat Two" });
+    const patId = ((await (await json(here, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+    const r = await json(owner, "PATCH", `/api/v1/companies/current/members/${patId}`, { status: "removed" });
+    expect(r.status).toBe(200);
+    // the same answer as for someone who works only here: nothing about the other company
+    expect(await r.json()).toEqual({ ok: true, userId: patId, role: "hiring_manager", status: "removed" });
+    // the session here is over; the one in the other company still works, in that company, and cannot come back
+    expect((await json(here, "GET", "/api/v1/auth/me")).status).toBe(401);
+    expect((await me(there)).activeCompanyId).toBe(companyB);
+    expect((await json(there, "GET", "/api/v1/companies/current")).status).toBe(200);
+    expect((await json(there, "POST", "/api/v1/auth/switch", { companyId: companyA })).status).toBe(403);
+    // recorded in this company's history, with nothing about the other company
+    const [audited] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyA))).orderBy(desc(auditRecords.createdAt)).limit(1);
+    expect(audited).toMatchObject({ reason: "removed from the team", target: { type: "user", id: patId }, details: { sessionsEnded: 1, scope: "company" } });
   });
 });
 
@@ -567,9 +615,12 @@ describe("people on the Trial plan", () => {
   const cleared = (r: Response, name: string) => r.headers.getSetCookie().some((c) => c.startsWith(`${name}=`) && /max-age=0/i.test(c));
   const pathOf = (link: string) => link.replace(container.env.APP_BASE_URL, "");
   const invite = (cookie: string, body: unknown) => json(cookie, "POST", "/api/v1/companies/current/members/invite", body);
-  const seats = async () => ((await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { usage: Record<string, { used: number; limit: number | null }> }).usage.seats;
+  const team = async () => (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as TeamView;
+  const seats = async () => {
+    const { used, limit } = (await team()).seats;
+    return { used, limit };
+  };
   const statusOf = async (email: string) => (await container.db.select({ status: invitations.status }).from(invitations).where(and(eq(invitations.companyId, companyId), eq(invitations.email, email))).orderBy(invitations.createdAt)).at(-1)?.status;
-  type Invited = { invitation: { id: string }; replaced: number; devLink: string };
   const FULL = "Your trial includes 3 people. Choose a plan to add more.";
   let owner = "";
   let companyId = "";
@@ -586,10 +637,12 @@ describe("people on the Trial plan", () => {
   });
 
   it("the owner and two invitations fill the trial; a 4th invitation is refused in plain words and sends nothing", async () => {
-    expect(await seats()).toEqual({ used: 1, limit: 3 });
+    expect((await team()).seats).toEqual({ used: 1, limit: 3, full: false, line: null });
     expect((await invite(owner, { email: "hana@seats.test", role: "hiring_manager" })).status).toBe(201);
     expect((await invite(owner, { email: "ian@seats.test", role: "hiring_manager" })).status).toBe(201);
     expect(await seats()).toEqual({ used: 3, limit: 3 });
+    // Settings says so before anyone presses Invite
+    expect((await team()).seats).toEqual({ used: 3, limit: 3, full: true, line: FULL });
     const fourth = await invite(owner, { email: "jo@seats.test", role: "hiring_manager" });
     expect(fourth.status).toBe(409);
     expect(await fourth.json()).toMatchObject({ error: { code: "seats_full", message: FULL } });
@@ -600,7 +653,7 @@ describe("people on the Trial plan", () => {
   it("inviting the same address again replaces its invitation without counting it twice", async () => {
     const again = await invite(owner, { email: "ian@seats.test", role: "admin" });
     expect(again.status).toBe(201);
-    expect(((await again.json()) as Invited).replaced).toBe(1);
+    expect((await container.db.select({ status: invitations.status }).from(invitations).where(and(eq(invitations.companyId, companyId), eq(invitations.email, "ian@seats.test")))).map((i) => i.status).sort()).toEqual(["pending", "revoked"]);
     expect(await seats()).toEqual({ used: 3, limit: 3 });
   });
 
@@ -629,8 +682,8 @@ describe("people on the Trial plan", () => {
     // someone joins outside an invitation (as ITS sets a company up): the owner, Lee, Jo's and Kai's invitations make 4
     await signInAs(container, app, { companyId, role: "hiring_manager", email: "lee@seats.test", name: "Lee" });
     const [jo] = await container.db.select({ id: invitations.id }).from(invitations).where(and(eq(invitations.email, "jo@seats.test"), eq(invitations.status, "pending")));
-    const resent = (await (await json(owner, "POST", `/api/v1/companies/current/invitations/${jo.id}/resend`)).json()) as Invited;
-    const page = await app.request(pathOf(resent.devLink));
+    const resent = (await (await json(owner, "POST", `/api/v1/companies/current/invitations/${jo.id}/resend`)).json()) as InviteAnswer;
+    const page = await app.request(pathOf(resent.link));
     const inviteCookie = cookieNamed(page, "ros_invite")!;
     const r = await session(idp().mint({ email: "jo@seats.test", name: "Jo", provider: "google" }), inviteCookie);
     expect(r.status).toBe(403);
@@ -658,7 +711,8 @@ describe("people on the Trial plan", () => {
 
   it("a company already past 3 keeps everyone; only new invitations are refused", async () => {
     expect((await seats()).used).toBeGreaterThan(3);
-    const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ email: string }>;
+    const { members, seats: places } = await team();
+    expect(places).toMatchObject({ limit: 3, full: true, line: FULL });
     expect(members.map((m) => m.email)).toEqual(expect.arrayContaining(["olga@seats.test", "lee@seats.test"]));
     const refused = await invite(owner, { email: "max@seats.test", role: "hiring_manager" });
     expect(refused.status).toBe(409);

@@ -1,20 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, desc, eq } from "drizzle-orm";
-import { NoticeKey } from "@ros/contracts";
+import { and, eq } from "drizzle-orm";
+import type { CompanyView, InviteAnswer, MemberChanged, TeamView } from "@ros/contracts";
 import { DEFAULT_NOTICES, hashToken, maskTokenPath, redactString, sealPayload } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, dataRequests, events, randomToken, sessions, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInAs, signInWithIdentity } from "./test-helpers";
+import { plantJob, signInAdmin, signInAs, signInWithIdentity, usePlan } from "./test-helpers";
 
 /**
- * Package COMPANY (audit findings A8, A9, A11, A12, D13, J16): typed company preferences with audit and notice
- * versions, the customer's own audit history with filters and a CSV, a person's sessions and their revocation,
- * re-authentication before a policy or notice change, contact hours feeding the texting window, and the public
- * privacy-request form confirmed by an emailed single-use link.
+ * Settings, Company: the six details an owner or an admin changes, answered as the company Settings reads, audited by
+ * field name and emitted; "Confirm it's you" before someone is made an admin or an owner; and the public
+ * privacy-request form, confirmed by an emailed single-use link.
  */
-describe("company preferences, audit history, sessions, re-authentication and the privacy-request form", () => {
+describe("company details, re-authentication and the privacy-request form", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   const mail = () => container.integrations.email as unknown as FakeEmailAdapter;
@@ -26,7 +25,8 @@ describe("company preferences, audit history, sessions, re-authentication and th
   const cookieNamed = (r: Response, name: string) => r.headers.getSetCookie().find((c) => c.startsWith(`${name}=`))?.split(";")[0] ?? null;
   const BASE = Date.now();
   const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
-  const today = () => container.engine.clock().toISOString().slice(0, 10);
+  const company = async (cookie: string) => (await (await json(cookie, "GET", "/api/v1/companies/current")).json()) as CompanyView;
+  const detailsAudits = () => container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated"))).orderBy(auditRecords.createdAt);
 
   let owner = "";
   let ownerId = "";
@@ -39,325 +39,143 @@ describe("company preferences, audit history, sessions, re-authentication and th
     app = createApp(container);
     setClock(0);
     owner = await signInWithIdentity(app, container, { email: "dana@settings.test", name: "Dana Owner", provider: "google", aal2: false });
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Settings Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    companySlug = co.slug;
+    companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Settings Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
+    companySlug = (await company(owner)).slug;
     ownerId = ((await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
-    const started = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${started.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
+    // Room for the people these cases invite: the Free plan has two.
+    await usePlan(container, companyId);
+    roleId = await plantJob(container, { companyId, title: "Dental Hygienist" });
   });
   afterAll(async () => {
     await container.close();
   });
 
-  it("the notice keys the API accepts are exactly the notices the product defines", () => {
-    expect([...NoticeKey.options].sort()).toEqual(DEFAULT_NOTICES.map((n) => n.key).sort());
-  });
-
-  describe("company preferences (A8, J16)", () => {
-    it("accepts a typed update, records which keys changed, and emits the change", async () => {
+  describe("company details", () => {
+    it("changes the six fields, answers the company as Settings reads it, records which fields changed and emits the change", async () => {
       const r = await json(owner, "PATCH", "/api/v1/companies/current", {
-        name: "Settings Dental Group", website: "settingsdental.com", timezone: "America/Chicago", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }],
-        settings: { careersPage: { intro: "A small team that answers every applicant." }, benefitsSummary: "Health, dental, 401k match.", logoUrl: "", businessHours: { days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" } },
+        name: "Settings Dental Group", website: "settingsdental.com", timezone: "America/Chicago", sizeBand: "50-99",
+        locations: [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }], benefitsSummary: "Health, dental, 401k match.",
       });
       expect(r.status).toBe(200);
-      const body = (await r.json()) as { name: string; timezone: string; sizeBand: string; changed: string[]; settings: { website?: string; careersPage?: { intro?: string; enabled: boolean }; businessHours?: { days: number[]; start: string; end: string }; logoUrl?: string } };
-      expect(body.name).toBe("Settings Dental Group");
-      expect(body.timezone).toBe("America/Chicago");
-      // an empty logo address where there is none changes nothing
-      expect(body.changed.sort()).toEqual(["benefitsSummary", "businessHours", "careersPage", "locations", "name", "sizeBand", "timezone", "website"].sort());
-      expect(body.settings.website).toBe("settingsdental.com");
-      expect(body.settings.careersPage).toEqual({ enabled: true, intro: "A small team that answers every applicant." });
-      expect(body.settings.businessHours).toEqual({ days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" });
-      const current = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { name: string; settings: { logoUrl?: string } };
-      expect(current.name).toBe("Settings Dental Group");
-      expect(current.settings.logoUrl).toBeUndefined();
-      // the logo is uploaded and served by us (plan D10): a typed address is refused with a plain way forward
-      const typed = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { logoUrl: "https://settingsdental.com/logo.png" } });
-      expect(typed.status).toBe(400);
-      expect(await errorCode(typed)).toBe("logo_upload_only");
-      const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated")));
+      const body = (await r.json()) as CompanyView;
+      expect(body).toMatchObject({ id: companyId, name: "Settings Dental Group", slug: companySlug, vertical: "dental", timezone: "America/Chicago", sizeBand: "50-99", website: "settingsdental.com", benefitsSummary: "Health, dental, 401k match.", logoUrl: null, about: null, aboutDraft: null, hiringContact: null, viewer: { mayEdit: true } });
+      expect(body.locations.map((l) => l.city)).toEqual(["Irvine", "Tustin"]);
+      expect(body.careersUrl).toContain(`/careers/${companySlug}`);
+      expect(body.plan).toMatchObject({ key: "growth", upgradeRequestedAt: null });
+      // named fields only: nothing of the stored settings, which also hold what an administrator sets
+      expect(body).not.toHaveProperty("settings");
+      expect(JSON.stringify(body)).not.toMatch(/verifiedAt|verifiedBy/);
+      // the same answer as reading it
+      expect(await company(owner)).toEqual(body);
+      const audited = await detailsAudits();
       expect(audited).toHaveLength(1);
-      expect((audited[0].details as { fields: string[] }).fields).toContain("businessHours");
+      expect((audited[0].details as { fields: string[] }).fields.sort()).toEqual(["benefitsSummary", "locations", "name", "sizeBand", "timezone", "website"]);
       expect(audited[0].actor.name).toBe("Dana Owner");
+      // the record names the fields, never what was written in them
+      expect(JSON.stringify(audited[0].details)).not.toMatch(/settingsdental|401k/);
       const emitted = await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "company.updated")));
-      expect(emitted.length).toBeGreaterThanOrEqual(1);
-      // the careers page shows the new introduction at once
-      expect(await (await app.request(`/careers/${companySlug}`)).text()).toContain("A small team that answers every applicant.");
+      expect(emitted).toHaveLength(1);
+      expect((emitted[0].payload as { fields: string[] }).fields).toContain("name");
+      // the careers page shows the new name at once
+      expect(await (await app.request(`/careers/${companySlug}`)).text()).toContain("Settings Dental Group");
       // saving the same values again changes nothing and records nothing
-      const again = await json(owner, "PATCH", "/api/v1/companies/current", { name: "Settings Dental Group" });
-      expect(((await again.json()) as { changed: string[] }).changed).toEqual([]);
-      expect(await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated")))).toHaveLength(1);
+      const again = await json(owner, "PATCH", "/api/v1/companies/current", { name: "Settings Dental Group", timezone: "America/Chicago", website: "settingsdental.com" });
+      expect(again.status).toBe(200);
+      expect(await again.json()).toEqual(body);
+      expect(await detailsAudits()).toHaveLength(1);
+      // a text sent empty is taken off
+      const cleared = (await (await json(owner, "PATCH", "/api/v1/companies/current", { website: "", benefitsSummary: "" })).json()) as CompanyView;
+      expect([cleared.website, cleared.benefitsSummary]).toEqual([null, null]);
+      expect(((await detailsAudits())[1].details as { fields: string[] }).fields).toEqual(["website", "benefitsSummary"]);
     });
 
-    it("refuses the plan, the pilot term, the allowances and anything else that is not a preference, with 400", async () => {
-      // the trial dates (founder decision L-02 B) are ITS's to set, like the pilot term
-      for (const body of [{ planKey: "growth" }, { status: "active" }, { vertical: "beauty" }, { slug: "other" }, { settings: { pilot: { startedAt: "2026-01-01", endsAt: "2027-01-01" } } }, { settings: { retention: { documents: 1 } } }, { settings: { brief: { channel: "email", hourLocal: 7 } } }, { settings: { trial: { startedAt: "2026-01-01T00:00:00.000Z", endsAt: "2027-01-01T00:00:00.000Z", startedBy: "its_check" } } }]) {
+    it("refuses the plan, the company's standing, the stored settings and anything else that is not one of the six fields, with 400", async () => {
+      const [before] = await container.db.select().from(companies).where(eq(companies.id, companyId));
+      const notTheirs = [
+        { planKey: "ultra" }, { status: "active" }, { vertical: "beauty" }, { slug: "other" },
+        // what an administrator sets, and what the gate stores
+        { settings: { verifiedAt: "2026-01-01T00:00:00.000Z" } }, { settings: { trial: { startedAt: "2026-01-01T00:00:00.000Z", endsAt: "2027-01-01T00:00:00.000Z", startedBy: "its_check" } } }, { settings: { benefitsSummary: "Health." } },
+        // what has its own route, where a person approves it or a file is judged
+        { about: { text: "We are great." } }, { logoUrl: "https://settingsdental.com/logo.png" }, { hiringContact: { email: "jobs@settings.test" } },
+        { somethingElse: true },
+      ];
+      for (const body of notTheirs) {
         const r = await json(owner, "PATCH", "/api/v1/companies/current", body);
         expect(r.status, JSON.stringify(body)).toBe(400);
-        expect(await errorCode(r)).toBe("not_yours_to_change");
+        expect(await errorCode(r)).toBe("invalid_request");
       }
-      const unknown = await json(owner, "PATCH", "/api/v1/companies/current", { somethingElse: true });
-      expect(unknown.status).toBe(400);
-      expect(await errorCode(unknown)).toBe("invalid_request");
-      const badHours = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { businessHours: { days: [1], start: "17:00", end: "09:00" } } });
-      expect(badHours.status).toBe(400);
-      const badLogo = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { logoUrl: "http://insecure.example/logo.png" } });
-      expect(badLogo.status).toBe(400);
-      // a time zone the server does not know, as when the company is made: the days and hours are counted in it (the second
-      // review of the live-test fixes, 12 November 2026, #30 and #37: one stored made every private decision fail)
-      for (const timezone of ["Pacific", "Pacific Time"]) {
-        const badZone = await json(owner, "PATCH", "/api/v1/companies/current", { timezone });
-        expect(badZone.status, timezone).toBe(400);
-        expect(await errorCode(badZone)).toBe("invalid_request");
+      // a value that is not one: a name too short, a web address that is none, no location, a time zone the server does not
+      // know (the company's days are counted in it)
+      for (const body of [{ name: "S" }, { website: "not a web address" }, { locations: [] }, { sizeBand: "huge" }, { timezone: "Pacific" }, { timezone: "Pacific Time" }]) {
+        const r = await json(owner, "PATCH", "/api/v1/companies/current", body);
+        expect(r.status, JSON.stringify(body)).toBe(400);
+        expect(await errorCode(r)).toBe("invalid_request");
       }
-      expect((await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)))[0].timezone).toBe("America/Chicago");
-      // what the job pages say about the company has its own routes, where a person approves it (plan D10)
-      for (const settings of [{ about: { text: "We are great." } }, { logo: { file: "x.png" } }, { hiringContact: { email: "jobs@settings.test" } }]) {
-        const r = await json(owner, "PATCH", "/api/v1/companies/current", { settings });
-        expect(r.status, JSON.stringify(settings)).toBe(400);
-        expect(await errorCode(r)).toBe("use_its_own_page");
-      }
-      // no company.update for a hiring manager
-      const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
-      expect((await json(hm, "PATCH", "/api/v1/companies/current", { name: "Nope" })).status).toBe(403);
-      expect((await container.db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)))[0].name).toBe("Settings Dental Group");
+      const notJson = await app.request("/api/v1/companies/current", { method: "PATCH", headers: { "content-type": "application/json", cookie: owner }, body: "name=Nope" });
+      expect(notJson.status).toBe(400);
+      expect(await container.db.select().from(companies).where(eq(companies.id, companyId))).toEqual([before]);
+      expect(await detailsAudits()).toHaveLength(2);
     });
 
-    it("rewords a notice with a new version (the date) that the job page and the apply form show from then on", async () => {
-      const custom = "Settings Dental uses software with artificial intelligence to organize applications and summarize them for the hiring team. People make every hiring decision. Reply HUMAN at any time to reach a person.";
-      const r = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { ai_use: { text: custom } } } });
-      expect(r.status).toBe(200);
-      const body = (await r.json()) as { changed: string[]; notices: Array<{ key: string; version: string; text: string; overridden: boolean; defaultText: string }> };
-      expect(body.changed).toEqual(["notices"]);
-      const ai = body.notices.find((n) => n.key === "ai_use")!;
-      expect(ai).toMatchObject({ version: today(), text: custom, overridden: true });
-      expect(ai.defaultText).not.toBe(custom);
-      expect(body.notices.find((n) => n.key === "privacy")!.overridden).toBe(false);
-      const noticeAudit = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "notice.changed")));
-      expect(noticeAudit).toHaveLength(1);
-      expect(noticeAudit[0].details).toMatchObject({ key: "ai_use", version: today(), previousVersion: null });
-      // the candidate pages pick it up
-      const job = await (await app.request(`/careers/${companySlug}/jobs/${roleId}`)).text();
-      expect(job).toContain(custom);
-      const apply = await (await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`)).text();
-      expect(apply).toContain(custom);
-      expect(apply).toContain(`ai_use@${today()}`);
-      // the list endpoint says the same; the standard text comes back with null
-      const list = (await (await json(owner, "GET", "/api/v1/companies/current/notices")).json()) as Array<{ key: string; overridden: boolean }>;
-      expect(list.find((n) => n.key === "ai_use")!.overridden).toBe(true);
-      const back = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { ai_use: null } } });
-      expect(((await back.json()) as { notices: Array<{ key: string; overridden: boolean }> }).notices.find((n) => n.key === "ai_use")!.overridden).toBe(false);
-      expect(await (await app.request(`/careers/${companySlug}/jobs/${roleId}`)).text()).not.toContain(custom);
-      // a text that is too short to be a notice is refused
-      expect((await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { privacy: { text: "short" } } } })).status).toBe(400);
-    });
-  });
-
-  describe("audit history (A9)", () => {
-    it("lists what the team may see in plain words, filters by action, prefix and dates, and pages", async () => {
-      const all = (await (await json(owner, "GET", "/api/v1/companies/current/audit")).json()) as Array<{ id: string; action: string; description: string; actor: { name: string | null }; at: string; details: Record<string, unknown> }>;
-      expect(all.length).toBeGreaterThanOrEqual(3);
-      expect(all.map((r) => r.action)).toEqual(expect.arrayContaining(["company.updated", "notice.changed"]));
-      const companyRows = all.filter((r) => r.action === "company.updated");
-      expect(companyRows.every((r) => /^Dana Owner changed the company details \(/.test(r.description))).toBe(true);
-      expect(companyRows.some((r) => r.description.includes("contact hours"))).toBe(true);
-      expect(companyRows.some((r) => r.description.includes("candidate notices"))).toBe(true);
-      const noticeRows = all.filter((r) => r.action === "notice.changed").map((r) => r.description);
-      expect(noticeRows).toEqual(expect.arrayContaining([expect.stringContaining("reworded the AI-use notice"), expect.stringContaining("restored the standard text of the AI-use notice")]));
-      // newest first
-      for (let i = 1; i < all.length; i++) expect(Date.parse(all[i - 1].at)).toBeGreaterThanOrEqual(Date.parse(all[i].at));
-      // filters
-      const only = (await (await json(owner, "GET", "/api/v1/companies/current/audit?actions=company.updated")).json()) as Array<{ action: string }>;
-      expect(only.length).toBeGreaterThanOrEqual(1);
-      expect(only.every((r) => r.action === "company.updated")).toBe(true);
-      const prefixed = (await (await json(owner, "GET", "/api/v1/companies/current/audit?prefix=notice.")).json()) as Array<{ action: string }>;
-      expect(prefixed.length).toBe(2);
-      expect(prefixed.every((r) => r.action === "notice.changed")).toBe(true);
-      const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-      expect((await (await json(owner, "GET", `/api/v1/companies/current/audit?from=${tomorrow}`)).json()) as unknown[]).toEqual([]);
-      expect(((await (await json(owner, "GET", `/api/v1/companies/current/audit?to=${tomorrow}`)).json()) as unknown[]).length).toBe(all.length);
-      expect((await json(owner, "GET", "/api/v1/companies/current/audit?from=yesterday")).status).toBe(400);
-      // paging: one at a time, then everything after it in this order. The newest two rows (company.updated and
-      // notice.changed from the last PATCH) were written in one transaction and share their time to the microsecond,
-      // so a cursor on the time alone would lose the sibling; the cursor is the row.
-      const first = (await (await json(owner, "GET", "/api/v1/companies/current/audit?limit=1")).json()) as Array<{ id: string; at: string }>;
-      expect(first).toHaveLength(1);
-      expect(all[0].id).toBe(first[0].id);
-      expect(all[1].at).toBe(all[0].at);
-      const rest = (await (await json(owner, "GET", `/api/v1/companies/current/audit?before=${first[0].id}`)).json()) as Array<{ id: string }>;
-      expect(rest.some((r) => r.id === first[0].id)).toBe(false);
-      expect(rest.map((r) => r.id)).toEqual(all.slice(1).map((r) => r.id));
-      // page by page, nothing lost and nothing twice
-      const paged: string[] = [];
-      for (let cursor = ""; ;) {
-        const page = (await (await json(owner, "GET", `/api/v1/companies/current/audit?limit=2${cursor ? `&before=${cursor}` : ""}`)).json()) as Array<{ id: string }>;
-        if (!page.length) break;
-        paged.push(...page.map((r) => r.id));
-        cursor = page[page.length - 1].id;
-      }
-      expect(paged).toEqual(all.map((r) => r.id));
-      // a cursor that is not a row of this list is refused in plain words
-      expect((await json(owner, "GET", `/api/v1/companies/current/audit?before=${encodeURIComponent(first[0].at)}`)).status).toBe(400);
-      expect((await json(owner, "GET", "/api/v1/companies/current/audit?before=00000000-0000-4000-8000-000000000000")).status).toBe(400);
-      // an action the customer may not see is never listed, even when asked for by name
-      const hidden = (await (await json(owner, "GET", "/api/v1/companies/current/audit?actions=data_request.created,signin.refused")).json()) as unknown[];
-      expect(hidden).toEqual([]);
-    });
-
-    it("downloads the same history as a spreadsheet and records the download", async () => {
-      const r = await json(owner, "GET", "/api/v1/companies/current/audit.csv");
-      expect(r.status).toBe(200);
-      expect(r.headers.get("content-type")).toContain("text/csv");
-      expect(r.headers.get("content-disposition")).toMatch(/activity-\d{4}-\d{2}-\d{2}\.csv/);
-      const csv = await r.text();
-      const lines = csv.trim().split("\r\n");
-      expect(lines[0]).toBe("\"when\",\"what\",\"who\",\"reason\",\"action\",\"target type\",\"target id\"");
-      expect(lines.length).toBeGreaterThanOrEqual(4);
-      expect(csv).toContain("changed the company details");
-      expect(csv).toContain("\"Dana Owner\"");
-      const exported = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "audit.exported")));
-      expect(exported).toHaveLength(1);
-      expect((exported[0].details as { rows: number }).rows).toBe(lines.length - 1);
-      // and the download itself is now part of the history
-      const after = (await (await json(owner, "GET", "/api/v1/companies/current/audit?actions=audit.exported")).json()) as Array<{ description: string }>;
-      expect(after[0].description).toMatch(/downloaded this history \(\d+ rows\)/);
-    });
-  });
-
-  describe("sessions (A11)", () => {
-    it("lists a person's own sessions with the current one marked, revokes one by id, and signs out everywhere else", async () => {
-      const second = await signInWithIdentity(app, container, { email: "dana@settings.test", name: "Dana Owner", provider: "google", aal2: false });
-      const third = await signInWithIdentity(app, container, { email: "dana@settings.test", name: "Dana Owner", provider: "google", aal2: false });
-      const list = (await (await json(owner, "GET", "/api/v1/auth/sessions")).json()) as Array<{ id: string; current: boolean; addressHash: string | null; provider: string; createdAt: string; lastSeenAt: string | null }>;
-      expect(list).toHaveLength(3);
-      expect(list.filter((s) => s.current)).toHaveLength(1);
-      expect(list[0].current).toBe(true);
-      expect(list.every((s) => s.provider === "google" && s.createdAt)).toBe(true);
-      expect(JSON.stringify(list)).not.toMatch(/tokenHash|token_hash/);
-      // the same person from another session sees a different one as current
-      const fromSecond = (await (await json(second, "GET", "/api/v1/auth/sessions")).json()) as Array<{ id: string; current: boolean }>;
-      expect(fromSecond.find((s) => s.current)!.id).not.toBe(list.find((s) => s.current)!.id);
-      const other = list.find((s) => !s.current)!;
-      // revoke one by id: it stops working; a stranger's session id is not found
-      expect((await json(owner, "POST", `/api/v1/auth/sessions/${other.id}/revoke`)).status).toBe(200);
-      expect((await json(owner, "POST", `/api/v1/auth/sessions/${other.id}/revoke`)).status).toBe(404);
-      expect((await json(owner, "POST", "/api/v1/auth/sessions/not-a-uuid/revoke")).status).toBe(404);
-      const remaining = (await (await json(owner, "GET", "/api/v1/auth/sessions")).json()) as Array<{ id: string }>;
-      expect(remaining).toHaveLength(2);
-      const revokedCookie = other.id === fromSecond.find((s) => s.current)!.id ? second : third;
-      expect((await json(revokedCookie, "GET", "/api/v1/auth/me")).status).toBe(401);
-      // sign out everywhere else keeps this one
-      const all = (await (await json(owner, "POST", "/api/v1/auth/sessions/revoke-all")).json()) as { sessionsEnded: number };
-      expect(all.sessionsEnded).toBe(1);
-      expect((await json(owner, "GET", "/api/v1/auth/me")).status).toBe(200);
-      expect((await (await json(owner, "GET", "/api/v1/auth/sessions")).json()) as unknown[]).toHaveLength(1);
-      const stranger = await signInAs(container, app, { companyId, role: "hiring_manager" });
-      expect((await json(stranger, "POST", `/api/v1/auth/sessions/${list.find((s) => s.current)!.id}/revoke`)).status).toBe(404);
-      const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId)));
-      expect(audited.length).toBeGreaterThanOrEqual(2);
-      // no other session left to end
-      expect(((await (await json(owner, "POST", "/api/v1/auth/sessions/revoke-all")).json()) as { sessionsEnded: number }).sessionsEnded).toBe(0);
-    });
-
-    it("an owner or admin signs a member out everywhere; not themselves, not a non-member, and a hiring manager signs nobody out", async () => {
-      const hm = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hank@settings.test" });
-      const hmId = ((await (await json(hm, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
-      expect((await json(hm, "GET", "/api/v1/auth/me")).status).toBe(200);
-      const r = await json(owner, "POST", `/api/v1/companies/current/members/${hmId}/sign-out`);
-      expect(r.status).toBe(200);
-      expect((await r.json()) as { sessionsEnded: number }).toEqual({ ok: true, userId: hmId, sessionsEnded: 1, message: "Signed out of one session here; they must sign in again to work here. If they use the same account for another company, their sessions there stay open. To keep them out of this company, remove them from the team." });
-      expect((await json(hm, "GET", "/api/v1/auth/me")).status).toBe(401);
-      const self = await json(owner, "POST", `/api/v1/companies/current/members/${ownerId}/sign-out`);
-      expect(self.status).toBe(400);
-      expect(await errorCode(self)).toBe("self_sign_out");
-      expect((await json(owner, "POST", "/api/v1/companies/current/members/00000000-0000-4000-8000-000000000000/sign-out")).status).toBe(404);
-      expect((await json(owner, "POST", "/api/v1/companies/current/members/nope/sign-out")).status).toBe(404);
-      const mo = await signInAs(container, app, { companyId, role: "hiring_manager" });
-      expect((await json(mo, "POST", `/api/v1/companies/current/members/${hmId}/sign-out`)).status).toBe(403);
-      const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt));
-      expect(audited[0].details).toEqual({ sessionsEnded: 1, scope: "company" });
-      expect(audited[0].target).toEqual({ type: "user", id: hmId });
-    });
-
-    it("signing out is ranked: a hiring manager never, an admin never an owner, an owner anyone (audit 01-platform B3)", async () => {
-      const meId = async (cookie: string) => ((await (await json(cookie, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
-      const manager = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hope.manager@settings.test" });
-      const admin = await signInAs(container, app, { companyId, role: "admin", email: "abe.admin@settings.test" });
-      const coOwner = await signInAs(container, app, { companyId, role: "owner", email: "olive.owner@settings.test" });
-      const ivy = await signInAs(container, app, { companyId, role: "hiring_manager", email: "ivy.manager@settings.test" });
-      const [adminId, coOwnerId, ivyId] = [await meId(admin), await meId(coOwner), await meId(ivy)];
-      const before = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId)))).length;
-      // a hiring manager: refused for everyone, an owner, an admin or another hiring manager alike, and nothing ends
-      for (const target of [ownerId, adminId, ivyId]) {
-        const r = await json(manager, "POST", `/api/v1/companies/current/members/${target}/sign-out`);
-        expect(r.status).toBe(403);
-        expect(await errorCode(r)).toBe("forbidden");
-      }
-      // an admin cannot sign an owner out
-      for (const target of [ownerId, coOwnerId]) {
-        const r = await json(admin, "POST", `/api/v1/companies/current/members/${target}/sign-out`);
-        expect(r.status).toBe(403);
-        expect(await errorCode(r)).toBe("owner_only");
-      }
-      for (const cookie of [owner, coOwner, admin, ivy]) expect((await json(cookie, "GET", "/api/v1/auth/me")).status).toBe(200);
-      expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId)))).length).toBe(before);
-      // an admin signs a hiring manager out; an owner signs another owner out
-      expect((await json(admin, "POST", `/api/v1/companies/current/members/${ivyId}/sign-out`)).status).toBe(200);
-      expect((await json(ivy, "GET", "/api/v1/auth/me")).status).toBe(401);
-      expect((await json(owner, "POST", `/api/v1/companies/current/members/${coOwnerId}/sign-out`)).status).toBe(200);
-      expect((await json(coOwner, "GET", "/api/v1/auth/me")).status).toBe(401);
-    });
-
-    it("a sign-out from one company ends only the sessions working there; the person's work in another company goes on, and nothing here tells of it", async () => {
-      // Pat is a hiring manager here and an owner of another company, signed in twice: once working here, once there
-      const other = await signInWithIdentity(app, container, { email: "olga@elsewhere.test", name: "Olga Other", provider: "google", aal2: false });
-      const otherCo = ((await (await json(other, "POST", "/api/v1/companies", { name: "Elsewhere Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Tustin", region: "CA", country: "US" }] })).json()) as { id: string }).id;
-      const here = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pat.two@settings.test", name: "Pat Two" });
-      const there = await signInAs(container, app, { companyId: otherCo, role: "owner", email: "pat.two@settings.test", name: "Pat Two" });
-      const patId = ((await (await json(here, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
-      const r = await json(owner, "POST", `/api/v1/companies/current/members/${patId}/sign-out`);
-      expect(r.status).toBe(200);
-      const body = (await r.json()) as Record<string, unknown>;
-      // the same answer as for someone who works only here: nothing about the other company, or how active they are there
-      expect(body).toEqual({ ok: true, userId: patId, sessionsEnded: 1, message: "Signed out of one session here; they must sign in again to work here. If they use the same account for another company, their sessions there stay open. To keep them out of this company, remove them from the team." });
-      expect(body).not.toHaveProperty("otherCompanies");
-      expect(body).not.toHaveProperty("sessionsLeftOpen");
-      // the session here is over; the one in the other company still works, in that company
-      expect((await json(here, "GET", "/api/v1/auth/me")).status).toBe(401);
-      const still = (await (await json(there, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string };
-      expect(still.activeCompanyId).toBe(otherCo);
-      expect((await json(there, "GET", "/api/v1/companies/current")).status).toBe(200);
-      // recorded in this company's history, with nothing about the other company
-      const [audited] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt)).limit(1);
-      expect(audited.details).toEqual({ sessionsEnded: 1, scope: "company" });
-      // removed from this team, their session in the other company keeps working and cannot switch back here
-      const there2 = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pat.two@settings.test", name: "Pat Two" });
-      expect((await json(owner, "PATCH", `/api/v1/companies/current/members/${patId}`, { status: "removed" })).status).toBe(200);
-      const [removalAudit] = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.revoked"), eq(auditRecords.companyId, companyId))).orderBy(desc(auditRecords.createdAt)).limit(1);
-      expect(removalAudit.details).toEqual({ sessionsEnded: 1, scope: "company" });
-      expect((await json(there2, "GET", "/api/v1/auth/me")).status).toBe(401);
-      expect((await json(there, "GET", "/api/v1/companies/current")).status).toBe(200);
-      expect((await json(there, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(403);
-    });
-  });
-
-  describe("re-authentication before sensitive changes (A12)", () => {
-    it("a rule change is refused once the session is older than thirty minutes, and accepted again after confirming with the provider", async () => {
-      // fresh session: the rule change goes through
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(200);
-      setClock(31 * 60_000);
-      const refused = await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] });
+    it("an owner and an admin change the details; a member reads them and is told they may not change them", async () => {
+      const admin = await signInAs(container, app, { companyId, role: "admin" });
+      const member = await signInAs(container, app, { companyId, role: "hiring_manager" });
+      expect((await company(admin)).viewer).toEqual({ mayEdit: true });
+      expect((await json(admin, "PATCH", "/api/v1/companies/current", { benefitsSummary: "Health and dental." })).status).toBe(200);
+      const seen = await company(member);
+      expect(seen.viewer).toEqual({ mayEdit: false });
+      expect(seen.benefitsSummary).toBe("Health and dental.");
+      const refused = await json(member, "PATCH", "/api/v1/companies/current", { name: "Nope" });
       expect(refused.status).toBe(403);
-      expect(await errorCode(refused)).toBe("reauth_required");
-      const notice = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { privacy: { text: "We keep what you give us only as long as the law requires, and a person handles every request about it." } } } });
-      expect(notice.status).toBe(403);
-      expect(await errorCode(notice)).toBe("reauth_required");
-      // an ordinary preference still saves without it
-      expect((await json(owner, "PATCH", "/api/v1/companies/current", { settings: { benefitsSummary: "Health, dental, vision." } })).status).toBe(200);
+      expect(await errorCode(refused)).toBe("forbidden");
+      expect((await company(owner)).name).toBe("Settings Dental Group");
+      // someone signed out, and someone with no company, read nothing
+      expect((await app.request("/api/v1/companies/current")).status).toBe(401);
+      const stranger = await signInWithIdentity(app, container, { email: "sam@elsewhere.test", name: "Sam Stranger", provider: "google", aal2: false });
+      const none = await json(stranger, "GET", "/api/v1/companies/current");
+      expect(none.status).toBe(403);
+      expect(await errorCode(none)).toBe("no_company");
+    });
+  });
 
-      // "Confirm it's you": the same PKCE flow, marked, through the fake consent page
+  describe("re-authentication before someone is made an admin or an owner", () => {
+    let miaId = "";
+    const memberPath = () => `/api/v1/companies/current/members/${miaId}`;
+    const team = async () => (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as TeamView;
+    const roleOfMia = async () => (await team()).members.find((m) => m.userId === miaId)!.role;
+
+    it("a grant is refused once the session is older than thirty minutes, and accepted again for ten minutes after confirming with the provider", async () => {
+      const mia = await signInAs(container, app, { companyId, role: "hiring_manager", email: "mia@settings.test", name: "Mia Member" });
+      miaId = ((await (await json(mia, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
+      // a fresh session: the grant goes through, and so does taking it back
+      const granted = await json(owner, "PATCH", memberPath(), { role: "admin" });
+      expect(granted.status).toBe(200);
+      expect((await granted.json()) as MemberChanged).toEqual({ ok: true, userId: miaId, role: "admin", status: "active" });
+      expect((await json(owner, "PATCH", memberPath(), { role: "hiring_manager" })).status).toBe(200);
+
+      setClock(31 * 60_000);
+      for (const role of ["admin", "owner"]) {
+        const refused = await json(owner, "PATCH", memberPath(), { role });
+        expect(refused.status, role).toBe(403);
+        const { error } = (await refused.json()) as { error: { code: string; details: unknown } };
+        expect(error.code).toBe("reauth_required");
+        expect(error.details).toEqual({ freshSessionMinutes: 30, reauthMinutes: 10 });
+      }
+      const sentBefore = mail().sent.length;
+      const invite = await json(owner, "POST", "/api/v1/companies/current/members/invite", { email: "ada.admin@settings.test", role: "admin" });
+      expect(invite.status).toBe(403);
+      expect(await errorCode(invite)).toBe("reauth_required");
+      await container.drain();
+      expect(mail().sent.slice(sentBefore).some((m) => m.to === "ada.admin@settings.test")).toBe(false);
+      expect(await roleOfMia()).toBe("hiring_manager");
+      expect((await team()).invitations).toEqual([]);
+      // what makes nobody an admin or an owner still goes without it: the company's details, and inviting a member
+      expect((await json(owner, "PATCH", "/api/v1/companies/current", { benefitsSummary: "Health, dental, vision." })).status).toBe(200);
+      const member = await json(owner, "POST", "/api/v1/companies/current/members/invite", { email: "max.member@settings.test", role: "hiring_manager" });
+      expect(member.status).toBe(201);
+      expect(((await member.json()) as InviteAnswer).invitation).toMatchObject({ email: "max.member@settings.test", role: "hiring_manager", roleLabel: "Member" });
+
+      // "Confirm it's you": the same PKCE flow, marked, through the fake consent page; Settings asks to come back to itself
       const start = await json(owner, "POST", "/api/v1/auth/reauth/start", { returnTo: "/setup" });
       expect(start.status).toBe(200);
       const { url, provider } = (await start.json()) as { url: string; provider: string };
@@ -379,17 +197,23 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect(Math.abs(Date.parse(row.reauthenticatedAt!) - container.engine.clock().getTime())).toBeLessThan(5_000);
       const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "session.reauthenticated"), eq(auditRecords.companyId, companyId)));
       expect(audited).toHaveLength(1);
-      // now the change goes through, for ten minutes
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "auto_notify", approverRoles: [] })).status).toBe(200);
-      expect((await json(owner, "PATCH", "/api/v1/companies/current", { settings: { notices: { privacy: { text: "We keep what you give us only as long as the law requires, and a person handles every request about it." } } } })).status).toBe(200);
+
+      // now both grants go through, for ten minutes
+      expect((await json(owner, "PATCH", memberPath(), { role: "admin" })).status).toBe(200);
+      expect(await roleOfMia()).toBe("admin");
+      expect((await json(owner, "POST", "/api/v1/companies/current/members/invite", { email: "ada.admin@settings.test", role: "admin" })).status).toBe(201);
       setClock(31 * 60_000 + 11 * 60_000);
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(403);
-      // the sessions list shows when it was confirmed
-      const list = (await (await json(owner, "GET", "/api/v1/auth/sessions")).json()) as Array<{ current: boolean; reauthenticatedAt: string | null }>;
-      expect(list.find((s) => s.current)!.reauthenticatedAt).toBeTruthy();
+      const late = await json(owner, "PATCH", memberPath(), { role: "owner" });
+      expect(late.status).toBe(403);
+      expect(await errorCode(late)).toBe("reauth_required");
+      expect(await roleOfMia()).toBe("admin");
+      // taking a role away never needs it
+      expect((await json(owner, "PATCH", memberPath(), { role: "hiring_manager" })).status).toBe(200);
+      expect(await roleOfMia()).toBe("hiring_manager");
     });
 
     it("confirming with a different account changes nothing, and a stale marker never hijacks a plain sign-in", async () => {
+      // with no address given, the browser comes back to Settings
       const start = await json(owner, "POST", "/api/v1/auth/reauth/start", {});
       const { url } = (await start.json()) as { url: string };
       const pkce = cookieNamed(start, "ros_pkce")!;
@@ -397,11 +221,21 @@ describe("company preferences, audit history, sessions, re-authentication and th
       const authorize = new URL(url);
       const consent = await form("/api/v1/auth/fake/authorize", { provider: "google", redirect_to: `${container.env.APP_BASE_URL}/api/v1/auth/callback`, code_challenge: authorize.searchParams.get("code_challenge")!, state: authorize.searchParams.get("state")!, email: "someone.else@settings.test", name: "Someone Else", email_verified: "1" });
       const cb = new URL(consent.headers.get("location")!);
-      const before = (await container.db.select().from(sessions).where(eq(sessions.userId, ownerId)))[0].reauthenticatedAt;
+      const stampOf = async () => (await container.db.select().from(sessions).where(and(eq(sessions.userId, ownerId), eq(sessions.tokenHash, hashToken(owner.split("=")[1])))))[0].reauthenticatedAt;
+      const before = await stampOf();
       const done = await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: `${owner}; ${pkce}; ${marker}` } });
       expect(done.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup?reauth=mismatch`);
-      expect((await container.db.select().from(sessions).where(eq(sessions.userId, ownerId)))[0].reauthenticatedAt).toBe(before);
-      expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.recommend_interview", level: "approval", approverRoles: [] })).status).toBe(403);
+      expect(await stampOf()).toBe(before);
+      expect((await json(owner, "PATCH", memberPath(), { role: "admin" })).status).toBe(403);
+      // an address outside the app is never where the browser is sent back to
+      const outside = await json(owner, "POST", "/api/v1/auth/reauth/start", { returnTo: "https://elsewhere.example/setup" });
+      const outsideMarker = cookieNamed(outside, "ros_reauth")!;
+      const outsidePkce = cookieNamed(outside, "ros_pkce")!;
+      const outsideAuthorize = new URL(((await outside.json()) as { url: string }).url);
+      const outsideConsent = await form("/api/v1/auth/fake/authorize", { provider: "google", redirect_to: `${container.env.APP_BASE_URL}/api/v1/auth/callback`, code_challenge: outsideAuthorize.searchParams.get("code_challenge")!, state: outsideAuthorize.searchParams.get("state")!, email: "someone.else@settings.test", name: "Someone Else", email_verified: "1" });
+      const outsideCb = new URL(outsideConsent.headers.get("location")!);
+      const outsideDone = await app.request(`${outsideCb.pathname}?${outsideCb.searchParams.toString()}`, { headers: { cookie: `${owner}; ${outsidePkce}; ${outsideMarker}` } });
+      expect(outsideDone.headers.get("location")).toBe(`${container.env.APP_BASE_URL}/setup?reauth=mismatch`);
       // a plain sign-in with the abandoned marker still in the cookie jar opens a session as usual
       const plain = await app.request("/api/v1/auth/start/google");
       const plainPkce = plain.headers.get("set-cookie")!.split(";")[0];
