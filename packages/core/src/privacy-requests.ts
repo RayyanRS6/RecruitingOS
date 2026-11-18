@@ -688,25 +688,6 @@ export async function fulfilDeletionRequest(q: Queryable, row: DataRequestRow, i
 }
 
 /**
- * Text-message opt-out: applied at once; the record exists so the deadline and the confirmation are tracked like any
- * other request. Any text to them still waiting (queued for a later hour, or held for the ITS company check) is withdrawn
- * now; the outbox checks again before every send.
- */
-export async function fulfilSmsOptOut(q: Queryable, row: DataRequestRow, actor: Actor, now: Date = new Date()): Promise<DataRequestRow> {
-  if (row.candidateId) {
-    const [cand] = await q.select().from(candidates).where(eq(candidates.id, row.candidateId)).limit(1);
-    if (cand) {
-      await q.update(candidates).set({ preferences: { ...cand.preferences, smsOptOut: true }, consent: { ...cand.consent, sms: { ...(cand.consent.sms ?? { at: now.toISOString(), source: "status_page" }), granted: false, at: now.toISOString() } } }).where(eq(candidates.id, cand.id));
-      await emit(q, { type: "candidate.opted_out", companyId: row.companyId, actor, subject: { type: "candidate", id: cand.id }, payload: { channel: "sms", requestId: row.id } });
-      const reason = "the candidate stopped text messages";
-      const waiting = await q.update(communications).set({ status: "cancelled", error: reason }).where(and(eq(communications.candidateId, cand.id), eq(communications.channel, "sms"), inArray(communications.status, ["queued", "held"]))).returning({ id: communications.id, templateKey: communications.templateKey, applicationId: communications.applicationId });
-      for (const c of waiting) await emit(q, { type: "message.cancelled", companyId: row.companyId, actor, subject: { type: "communication", id: c.id }, payload: { template: c.templateKey, channel: "sms", applicationId: c.applicationId, reason } });
-    }
-  }
-  return resolve(q, row, "Text messages stopped.", actor, "fulfilled", now);
-}
-
-/**
  * "Ask a person to review my application": the request stays with ITS administrators, who arrange the review with the
  * company: an admin alert, and a note on the request, which the privacy console lists with its deadline. Privacy requests
  * are platform records, so this always runs in a platform transaction, where alerts can be written.

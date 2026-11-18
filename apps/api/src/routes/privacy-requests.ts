@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { AdminCreateDataRequest, DataRequestAssign, DataRequestCounsel, DataRequestDecline, DataRequestFulfil, DataRequestNote, DataRequestVerify } from "@ros/contracts";
-import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, checkPrivacyRequestDeadlines, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, fulfilSmsOptOut, publicDataRequest, raiseAlert, recordCounselDecision, verifyDataRequest, type DataRequestRow } from "@ros/core";
+import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, checkPrivacyRequestDeadlines, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, publicDataRequest, raiseAlert, recordCounselDecision, verifyDataRequest, type DataRequestRow } from "@ros/core";
 import { sendDeletionConfirmation, sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
@@ -141,12 +141,7 @@ privacyRequestRoutes.post("/:id/fulfil", async (c) => {
         const u = await fulfilDeletionRequest(tx, row, { resolution: body.resolution, confirm: !!body.confirmAnonymize, actor, deleteFile: async (key) => { filesToRemove.push(key); }, now: container.engine.clock(), cancelRun: (q, runId, reason) => container.engine.cancel(q, runId, actor, reason) });
         return u;
       }
-      if (row.kind === "sms_opt_out") {
-        const u = await fulfilSmsOptOut(tx, row, actor, container.engine.clock());
-        await sendPrivacyCompletion(tx, container.integrations, { row: u, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
-        return u;
-      }
-      // human_review and withdrawal close once the person confirms the outcome in the resolution text
+      // every other kind closes once the person confirms the outcome in the resolution text
       const [u] = await tx.update(dataRequests).set({ status: "fulfilled", resolution: body.resolution, resolvedAt: container.engine.clock().toISOString(), resolvedBy: actor.id }).where(eq(dataRequests.id, row.id)).returning();
       await sendPrivacyCompletion(tx, container.integrations, { row: u, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
       return u;

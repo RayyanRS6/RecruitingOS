@@ -7,7 +7,7 @@ import { closingDayWords } from "./closing-date";
  * [counsel] in docs/00 must be reviewed by an attorney before use with paying customers.
  */
 
-export type NoticeKey = "ai_use" | "sms_consent" | "recording" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
+export type NoticeKey = "ai_use" | "recording" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
 
 export type Notice = { key: NoticeKey; version: string; jurisdictions: string[]; text: string };
 
@@ -20,13 +20,6 @@ export const DEFAULT_NOTICES: Notice[] = [
     text:
       "This employer uses software that includes artificial intelligence to help organize applications, ask screening questions, and summarize information for the hiring team. " +
       "People make the hiring decisions. You can ask to talk to a person at any point: before you apply, use the contact on the job page; after you apply, reply HUMAN to any of our messages or use the link in it.",
-  },
-  {
-    key: "sms_consent",
-    version: "2026-09-01",
-    jurisdictions: ["*"],
-    text:
-      "Yes, you may send me text messages about this application (scheduling, questions, updates). Message and data rates may apply. Reply STOP to opt out at any time. Consent is not a condition of applying.",
   },
   {
     key: "recording",
@@ -96,11 +89,11 @@ export function payShown(compensation: { discloseRange: boolean }, notices: Noti
 }
 
 /**
- * The notices a candidate page renders as text. Two keys stay defined but are never shown as notices: `recording` is
- * for a feature release 1 does not have (docs/readiness/20 section F), and `sms_consent` is a consent checkbox, not a
- * notice, rendered by the apply form only while texting is on. Neither belongs in the versions recorded as shown.
+ * The notices a candidate page renders as text. One key stays defined but is never shown as a notice: `recording` is
+ * for a feature release 1 does not have (docs/readiness/20 section F), and does not belong in the versions recorded as
+ * shown.
  */
-export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording", "sms_consent"];
+export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording"];
 
 export function candidateNotices(notices: Notice[]): Notice[] {
   return notices.filter((n) => !NOTICES_NOT_RENDERED.includes(n.key));
