@@ -242,15 +242,15 @@ describe("a credential the candidate's own words show is not held", () => {
   });
 
   /**
-   * The founder's licence rule (15 Oct 2026): a credential must-have is "no" only when the candidate's own words say
-   * plainly they do not hold it; lapsed, expired, pending or unclear is "unknown", whatever the model answered, so every
-   * reading of the same CV gives the same finding and score.
+   * The licence rule: a credential must-have is "no" only when the candidate's own words say plainly they do not hold
+   * it; lapsed, expired, pending or unclear is "unknown", whatever the model answered, so every reading of the same CV
+   * gives the same finding and score.
    */
   it("holds a credential must-have to the licence rule, whatever the model answered", () => {
     const credentials = credentialMustHaves({ requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law" }, { key: "perio", text: "Periodontal therapy", rationale: "work" }], niceToHaves: [] } });
     expect([...credentials]).toEqual(["licence"]);
     const text = `${RESUME}\nI do not hold a Nevada RDH license\nRDH license CA active`;
-    const inResume = (e: { quote?: string; source: string }) => (e.source === "resume" ? text.includes(e.quote ?? "") : null);
+    const inResume = (e: { quote?: string; source: string }) => e.source === "resume" && text.includes(e.quote ?? "");
     const quoted = (key: string, met: Met, quote: string) => reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: key, met, evidence: { source: "resume", quote } }] });
     const lapsed = "RDH license CA expired in 2021; renewal not started";
     // lapsed: "unknown" from every answer the model could give, so three readings always agree

@@ -1,4 +1,4 @@
-import { EvidenceAssessment, type ResumeExtraction, type RolePacket } from "@ros/contracts";
+import { EvidenceAssessment, skillsInScore, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { FAIRNESS_RULES, FINDING_RULES_MUST_HAVES, FINDING_RULES_NAMING, withoutTag, type PromptDef } from "./registry";
 
 /**
@@ -7,6 +7,7 @@ import { FAIRNESS_RULES, FINDING_RULES_MUST_HAVES, FINDING_RULES_NAMING, without
  * to the company or how those ended.
  */
 export type TriageInput = {
+  /** The job version the reading is made against. Only what the CV score counts is read from it: its must-haves and its skills. */
   packet: RolePacket;
   extraction: ResumeExtraction | null;
   resumeText: string | null;
@@ -63,14 +64,15 @@ ${FINDING_RULES_NAMING}
 
 ${FAIRNESS_RULES}`;
 
+/**
+ * The job as the reading takes it: what it is, then exactly the requirements the CV score counts (`cvScoreOf`): every
+ * must-have, and every skill but one named like a must-have (`skillsInScore`). Nothing the score does not count is sent.
+ */
 function packetBlock(p: RolePacket): string {
-  const comp = p.compensation;
   return [
     `Role: ${p.identity.title} (${p.identity.employmentType.replace("_", " ")}${p.identity.schedule ? `, ${p.identity.schedule}` : ""}) at ${p.identity.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}.`,
     `Must-haves: ${p.requirements.mustHaves.map((m) => `[${m.key}] ${m.text}${m.rationale ? ` (${m.rationale})` : ""}`).join(" | ")}`,
-    `Nice-to-haves: ${p.requirements.niceToHaves.map((m) => `[${m.key}] ${m.text}`).join(" | ") || "none"}`,
-    `Competencies: ${p.competencies.map((c) => `[${c.key}] ${c.name}: ${c.definition} Indicators: ${c.indicators.join("; ")}`).join(" | ")}`,
-    `Pay: ${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}.`,
+    `Competencies: ${skillsInScore(p).map((c) => `[${c.key}] ${c.name}: ${c.definition} Indicators: ${c.indicators.join("; ")}`).join(" | ") || "none"}`,
   ].join("\n");
 }
 

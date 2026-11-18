@@ -1,7 +1,7 @@
 import type { EvidenceAssessment, ResumeExtraction, ScreenAssessment, ScreenProgress, ScreenTurn } from "@ros/contracts";
 import type { StructuredRequest } from "@ros/ai";
 import { redactProtected } from "./screening";
-import { plainlyNotHeld } from "./triage";
+import { namesCredential, plainlyNotHeld } from "./triage";
 
 /**
  * The stand-in AI for a candidate's path: the CV's facts, the CV reading, a turn of the AI interview and its scorecard.
@@ -47,8 +47,6 @@ function parseBracketList(block: string | undefined): Array<{ key: string; text:
 
 /** A line where the candidate says, in their own words, that they do not have something: lapsed, expired, never, do not have. */
 const NOT_MET = /\b(expired|lapsed|no longer (?:hold|have|active)|not (?:licensed|certified|currently licensed)|(?:do|does) not (?:have|hold)|don't (?:have|hold)|never (?:had|held|done|worked))\b/i;
-/** A must-have that names a licence, certificate, permit or registration (as `credentialMustHaves` reads it). */
-const CREDENTIAL = /licen[cs]|certif|permit|registration|registered|credential/i;
 
 /** "Active CA RDH license" reads as "active CA RDH license" after "your"; an acronym at the start ("RDH license") is left alone. */
 function plainPhrase(s: string): string {
@@ -80,7 +78,7 @@ export function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAsses
     const tks = tokens(what);
     const hits = tks.filter((t) => lower.includes(t));
     const miss = lines.find((l) => NOT_MET.test(l) && tks.some((t) => l.toLowerCase().includes(t)));
-    if (miss && CREDENTIAL.test(m.text) && !plainlyNotHeld(miss)) {
+    if (miss && namesCredential(m.text) && !plainlyNotHeld(miss)) {
       unknowns.push({ question: `Is your ${plainPhrase(what)} current?`, whyItMatters: "It is a must-have for this job and the resume says it is lapsed or pending." });
       return { requirementKey: m.key, met: "unknown" as const, evidence: { source: "resume" as const, quote: miss } };
     }

@@ -48,6 +48,25 @@ describe("the CV score of one reading", () => {
     expect(unknown.requirements[0]).toMatchObject({ finding: "not_shown", quote: null });
   });
 
+  it("can never read 100 beside a must-have that is not shown: every must-have of the job is in the number", () => {
+    // one must-have nothing was said about, the job's one skill shown in full: 3 of 7 points, never 100
+    const job = { requirements: { mustHaves: [{ key: "mh_practical", text: "Passes our practical test" }], niceToHaves: [] }, competencies: [skill("c_chairside", "Chairside assisting", "essential")] };
+    expect(cvScoreFromReading({ requirementFindings: [], competencyFindings: [{ competencyKey: "c_chairside", finding: "evidenced", evidence: quoted("Four years chairside") }] }, job)).toMatchObject({ score: 43, mustHaves: { shown: 0, total: 1 }, mustHaveLine: "0 of 1 must-have shown" });
+    // and over every combination of findings on the two must-haves and the two counted skills
+    const mets = ["yes", "partially", "no", "unknown"] as const;
+    const finds = ["evidenced", "partially_evidenced", "contradicted", "not_evidenced"] as const;
+    for (const licence of mets) for (const xray of mets) for (const chairside of finds) for (const dentrix of finds) {
+      const score = cvScoreFromReading({
+        requirementFindings: [{ requirementKey: "mh_license", met: licence, evidence: quoted("their words") }, { requirementKey: "mh_xray", met: xray, evidence: quoted("their words") }],
+        competencyFindings: [{ competencyKey: "c_chairside", finding: chairside, evidence: quoted("their words") }, { competencyKey: "c_dentrix", finding: dentrix, evidence: quoted("their words") }],
+      }, packet);
+      const everyMustHaveShown = licence === "yes" && xray === "yes";
+      expect(score.mustHaves, `${licence} ${xray}`).toEqual({ shown: [licence, xray].filter((m) => m === "yes").length, total: 2 });
+      if (score.score === 100) expect(everyMustHaveShown, `${licence} ${xray} ${chairside} ${dentrix}`).toBe(true);
+      if (!everyMustHaveShown) expect(score.score, `${licence} ${xray} ${chairside} ${dentrix}`).toBeLessThan(100);
+    }
+  });
+
   it("scores a reading that found nothing as zero, and says when it was read against an earlier version of the job", () => {
     expect(cvScoreFromReading({ requirementFindings: [], competencyFindings: [] }, packet)).toMatchObject({ score: 0, band: "low", mustHaveLine: "0 of 2 must-haves shown", earlierVersion: false, earlierVersionLine: null });
     expect(cvScoreFromReading(reading, packet, { earlierVersion: true })).toMatchObject({ score: 75, earlierVersion: true, earlierVersionLine: EARLIER_VERSION_LINE });

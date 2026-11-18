@@ -138,6 +138,20 @@ describe("no number from the model", () => {
     if (own.result.kind !== "ok") throw new Error(`expected a reading: ${own.result.kind}`);
     expect(own.result.output).not.toHaveProperty("secondaryScore");
   });
+
+  it("the resume reading is asked about exactly what the score counts: every must-have and every counted skill, never a nice-to-have or the pay", () => {
+    const job = {
+      ...PACKET,
+      requirements: { mustHaves: [{ key: "mh_licence", text: "Active CA RDH license" }], niceToHaves: [{ key: "n_spanish", text: "Speaks Spanish" }] },
+      competencies: [{ key: "c_perio", name: "Periodontal care", definition: "Charts and treats.", importance: "essential", indicators: ["charts every visit"] }, { key: "c_licence", name: "active CA RDH license.", definition: "Holds it.", importance: "important", indicators: [] }],
+    };
+    const system = (packet: unknown) => triageAssessPrompt.system({ packet: packet as never, extraction: null, resumeText: RESUME, answerSentences: [] }).map((b) => b.text).join("\n");
+    expect(system(job)).toContain("Must-haves: [mh_licence] Active CA RDH license");
+    expect(system(job)).toContain("Competencies: [c_perio] Periodontal care: Charts and treats. Indicators: charts every visit");
+    // a skill named exactly like a must-have counts once, as the must-have, so the reading is not asked about it twice
+    for (const gone of ["c_licence", "Speaks Spanish", "n_spanish", "Nice-to-haves", "Pay:", "45 to 55"]) expect(system(job), gone).not.toContain(gone);
+    expect(system({ ...job, competencies: [] })).toContain("Competencies: none");
+  });
 });
 
 /**

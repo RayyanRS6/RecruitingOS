@@ -1,17 +1,16 @@
-import { inArray, eq } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import type { Evidence, EvidenceAssessment, EvidenceSource, ResumeExtraction, RolePacket } from "@ros/contracts";
 import { outOfCredit, resumeExtractPrompt, runPromptDetached, runPromptsDetached, triageAssessPrompt, type AiRuntime, type RunMeta, type RunOutcome, type TriageInput } from "@ros/ai";
 import { errorForLog, formAnswerSentences } from "@ros/core";
-import { aiRuns, withTenant, type Db, type Queryable } from "@ros/db";
+import { aiRuns, withTenant, type Db } from "@ros/db";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringIdentity, type ScoringView } from "./scoring-view";
 
 export { PLACEHOLDER as SCORING_PLACEHOLDER, SCORING_VIEW_VERSION, hasPlaceholder, restoreQuotes, scoringView, withoutPlaceholders, type HiddenKind, type ScoringIdentity, type ScoringView } from "./scoring-view";
 
 /**
- * Resume extraction (Triage agent, Slice 1). Quotes are verified against the source text in code:
- * any quote that is not a substring of the resume is dropped and the entry is marked as unquoted, so
- * nothing the model invented can be presented as evidence. The model is called with no transaction open;
- * the run is recorded in its own short one.
+ * The CV's facts, read by the model once per application. Quotes are verified against the source text in code: any quote
+ * that is not in the CV is dropped, so nothing the model invented can be presented as evidence. The model is called with
+ * no transaction open; the run is recorded in its own short one.
  */
 export async function extractResume(db: Db, ai: AiRuntime, input: { companyId: string; workflowRunId?: string | null; text: string; filename?: string; documentId: string }): Promise<RunOutcome<ResumeExtraction>> {
   const out = await runPromptDetached(db, ai, resumeExtractPrompt, { text: input.text, filename: input.filename }, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { documentId: input.documentId, chars: input.text.length } });
@@ -41,6 +40,10 @@ export type AssessInput = {
   companyId: string;
   workflowRunId?: string | null;
   applicationId: string;
+  /**
+   * The job as the reading takes it: the must-haves and skills of the version it is read against, and `formQuestions` as
+   * this candidate answered them (the version they applied to), which the form's answers are read with.
+   */
   packet: RolePacket;
   extraction: ResumeExtraction | null;
   resumeText: string | null;
@@ -107,11 +110,11 @@ export function assessmentSources(input: Pick<AssessInput, "resumeText" | "formA
 }
 
 /**
- * Evidence-based assessment (Triage agent, Slice 2). The model reads the application `TRIAGE_READINGS` times; code
- * verifies every quote against the source text and discards any claim whose quote cannot be found, so nothing invented
- * reaches the owner, then keeps the middle answer of the readings for each finding. The readings ask the AI credit together
- * (`runPromptsDetached`): with no room for all of them none is made, and the caller waits for credit, rather than leaving
- * this applicant with fewer readings than the next.
+ * The CV reading. The model reads the application `TRIAGE_READINGS` times; code verifies every quote against the source
+ * text and discards any claim whose quote cannot be found, so nothing invented reaches the team, then keeps the middle
+ * answer of the readings for each finding. The readings ask the AI credit together (`runPromptsDetached`): with no room
+ * for all of them none is made, and the caller waits for credit, rather than leaving this applicant with fewer readings
+ * than the next.
  */
 export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
   const { promptInput, view } = scoringInput(input);
@@ -151,11 +154,11 @@ export type ReadingSettlement<R extends Combinable> = {
   skills?: (settled: Combinable["competencyFindings"], readings: readonly R[]) => Combinable["competencyFindings"];
 };
 
-/** Whether evidence carries a checked quote, as the match score reads it: something quoted, and not marked "no quote". */
+/** Whether evidence carries a checked quote, as the CV score reads it: something quoted, and not marked "no quote". */
 const checkedQuote = (e: Evidence | undefined): e is Evidence => !!e?.quote?.trim() && !e.unquoted;
 
 /**
- * The skill floor of the résumé reading (Wave S9 round 4; the real-model runs of 15 Oct 2026): a competency whose middle
+ * The skill floor of the CV reading: a competency whose middle
  * answer is "not evidenced", but which one of the readings showed (partly or fully) on a checked quote that may lift it
  * (`liftable`, `liftableQuote`: never a dated job line or a yes/no answer on the form), settles at "partially evidenced"
  * with that quote. Never higher than partly shown, never when any reading said "contradicted" on a checked quote, and
@@ -220,8 +223,7 @@ export function liftableQuote(sources: Partial<Record<EvidenceSource, string>>):
 /**
  * Every model run behind one stored reading, linked to the run the reading keeps as its own (`assessments.ai_run_id`):
  * each run's `final_outcome` says `readingOf` that run and lists all of them, so the audit trail from the reading the team
- * saw reaches all three runs, and a flag on the reading marks every one (`readingRunIds`). Bookkeeping only: a failure
- * here is logged and never loses the reading.
+ * saw reaches all three runs. Bookkeeping only: a failure here is logged and never loses the reading.
  */
 export async function linkReadingRuns(db: Db, companyId: string, kept: RunOutcome<unknown>, runs: ReadonlyArray<RunOutcome<unknown>>): Promise<void> {
   if (!kept.ok) return;
@@ -235,19 +237,8 @@ export async function linkReadingRuns(db: Db, companyId: string, kept: RunOutcom
 }
 
 /**
- * The model runs behind the reading whose own run is `aiRunId`: itself and every run linked to it (`linkReadingRuns`),
- * read from the kept run's own `final_outcome.readings` (a primary-key lookup). An older reading with no link: itself.
- */
-export async function readingRunIds(q: Queryable, aiRunId: string): Promise<string[]> {
-  const [kept] = await q.select({ finalOutcome: aiRuns.finalOutcome }).from(aiRuns).where(eq(aiRuns.id, aiRunId)).limit(1);
-  const readings = (kept?.finalOutcome as { readings?: unknown } | null | undefined)?.readings;
-  const linked = Array.isArray(readings) ? readings.filter((x): x is string => typeof x === "string") : [];
-  return [...new Set([aiRunId, ...linked])];
-}
-
-/**
- * A reading's quotes as the candidate wrote them (D-04 = C): each quote with a placeholder mapped back to the original
- * text of the source it cites, else of any source. Exported for the tests.
+ * A reading's quotes as the candidate wrote them: each quote with a placeholder mapped back to the original text of the
+ * source it cites, else of any source. Exported for the tests.
  */
 export function restoreReadingQuotes<T>(reading: T, view: Pick<ScoringView, "restore">, sources: Partial<Record<EvidenceSource, string>>): T {
   const all = Object.values(sources).filter((s): s is string => !!s);
@@ -257,12 +248,14 @@ export function restoreReadingQuotes<T>(reading: T, view: Pick<ScoringView, "res
   });
 }
 
-/**
- * The must-haves that name a licence, certificate, permit or registration: the only ones the expired-credential rule
- * (`applyEvidenceRules`, `shownNotHeld`) may settle.
- */
+/** Whether a must-have's words name a licence, certificate, permit or registration: the only ones the licence rule (`credentialFinding`) may settle. */
+export function namesCredential(text: string): boolean {
+  return /licen[cs]|certif|permit|registration|registered|credential/i.test(text);
+}
+
+/** The must-haves the licence rule holds to (`namesCredential`), by key. */
 export function credentialMustHaves(packet: Pick<RolePacket, "requirements">): ReadonlySet<string> {
-  return new Set(packet.requirements.mustHaves.filter((m) => /licen[cs]|certif|permit|registration|registered|credential/i.test(m.text)).map((m) => m.key));
+  return new Set(packet.requirements.mustHaves.filter((m) => namesCredential(m.text)).map((m) => m.key));
 }
 
 /** What each finding is about, by key: a must-have's words, or a skill's name (`applyEvidenceRules` `subjects`). */
@@ -416,13 +409,13 @@ export function formAnswerAround(quote: string, application: string): string | n
 }
 
 /** The candidate's own record or words: a claim citing one of these must quote it, and the quote is checked. */
-export const CANDIDATE_EVIDENCE_SOURCES: ReadonlySet<EvidenceSource> = new Set<EvidenceSource>(["resume", "application", "candidate_statement", "screen"]);
+const CANDIDATE_EVIDENCE_SOURCES: ReadonlySet<EvidenceSource> = new Set<EvidenceSource>(["resume", "application", "candidate_statement", "screen"]);
 
 /**
- * The fewest words a quote needs to count as evidence (Wave S5, 15 Oct 2026), not counting yes, no and the small
- * words around them: "Yes", "I do" or "Dentrix" alone show nothing a person could check.
+ * The fewest words a quote needs to count as evidence, not counting yes, no and the small words around them: "Yes",
+ * "I do" or "Dentrix" alone show nothing a person could check.
  */
-export const MIN_QUOTE_WORDS = 2;
+const MIN_QUOTE_WORDS = 2;
 const FILLER_WORDS = new Set(["yes", "yeah", "yep", "no", "nope", "ok", "okay", "sure", "true", "false", "none", "maybe", "na", "n", "a", "i", "an", "the", "do", "did", "does", "am", "is", "it", "have", "has", "of", "and", "or", "to", "in", "on", "my"]);
 
 /** Whether a quote says enough to be evidence: at least `MIN_QUOTE_WORDS` words besides yes, no and the like. */
@@ -433,8 +426,8 @@ export function meaningfulQuote(quote: string | null | undefined): boolean {
 
 /**
  * Words that say a licence, certificate, permit or registration is not in force today: lapsed, expired, revoked and the
- * like, or still to come (pending, applied for, in training, enrolled, not yet). Under the founder's licence rule (15 Oct
- * 2026) every one of these reads "unknown", for the screening chat to ask about.
+ * like, or still to come (pending, applied for, in training, enrolled, not yet). Under the licence rule
+ * (`credentialFinding`) every one of these reads "unknown", for a person or the AI interview to ask about.
  */
 const NOT_HELD = /\b(expired|lapsed|inactive|revoked|suspended|not renewed|renewal not started|pending|applied for|applying for|awaiting|in progress|enrolled|enrolling|studying|in training|trainee|graduating|not yet|yet to|expected)\b/gi;
 const STILL_HELD = /\b(active|current|valid|reinstated|reactivated|good standing)\b|\bcurrently (licensed|certified|registered|active|valid|hold|holding)\b|(?<!\bnot )\brenewed\b/i;
@@ -524,9 +517,9 @@ export function plainlyNotHeld(quote: string, subject?: string | null): boolean 
 type Met = EvidenceAssessment["requirementFindings"][number]["met"];
 
 /**
- * The founder's licence rule (15 Oct 2026) for a credential must-have with a checked quote, read from the candidate's
- * words (`text`: the line the quote sits on, or the chat question a short answer replies to, so the finding never rests
- * on which part of a line the model chose to quote): "no" when the words say plainly the candidate does not hold it,
+ * The licence rule for a credential must-have with a checked quote, read from the candidate's words (`text`: the line
+ * the quote sits on, or the form's question a short answer replies to, so the finding never rests on which part of a
+ * line the model chose to quote): "no" when the words say plainly the candidate does not hold it,
  * whatever the model answered; a lapsed, expired, pending or unclear credential is "unknown", never "no", "yes" or
  * "partially"; a "no" the words do not say plainly is "unknown". Anything else stands as read. `subject`: the
  * must-have's own words, so a part of the line about another qualification is not read as this one.
@@ -548,15 +541,13 @@ type RequirementFinding = EvidenceAssessment["requirementFindings"][number];
  * What `applyEvidenceRules` may know beyond the quote itself:
  * - `credentials`: the must-haves the licence rule holds to (`credentialMustHaves`);
  * - `subjects`: what each finding is about, by key (`findingSubjects`);
- * - `lineOf(e)`: the candidate's line or sentence around a checked quote, for the licence rule (`sentenceAround`);
- * - `answerOf(e, subject)`: for a quote too short alone ("Yes", "No, I don't") that is a whole chat answer, the
- *   question it replies to read with it (`answerInContext`), when that question is about `subject`; else null.
+ * - `lineOf(e)`: the candidate's line or sentence around a checked quote, for the licence rule (`sentenceAround`; an
+ *   answer on the form read as the statement it makes, `formAnswerAround`).
  */
 export type EvidenceRuleOptions = {
   credentials?: ReadonlySet<string>;
   subjects?: ReadonlyMap<string, string>;
   lineOf?: (e: Evidence) => string | null | undefined;
-  answerOf?: (e: Evidence, subject: string | null) => string | null | undefined;
 };
 
 const YES_ANSWER = /^(?:yes|yeah|yep|yup|sure|correct|i do|i have|i am|i hold)\b/;
@@ -566,9 +557,8 @@ function yesOrNo(answer: string): boolean {
   const a = answer.replace(/\s+/g, " ").trim().toLowerCase();
   return YES_ANSWER.test(a) || NO_ANSWER.test(a);
 }
-// Each reads the last question from its start, after a leading "And" or "So" ("So do you hold …?", as the chat may ask
-// it): "Which certifications do you hold …?" has "do you hold" in it and is no closed question (the review of the
-// live-test fixes, 12 November 2026).
+// Each reads the last question from its start, after a leading "And" or "So" ("So do you hold …?"): "Which
+// certifications do you hold …?" has "do you hold" in it and is no closed question.
 const HOLD_QUESTION = /^(?:(?:and|so)\b,?\s+)?(?:do|did|does)\s+you\s+(?:currently\s+|still\s+)?(have|hold)\b\s*(.*)$/i;
 const ARE_YOU_QUESTION = /^(?:(?:and|so)\b,?\s+)?are\s+you\s+(?:currently\s+|still\s+)?((?:licensed|certified|registered)\b.*)$/i;
 /** A question that asks them to name something: which, what, how, when, where, who or whose. */
@@ -606,12 +596,11 @@ export function closedAnswer(question: string, answer: string): { held: boolean;
 }
 
 /**
- * A short chat answer read with the question it replies to, as one statement the evidence rules can read: a bare "No"
- * to "Do you hold a California RDH license?" reads "I do not hold a California RDH license", a bare "Yes" reads "I hold
- * a California RDH license" (`closedAnswer`). A yes or no to any other closed question reads as the question followed by
+ * A short answer read with the question it replies to, as one statement the evidence rules can read: a bare "No" to "Do
+ * you hold a California RDH license?" reads "I do not hold a California RDH license", a bare "Yes" reads "I hold a
+ * California RDH license" (`closedAnswer`). A yes or no to any other closed question reads as the question followed by
  * the answer. A yes or no to a question that asks them to name something (`asksOpenly`: "Which certifications do you
- * hold …?") says nothing, and anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null, so it
- * stays too short to count. Pure.
+ * hold …?") says nothing, and anything else ("Maybe", "Dentrix") is not a plain answer to a closed question: null. Pure.
  */
 export function answerInContext(question: string, answer: string): string | null {
   if (asksOpenly(question)) return null;
@@ -620,7 +609,7 @@ export function answerInContext(question: string, answer: string): string | null
   return yesOrNo(answer) ? `${lastQuestionOf(question)} ${answer.trim()}` : null;
 }
 
-type QuoteCheck = "verified" | "failed" | "external" | "thin" | "none";
+type QuoteCheck = "verified" | "failed" | "thin" | "none";
 
 /** The evidence as shown: the model's own `unquoted` flag removed, and set when a claim about the candidate has nothing quoted. */
 function marked(e: Evidence): Evidence {
@@ -638,61 +627,49 @@ function keptEvidence(e: Evidence, c: QuoteCheck): Evidence {
  * one quoting too little to show anything (`meaningfulQuote`), or nothing, is kept and marked "no quote". The CV reading
  * and the AI interview's scorecard both pass theirs through it.
  */
-export function checkedClaims(claims: readonly Claim[], inSource: (e: Evidence) => boolean | null): Claim[] {
+export function checkedClaims(claims: readonly Claim[], inSource: (e: Evidence) => boolean): Claim[] {
   return claims.flatMap((f) => {
     if (!f.evidence.quote?.trim()) return [{ ...f, evidence: marked(f.evidence) }];
     if (!meaningfulQuote(f.evidence.quote)) return [{ ...f, evidence: keptEvidence(f.evidence, "thin") }];
-    return inSource(f.evidence) === false ? [] : [{ ...f, evidence: marked(f.evidence) }];
+    return inSource(f.evidence) ? [{ ...f, evidence: marked(f.evidence) }] : [];
   });
 }
 
 /**
  * The evidence rules a CV reading passes before anyone sees it. `inSource(e)` says whether a non-empty quote is in the
- * text it cites: true, false, or null for a source that is not the candidate's (it passes through).
+ * candidate's own text.
  * - A strength or concern whose quote is not in the source is dropped (`checkedClaims`).
  * - A skill or must-have finding whose quote is not in the source keeps its place without the quote: "evidenced" becomes
  *   "partially evidenced", a must-have "yes" becomes "partially".
  * - A must-have "no" stands only on a verified quote from the candidate; otherwise it becomes "unknown": a gap is a
  *   question to ask, never a conclusion.
  * - A quote too short to show anything (`meaningfulQuote`: a lone "yes", "I do", one word) is no evidence: it is taken
- *   off and the claim is marked "no quote", as if nothing were quoted (so a "yes" on it never scores in full). The
- *   exception is a whole answer to a closed question about that finding (`answerOf`): "Yes" to "Do you hold a California
- *   RDH license?" says it, and is read with the question.
+ *   off and the claim is marked "no quote", as if nothing were quoted (so a "yes" on it never scores in full).
  * - The licence rule (`credentialFinding`), for a credential must-have (`credentials`: one that names a licence,
  *   certificate, permit or registration) with a checked quote, read from the candidate's words around the quote
- *   (`lineOf`, `answerOf`), never only the part the model chose: "no" when they say plainly they do not hold it, whatever
- *   the model answered; lapsed, expired, pending or unclear is "unknown".
+ *   (`lineOf`), never only the part the model chose: "no" when they say plainly they do not hold it, whatever the model
+ *   answered; lapsed, expired, pending or unclear is "unknown".
  * - A claim about the candidate with nothing quoted is kept and marked `unquoted`, so the page says "no quote".
  * The model's own `unquoted` marks are never trusted: the flag is recomputed here.
  */
-export function applyEvidenceRules<T extends Readable>(a: T, inSource: (e: Evidence) => boolean | null, opts: EvidenceRuleOptions = {}): T {
-  const subjectOf = (key: string) => opts.subjects?.get(key) ?? null;
-  /** A short answer read with the question it replies to (`answerOf`), when there is one about this finding. */
-  const answered = (e: Evidence, key: string) => opts.answerOf?.(e, subjectOf(key)) ?? null;
-  const check = (e: Evidence | undefined, key: string): QuoteCheck => {
+export function applyEvidenceRules<T extends Readable>(a: T, inSource: (e: Evidence) => boolean, opts: EvidenceRuleOptions = {}): T {
+  const check = (e: Evidence | undefined): QuoteCheck => {
     if (!e?.quote?.trim()) return "none";
-    if (!meaningfulQuote(e.quote) && !meaningfulQuote(answered(e, key))) return "thin";
-    const r = inSource(e);
-    return r === null ? "external" : r ? "verified" : "failed";
+    if (!meaningfulQuote(e.quote)) return "thin";
+    return inSource(e) ? "verified" : "failed";
   };
   const competencyFindings = a.competencyFindings.map((f): CompetencyFinding => {
-    const c = check(f.evidence, f.competencyKey);
+    const c = check(f.evidence);
     if (c !== "failed") return { ...f, evidence: f.evidence ? keptEvidence(f.evidence, c) : undefined };
     return { ...f, evidence: keptEvidence(f.evidence!, c), finding: f.finding === "evidenced" ? "partially_evidenced" : f.finding, note: [f.note, "quote could not be verified against the source"].filter(Boolean).join("; ") };
   });
   const requirementFindings = a.requirementFindings.map((f): RequirementFinding => {
-    const c = check(f.evidence, f.requirementKey);
+    const c = check(f.evidence);
     const evidence = !f.evidence ? undefined : keptEvidence(f.evidence, c);
     if (f.met === "no" && c !== "verified") return { ...f, evidence, met: "unknown" };
     const met = c === "failed" && f.met === "yes" ? "partially" : f.met;
-    // The licence rule, on a quote that stands, read from the candidate's words around it: the line it sits on, or the
-    // question a short answer replies to.
-    if (opts.credentials?.has(f.requirementKey) && (c === "verified" || c === "external") && f.evidence?.quote) {
-      const quote = f.evidence.quote;
-      const words = c === "verified" ? (meaningfulQuote(quote) ? opts.lineOf?.(f.evidence) : answered(f.evidence, f.requirementKey)) ?? quote : quote;
-      const read = credentialFinding(met, words, subjectOf(f.requirementKey));
-      return { ...f, evidence, met: c === "external" && read === "no" ? "unknown" : read };
-    }
+    // The licence rule, on a quote that stands, read from the candidate's line around it.
+    if (opts.credentials?.has(f.requirementKey) && c === "verified" && f.evidence?.quote) return { ...f, evidence, met: credentialFinding(met, opts.lineOf?.(f.evidence) ?? f.evidence.quote, opts.subjects?.get(f.requirementKey) ?? null) };
     return { ...f, evidence, met };
   });
   return { ...a, strengths: checkedClaims(a.strengths, inSource), concerns: checkedClaims(a.concerns, inSource), competencyFindings, requirementFindings };

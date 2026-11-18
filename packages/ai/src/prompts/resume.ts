@@ -7,7 +7,7 @@ const SYSTEM = `You extract structured facts from a resume. Extract only what is
 
 ${FAIRNESS_RULES}`;
 
-// Version 2 (fairness run on Haiku 5.5, 14 Oct 2026): licenses and certifications named by their short name.
+/** The CV's facts, read once per application: positions, licences, certifications and skills, each with the line it rests on. */
 export const resumeExtractPrompt: PromptDef<ResumeInput, ResumeExtraction> = {
   key: "resume.extract",
   version: 2,

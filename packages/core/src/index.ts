@@ -34,4 +34,3 @@ export * from "./ai-interview";
 export * from "./packet-guard";
 export * from "./intake-builder";
 export * from "./answer-sentences";
-export * from "./hidden-text";

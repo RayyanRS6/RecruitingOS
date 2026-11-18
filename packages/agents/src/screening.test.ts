@@ -129,6 +129,41 @@ describe("the scorecard rests only on what the candidate sent", () => {
     expect(out.strengths.map((s) => s.claim)).toEqual(["Charts in Dentrix"]);
   });
 
+  it("gives every question asked a finding: one the model left out is not known, with no words of the model's", () => {
+    const out = scorecardOutcome(card([finding("license", "yes", "Yes, active since 2015."), finding("mh_perio", "no", "I chart six points a tooth.")]), view, screen, asked);
+    expect(out.questionFindings.map((f) => [f.questionKey, f.answered, f.meetsModelAnswer, f.finding])).toEqual([
+      ["license", true, "yes", "About license."],
+      ["experience", true, "unknown", ""],
+      ["pay", false, "unknown", "Skipped by the candidate."],
+      // a must-have that names no licence stands as the model read it, on their own quoted words
+      ["mh_perio", true, "no", "About mh_perio."],
+    ]);
+    // a question with no answer on record is not known, whatever the model wrote about it
+    const unanswered = scorecardOutcome(card([finding("experience", "yes", "I chart in Dentrix.")]), view, { ...screen, answers: { license: "Yes, active since 2015." } }, asked);
+    expect(unanswered.questionFindings.find((f) => f.questionKey === "experience")).toMatchObject({ answered: false, meetsModelAnswer: "unknown" });
+  });
+
+  it("holds a question about a licence the job needs to the licence rule, whatever the model answered", () => {
+    const meets = (answer: string, model: string, quote = answer) => {
+      const chat = {
+        progress: { ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(hygienist, readingOf(["mh_perio", "mh_xray", "mh_dentrix", "mh_nitrous", "mh_permit"]), startedAt), askedKeys: ["license", "experience", "pay", "mh_license"] } as ScreenProgress,
+        answers: { mh_license: answer } as Record<string, string>,
+        transcript: [said(answer)],
+      };
+      const about = askedQuestions(chat, hygienist);
+      expect(about.at(-1)).toEqual({ key: "mh_license", question: gapQuestion("Active CA RDH license"), mustHave: "Active CA RDH license", skipped: false });
+      return scorecardOutcome(card([finding("mh_license", model, quote)]), view, chat, about).questionFindings.at(-1)?.meetsModelAnswer;
+    };
+    // lapsed, expired or pending is not known: never met, partly met or not met
+    for (const model of ["yes", "partially", "no", "unknown"]) expect(meets("My RDH license lapsed last year and I have not renewed it yet.", model), model).toBe("unknown");
+    // said plainly, it is not met, also when the model read it otherwise or quoted only part of their sentence
+    expect(meets("I do not hold a California RDH license.", "unknown")).toBe("no");
+    expect(meets("I do not hold a California RDH license.", "yes", "a California RDH license")).toBe("no");
+    // a "no" their words do not say plainly is not known, and one they hold stands as read
+    expect(meets("My license is from Nevada and I am moving next month.", "no")).toBe("unknown");
+    expect(meets("Yes, my RDH license is active in California.", "yes")).toBe("yes");
+  });
+
   it("is read three times: the middle answer for each question; the first reading when fewer came back; an outage fails", () => {
     expect(SCORECARD_READINGS).toBe(3);
     const ok = (output: ScreenAssessment, runId: string) => ({ ok: true, output, runId }) as unknown as RunOutcome<ScreenAssessment>;

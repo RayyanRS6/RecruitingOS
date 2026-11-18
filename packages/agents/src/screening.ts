@@ -6,7 +6,7 @@ import { applications, assessments, candidates, companies, randomToken, rolePack
 import type { Integrations } from "@ros/integrations";
 import { unfairQuestion } from "./fair-question";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringView } from "./scoring-view";
-import { TRIAGE_READINGS, checkedClaims, jobWords, linkReadingRuns, middle } from "./triage";
+import { TRIAGE_READINGS, checkedClaims, credentialFinding, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
 
 /**
  * The AI interview ("screen" in code): a web chat a shortlisted candidate does from an emailed link. This file is the
@@ -1361,10 +1361,10 @@ const MEETS_ORDER = ["no", "unknown", "partially", "yes"] as const;
 type QuestionFinding = ScreenAssessment["questionFindings"][number];
 
 /**
- * The scorecard readings as the team sees them: each through `scorecardOutcome` (quotes mapped back and checked), then,
- * with all of them back, the middle answer for each question asked, with the finding of a reading that gave it, and the
- * words (summary, strengths, concerns, open questions) of the reading that agrees with the most middle answers. Fewer
- * usable readings: the first. The same whatever order they came back in.
+ * The scorecard readings as the team sees them: each through `scorecardOutcome` (one finding for each question asked,
+ * quotes mapped back and checked), then, with all of them back, the middle answer for each question, with the finding of
+ * a reading that gave it, and the words (summary, strengths, concerns, open questions) of the reading that agrees with
+ * the most middle answers. Fewer usable readings: the first. The same whatever order they came back in.
  */
 export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAssessment>>, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers">, asked: readonly AskedQuestion[]): RunOutcome<ScreenAssessment> {
   const ok = readings.filter((r): r is Extract<RunOutcome<ScreenAssessment>, { ok: true }> => r.ok);
@@ -1386,26 +1386,29 @@ export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAsses
  * One scorecard as the team sees it, from the model's answer. Quotes are checked against the candidate's ORIGINAL words:
  * one written around a placeholder is mapped back first, and the model's own words keep no placeholder ("[name]" reads
  * "the candidate"). Then the evidence rules:
- * - one finding for each question asked and for nothing else (never the closing question); whether it was answered is
- *   read from the record, not from the model;
- * - a question the candidate skipped is not known, whatever the model wrote;
+ * - one finding for each question asked and for nothing else (never the closing question): one the model left out is
+ *   not known; whether a question was answered is read from the record, not from the model;
+ * - a question the candidate skipped, or gave no answer to, is not known, whatever the model wrote;
  * - a quote that is not in what the candidate sent is taken off; "yes" with no checked quote counts as "partially", and
  *   "no" stands only on their own checked words, otherwise it is not known;
+ * - the licence rule (`credentialFinding`), for a question about a must-have that names a licence, certificate, permit
+ *   or registration, read from the candidate's line around the quote: "no" only when they say plainly they do not hold
+ *   it, whatever the model answered; lapsed, expired, pending or unclear is not known;
  * - a strength or a concern whose quote is not theirs is dropped (`checkedClaims`).
  * Shared with the evals (packages/evals), so they check exactly what the app does after the model has answered.
  */
 export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringView, "restore">, screen: Pick<ScreenRow, "transcript" | "answers">, asked: readonly AskedQuestion[]): ScreenAssessment {
   const candidateText = candidateWordsOf(screen);
   const card = withoutPlaceholders(restoreQuotes(output, view, () => [candidateText]));
-  const theirs = (quote: string | undefined) => !!quote?.trim() && saidByCandidate(quote, candidateText);
-  const questionFindings = asked.flatMap((a): QuestionFinding[] => {
+  const questionFindings = asked.map((a): QuestionFinding => {
+    if (a.skipped) return { questionKey: a.key, answered: false, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" };
     const f = card.questionFindings.find((x) => x.questionKey === a.key);
     const answered = screen.answers[a.key] !== undefined;
-    if (a.skipped) return [{ questionKey: a.key, answered: false, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" }];
-    if (!f) return [];
-    const quoted = theirs(f.evidence?.quote);
-    const meets = f.meetsModelAnswer === "yes" && !quoted ? "partially" : f.meetsModelAnswer === "no" && !quoted ? "unknown" : f.meetsModelAnswer;
-    return [{ questionKey: a.key, answered, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quoted && f.evidence ? { evidence: { source: "screen" as const, quote: f.evidence.quote } } : {}) }];
+    if (!f) return { questionKey: a.key, answered, finding: "", meetsModelAnswer: "unknown" };
+    const quote = f.evidence?.quote?.trim() && saidByCandidate(f.evidence.quote, candidateText) ? f.evidence.quote : null;
+    const read = f.meetsModelAnswer === "yes" && !quote ? "partially" : f.meetsModelAnswer === "no" && !quote ? "unknown" : f.meetsModelAnswer;
+    const meets = quote && a.mustHave && namesCredential(a.mustHave) ? credentialFinding(read, sentenceAround(quote, candidateText) ?? quote, a.mustHave) : read;
+    return { questionKey: a.key, answered, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quote ? { evidence: { source: "screen" as const, quote } } : {}) };
   });
   const inSource = (e: { quote?: string }) => saidByCandidate(e.quote ?? "", candidateText);
   return { ...card, strengths: checkedClaims(card.strengths, inSource), concerns: checkedClaims(card.concerns, inSource), questionFindings };
