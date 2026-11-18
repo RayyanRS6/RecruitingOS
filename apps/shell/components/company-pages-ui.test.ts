@@ -409,6 +409,7 @@ describe("Settings", () => {
   it("says what came of confirming it's you on the way back", () => {
     expect(text(draw("owner", { search: "reauth=ok" }))).toContain("Thanks, that is confirmed.");
     expect(text(draw("owner", { search: "reauth=mismatch" }))).toContain("That sign-in was a different account.");
+    expect(text(draw("owner", { search: "reauth=failed" }))).toContain("The confirmation did not complete. Try again.");
     expect(text(draw("owner"))).not.toContain("confirmed");
   });
 });
