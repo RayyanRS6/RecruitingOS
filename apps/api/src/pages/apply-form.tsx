@@ -459,7 +459,7 @@ function postedFile(body: Record<string, unknown>): File | null {
   return f && typeof f === "object" && "arrayBuffer" in f && (f as File).size > 0 ? (f as File) : null;
 }
 
-const UPLOAD_EXPIRED = "Your uploaded resume could not be attached (the upload expired). Please attach the file again.";
+const UPLOAD_EXPIRED = "Your uploaded resume could not be attached (the upload expired).";
 
 candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   const container = c.get("container");
@@ -558,7 +558,10 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
   const held = heldUpload(container, job, posted.grant);
   const keptResume = held ? { grant: posted.grant, filename: held.filename } : null;
   const resumeLost = !keptResume && (!!postedFile(body) || !!posted.grant);
-  const again = (error: string, missing: string[] = [], status: 400 | 500 = 400) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={`${error} ${keptSentence(resumeLost)}`} state={{ values, answers: posted.shown, acknowledged, missing, resume: keptResume, resumeLost }} />, status);
+  const shown = (error: string, missing: string[], status: 400 | 500, kept: typeof keptResume, lost: boolean) => c.html(<ApplyFormPage {...form} formOpened={formOpened} error={`${error} ${keptSentence(lost)}`} state={{ values, answers: posted.shown, acknowledged, missing, resume: kept, resumeLost: lost }} />, status);
+  const again = (error: string, missing: string[] = [], status: 400 | 500 = 400) => shown(error, missing, status, keptResume, resumeLost);
+  // An upload that turns out unusable is not kept in the form: it comes back asking for the file again.
+  const uploadGone = (error: string) => shown(error, ["resume"], 400, null, true);
   // From here whatever fails before the application is stored brings this form back, with what was typed (`formPost`).
   drawn.again = (error) => again(error, [], 500);
   // Honeypot: a filled hidden field gets the receipt a person gets, and nothing is recorded.
@@ -576,14 +579,14 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
   let usedUploadId: string | null = null;
   if (posted.grant) {
     // The browser uploaded straight to storage; the grant names the object. It must be for this company and job.
-    if (!held) return again(UPLOAD_EXPIRED, ["resume"]);
+    if (!held) return uploadGone(UPLOAD_EXPIRED);
     // One submission per grant, refused before the file is looked at (services/applications.ts, uploadAlreadyUsed).
-    if (await withTenant(container.db, company.id, (tx) => uploadAlreadyUsed(tx, { roleId: role.id, uploadId: held.uploadId }))) return again(UPLOAD_EXPIRED, ["resume"]);
+    if (await withTenant(container.db, company.id, (tx) => uploadAlreadyUsed(tx, { roleId: role.id, uploadId: held.uploadId }))) return uploadGone(UPLOAD_EXPIRED);
     const head = await container.integrations.storage.head(held.key);
-    if (!head || head.size === 0) return again("Your uploaded resume did not arrive. Please attach the file again.", ["resume"]);
+    if (!head || head.size === 0) return uploadGone("Your uploaded resume did not arrive.");
     if (head.size > MAX_RESUME_BYTES) {
       await container.integrations.storage.delete(held.key);
-      return again("Resume files must be under 8 MB.", ["resume"]);
+      return uploadGone("Resume files must be under 8 MB.");
     }
     resume = { kind: "stored", filename: held.filename, mime: held.mime, storageKey: held.key, sizeBytes: head.size, via: "direct" };
     usedUploadId = held.uploadId;

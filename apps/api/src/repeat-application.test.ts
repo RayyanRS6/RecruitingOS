@@ -1,62 +1,36 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { entitlements } from "@ros/core";
-import { applications, candidates, communications, documents, events, jobs, roles, withTenant } from "@ros/db";
+import { applications, candidates, communications, documents, events, jobs, roles, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RECEIPT_COOKIE, maskEmail } from "./pages/candidate";
-import { LINK_REQUEST_JOB_KIND, createApplication } from "./services/applications";
-import { pastTheWaitingRoom, useLaterApplyFlow } from "./test-helpers";
+import { LINK_REQUEST_JOB_KIND, createApplication, type NewApplication } from "./services/applications";
+import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
- * Wave 0 items 0.1 and 0.11, over HTTP. A repeat application looks exactly like a new one and changes nothing on the
- * person the company already has; the status link only ever travels by email to the address on file; "Lost your
- * link?" answers the same whether or not an address is known; only an open role that takes applications admits one.
+ * A second application and a lost link, over HTTP. A repeat application looks exactly like a new one, creates nothing
+ * and changes nothing on the person the company already has; the status link only ever travels by email to the address
+ * on file; "Lost your link?" answers the same whether or not an address is known; only an open job that takes
+ * applications admits one.
  */
 describe("repeat applications and lost links", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  let owner = "";
   let companyId = "";
   let slug = "";
   let roleId = "";
   let otherRoleId = "";
-  let eligibility: string[] = [];
-  let otherEligibility: string[] = [];
-  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.link_request": 4 }) };
-  const signIn = async (email: string) => {
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
-    return r2.headers.get("set-cookie")!.split(";")[0];
-  };
-  const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie: owner }, body: body ? JSON.stringify(body) : undefined });
+  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.link_request": 4 }) };
   const outbox = () => (container.integrations.email as FakeEmailAdapter).sent;
   const storage = () => container.integrations.storage as MemoryStorageAdapter;
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   /** The page without the per-request nonce, so two renders of the same page compare equal. */
-  // the nonce and the form's sealed opening time (plan D7) change with every render, whoever applies
-  const stable = (html: string) => html.replace(/nonce="[^"]*"/g, "").replace(/name="formOpened" value="[^"]*"/g, "");
+  const stable = (html: string) => html.replace(/nonce="[^"]*"/g, "");
   const form = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(fields).toString() });
-
-  const openRole = async (message: string) => {
-    const s = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: message })).json()) as { session: { id: string } };
-    const id = ((await (await json("POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    expect((await json("POST", `/api/v1/roles/${id}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-    await container.drain();
-    const role = (await (await json("GET", `/api/v1/roles/${id}`)).json()) as { status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    expect(role.status).toBe("open");
-    return { id, eligibility: role.currentPacket.packet.requirements.eligibility.map((r) => r.key) };
-  };
-  /** The apply form as a browser posts it; every field can be overridden or dropped. */
-  const applyTo = async (role: { id: string; eligibility: string[] }, fields: Record<string, string | null>, extra?: (fd: FormData) => void, ip = "198.51.100.40") => {
-    const fd = new FormData();
-    const base: Record<string, string> = { firstName: "Maria", lastName: "Reyes", email: "maria.reyes@example.com", locationText: "Tustin, CA", noResume: "Registered Dental Hygienist at Coastal Family Dentistry since 2019; active CA RDH license.", noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01", acknowledged: "yes" };
-    for (const k of role.eligibility) base[`elig_${k}`] = "yes";
-    for (const [k, v] of Object.entries({ ...base, ...fields })) if (v !== null) fd.set(k, v);
-    extra?.(fd);
-    const r = await app.request(`/careers/${slug}/jobs/${role.id}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": ip } });
+  /** The application form as a browser posts it to a job; `resume: null` posts no file (a direct upload's grant goes in `fields`). */
+  const applyTo = async (job: string, fields: Record<string, string | null> = {}, resume?: string | null, ip = "198.51.100.40") => {
+    const r = await app.request(`/careers/${slug}/jobs/${job}/apply`, { method: "POST", body: applicationForm(fields, resume), headers: { "x-forwarded-for": ip } });
     await container.drain();
     return r;
   };
@@ -68,23 +42,21 @@ describe("repeat applications and lost links", () => {
   };
   const person = async (email: string) => (await container.db.select().from(candidates).where(and(eq(candidates.companyId, companyId), eq(candidates.email, email))))[0];
   const applicationOf = async (candidateId: string, forRole = roleId) => (await container.db.select().from(applications).where(and(eq(applications.roleId, forRole), eq(applications.candidateId, candidateId))))[0];
+  /** A file the browser put straight into storage for this job, and the grant the form then carries. */
+  const upload = async (ip: string, text = "A short resume text") => {
+    const intent = await app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify({ filename: "cv.txt", size: text.length, type: "text/plain" }) });
+    const g = (await intent.json()) as { url: string; method: string; headers: Record<string, string>; grant: string };
+    expect((await app.request(new URL(g.url).pathname, { method: g.method, headers: g.headers, body: new TextEncoder().encode(text).buffer as ArrayBuffer })).status).toBe(200);
+    return g.grant;
+  };
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env });
     app = createApp(container);
-    owner = await signIn("owner@repeat.test");
-    const co = (await (await json("POST", "/api/v1/companies", { name: "Repeat Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    slug = co.slug;
-    await entitlements.applyPlan(container.db, companyId, "growth");
-    // The ITS switch is ignored since 20 October (R20-12): set to "later", every applicant still gets the AI interview.
-    await useLaterApplyFlow(container, companyId);
-    const first = await openRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
-    roleId = first.id;
-    eligibility = first.eligibility;
-    const second = await openRole("I need a front desk coordinator in Irvine, $22 to $26 an hour, full time. It's growth. Ceiling $27. I decide. Must-haves: Dentrix scheduling. Just draft it.");
-    otherRoleId = second.id;
-    otherEligibility = second.eligibility;
+    ({ companyId, slug } = await seedCompany(app, { email: "owner@repeat.test", name: "Repeat Dental" }));
+    await usePlan(container, companyId);
+    roleId = await plantJob(container, { companyId, title: "Dental Hygienist" });
+    otherRoleId = await plantJob(container, { companyId, title: "Front Desk Coordinator" });
   });
   afterAll(async () => {
     await container.close();
@@ -97,59 +69,52 @@ describe("repeat applications and lost links", () => {
     expect(maskEmail("@example.com")).toBe("the email address you gave");
   });
 
-  it("a repeat submission gets the same waiting room as a first application (Q14, kept in full on 21 Oct), changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
-    const role = { id: roleId, eligibility };
-    const r1 = await applyTo(role, { phone: "(949) 555-0100" }, (fd) => fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist 2019 - present"], "maria.txt", { type: "text/plain" })));
+  it("a second application gets the same receipt as a first one, creates nothing, changes nothing on the existing person, discards its upload, and the address on file gets its status link again, once a day", async () => {
+    const r1 = await applyTo(roleId, { phone: "(949) 555-0100" });
     expect(r1.status).toBe(302);
     expect(r1.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     const maria = await person("maria.reyes@example.com");
     const mariaApp = await applicationOf(maria.id);
     expect(mariaApp.resumeDocumentId).toBeTruthy();
-    // the receipt cookie is sealed, short-lived, limited to the receipt page, and carries only the masked address (and,
-    // sealed, the application its waiting room waits for)
+    // the receipt cookie is sealed, short-lived, limited to the receipt page, and carries only the masked address
     const setCookie = r1.headers.get("set-cookie") ?? "";
     const receiptCookie = setCookie.slice(setCookie.indexOf(`${RECEIPT_COOKIE}=`));
     expect(receiptCookie).toMatch(new RegExp(`^${RECEIPT_COOKIE}=v1\\.`));
     for (const part of ["Max-Age=1800", `Path=/careers/${slug}/jobs/${roleId}/applied`, "HttpOnly", "SameSite=Lax"]) expect(receiptCookie).toContain(part);
     expect(setCookie).not.toContain("maria");
     expect(setCookie).not.toContain(mariaApp.id);
-    // a first application's waiting room opens her own AI interview (the inline worker made it already) once its first
-    // 40 to 90 seconds are over, as every waiting room's are (Q14, 21 Oct)
-    const room = await pastTheWaitingRoom(container, async () => app.request(r1.headers.get("location")!, { headers: { cookie: setCookie.match(new RegExp(`${RECEIPT_COOKIE}=[^;,]+`))![0] } }));
-    expect(room.status).toBe(302);
-    expect(room.headers.get("location")).toMatch(/^\/c\/screen\//);
-    // the status link went by email, in the one email with the interview's link
-    const ack = outbox().find((m) => m.to === "maria.reyes@example.com" && /^Thank you for applying: your next step/.test(m.subject))!;
+    // the receipt is a page, never a way into anything: no status link, and no AI interview (nobody is shortlisted by applying)
+    const first = await receiptOf(r1);
+    expect(first.html).toContain("<h1>Thanks, we have your application</h1>");
+    expect(first.html).toContain("m***@example.com");
+    expect(first.html).not.toMatch(/\/c\/status\/|\/c\/screen\//);
+    expect(await container.db.select().from(screens).where(eq(screens.applicationId, mariaApp.id))).toHaveLength(0);
+    // the status link went by email, in the one email every applicant gets
+    const ack = outbox().find((m) => m.to === "maria.reyes@example.com" && m.subject === "Thank you for applying: Dental Hygienist at Repeat Dental")!;
     expect(ack.text).toContain(`https://jobs.example.test/c/status/${mariaApp.statusToken}`);
     const before = { candidate: maria, app: mariaApp, docs: (await container.db.select().from(documents).where(eq(documents.candidateId, maria.id))).length, consentEvents: (await container.db.select().from(events).where(eq(events.type, "consent.granted"))).length, sent: outbox().length };
 
-    // a stranger sends the form with Maria's address (another case), their own phone, place, text consent and résumé uploaded straight to storage
-    const intent = await app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.90" }, body: JSON.stringify({ filename: "mine.txt", size: 18, type: "text/plain" }) });
-    const grant = (await intent.json()) as { url: string; method: string; headers: Record<string, string>; grant: string };
-    expect((await app.request(new URL(grant.url).pathname, { method: grant.method, headers: grant.headers, body: new TextEncoder().encode("A different person").buffer as ArrayBuffer })).status).toBe(200);
-    const uploadKey = container.uploadGrants.open(grant.grant)!.key;
+    // a stranger sends the form with Maria's address (another case), their own name and phone, and a resume uploaded straight to storage
+    const grant = await upload("203.0.113.90", "A different person");
+    const uploadKey = container.uploadGrants.open(grant)!.key;
     expect(storage().has(uploadKey)).toBe(true);
-    const r2 = await applyTo(role, { firstName: "Mallory", lastName: "Stranger", email: "MARIA.REYES@example.com", phone: "(714) 555-0199", locationText: "Reno, NV", noResume: "Somebody else entirely." }, (fd) => fd.set("uploadGrant", grant.grant), "203.0.113.90");
+    const r2 = await applyTo(roleId, { firstName: "Mallory", lastName: "Stranger", email: "MARIA.REYES@example.com", phone: "(714) 555-0199", uploadGrant: grant }, null, "203.0.113.90");
     expect(r2.status).toBe(302);
     expect(r2.headers.get("location")).toBe(r1.headers.get("location"));
     const second = await receiptOf(r2);
-    // the same waiting room a first application gets (Q14): never Maria's link on the page, since anyone can type anyone's
-    // address; what it opens later is a detached interview whose answers wait for Maria to confirm (repeat-conversation.test.ts)
-    expect(decodeEntities(second.html)).toContain("We're preparing your AI interview…");
-    expect(second.html).toContain('<input type="hidden" name="grant" value="v1.');
+    // the very receipt a first application gets, never Maria's link on the page: anyone can type anyone's address
+    expect(second.html).toContain("<h1>Thanks, we have your application</h1>");
     expect(second.html).toContain("M***@example.com");
+    expect(stable(second.html).replace("M***@", "m***@")).toBe(stable(first.html));
     // true for a repeat, whose reminder goes at most once a day
     expect(decodeEntities(second.html)).toContain("If you applied for this job before, look in our earlier emails too: we send the link again at most once a day.");
     expect(second.html).toContain('href="/c/link-request"');
-    expect(second.html).not.toContain("/c/screen/");
     // a hidden-field bot with the same address lands on the very same page
-    const sealed = (html: string) => stable(html).replace(/name="grant" value="[^"]*"/g, "");
-    expect(sealed(second.html)).toBe(sealed((await receiptOf(await applyTo({ id: roleId, eligibility }, { website: "https://spam.example", email: "MARIA.REYES@example.com" }))).html));
+    expect(stable(second.html)).toBe(stable((await receiptOf(await applyTo(roleId, { website: "https://spam.example", email: "MARIA.REYES@example.com" }))).html));
     for (const text of [r2.headers.get("location") ?? "", second.setCookie, second.html]) expect(text).not.toContain(mariaApp.statusToken);
 
     // nothing about Maria changed, and nothing new was created
-    const after = await person("maria.reyes@example.com");
-    expect(after).toEqual(before.candidate);
+    expect(await person("maria.reyes@example.com")).toEqual(before.candidate);
     expect(await applicationOf(maria.id)).toEqual(before.app);
     expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length).toBe(1);
     expect((await container.db.select().from(documents).where(eq(documents.candidateId, maria.id))).length).toBe(before.docs);
@@ -159,17 +124,17 @@ describe("repeat applications and lost links", () => {
     expect(storage().has(uploadKey)).toBe(false);
     const [mariaDoc] = await container.db.select().from(documents).where(eq(documents.id, mariaApp.resumeDocumentId!));
     expect(storage().has(mariaDoc.storageKey)).toBe(true);
-    // the team sees the repeat; the address on file (never a typed one) gets its own link
+    // the repeat is recorded; the address on file (never a typed one) gets its own link
     expect((await container.db.select().from(events).where(and(eq(events.type, "application.duplicate_detected"), eq(events.subjectId, mariaApp.id)))).length).toBe(1);
     const notices = outbox().slice(before.sent);
     expect(notices.map((m) => m.to)).toEqual(["maria.reyes@example.com"]);
-    expect(notices[0].subject).toMatch(/^Your application for .+ at Repeat Dental$/);
+    expect(notices[0].subject).toBe("Your application for Dental Hygienist at Repeat Dental");
     expect(notices[0].text).toContain(`https://jobs.example.test/c/status/${mariaApp.statusToken}`);
     expect(notices[0].text).toContain("If you did not send the second application, you do not need to do anything.");
-    expect(notices[0].text).not.toMatch(/Mallory|Reno|714/);
+    expect(notices[0].text).not.toMatch(/Mallory|Stranger|714|\/c\/screen\//);
 
     // a third try the same day: the same receipt, no second email
-    const r3 = await applyTo(role, { email: "maria.reyes@example.com" }, undefined, "203.0.113.91");
+    const r3 = await applyTo(roleId, {}, undefined, "203.0.113.91");
     expect(r3.headers.get("location")).toBe(r1.headers.get("location"));
     expect(outbox().slice(before.sent).filter((m) => m.to === "maria.reyes@example.com")).toHaveLength(1);
     expect((await container.db.select().from(communications).where(and(eq(communications.applicationId, mariaApp.id), eq(communications.templateKey, "status_link_repeat")))).length).toBe(1);
@@ -177,63 +142,62 @@ describe("repeat applications and lost links", () => {
 
   it("a hidden-field bot gets the same receipt and nothing is recorded", async () => {
     const applicationsBefore = (await container.db.select().from(applications)).length;
-    const r = await applyTo({ id: roleId, eligibility }, { firstName: "Bot", email: "bot@example.com", website: "https://spam.example" });
+    const r = await applyTo(roleId, { firstName: "Bot", email: "bot@example.com", website: "https://spam.example" });
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     expect((await receiptOf(r)).html).toContain("b***@example.com");
     expect((await container.db.select().from(applications)).length).toBe(applicationsBefore);
+    expect(await person("bot@example.com")).toBeUndefined();
   });
 
   it("an upload grant attaches its file to one submission: used again, it is refused the same way whether the first was new or a repeat", async () => {
-    const role = { id: roleId, eligibility };
-    const upload = async (ip: string) => {
-      const intent = await app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify({ filename: "cv.txt", size: 19, type: "text/plain" }) });
-      const g = (await intent.json()) as { url: string; method: string; headers: Record<string, string>; grant: string };
-      expect((await app.request(new URL(g.url).pathname, { method: g.method, headers: g.headers, body: new TextEncoder().encode("A short resume text").buffer as ArrayBuffer })).status).toBe(200);
-      return g.grant;
-    };
     // first use: a new application, and a repeat with Maria's address (whose upload is discarded at once)
     const fresh = await upload("203.0.113.120");
-    expect((await applyTo(role, { firstName: "Ola", lastName: "Newman", email: "ola.newman@example.com" }, (fd) => fd.set("uploadGrant", fresh), "203.0.113.120")).status).toBe(302);
+    expect((await applyTo(roleId, { firstName: "Ola", lastName: "Newman", email: "ola.newman@example.com", uploadGrant: fresh }, null, "203.0.113.120")).status).toBe(302);
     const repeat = await upload("203.0.113.121");
-    expect((await applyTo(role, { email: "maria.reyes@example.com" }, (fd) => fd.set("uploadGrant", repeat), "203.0.113.121")).status).toBe(302);
+    expect((await applyTo(roleId, { uploadGrant: repeat }, null, "203.0.113.121")).status).toBe(302);
     // each grant again, with the same other address: the very same refusal, before the file is looked at
     const reuse = async (grant: string) => {
-      const r = await applyTo(role, { firstName: "Eve", lastName: "Probe", email: "eve.probe@example.com" }, (fd) => fd.set("uploadGrant", grant), "203.0.113.122");
-      return { status: r.status, html: stable(decodeEntities(await r.text())) };
+      const r = await applyTo(roleId, { firstName: "Eve", lastName: "Probe", email: "eve.probe@example.com", uploadGrant: grant }, null, "203.0.113.122");
+      return { status: r.status, html: stable(decodeEntities(await r.text())).replace(/name="formOpened" value="[^"]*"/g, "") };
     };
     const afterNew = await reuse(fresh);
     const afterRepeat = await reuse(repeat);
     expect(afterNew.status).toBe(400);
-    expect(afterNew.html).toContain("Your uploaded resume could not be attached (the upload expired).");
+    expect(afterNew.html).toContain("Your uploaded resume could not be attached (the upload expired). Everything you typed is still here, but please attach your resume again.");
     expect(afterNew.html).not.toContain("did not arrive");
+    // the spent upload is not kept in the form, which asks for the file again
+    expect(afterNew.html).toContain('name="uploadGrant" value=""');
+    expect(afterNew.html).toContain("Your resume is not attached any more. Please choose the file again.");
     expect(afterRepeat).toEqual(afterNew);
     expect(await person("eve.probe@example.com")).toBeUndefined();
     expect((await container.db.select().from(events).where(and(eq(events.type, "document.upload_used"), eq(events.subjectId, roleId)))).length).toBeGreaterThanOrEqual(3);
   });
 
-  it("an existing person applying to another role gets the new application, but their record stays exactly as it was", async () => {
+  it("an existing person applying to another job gets the new application, but their record stays exactly as it was", async () => {
     const maria = await person("maria.reyes@example.com");
-    const r = await applyTo({ id: otherRoleId, eligibility: otherEligibility }, { phone: "(714) 555-0177", locationText: "Reno, NV", noResume: "Front desk at Smile Bright since 2021; Dentrix scheduling." });
+    const r = await applyTo(otherRoleId, { firstName: "Mariah", phone: "(714) 555-0177" });
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${otherRoleId}/applied`);
     const other = await applicationOf(maria.id, otherRoleId);
     expect(other).toBeTruthy();
     expect(other.answers.acknowledgment).toBeTruthy(); // what this submission acknowledged is kept on its own application
     expect(await person("maria.reyes@example.com")).toEqual(maria);
-    // a repeat for this second role the same day still gets this role's own link: the daily limit is per application
+    // a repeat for this second job the same day still gets this job's own link: the daily limit is per application
     const sentBefore = outbox().length;
-    await applyTo({ id: otherRoleId, eligibility: otherEligibility }, { email: "maria.reyes@example.com" }, undefined, "203.0.113.95");
+    await applyTo(otherRoleId, {}, undefined, "203.0.113.95");
     const notices = outbox().slice(sentBefore).filter((m) => m.to === "maria.reyes@example.com");
     expect(notices).toHaveLength(1);
     expect(notices[0].text).toContain(`https://jobs.example.test/c/status/${other.statusToken}`);
   });
 
-  it("only an open role that is taking applications admits an application, the same rule as the form (email held while paused is replayed later)", async () => {
-    const input = { companyId, roleId, source: "email_in", firstName: "Held", lastName: "Person", email: "held.person@example.com", phone: null, smsConsent: false, consentSource: "email_in", noticeVersionsShown: [], eligibilityAnswers: {}, noResumeAnswers: { summary: "Hygienist." } };
-    const actor = { kind: "system" as const, id: "email_in" };
+  it("only an open job that is taking applications admits an application, the same rule as the form", async () => {
+    const input: NewApplication = { companyId, roleId, source: "careers_page", firstName: "Held", lastName: "Person", email: "held.person@example.com", phone: null, consentSource: "careers_page_apply", noticeVersionsShown: [], acknowledgment: { at: new Date().toISOString(), noticeVersions: [] }, answers: {} };
+    const actor = { kind: "candidate" as const, id: "applicant" };
     await container.db.update(roles).set({ status: "paused", pausedAt: new Date().toISOString() }).where(eq(roles.id, roleId));
     await expect(withTenant(container.db, companyId, (tx) => createApplication(tx, container, input, actor))).rejects.toThrow(/not accepting applications/);
+    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).status).toBe(404);
+    expect((await applyTo(roleId, { email: "held.person@example.com" })).status).toBe(404);
     await container.db.update(roles).set({ status: "open", pausedAt: null, acceptingApplications: false }).where(eq(roles.id, roleId));
     await expect(withTenant(container.db, companyId, (tx) => createApplication(tx, container, input, actor))).rejects.toThrow(/not accepting applications/);
     await container.db.update(roles).set({ acceptingApplications: true }).where(eq(roles.id, roleId));
@@ -243,7 +207,7 @@ describe("repeat applications and lost links", () => {
   it("'Lost your link?' answers the same for a known and an unknown address; only the address on file gets the links, at most once an hour", async () => {
     const page = await app.request("/c/link-request");
     expect(page.status).toBe(200);
-    expect(decodeEntities(await page.text())).toContain("Lost your link?");
+    expect(decodeEntities(await page.text())).toContain("<h1>Lost your link?</h1>");
     const maria = await person("maria.reyes@example.com");
     const apps = await container.db.select().from(applications).where(eq(applications.candidateId, maria.id));
     expect(apps).toHaveLength(2);
@@ -274,6 +238,7 @@ describe("repeat applications and lost links", () => {
     // asking again within the hour: the same answer, no second email
     const again = await form("/c/link-request", { email: "maria.reyes@example.com" }, { "x-forwarded-for": "198.51.100.63" });
     expect(again.headers.get("location")).toBe("/c/link-request?sent=1");
+    await container.drain();
     expect(outbox().slice(sentBefore)).toHaveLength(1);
     // a malformed address is asked for again; the hidden field is answered like everyone else and sends nothing
     const bad = await form("/c/link-request", { email: "not an address" }, { "x-forwarded-for": "198.51.100.64" });
