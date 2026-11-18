@@ -16,7 +16,7 @@ import { installShellForTests } from "../lib/container";
  * Where a company must be accepted (SIGNUP_MODE=approval) the same form sends a request, and the person reads where it
  * stands: waiting or declined, in the same card, from any signed-in address. The email line is there only when the
  * email really left. The waiting screen's every-30-seconds look is proved in tests/web/access-approval.test.ts and, in
- * a real browser, in tests/e2e/specs/signup-approval.spec.ts.
+ * a real browser, in tests/e2e/specs/access-approval.spec.ts.
  */
 const jar = vi.hoisted(() => ({ cookie: "" }));
 vi.mock("next/headers", () => ({

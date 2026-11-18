@@ -40,6 +40,7 @@ test.describe("the whole hire", () => {
     await b.context.close();
     const a = await applyThroughTheForm(browser, base, job.jobUrl, ana);
     const calStatus = await statusPathFromEmail(page.request, base, cal.email);
+    for (const who of [ana, ben]) await statusPathFromEmail(page.request, base, who.email);
     for (const who of [ana, ben, cal]) expect((await emailsTo(page.request, base, who.email)).length, `${who.first} got one email, the receipt`).toBe(1);
 
     // ---- 2. The owner reads them, ranked by resume score, best first -------------------------------------------------------------
