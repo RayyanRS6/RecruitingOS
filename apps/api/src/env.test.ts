@@ -46,7 +46,7 @@ describe("production boot checks", () => {
   it("the production app refuses any rate-limit store but upstash, and upstash without its address or token", () => {
     const prod = { ...base, DATABASE_URL: appUrl };
     expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: "memory" })).toThrow(/RATE_LIMIT_STORE must be "upstash" in production \(it is "memory"\)/);
-    expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: "memory" })).toThrow(/staging-environment-variables\.md/);
+    expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: "memory" })).toThrow(/docs\/14-deployment-and-environment\.md/);
     // unset is the development default, memory, and is refused the same way
     expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: undefined })).toThrow(/RATE_LIMIT_STORE must be "upstash"/);
     expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: "fake" })).toThrow(/RATE_LIMIT_STORE must be "upstash" in production \(it is "fake"\)/);
