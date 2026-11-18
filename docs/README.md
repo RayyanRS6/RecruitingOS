@@ -1,32 +1,32 @@
 # Recruiting OS documentation
 
-What is in this folder, one line per file. Start with [PRODUCT.md](PRODUCT.md): it wins over every other document. How to run the app is in the [root README](../README.md), and the guide for developers and AI agents is [AGENTS.md](../AGENTS.md).
-
-A document here may still cite a decision id or a document from the earlier, larger design (HF-8, known-bugs row 159, the staging verification checklist). Those are in git history, at commit `199c94f` and before: `git show 199c94f:docs/README.md` lists what was there.
+What is in this folder, one line per file. How to run the app is in the [root README](../README.md), and the guide for developers and AI agents is [AGENTS.md](../AGENTS.md). The code wins over every document: when a statement matters, open the file it names.
 
 ## The product
 
 | File | What it is |
 |---|---|
-| [PRODUCT.md](PRODUCT.md) | What the product is: the flow, the decisions, and what is never cut |
-| [DECISIONS.md](DECISIONS.md) | The decisions and open items still in force: sign-in, plans, AI models, fairness, hosting, email, legal |
-| [07-ux-and-design-system.md](07-ux-and-design-system.md) | The design system and the "Words on screen" lists |
+| [PRODUCT.md](PRODUCT.md) | What the product is: the flow, who may do what, stages, the two scores, and what is never cut |
+| [DECISIONS.md](DECISIONS.md) | The decisions and open items around it: sign-in, plans, AI models, fairness, hosting, email, legal |
+| [07-ux-and-design-system.md](07-ux-and-design-system.md) | The screens, the "Words on screen" lists and the design system |
+| [11-evaluation-framework.md](11-evaluation-framework.md) | The AI evaluation suites and how to run them on the stand-in AI and on the real models |
+| [14-deployment-and-environment.md](14-deployment-and-environment.md) | Where the app runs, what a process checks at start, every environment variable, rate limits and the browser policy |
 
 ## Runbooks
 
 | File | What it is for |
 |---|---|
-| [production-setup.md](runbooks/production-setup.md) | Production from new accounts to go-live, every later release, rollback and hotfix |
+| [production-setup.md](runbooks/production-setup.md) | Production: setup, secrets and their rotation, the first administrator, every release, the check with made-up people, rollback and hotfix |
 | [release-migrations.md](runbooks/release-migrations.md) | Release day with a pending migration: migrate first, deploy second |
-| [railway-worker.md](runbooks/railway-worker.md) | The worker on Railway: its variables, health check and deployments |
-| [resume-storage.md](runbooks/resume-storage.md) | The private CV bucket: uploads, quarantine and malware scanning |
+| [railway-worker.md](runbooks/railway-worker.md) | The worker on Railway: its settings, how a stopped worker is noticed and brought back |
+| [resume-storage.md](runbooks/resume-storage.md) | The private resume bucket: uploads, quarantine, malware scanning, key rotation |
 | [staff-second-factor.md](runbooks/staff-second-factor.md) | Staff sign-in with an authenticator: enrolment, backup, reset |
 | [privacy-requests.md](runbooks/privacy-requests.md) | Handling a candidate's privacy request within its deadline |
-| [fairness-tests.md](runbooks/fairness-tests.md) | The "Run fairness tests" button: how to run it and what it checks |
+| [fairness-tests.md](runbooks/fairness-tests.md) | The "Run fairness tests" button: what it checks and how to run it |
 
 ## Legal drafts
 
-Drafts for a lawyer. None is approved, and none may be sent or shown to anyone until a lawyer returns it.
+Drafts for a lawyer. None is approved, and none may be sent or shown to anyone until a lawyer returns it. They were written before the simple product, and parts of them describe things it no longer does ([DECISIONS.md](DECISIONS.md), F13).
 
 | File | What it is |
 |---|---|
@@ -43,18 +43,3 @@ Drafts for a lawyer. None is approved, and none may be sent or shown to anyone u
 | [10-proposed-retention-schedule.md](legal-drafts/10-proposed-retention-schedule.md) | The retention schedule proposed for the agreement |
 | [11-founding-partner-agreement-additions.md](legal-drafts/11-founding-partner-agreement-additions.md) | Additions to the agreement for a paid customer |
 | [12-free-plan-terms.md](legal-drafts/12-free-plan-terms.md) | Short terms for a tester on the Free plan |
-
-## Kept where they are because the app or CI names their path
-
-To be moved or folded when the code that names them changes.
-
-| File | What it is |
-|---|---|
-| [11-evaluation-framework.md](11-evaluation-framework.md) | The AI evaluation suites and the real-model run (named by `packages/evals`) |
-| [14-deployment-and-environment.md](14-deployment-and-environment.md) | Local setup and every environment variable (named by `.env.example`) |
-| [staging-environment-variables.md](runbooks/staging-environment-variables.md) | The variables of the staging copy on Vercel (named by a start-up error) |
-| [13-administrator-bootstrap.md](readiness/13-administrator-bootstrap.md) | How the first platform administrator is made, and the ledger of administrators |
-| [15-rate-limiting-provider.md](readiness/15-rate-limiting-provider.md) | Rate limiting and its shared store |
-| [18-content-security-policy.md](readiness/18-content-security-policy.md) | The content-security policy, and how enforcing it is earned |
-| [20-real-data-readiness-plan.md](readiness/20-real-data-readiness-plan.md) | What must be proven before real candidate data |
-| [17-staging-handoff.md](spec/17-staging-handoff.md) | The staging hand-off package (named by a start-up warning) |
