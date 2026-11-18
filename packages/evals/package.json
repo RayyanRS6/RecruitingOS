@@ -11,8 +11,7 @@
     "@ros/agents": "workspace:*",
     "@ros/ai": "workspace:*",
     "@ros/contracts": "workspace:*",
-    "@ros/db": "workspace:*",
-    "@ros/playbooks": "workspace:*"
+    "@ros/db": "workspace:*"
   },
   "devDependencies": {
     "tsx": "^4.20.0",

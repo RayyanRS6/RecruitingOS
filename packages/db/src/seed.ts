@@ -1,7 +1,5 @@
-import { eq, and } from "drizzle-orm";
-import { ALL_PLAYBOOKS } from "@ros/playbooks";
 import type { Db } from "./client";
-import { plans, playbooks } from "./schema";
+import { plans } from "./schema";
 
 export type PlanRow = { key: string; name: string; prices: Record<string, number>; limits: Record<string, number | null>; active: boolean };
 
@@ -83,19 +81,9 @@ export const PLAN_ROWS: readonly PlanRow[] = [
   },
 ];
 
-/** Platform-level seed: plans and playbooks. Idempotent, and safe when two processes first boot together. Company-level defaults are created by core at signup. */
+/** Platform-level seed: the plans. Idempotent, and safe when two processes first boot together. Company-level defaults are created by core at signup. */
 export async function seedPlatform(db: Db): Promise<void> {
   for (const p of PLAN_ROWS) {
     await db.insert(plans).values(p).onConflictDoUpdate({ target: plans.key, set: { name: p.name, prices: p.prices, limits: p.limits, active: p.active } });
-  }
-
-  for (const pb of ALL_PLAYBOOKS) {
-    const existing = await db
-      .select()
-      .from(playbooks)
-      .where(and(eq(playbooks.vertical, pb.vertical), eq(playbooks.version, pb.version)))
-      .limit(1);
-    if (existing.length === 0) await db.insert(playbooks).values({ vertical: pb.vertical, version: pb.version, content: pb, status: "published" });
-    else await db.update(playbooks).set({ content: pb }).where(eq(playbooks.id, existing[0].id));
   }
 }

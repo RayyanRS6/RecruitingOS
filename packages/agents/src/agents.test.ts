@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { FakeProvider, OWNERS_CALL_MARK, callPrompt, intakeCompilePrompt, intakeTurnPrompt, screenTurnPrompt, type IntakeContext, type ScreenContext } from "@ros/ai";
 import { DraftRolePacket, IntakeExtraction, IntakeQuestion, IntakeTurn, repeatsMustHave, type IntakeFacts } from "@ros/contracts";
 import { applyAnswers, normalizeFacts } from "@ros/core";
-import { consumerPlaybook, dentalPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { futureRolesLine, reminderClosingLine } from "./coordinator";
 import { registerFakeHandlers } from "./fake-handlers";
 import { factsSetOnPanel, fieldsKnownFromFacts, fieldsSetOnPanel, keepAnswered, keepWordsFacts, mergeFacts, ownerWordsOf, prepareQuestions, rememberPrompts, sameQuestion, settle, typedSinceReply, typedWordsOf, withoutCardCount } from "./intake";
@@ -136,7 +135,7 @@ describe("the stand-in's draft names no skill the same as a must-have (intake.co
   const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
   const draftFor = async (title: string, more: Partial<IntakeFacts> = {}) => {
     const facts: IntakeFacts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title, locationText: "Irvine, CA", employmentType: "full_time", compensationBasis: "hourly", compensationMin: 34, compensationMax: 40, ...more };
-    const ctx: IntakeContext = { company: { name: "Harbor Dental", vertical: "dental", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] }, playbook: dentalPlaybook, playbookRole: matchPlaybookRole(dentalPlaybook, title), benchmark: null, facts, messages: [{ role: "owner", content: "Just draft it.", at: "2026-11-12T12:00:00.000Z", kind: "text" }], confirmedPay: { basis: "hourly", min: 34, max: 40 } };
+    const ctx: IntakeContext = { company: { name: "Harbor Dental", vertical: "dental", sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] }, benchmark: null, facts, messages: [{ role: "owner", content: "Just draft it.", at: "2026-11-12T12:00:00.000Z", kind: "text" }], confirmedPay: { basis: "hourly", min: 34, max: 40 } };
     const r = await callPrompt(rt, intakeCompilePrompt, ctx, { companyId: null });
     if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a draft: ${r.result.kind}`);
     return DraftRolePacket.parse(r.result.output);
@@ -164,60 +163,6 @@ describe("the stand-in's draft names no skill the same as a must-have (intake.co
     expect(pointsOnlyAtItsSkills(d)).toBe(true);
     // with no must-have named like one, the general three as before
     expect((await draftFor("Warehouse Lead", { mustHaves: ["Forklift license"] })).competencies.map((c) => c.name)).toEqual(["Warehouse Lead skill", "Communication", "Reliability"]);
-  });
-});
-
-describe("market pay in the assistant's words, from the real prompt (intake.turn v3, polish list)", () => {
-  const fake = new FakeProvider();
-  registerFakeHandlers(fake);
-  const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
-  const role = matchPlaybookRole(consumerPlaybook, "Social media manager")!;
-  const facts = { mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [], title: role.title, locationText: "Austin, TX", compensationBasis: "salary", compensationMin: 65000, compensationMax: 80000 };
-  const ctx = (benchmark: IntakeContext["benchmark"]): IntakeContext => ({
-    company: { name: "Northwind Skincare", vertical: "consumer", sizeBand: "11-50", locations: [{ city: "Austin", region: "TX", country: "US" }] },
-    playbook: consumerPlaybook, playbookRole: role, benchmark, facts,
-    messages: [{ role: "owner", content: "I need a social media manager in Austin, $65,000 to $80,000 a year.", at: "2026-10-09T09:00:00.000Z" }],
-  });
-  const say = async (c: IntakeContext) => {
-    const r = await callPrompt(rt, intakeTurnPrompt, c, { companyId: null });
-    if (r.result.kind !== "ok") throw new Error(r.result.kind);
-    return r.result.output.assistantMessage;
-  };
-
-  it("the social and content role reads as marketing specialists, a rough guide, never marketing managers", () => {
-    expect(role.title).toBe("Social and Content Marketing Manager");
-    expect(role.occupation).toEqual({ soc: "13-1161", name: "Market research analysts and marketing specialists", match: "approximate" });
-  });
-
-  it("writes money and places the way the pay card does", async () => {
-    // v6 (the live test and its review, 12 Nov 2026): the playbook's RDA question reworded for candidates, with no mark
-    expect(intakeTurnPrompt.version).toBe(6);
-    // v4: option values and facts in plain words, never codes (staging, 13 Oct 2026).
-    expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).toContain('never a code: "California RDA license", not "rda_license"');
-    // v5: what was already asked is in the notes and never asked again; a job for another business is said once, never asked
-    const withAsked = intakeTurnPrompt.system({ ...ctx(null), alreadyAsked: ["compensation", "interviewers", "reason_for_hire", "interviewers"] }).map((b) => b.text).join("\n");
-    expect(withAsked).toContain("Already asked or answered in this draft (never ask about these again, on a card or in your message): the pay; who interviews; why they are hiring, and who the job is for.");
-    expect(withAsked).toContain("do not ask which company it is for");
-    expect(intakeTurnPrompt.system(ctx(null)).map((b) => b.text).join("\n")).not.toContain("Already asked or answered in this draft (");
-    const c = ctx({ basis: "salary", p25: 121130, p50: 164920, p75: 212050, source: "BLS OEWS 2025, SOC 112021, area 0012420", metro: "austin area", origin: "market", asOf: "2025" });
-    // the model is handed the figure already written as the pay card writes it
-    expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("write it as the pay card does: $121,130–$212,050 a year (middle $164,920), never bare numbers, and name places with capital letters.");
-    const text = await say(c);
-    expect(text).toContain("the market for the Austin area runs about $121,130–$212,050 a year (middle $164,920; source: BLS OEWS 2025, SOC 112021, area 0012420).");
-    expect(text).toContain("Your range is below the middle, which may slow the search.");
-    expect(text).not.toMatch(/\b121130\b|midpoint|austin area/);
-  });
-
-  it("tells a figure for a broader group of jobs as a rough guide, and a range below it gently", async () => {
-    const c = ctx({ basis: "salary", p25: 58000, p50: 71000, p75: 90000, source: "BLS OEWS 2025, SOC 131161, area 0012420", metro: "Austin area", origin: "market", asOf: "2025", approximate: true, occupation: "Market research analysts and marketing specialists" });
-    expect(intakeTurnPrompt.system(c).map((b) => b.text).join("\n")).toContain("This figure is an approximate match: it is for a broader group of jobs (Market research analysts and marketing specialists)");
-    const text = await say({ ...c, facts: { ...facts, compensationMax: 70000 } });
-    expect(text).toContain("$58,000–$90,000 a year (middle $71,000;");
-    expect(text).toContain("so this one is for a broader group (market research analysts and marketing specialists): take it as a rough guide.");
-    expect(text).toContain("Your range is below its middle, which is worth knowing but not a worry on its own.");
-    expect(text).not.toMatch(/slow the search/);
-    // the compile prompt keeps its own words: how to talk to the owner is the conversation's
-    expect(intakeCompilePrompt.system(c).map((b) => b.text).join("\n")).not.toMatch(/approximate match|pay card does/);
   });
 });
 

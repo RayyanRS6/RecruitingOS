@@ -1,7 +1,6 @@
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext, type PromptDef, type RunOutcome } from "@ros/ai";
 import { INTAKE_COMPILE_MAX_TOKENS, basisFor, factsFromExtraction, finalizePacket, mergeFacts, resolveBenchmark, type BenchmarkResult } from "@ros/agents";
 import type { IntakeFacts, IntakeMessage, IntakeTurn } from "@ros/contracts";
-import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { EMPTY_FACTS, draftFailures, draftSkillsNote, type IntakeCase } from "./suites";
 
 /**
@@ -21,18 +20,14 @@ const noLiveWages = { id: "eval", status: "disabled" as const, benchmark: async 
 
 /** The job builder's input for a case's answers and conversation so far, with the market check made for it. */
 export async function intakeContextOf(c: Pick<IntakeCase, "vertical">, facts: IntakeFacts, messages: IntakeMessage[]): Promise<{ ctx: IntakeContext; basis: "hourly" | "salary" | null; bench: BenchmarkResult }> {
-  const playbook = findPlaybook(c.vertical);
   const typed = messages.filter((m) => m.role === "owner" && (!m.kind || m.kind === "text")).map((m) => m.content);
-  const title = facts.title ?? typed[0] ?? "";
-  const role = playbook && title ? matchPlaybookRole(playbook, title) : null;
-  const basis = basisFor(facts, typed, role);
-  const bench = await resolveBenchmark(noLiveWages, { basis, playbookRole: role, titleGuess: title, locationText: facts.locationText ?? "Irvine, CA" });
+  const basis = basisFor(facts, typed);
+  const bench = await resolveBenchmark(noLiveWages, { basis });
   const ad = messages.find((m) => m.kind === "pasted_ad");
   const pay = facts.compensationBasis && facts.compensationMin !== undefined && facts.compensationMax !== undefined && !ad ? { basis: facts.compensationBasis, min: facts.compensationMin, max: facts.compensationMax, ...(facts.compensationCeiling !== undefined ? { ceiling: facts.compensationCeiling } : {}) } : null;
   return {
     ctx: {
       company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
-      playbook, playbookRole: role,
       benchmark: bench.benchmark, benchmarkGap: bench.gap,
       facts, messages,
       ad: ad ? { text: ad.content } : null,

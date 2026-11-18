@@ -1,11 +1,10 @@
-import { askedKind, lacksCredential, mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type PacketRevision, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
+import { askedKind, lacksCredential, mustHaveOf, repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type ResumeExtraction, type ScreenAssessment, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
 import { ASKED_WORDS, OWNERS_CALL_MARK, type FakeProvider, type IntakeContext, type StructuredRequest } from "@ros/ai";
-import { marketPlace, normalizeCriterion, screenCriterion } from "@ros/core";
+import { marketPlace, normalizeCriterion, sameRequirement, screenCriterion } from "@ros/core";
 import { redactProtected } from "./screening";
 import { fakeScreenWriteup } from "./fake-writeup";
 import { FOCUS_INTRO, isFocusKey } from "./screen-focus";
 import { plainlyNotHeld } from "./triage";
-import { sameRequirement } from "./requirements-check";
 
 /**
  * Deterministic handlers for the fake AI provider. They exist so tests, evals, and local development run
@@ -21,40 +20,7 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("screen.turn", (req) => fakeScreenTurn(req));
   fake.register("screen.assess", (req) => fakeScreenAssess(req));
   fake.register("screen.writeup", (req) => fakeScreenWriteup(req));
-  fake.register("packet.revise", (req) => fakeRevise(req));
   fake.register("company.about", (req) => fakeCompanyAbout(req));
-  fake.register("intake.suggest", (req) => fakeSuggest(req));
-}
-
-/**
- * intake.suggest v2 (Wave S3, G3): must-haves and yes/no questions for the quick start, built only from the job facts in
- * the request, the same every time for the same facts. Nothing about candidates is ever in the request. The questions
- * are only of the kinds a form question may be (a licence, the place of work), never a tool or experience question
- * (those are must-haves), nor the right to work or the posted schedule, which the form already asks: a remote job gets
- * none. A title that is not a job (empty, or only instructions) gets nothing.
- */
-function fakeSuggest(req: StructuredRequest<unknown>): { mustHaves: string[]; questions: string[] } {
-  const text = req.messages.map((m) => m.content).join("\n");
-  const job = text.match(/<job>\n([\s\S]*?)\n<\/job>/)?.[1] ?? "";
-  const fact = (label: string) => job.match(new RegExp(`^${label}: (.*)$`, "m"))?.[1]?.trim() ?? "";
-  const title = fact("Job title");
-  if (!title || /\b(?:ignore|instructions?|system prompt)\b/i.test(title)) return { mustHaves: [], questions: [] };
-  const lower = title.toLowerCase();
-  const model = fact("Work model");
-  const type = fact("Employment type");
-  const mustHaves = [`Hands-on ${lower} work`, `The tools a ${lower} uses every day`];
-  const questions: string[] = [];
-  if (/\bdriver|delivery|courier|truck/i.test(title)) {
-    mustHaves.push("Valid driver's licence and a clean driving record");
-    questions.push("Do you hold a valid driver's licence?");
-  }
-  if (model === "Remote") {
-    mustHaves.push("Working on your own, remotely");
-  } else if (model === "On site" || model === "Hybrid") {
-    questions.push("Can you get to the workplace on the days the job needs?");
-  }
-  if (type === "Part time" || type === "Temporary") mustHaves.push("Available for the posted hours");
-  return { mustHaves: mustHaves.slice(0, 8), questions: questions.slice(0, 4) };
 }
 
 type FakeIntakeContext = {
@@ -973,131 +939,6 @@ function fakeScreenMustHaves(req: StructuredRequest<unknown>, user: string): Scr
     if (short) return [{ requirementKey: m.key, met: /^no\b/i.test(short.text) ? ("no" as const) : ("yes" as const), evidence: { source: "screen" as const, quote: short.text } }];
     return [];
   });
-}
-
-/**
- * packet.revise v2 (C10): the few kinds of change tests and local development ask for, answered the way the model is
- * told to: only the sections that change, each written out whole; wording that stands in for a protected trait refused
- * in notChanged; pay only where pay may change; who decides pointed to Edit beside a draft; a must-have the request says
- * they must hold, worded as what rules someone out, turned round, and one already worded as what they need quoted with
- * nothing changed; a skill asked for in a must-have's words not added, the must-have named in notChanged (second review
- * of the live-test fixes, #12); a question back when the request is not one of these.
- */
-function fakeRevise(req: StructuredRequest<unknown>): PacketRevision {
-  const text = req.messages.map((m) => m.content).join("\n");
-  const allowed = (text.match(/^Sections you may change: ([a-z, ]+) \(/m)?.[1] ?? "").split(", ").filter(Boolean);
-  const request = text.match(/<request>\n([\s\S]*?)\n<\/request>/)?.[1]?.trim() ?? "";
-  let packet: Partial<DraftRolePacket> = {};
-  try { packet = JSON.parse(text.match(/Current packet \(JSON\): (\{[\s\S]*\})\n\n<request>/)?.[1] ?? "{}") as Partial<DraftRolePacket>; } catch { /* keep empty */ }
-  const changes: PacketRevision["changes"] = {};
-  const notChanged: PacketRevision["notChanged"] = [];
-  const done: string[] = [];
-  const clean = (s: string) => s.trim().replace(/^["']|["'.]+$/g, "").trim();
-  const refuse = (words: string) => {
-    const hit = screenCriterion(words);
-    if (hit) notChanged.push({ request: words, reason: `${hit.reason} ${hit.alternative}` });
-    return !!hit;
-  };
-  const unusedKey = (prefix: string, words: string, taken: string[]) => {
-    let key = `${prefix}_${slug(words).slice(0, 30)}`;
-    for (let n = 2; taken.includes(key); n += 1) key = `${prefix}_${slug(words).slice(0, 30)}_${n}`;
-    return key;
-  };
-  const addMust = request.match(/\badd (?:a |another )?must[\s-]have:?\s*(.+)$/i) ?? request.match(/\bmake (.+?) a must[\s-]have\b/i);
-  const takeOut = request.match(/\b(?:take out|remove|drop|delete)\s+(?:the\s+)?(?:must[\s-]have\s+|line\s+|sentence\s+|part\s+)?(?:about\s+|on\s+|saying\s+)?(.+)$/i);
-  const rename = request.match(/\b(?:rename (?:the job|the role|it)|call (?:the job|the role|it)|change the (?:job )?title) to\s+(.+)$/i);
-  const schedule = request.match(/\b(?:change|set|make) the schedule to\s+(.+)$/i);
-  const tone = request.match(/\b(warmer|friendlier|more formal|more direct)\b/i);
-  const question = request.match(/\badd (?:a |another )?(?:screening )?question:?\s*(.+)$/i);
-  const pay = /\bpay\b|\bwage\b|\bsalary\b|\brate\b/i.test(request) ? request.match(/\$?\s?(\d[\d,]*(?:\.\d+)?)\s*(?:-|–|to)\s*\$?\s?(\d[\d,]*(?:\.\d+)?)/i) : null;
-  const mustHold = /\b(?:must|need to|needs to|has to|have to)\s+(?:hold|have|be)\b/i.test(request);
-  // "Add perio charting as an essential skill", "Add a skill: perio charting": only a skill in a must-have's words is answered
-  const skillWords = request.match(/\badd (?:a |an |another )?(?:(?:essential|important|helpful) )?(?:skill|competency):\s*(.+)$/i)?.[1] ?? request.match(/\badd (.+?) as (?:a |an |another )?(?:(?:essential|important|helpful) )?(?:skill|competency)\b/i)?.[1];
-  const skillAsMustHave = skillWords ? packet.requirements?.mustHaves.find((m) => repeatsMustHave({ name: clean(skillWords) }, [m]) || sameRequirement(m.text, clean(skillWords))) : undefined;
-  // a draft is the one where pay may not change
-  if (/\bdecision maker\b|\bwho decides\b|\bfinal say\b/i.test(request)) notChanged.push({ request, reason: allowed.includes("compensation") ? "Who makes the final decision is chosen from your team in the editor." : "Who makes the final decision is chosen from your team with Edit beside the draft." });
-  else if (pay) {
-    const min = Number(pay[1].replace(/,/g, ""));
-    const max = Number(pay[2].replace(/,/g, ""));
-    if (!allowed.includes("compensation") || !packet.compensation) notChanged.push({ request, reason: "Pay is set on the pay card." });
-    else {
-      changes.compensation = { ...packet.compensation, min: Math.min(min, max), max: Math.max(min, max), mid: Math.round((min + max) / 2), ceiling: Math.max(packet.compensation.ceiling, min, max) };
-      done.push(`I changed the pay to ${money(Math.min(min, max))}–${money(Math.max(min, max))} ${per(packet.compensation.basis)}.`);
-    }
-  } else if (addMust && packet.requirements) {
-    const words = clean(addMust[1]);
-    if (!refuse(words)) {
-      if (packet.requirements.mustHaves.length >= 6) notChanged.push({ request: words, reason: "There are six must-haves already, the most a role can have. Take one out first." });
-      else {
-        changes.requirements = { ...packet.requirements, mustHaves: [...packet.requirements.mustHaves, { key: unusedKey("mh", words, packet.requirements.mustHaves.map((m) => m.key)), text: words, rationale: "Added by the owner in the conversation", evidencedBy: ["resume", "screen"] }] };
-        done.push(`I added a must-have: ${words}.`);
-      }
-    }
-  } else if (skillAsMustHave) {
-    // packet.revise v2: a skill the same as a must-have only repeats it, so it is not added; the person is told why.
-    notChanged.push({ request, reason: `The job already has "${skillAsMustHave.text}" as a must-have, which counts the most.` });
-  } else if (question && packet.screening) {
-    const words = clean(question[1]);
-    if (!refuse(words)) {
-      if (packet.screening.questions.length >= 12) notChanged.push({ request: words, reason: "There are twelve screening questions already, the most a role can have." });
-      else {
-        changes.screening = { ...packet.screening, questions: [...packet.screening.questions, { key: unusedKey("q", words, packet.screening.questions.map((q) => q.key)), question: /\?$/.test(words) ? words : `${words}?`, kind: "skills" }] };
-        done.push(`I added a screening question: ${words}`);
-      }
-    }
-  } else if (takeOut && packet.requirements && packet.description) {
-    const target = normalizeCriterion(clean(takeOut[1]));
-    const matches = (s: string) => { const t = normalizeCriterion(s); return !!target && (t.includes(target) || target.includes(t)); };
-    const must = packet.requirements.mustHaves.filter((m) => !matches(m.text));
-    const nice = packet.requirements.niceToHaves.filter((m) => !matches(m.text));
-    const sentences = packet.description.publicJobDescription.match(/[^.!?]+[.!?]+\s*/g) ?? [packet.description.publicJobDescription];
-    const kept = sentences.filter((s) => !matches(s)).join("").trim();
-    if ((must.length > 0 && must.length < packet.requirements.mustHaves.length) || nice.length < packet.requirements.niceToHaves.length) {
-      changes.requirements = { ...packet.requirements, mustHaves: must.length ? must : packet.requirements.mustHaves, niceToHaves: nice };
-      done.push(`I took out "${clean(takeOut[1])}".`);
-    } else if (kept.length >= 50 && kept !== packet.description.publicJobDescription.trim()) {
-      changes.description = { ...packet.description, publicJobDescription: kept };
-      done.push(`I took the line about "${clean(takeOut[1])}" out of the job description.`);
-    }
-  } else if (rename && packet.identity) {
-    const words = clean(rename[1]);
-    if (!refuse(words)) {
-      changes.identity = { ...packet.identity, title: words };
-      done.push(`I renamed the job to ${words}.`);
-    }
-  } else if (schedule && packet.identity) {
-    const words = clean(schedule[1]);
-    changes.identity = { ...packet.identity, schedule: words };
-    done.push(`I changed the schedule to ${words}.`);
-  } else if (tone && packet.communication) {
-    const to = /formal/i.test(tone[1]) ? "formal" : /direct/i.test(tone[1]) ? "direct" : "warm";
-    changes.communication = { ...packet.communication, tone: to };
-    done.push(`I made the messages to candidates ${to === "warm" ? "warmer" : `more ${to}`}.`);
-  } else if (/\bshort(?:er|en)\b/i.test(request) && packet.description) {
-    const sentences = packet.description.publicJobDescription.match(/[^.!?]+[.!?]+\s*/g) ?? [];
-    const shorter = sentences.slice(0, Math.max(3, Math.ceil(sentences.length / 2))).join("").trim();
-    if (shorter.length >= 50 && shorter !== packet.description.publicJobDescription.trim()) {
-      changes.description = { ...packet.description, publicJobDescription: shorter };
-      done.push("I made the job description shorter.");
-    }
-  } else if (mustHold && packet.requirements?.mustHaves.some((m) => sameRequirement(m.text, request))) {
-    // "They must hold an active RDH license" (live test, 12 Nov 2026): the must-have it names, worded as what rules
-    // someone out, is turned round; one already worded as what they need is quoted, and nothing changes.
-    const named = packet.requirements.mustHaves.filter((m) => sameRequirement(m.text, request));
-    const ruling = named.find((m) => rulesOut(m.text) && !rulesOut(mustHaveOf(m.text)));
-    if (ruling) {
-      const need = mustHaveOf(ruling.text);
-      changes.requirements = { ...packet.requirements, mustHaves: packet.requirements.mustHaves.map((m) => (m.key === ruling.key ? { ...m, text: need } : m)) };
-      done.push(`I changed the must-have "${ruling.text}" to "${need}".`);
-    } else {
-      const already = named.find((m) => !rulesOut(m.text));
-      if (already) return { summary: `Nothing needs to change: the job already lists "${already.text}" as a must-have.`, changes: {}, notChanged: [] };
-      return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "How should that must-have read, as what they need?" };
-    }
-  } else if (!refuse(request)) {
-    return { summary: "I have not changed anything yet.", changes: {}, notChanged: [], question: "What would you like to change? For example: add a must-have, change the schedule, or rename the job." };
-  }
-  return { summary: done.length ? done.join(" ") : "I have not changed anything.", changes, notChanged };
 }
 
 /**

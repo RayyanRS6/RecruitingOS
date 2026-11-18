@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
-// The real dental playbook, read by path: @ros/ai does not depend on @ros/playbooks.
-import { dentalPlaybook } from "../../../playbooks/src/dental.v1";
 import { OWNERS_CALL_MARK, PANEL_CHANGE_NOTE, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "./intake";
 
 const ctx: IntakeContext = {
   company: { name: "Harbor Dental", vertical: "dental", sizeBand: "10-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
-  playbook: null,
-  playbookRole: null,
   benchmark: null,
   facts: { title: "Dental Assistant", mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] },
   messages: [{ role: "owner", content: "A dental assistant in Irvine", at: "2026-10-13T09:00:00.000Z" }],
@@ -74,30 +70,6 @@ describe("intake.compile v6: what the live test showed (12 Nov 2026)", () => {
     expect(compile()).toContain("The description is public: never write why the owner is hiring into it");
     expect(compile()).toContain("never add a skill that is the same as a must-have, under any name: the must-have already counts it");
     expect(compile()).not.toContain("never name one the same as a must-have");
-  });
-
-  it("marks the Dental Assistant's RDA question as the owner's call in the draft's prompt only, and no other question", () => {
-    const role = (key: string) => dentalPlaybook.roles.find((r) => r.key === key)!;
-    // the playbook's part of the system text (the second block of intake.compile)
-    const playbookText = (key: string) => intakeCompilePrompt.system({ ...ctx, playbook: dentalPlaybook, playbookRole: role(key) })[1].text;
-    const da = playbookText("da");
-    expect(da).toContain(`license: Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?${OWNERS_CALL_MARK} | certification:`);
-    expect(da).not.toMatch(/Answer 'not required'|if the owner did not require it/);
-    // the hygienist's licence is required by law, so it carries no mark, and no other role has one
-    expect(playbookText("rdh")).toContain("license: Do you hold an active dental hygiene (RDH) license in the state where this office is located? | certification:");
-    for (const r of dentalPlaybook.roles) expect(playbookText(r.key).split(OWNERS_CALL_MARK).length - 1, r.key).toBe(r.key === "da" ? 1 : 0);
-  });
-
-  it("never shows the mark to intake.turn, which writes the cards the owner reads (review of the live-test fixes, 12 Nov 2026)", () => {
-    const da = dentalPlaybook.roles.find((r) => r.key === "da")!;
-    const turn = intakeTurnPrompt.system({ ...ctx, playbook: dentalPlaybook, playbookRole: da });
-    expect(turn.map((b) => b.text).join("\n")).not.toContain(OWNERS_CALL_MARK.trim());
-    expect(turn.map((b) => b.text).join("\n")).not.toMatch(/ask only when/i);
-    // the same playbook block as the draft's, the question written for candidates, without the mark
-    expect(turn[1].text).toContain("license: Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located? | certification:");
-    expect(turn[1].text).toBe(intakeCompilePrompt.system({ ...ctx, playbook: dentalPlaybook, playbookRole: da })[1].text.replace(OWNERS_CALL_MARK, ""));
-    // its words changed from the released v5 (the reworded question), so it is a version of its own
-    expect(intakeTurnPrompt.version).toBe(6);
   });
 });
 

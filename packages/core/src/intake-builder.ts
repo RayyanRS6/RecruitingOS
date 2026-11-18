@@ -806,3 +806,31 @@ export function normalizeFacts(facts: Partial<IntakeFacts> | null | undefined): 
   const f = facts ?? {};
   return { ...f, mustHaves: (f.mustHaves ?? []).slice(0, MAX_MUST_HAVES), niceToHaves: f.niceToHaves ?? [], eligibilityNotes: f.eligibilityNotes ?? [], interviewers: f.interviewers ?? [], dealBreakers: f.dealBreakers ?? [], declinedCriteria: f.declinedCriteria ?? [] };
 }
+
+const REQUIREMENT_STOP_WORDS = new Set(["the", "and", "for", "with", "our", "your", "their", "must", "have", "has", "able", "can", "who", "will", "are", "experience", "years", "year", "you", "any", "all", "from", "into", "that", "this", "work", "working", "job", "role", "plus"]);
+
+function requirementWords(text: string): Set<string> {
+  return new Set(normalizeCriterion(text).split(" ").filter((w) => w.length >= 3 && !REQUIREMENT_STOP_WORDS.has(w)));
+}
+
+/** A credential's short form, as a question names it: three to six capital letters, whole ("RDA", "CPR/BLS", "(RDH)"). Words all in capitals are read for their words only. */
+const shortForms = (text: string): Set<string> => new Set(/[a-z]/.test(text) ? text.match(/\b[A-Z]{3,6}\b/g) ?? [] : []);
+
+/**
+ * Whether two lines ask for the same requirement: the same words, one's key words nearly all inside the other's, or both
+ * naming the same credential by its short form however the rest is worded ("Active California RDA license" and "Do you
+ * hold a Registered Dental Assistant (RDA) license?").
+ */
+export function sameRequirement(a: string, b: string): boolean {
+  if (normalizeCriterion(a) === normalizeCriterion(b)) return true;
+  const x = requirementWords(a);
+  const y = requirementWords(b);
+  if (x.size >= 2 && y.size >= 2) {
+    let shared = 0;
+    for (const t of x) if (y.has(t)) shared += 1;
+    if (shared / Math.min(x.size, y.size) >= 0.8) return true;
+  }
+  const short = shortForms(a);
+  for (const s of shortForms(b)) if (short.has(s)) return true;
+  return false;
+}

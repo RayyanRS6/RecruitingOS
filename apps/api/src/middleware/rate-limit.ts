@@ -53,11 +53,6 @@ export const POLICIES = {
   /** Every candidate-facing page, read or written, per address: generous, but not unbounded. */
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
   /**
-   * The quick start's AI suggestions (Wave S3): each request is a paid model call that makes no draft and uses no plan
-   * room. The page asks once per set of answers; this caps a script or a stuck page.
-   */
-  intakeSuggest: { name: "intake.suggest", rules: [{ by: "user", windowMs: HOUR, limit: 30 }, { by: "tenant", windowMs: HOUR, limit: 200 }] },
-  /**
    * A request for access (SIGNUP_MODE=approval, the review of 6 November 2026): each one is a company row and two emails, and
    * one account makes one request, so many accounts from one address are what this bounds. The direct door is not limited.
    */

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt, type IntakeContext } from "@ros/ai";
 import { finalizePacket, registerFakeHandlers } from "@ros/agents";
 import type { DraftRolePacket, IntakeFacts, RolePacket } from "@ros/contracts";
-import { findPlaybook, matchPlaybookRole } from "@ros/playbooks";
 import { DA_DAYS_QUESTION, DA_RDA_QUESTION, DA_XRAY_CPR_QUESTION, EMPTY_FACTS, RDH_FACTS, REPLACEMENT_WORDS, draftFailures, draftSkillsNote, intakeGolden, quickStartFormFailures, reasonInDescription, ruleOutMustHaves, saysPracticeGrows, skillsRepeatingMustHaves, type IntakeCase } from "./suites";
 
 /**
@@ -22,11 +21,8 @@ const byId = (id: string): IntakeCase => {
 
 /** The draft's input as the runner gives it for answers already set (no market figure here: the stand-in needs none). */
 const contextOf = (vertical: string, facts: IntakeFacts, ownerMessages: string[]): IntakeContext => {
-  const playbook = findPlaybook(vertical);
   return {
     company: { name: "Eval Co", vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
-    playbook,
-    playbookRole: playbook && facts.title ? matchPlaybookRole(playbook, facts.title) : null,
     benchmark: null,
     facts,
     messages: ownerMessages.map((content) => ({ role: "owner" as const, content, at: "2026-11-12T12:00:00.000Z", kind: "text" as const })),
@@ -234,23 +230,6 @@ describe("intake.golden: why the owner is hiring, and skills that repeat a must-
     expect(said("You will have room to grow. Due to growth, we are adding a second assistant.", saysPracticeGrows)).toEqual(['why the owner is hiring is written into the public description: "Due to growth, we are adding a second assistant."']);
   });
 
-  it("finds a skill that repeats a must-have under its name or in its definition, never one that names it in passing", () => {
-    const repeats = (mustHaves: string[], ...skills: Array<[string, string]>) => skillsRepeatingMustHaves({ requirements: { mustHaves: mustHaves.map(mustHave), niceToHaves: [], eligibility: [] }, competencies: skills.map(([name, definition]) => ({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, weight: 4, evaluatedIn: "both", indicators: [] })) }).length;
-    const da = ["Four-handed dentistry", "Digital radiography", "Active California RDA license"];
-    for (const twin of [["Digital Radiography.", "Takes x-rays."], ["Radiography", "Takes x-rays."], ["Radiographic imaging", "Clear images."], ["X-ray technique", "Positions the sensor."], ["Imaging", "Takes and processes digital radiographs."], ["Four-handed assisting", "Passes instruments."]] as Array<[string, string]>) expect(repeats(da, twin), twin[0]).toBe(1);
-    // renamed as radiology or imaging, with a definition of a whole sentence (review of the intake evals fix, 13 Nov 2026)
-    for (const twin of [["Radiology", "Takes diagnostic x-rays with correct positioning and minimal retakes."], ["Dental imaging", "Captures clear intraoral images with correct sensor positioning."], ["Imaging", "Captures diagnostic-quality intraoral and extraoral radiographs with correct positioning and exposure settings."]] as Array<[string, string]>) expect(repeats(da, twin), twin[0]).toBe(1);
-    // the playbook's own skills overlap other must-haves by design, and stay
-    const playbook = findPlaybook("dental")!.roles.find((r) => r.key === "da")!.competencies.map((c): [string, string] => [c.name, c.definition]);
-    expect(repeats(da, ...playbook)).toBe(0);
-    expect(repeats(da, ["Digital charting", "Charts in the practice software."])).toBe(0);
-    const rdh = ["Active CA RDH license", "Perio experience"];
-    const quality = findPlaybook("dental")!.roles.find((r) => r.key === "rdh")!.competencies.find((c) => c.key === "clinical_quality")!;
-    expect(quality.definition).toContain("perio assessment");
-    expect(repeats(rdh, [quality.name, quality.definition])).toBe(0);
-    expect(repeats(rdh, ["Periodontal care", "Gentle scaling and root planing."])).toBe(1);
-  });
-
   it("fails dental_rdh_irvine and the Dental Assistant case on either, and passes the stand-in's drafts of them", async () => {
     // the skills are judged in other words too on these two (`skillRepeats`), through the check every compiled case runs
     const rdh = byId("dental_rdh_irvine");
@@ -314,23 +293,6 @@ describe("intake.golden: every draft and a skill named the same as a must-have (
     }
   });
 
-  it("drafts the Dental Office Manager without the playbook's 'Team leadership', and fails a draft that keeps it", async () => {
-    const om = byId("dental_office_manager_just_draft_it");
-    expect(om.ownerMessages).toEqual(["Dental office manager in Irvine, $34 to $40 an hour, full time. It's growth. I decide. Just draft it."]);
-    expect(findPlaybook("dental")!.roles.find((r) => r.key === "office_manager")!.competencies.map((c) => c.name)).toContain("Team leadership");
-    const { draft, finish } = await draftOf(om);
-    expect(draft.requirements.mustHaves.map((m) => m.text)).toEqual(["Dental practice management experience", "Team leadership", "Insurance and AR management"]);
-    expect(draft.competencies.map((c) => c.name)).toEqual(["Financial management", "Operations", "Patient experience", "Judgment and calm"]);
-    expect(draftFailures(om, finish())).toEqual([]);
-    const kept: DraftRolePacket = structuredClone(draft);
-    kept.competencies.unshift(skill("Team leadership", "Hires, trains, holds accountable, keeps morale."));
-    expect(draftFailures(om, finish(kept))).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"']);
-    // nor does its description say why the owner is hiring ("It's growth.")
-    const grown: DraftRolePacket = structuredClone(draft);
-    grown.description.publicJobDescription += " Our practice keeps growing.";
-    expect(draftFailures(om, finish(grown))).toEqual(['why the owner is hiring is written into the public description: "Our practice keeps growing."']);
-  });
-
   it("notes each draft's must-haves and skills by name, and the skills whose words are all in a must-have", async () => {
     const om = byId("dental_office_manager_just_draft_it");
     const { draft, finish } = await draftOf(om);
@@ -344,20 +306,5 @@ describe("intake.golden: every draft and a skill named the same as a must-have (
     expect(draftSkillsNote(da)).toBe('must-haves: "Digital radiography", "Four-handed dentistry"; skills: "X-rays", "Chairside skill", "Digital radiography and intraoral scanning"; skills whose words are all in a must-have: "X-rays" ("Digital radiography")');
     expect(draftSkillsNote({ requirements: { mustHaves: [], niceToHaves: [], eligibility: [] }, competencies: [] })).toBe("must-haves: none; skills: none");
   });
-
-  it("reads the same name as the score does, case, accents and punctuation aside, when the case judges names alone", () => {
-    const of = (...names: string[]) => skillsRepeatingMustHaves({ requirements: { mustHaves: [mustHave("Digital radiography")], niceToHaves: [], eligibility: [] }, competencies: names.map((n) => skill(n)) }, "same name");
-    expect(of("Digital Radiography.", "digital  radiography")).toHaveLength(2);
-    expect(of("Radiographic imaging", "Radiography", "Digital radiography and intraoral scanning")).toEqual([]);
-    // in any words, the first review's reading, those repeat it too but the last
-    expect(skillsRepeatingMustHaves({ requirements: { mustHaves: [mustHave("Digital radiography")], niceToHaves: [], eligibility: [] }, competencies: [skill("Radiographic imaging"), skill("Radiography")] })).toHaveLength(2);
-    // that reading fails other roles' own playbook skills beside the qualifications a draft takes as must-haves, so those
-    // drafts are judged by the name, and their note shows a skill renamed
-    const role = (key: string) => findPlaybook("dental")!.roles.find((r) => r.key === key)!;
-    const asDrafted = (key: string) => ({ requirements: { mustHaves: role(key).commonQualifications.slice(0, 3).map(mustHave), niceToHaves: [], eligibility: [] }, competencies: role(key).competencies.map((c) => skill(c.name, c.definition)) });
-    expect(skillsRepeatingMustHaves(asDrafted("front_office"))).toEqual(['the skill "Scheduling and follow-through" (Keeps the schedule full and accurate; confirms and reactivates.) repeats the must-have "Multi-line phones and scheduling"']);
-    expect(skillsRepeatingMustHaves(asDrafted("front_office"), "same name")).toEqual([]);
-    expect(skillsRepeatingMustHaves(asDrafted("office_manager"))).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"', 'the skill "Financial management" (Collections, AR, insurance, and daily numbers.) repeats the must-have "Dental practice management experience"']);
-    expect(skillsRepeatingMustHaves(asDrafted("office_manager"), "same name")).toEqual(['the skill "Team leadership" (Hires, trains, holds accountable, keeps morale.) repeats the must-have "Team leadership"']);
   });
 });

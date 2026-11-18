@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RolePacket, ScreenAssessment, ScreeningQuestion, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { FakeProvider, screenAssessPrompt, screenTurnPrompt, type RunOutcome, type ScreenContext } from "@ros/ai";
 import { CHAT_WRAP_KEY, chatCounter, tapFormatFor } from "@ros/core";
-import { ALL_PLAYBOOKS } from "@ros/playbooks";
+import { SAMPLE_QUESTIONS } from "./fixtures/sample-questions";
 import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, CHAT_WRAP_QUESTION, CONFUSED_OFFER, EMPTY_SCREEN_PROGRESS, NOT_ASKED_NOTE, SCORECARD_READINGS, SCREEN_COMPLETE_MESSAGE, SCREEN_NEXT_LINE, TURN_CAP_CLOSE_MESSAGE, WITHDRAW_CONFIRM_KEY, advanceProgress, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatFactsFor, chatGaps, chatNextLine, chatOpening, chatPacket, currentTapFormat, enforceChatTurn, enforceTurnRules, gapQuestion,
   newScreenProgress, nextQuestion, onlyQuestions, plainCredentialAnswers, recruiterNotesOf, redactProtected, reviewItems, saidByCandidate, scorecardReadings, screenAnswerOf, screenCommand, screenContextOf, screenIntro, seemsConfused, settledScreenRecommendation, tapWords, verifyScreenQuotes, withAskedSkills, withChatPlan, withdrawPending, withoutResumeShownConcerns, type ChatFacts,
@@ -1928,16 +1928,16 @@ describe("the chat's line after a tap or a skip, in code (22 Oct 2026 try-out)",
 /**
  * The live test of 12 November 2026: the Dental Assistant's "Which certifications do you hold, such as x-ray, coronal
  * polishing, RDA or BLS?" came with Yes and No, because every question of kind eligibility got them. Now only a question
- * whose words ask yes or no does, in every playbook, and a tap posted from a page that still showed them saves nothing.
+ * whose words ask yes or no does, across the sample jobs, and a tap posted from a page that still showed them saves nothing.
  */
 describe("Yes and No in the AI interview only for a question asked as yes or no (live test, 12 November 2026)", () => {
   const comp = { basis: "hourly" as const, currency: "USD" };
   const asQuestion = (q: { question: string; kind: string }) => q as Pick<ScreeningQuestion, "kind" | "question">;
-  const dental = ALL_PLAYBOOKS.find((p) => p.vertical === "dental")!;
+  const dental = SAMPLE_QUESTIONS.find((p) => p.vertical === "dental")!;
   const roleQuestion = (role: string, key: string) => dental.roles.find((r) => r.key === role)!.screeningQuestions.find((q) => q.key === key)!;
 
-  it("no playbook question that asks them to name, list or describe something gets the buttons", () => {
-    const all = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.screeningQuestions.map((q) => ({ role: `${p.vertical} ${r.key}`, ...q }))));
+  it("no sample question that asks them to name, list or describe something gets the buttons", () => {
+    const all = SAMPLE_QUESTIONS.flatMap((p) => p.roles.flatMap((r) => r.screeningQuestions.map((q) => ({ role: `${p.vertical} ${r.key}`, ...q }))));
     expect(all.length).toBeGreaterThan(20);
     for (const q of all.filter((x) => /\b(which|what|how|who|tell|describe|list|explain)\b/i.test(x.question))) expect(tapFormatFor(asQuestion(q), comp)?.kind, `${q.role}: ${q.question}`).not.toBe("yes_no");
     // the Dental Assistant's certificates are typed, while the hygienist's licence question keeps its buttons
@@ -1949,8 +1949,8 @@ describe("Yes and No in the AI interview only for a question asked as yes or no 
 
   // The review of the live-test fixes: the form's licence questions end "in the state where this office is located", and
   // a chat change or the owner can ask one in the AI interview instead, where its "where" took the buttons away.
-  it("every playbook form question asked in the AI interview keeps Yes and No", () => {
-    const form = ALL_PLAYBOOKS.flatMap((p) => p.roles.flatMap((r) => r.eligibility.map((e) => ({ role: `${p.vertical} ${r.key}`, question: e.question }))));
+  it("every sample form question asked in the AI interview keeps Yes and No", () => {
+    const form = SAMPLE_QUESTIONS.flatMap((p) => p.roles.flatMap((r) => r.formQuestions.map((e) => ({ role: `${p.vertical} ${r.key}`, question: e.question }))));
     expect(form.filter((q) => /\bwhere\b/.test(q.question)).length).toBeGreaterThanOrEqual(3);
     for (const q of form) expect(tapFormatFor(asQuestion({ question: q.question, kind: "eligibility" }), comp), `${q.role}: ${q.question}`).toEqual({ kind: "yes_no" });
   });

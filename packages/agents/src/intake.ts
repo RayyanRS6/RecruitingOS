@@ -2,23 +2,36 @@ import { and, desc, eq, lt, sql } from "drizzle-orm";
 import {
   DraftRolePacket as DraftRolePacketSchema, HireReason, IntakeServerState, RolePacket as RolePacketSchema, askedKind, mustHaveOf, rulesOut, withoutOwnersCallMark,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeFactsPatch, type IntakeListFact,
-  type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeSuggestion, type IntakeTurn, type PayBenchmark, type Playbook, type PlaybookRole,
+  type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionView, type IntakeSuggestion, type IntakeTurn, type PayBenchmark,
   type RolePacket,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
   DECIDER_ROLES, DRAFT_IT_WORDS, ESSENTIAL_LABEL, INTERVIEWERS_DEFAULT_NOTE, IntakeEditError, MAX_MUST_HAVES, SOMEONE_NEW, applyAnswers, applyFactsPatch, basisFromText, dealBreakerOffer, draftFactsKey,
   draftKeyMatches, emit, guardPacket, intakeReadiness, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, screenCriterion, setOnDraftByRule, typedByOwner, typedCeiling,
-  unresolvedFlags, withoutRemoved, withoutServerOwned,
+  sameRequirement, unresolvedFlags, withoutRemoved, withoutServerOwned,
   type FactsEdit, type TeamMember,
 } from "@ros/core";
-import { companies, intakeSessions, memberships, playbooks, rolePackets, roles, users, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
-import { VERTICAL_TO_PLAYBOOK, compensationFor, findPlaybook, matchPlaybookRole } from "@ros/playbooks";
+import { createHash } from "node:crypto";
+import { companies, intakeSessions, memberships, rolePackets, roles, users, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import type { CompAdapter } from "@ros/integrations";
-import { packetFingerprint, plainWords } from "./packet-revise";
-import { sameRequirement } from "./requirements-check";
 
 export type IntakeDeps = { ai: AiRuntime; comp: CompAdapter };
+
+/** JSON with every object's keys sorted, so two copies of the same draft compare equal whatever order they were stored in. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** A short fingerprint of a draft: an edit is saved only onto the draft it was made on. */
+export function packetFingerprint(packet: unknown): string {
+  return createHash("sha256").update(stableJson(packet)).digest("hex").slice(0, 16);
+}
 
 export type IntakeSessionRow = typeof intakeSessions.$inferSelect;
 
@@ -57,25 +70,16 @@ type IntakeInputs = {
   company: typeof companies.$inferSelect;
   session: IntakeSessionRow;
   state: IntakeServerState;
-  playbook: Playbook | null;
-  playbookRole: PlaybookRole | null;
-  playbookRow: { id: string; version: number } | null;
   titleGuess: string;
   locationText: string;
-  /** Hourly or salary, known before the first market check (C2); null means ask first and check nothing yet. */
+  /** Hourly or salary, from the facts or the owner's own typed words; null when neither says. */
   basis: "hourly" | "salary" | null;
 };
 
-/** The basis a playbook role's pay table uses, when all of its rows agree (a dental hygienist is paid by the hour). */
-function playbookBasis(role: PlaybookRole | null): "hourly" | "salary" | null {
-  const bases = [...new Set((role?.compensation ?? []).map((r) => r.basis))];
-  return bases.length === 1 ? bases[0] : null;
-}
-
-/** Hourly or salary before the first market check (C2): the facts, else the owner's own typed words, else the playbook role's table. */
-export function basisFor(facts: IntakeFacts, typedWords: string[], role: PlaybookRole | null): "hourly" | "salary" | null {
+/** Hourly or salary: the facts, else the owner's own typed words. */
+export function basisFor(facts: IntakeFacts, typedWords: string[]): "hourly" | "salary" | null {
   const stated = facts.compensationBasis === "hourly" || facts.compensationBasis === "salary" ? facts.compensationBasis : null;
-  return stated ?? basisFromText(typedWords.join("\n")) ?? playbookBasis(role);
+  return stated ?? basisFromText(typedWords.join("\n"));
 }
 
 /** The fairness check the server applies to every answer a card offers (C6), for the evaluation harness. */
@@ -85,46 +89,17 @@ async function loadIntakeInputs(q: Queryable, companyId: string, sessionId: stri
   const [company] = await q.select().from(companies).where(eq(companies.id, companyId)).limit(1);
   const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
   if (!company || !session) throw new IntakeSessionError("not_found");
-  const playbookVertical = VERTICAL_TO_PLAYBOOK[company.vertical] ?? company.vertical;
-  // The newest published version of the vertical's playbook (C2: this read the oldest).
-  const pbRow = (await q.select().from(playbooks).where(eq(playbooks.vertical, playbookVertical)).orderBy(desc(playbooks.version)).limit(1))[0] ?? null;
-  const playbook = pbRow?.content ?? findPlaybook(company.vertical);
   const facts = normalizeFacts(session.facts);
   const typed = typedByOwner(session.messages);
-  // A pasted ad is never matched as a whole (an ad that mentions a receptionist is not a receptionist's job): only its
-  // extracted title, or the owner's own typed words, name the job.
   const titleGuess = facts.title ?? typed[0] ?? "";
-  const playbookRole = playbook && titleGuess ? matchPlaybookRole(playbook, titleGuess) : null;
   const locationText = facts.locationText ?? company.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ");
-  const basis = basisFor(facts, typed, playbookRole);
-  return { company, session, state: stateOf(session), playbook, playbookRole, playbookRow: pbRow ? { id: pbRow.id, version: pbRow.version } : null, titleGuess, locationText, basis };
+  return { company, session, state: stateOf(session), titleGuess, locationText, basis: basisFor(facts, typed) };
 }
 
 export type BenchmarkResult = { benchmark: PayBenchmark | null; gap?: "basis_unknown" | "no_market_figure" };
 
-/**
- * The pay benchmark (C2, C8): nothing until the basis is known; then the live wage service (a network call, made with
- * no transaction open), then the playbook's own table, labelled as an ITS estimate. A figure on the other basis is
- * never used: a $95,000 salary is not compared with hourly rates. The playbook role's own occupation, when it names one,
- * is the one read; figures for a broader group than the job (the role says so, or the wage service does) are marked
- * `approximate`, with that group's name, so they are told as a rough guide.
- */
-export async function resolveBenchmark(comp: CompAdapter, inputs: Pick<IntakeInputs, "basis" | "playbookRole" | "titleGuess" | "locationText">): Promise<BenchmarkResult> {
-  if (!inputs.basis) return { benchmark: null, gap: "basis_unknown" };
-  const occupation = inputs.playbookRole?.occupation;
-  try {
-    const live = await comp.benchmark({ title: inputs.playbookRole?.title ?? inputs.titleGuess, ...(occupation ? { socCode: occupation.soc } : {}), locationText: inputs.locationText, basis: inputs.basis });
-    if (live && live.basis === inputs.basis) {
-      const approximate = occupation ? occupation.match === "approximate" : !!live.approximate;
-      const group = occupation ? occupation.name : live.occupation;
-      return { benchmark: { basis: live.basis, p25: live.p25, p50: live.p50, p75: live.p75, source: live.source, metro: live.metro, asOf: live.asOf, origin: "market", ...(approximate ? { approximate: true, ...(group ? { occupation: group } : {}) } : {}) } };
-    }
-  } catch {
-    // the wage service being down is not the owner's problem: fall through to the playbook
-  }
-  const row = inputs.playbookRole ? compensationFor(inputs.playbookRole, inputs.locationText) : null;
-  if (row && row.basis === inputs.basis) return { benchmark: { basis: row.basis, p25: row.p25, p50: row.p50, p75: row.p75, source: `${row.source} (ITS playbook estimate)`, metro: row.metro, asOf: row.asOf, origin: "its_estimate" } };
-  return { benchmark: null, gap: "no_market_figure" };
+export async function resolveBenchmark(_comp: CompAdapter, inputs: Pick<IntakeInputs, "basis">): Promise<BenchmarkResult> {
+  return { benchmark: null, gap: inputs.basis ? "no_market_figure" : "basis_unknown" };
 }
 
 /**
@@ -142,8 +117,6 @@ function contextFrom(inputs: IntakeInputs, bench: BenchmarkResult): IntakeContex
   const adText = state.ad ? session.messages[state.ad.messageIndex]?.content ?? null : null;
   return {
     company: { name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, locations: company.locations, benefitsSummary: company.settings.benefitsSummary, website: company.settings.website },
-    playbook: inputs.playbook,
-    playbookRole: inputs.playbookRole,
     benchmark: bench.benchmark,
     benchmarkGap: bench.gap,
     facts,
@@ -1034,13 +1007,11 @@ export function finalizeDraft(
   // own say "the job", never "the packet" (live test, 12 Nov 2026), as the owner reads them under "What the assistant
   // assumed".
   const done = new Set(readiness.essentials.filter((e) => e.done).map((e) => e.key));
-  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a))).map((a) => plainWords(a, ctx.company.name));
+  const modelAssumptions = (packet.provenance.assumptions ?? []).filter((a) => !serverAssumption(a) && !answeredSince(a, done) && !(madeToHold && saysFormHoldsNobody(a)));
   packet.provenance = {
     ...packet.provenance,
     intakeSessionId: prov.sessionId,
     aiRunIds: [...new Set([...(packet.provenance.aiRunIds ?? []), ...(prov.aiRunId ? [prov.aiRunId] : [])])],
-    playbookId: ctx.playbook ? `${ctx.playbook.vertical}@v${ctx.playbook.version}` : packet.provenance.playbookId,
-    playbookVersion: ctx.playbook?.version ?? packet.provenance.playbookVersion,
     sources: [...new Set([...(packet.provenance.sources ?? []), ...(benchmark ? [benchmark.source] : [])])],
     assumptions: [...new Set([...modelAssumptions, ...assumed, ...notSet, ...(pay ? [] : [PAY_NOT_SET])])],
     ...(benchmark ? { benchmark } : {}),
@@ -1170,9 +1141,6 @@ export async function requestIntakeApproval(
         title: packet.identity.title,
         status: "draft",
         hiringManagerUserId: input.hiringManagerUserId ?? null,
-        playbookId: loaded.playbookRow?.id ?? null,
-        playbookVersion: loaded.playbookRow?.version ?? null,
-        playbookRoleKey: loaded.playbookRole?.key ?? null,
         createdBy: input.actor,
       })
       .returning();

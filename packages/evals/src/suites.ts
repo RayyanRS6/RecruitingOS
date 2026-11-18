@@ -1,7 +1,6 @@
 import { triageAssessPrompt, type CompanyAboutInput } from "@ros/ai";
 import { assessmentSources, credentialMustHaves, readingsOutcome, saidByCandidate, scoringInput, screenCriterion, type MergedRevision, type ScoringIdentity } from "@ros/agents";
 import { repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessment, type IntakeFacts, type IntakeTurn, type MatchBand, type PacketRevision, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
-import { findPlaybook } from "@ros/playbooks";
 // The score is a pure function over the stored findings; this package does not depend on @ros/core (its database
 // code), so the eval reads the very same module by path.
 import { matchScore } from "../../core/src/match-score";
@@ -197,7 +196,7 @@ export function draftSkillsNote(p: Pick<RolePacket, "requirements" | "competenci
 }
 
 /** The Dental Assistant's questions for the form as the quick start offers them on step 9: the playbook's, word for word. */
-const daForm = findPlaybook("dental")?.roles.find((r) => r.key === "da")?.eligibility.map((e) => e.question) ?? [];
+const daForm = ["Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?", "Do you hold a current radiation safety / x-ray certification and CPR/BLS?", "Are you available for the days this office is open?"];
 const daQuestion = (words: RegExp) => daForm.find((q) => words.test(q)) ?? "";
 export const DA_RDA_QUESTION = daQuestion(/\bRDA\b/);
 export const DA_XRAY_CPR_QUESTION = daQuestion(/x-ray/i);

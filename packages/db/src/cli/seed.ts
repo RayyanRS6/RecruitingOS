@@ -6,5 +6,5 @@ import { seedPlatform } from "../seed";
 const handle = await createDb({ databaseUrl: process.env.MIGRATE_DATABASE_URL ?? process.env.DATABASE_URL ?? null, pgliteDir: process.env.PGLITE_DIR ?? "./.data/pglite" });
 await migrate(handle);
 await seedPlatform(handle.db);
-console.log("seeded plans and playbooks");
+console.log("seeded plans");
 await handle.close();
