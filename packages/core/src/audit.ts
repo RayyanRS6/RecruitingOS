@@ -53,7 +53,7 @@ export type AuditAction =
   | "document.rejected"
   /** A job's closing date set, changed or taken off. */
   | "role.closing_date_changed"
-  /** Team invitations (docs/spec/21, area A): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
+  /** Team invitations (docs/PRODUCT.md, D1): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
   | "invitation.sent"
   | "invitation.resent"
   | "invitation.revoked"

@@ -2,9 +2,9 @@ import type { LegalCheck, LegalCheckItem, Location } from "@ros/contracts";
 import { closingDayWords } from "./closing-date";
 
 /**
- * Regulation as configuration (docs/08). Notice texts are versioned defaults; a rewording stored in a
+ * Regulation as configuration. Notice texts are versioned defaults; a rewording stored in a
  * company's settings takes a default's place; every display is recorded with the version shown. Items
- * marked [counsel] in docs/00 must be reviewed by an attorney before use with paying customers.
+ * marked [counsel] must be reviewed by an attorney before use with paying customers.
  */
 
 export type NoticeKey = "ai_use" | "privacy" | "pay_transparency" | "adverse_decision_explanation";

@@ -8,7 +8,7 @@ import { createContainer, type Container } from "./container";
 import { plantJob, signInAs, signInWithIdentity, usePlan, useTrial } from "./test-helpers";
 
 /**
- * Team invitations, members and per-role permissions (docs/spec/21, area A, and section 7 P0): an invitation is a row
+ * Team invitations, members and per-role permissions (docs/PRODUCT.md, D1): an invitation is a row
  * accepted by a Google or Microsoft sign-in with the invited address (never by an email-link session on its own);
  * member updates are validated with a last-owner guard; removal ends sessions; the team is read as one answer that
  * says what the person looking may do; and every role is exercised over HTTP.

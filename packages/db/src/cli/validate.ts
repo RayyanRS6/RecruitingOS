@@ -16,7 +16,7 @@ const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migration
 const DESTRUCTIVE = [/\bDROP\s+TABLE\b/i, /\bTRUNCATE\b/i, /\bDROP\s+COLUMN\b/i, /\bDELETE\s+FROM\b(?![^;]*\bWHERE\b)/i];
 /**
  * Platform tables (no company id, no row policy) the tenant role may touch on purpose, with the privileges it may hold.
- * Every entry is a decision recorded in a migration comment or docs/spec/09; anything else is a finding.
+ * Every entry is a decision recorded in a migration comment; anything else is a finding.
  */
 const TENANT_MAY: Record<string, ReadonlyArray<"SELECT" | "INSERT" | "UPDATE" | "DELETE">> = {
   plans: ["SELECT"], // public price list

@@ -5,7 +5,7 @@ import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, typ
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
 /**
- * A durable, Postgres-backed workflow engine (docs/06).
+ * A durable, Postgres-backed workflow engine.
  *
  * - A run is a row; every step execution is a ledger row; the queue is the `jobs` table.
  * - Steps run inside a tenant transaction; if the process dies mid-step the transaction rolls back and the

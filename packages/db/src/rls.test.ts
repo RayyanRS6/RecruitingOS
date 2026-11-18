@@ -17,8 +17,8 @@ import {
 
 /**
  * The application roles cannot run this file: they may not read the migration ledger, and the rows seeded here are
- * read back outside tenant transactions, which relies on the connection seeing every company (docs/readiness/03
- * section 2). Through the Supabase pooler the user is written `<role>.<project ref>`.
+ * read back outside tenant transactions, which relies on the connection seeing every company. Through the Supabase
+ * pooler the user is written `<role>.<project ref>`.
  */
 function refuseApplicationRole(url: string): void {
   let user = "";
@@ -27,7 +27,7 @@ function refuseApplicationRole(url: string): void {
   } catch {
     return; // a malformed string is reported by createDb in its own words
   }
-  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker (docs/readiness/03 section 2)`);
+  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker`);
 }
 
 describe("row-level security", () => {
@@ -40,11 +40,11 @@ describe("row-level security", () => {
   let roleB: string;
 
   const actor = { kind: "system" as const, id: "test" };
-  /** Whether the connection may switch to each application role: a superuser (PGlite) always may; a Postgres owner only after the grant docs/readiness/03 section 2 names. */
+  /** Whether the connection may switch to each application role: a superuser (PGlite) always may; a Postgres owner only once ros_app and ros_worker are granted to it. */
   const canBecome = { app: true, worker: true };
 
   beforeAll(async () => {
-    // In-memory PGlite by default; with TEST_DATABASE_URL the same proof runs on a real Postgres test database, connected as that database's owner role (docs/readiness/03 section 2).
+    // In-memory PGlite by default; with TEST_DATABASE_URL the same proof runs on a real Postgres test database, connected as that database's owner role.
     const testUrl = process.env.TEST_DATABASE_URL?.trim();
     if (testUrl) refuseApplicationRole(testUrl);
     handle = await createDb(testUrl ? { databaseUrl: testUrl } : { pgliteDir: "memory://" });
@@ -165,7 +165,7 @@ describe("row-level security", () => {
   });
 
   it("the application role sees nothing outside platform mode and everything inside it", async ({ skip }) => {
-    skip(!canBecome.app, "this connection cannot become ros_app; grant it to the owner role of the test database (docs/readiness/03 section 2)");
+    skip(!canBecome.app, "this connection cannot become ros_app; grant it to the owner role of the test database");
     const outside = await handle.db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL ROLE ros_app`);
       return tx.select().from(roles);
@@ -188,7 +188,7 @@ describe("row-level security", () => {
   });
 
   it("the API role cannot claim jobs; the worker role can", async ({ skip }) => {
-    skip(!canBecome.app || !canBecome.worker, "this connection cannot become ros_app and ros_worker; grant them to the owner role of the test database (docs/readiness/03 section 2)");
+    skip(!canBecome.app || !canBecome.worker, "this connection cannot become ros_app and ros_worker; grant them to the owner role of the test database");
     await withPlatform(handle.db, (tx) => tx.execute(sql`INSERT INTO jobs (kind, payload) VALUES ('workflow.tick', '{}'::jsonb)`));
     const denied = await handle.db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL ROLE ros_app`);
@@ -213,7 +213,7 @@ describe("row-level security", () => {
       expect(info.superuser).toBe(true); // PGlite runs as a superuser; production refuses this
       expect(problemsWithConnectionRole(info, "postgres").some((p) => /superuser/.test(p))).toBe(true);
     } else {
-      // A real Postgres run connects as the owner of the test database (docs/readiness/03 section 2): never an application role, able to enter tenant transactions (the cases above just did), and in platform mode from the start. The role is printed so the run's record carries it.
+      // A real Postgres run connects as the owner of the test database: never an application role, able to enter tenant transactions (the cases above just did), and in platform mode from the start. The role is printed so the run's record carries it.
       console.log(`[rls] connected as ${info.role} on postgres`);
       expect(info.role).not.toMatch(/^(ros_app|ros_worker|app_tenant)$/);
       expect(info.canBecomeTenant).toBe(true);

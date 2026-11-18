@@ -29,7 +29,7 @@ export async function signInAdmin(app: ReturnType<typeof createApp>, container: 
 }
 
 /**
- * Where a suite's database lives (docs/readiness/03 section 2). By default the in-memory PGlite every suite has always
+ * Where a suite's database lives. By default the in-memory PGlite every suite has always
  * used. With TEST_DATABASE_URL set, the isolation and privacy suites run against that Postgres database instead: an
  * empty test database, connected as its owner role (the one that applied the migrations there, the same kind of
  * string as MIGRATE_DATABASE_URL), never as `ros_app` or `ros_worker`. The application roles cannot read the
@@ -56,7 +56,7 @@ export function refuseApplicationRole(url: string): void {
     return; // a malformed string is reported by createDb in its own words
   }
   // Through the Supabase pooler the user is written `<role>.<project ref>`.
-  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row (docs/readiness/03 section 2)`);
+  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row`);
 }
 
 /**
@@ -93,8 +93,8 @@ export async function useTrial(container: Container, companyId: string): Promise
 }
 
 /**
- * A customer with a membership of the given role in the company, signed in through the fake Google issuer (docs/spec/21,
- * area A: per-role coverage). Creates the person and the membership when they do not exist yet, then returns the
+ * A customer with a membership of the given role in the company, signed in through the fake Google issuer (per-role
+ * coverage of docs/PRODUCT.md, D1). Creates the person and the membership when they do not exist yet, then returns the
  * session cookie with that company active. The email defaults to a fresh address so each call is a distinct person.
  */
 export async function signInAs(container: Container, app: ReturnType<typeof createApp>, input: { companyId: string; role: MembershipRole; email?: string; name?: string }): Promise<string> {

@@ -152,7 +152,7 @@ function outcomeOf<TOutput>(runId: string, call: PromptCall<TOutput>): RunOutcom
   return { ok: false, runId, model, reason: result.error.startsWith("provider") ? "error" : "invalid", error: result.error };
 }
 
-/** Records an `ai_runs` row for a call (docs/16: what did the AI see, conclude, why) and turns it into an outcome. */
+/** Records an `ai_runs` row for a call (what did the AI see, conclude, why) and turns it into an outcome. */
 export async function recordRun<TInput, TOutput>(q: Queryable, rt: AiRuntime, prompt: PromptDef<TInput, TOutput>, meta: RunMeta, call: PromptCall<TOutput>): Promise<RunOutcome<TOutput>> {
   const [row] = await q
     .insert(aiRuns)
