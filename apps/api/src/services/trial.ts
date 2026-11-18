@@ -23,6 +23,8 @@ export const TRIAL_ENDED_ALERT = "billing.trial_ended";
 
 /** Why the team asks ITS about its plan from a refusal of new work. */
 export const TRIAL_PLAN_QUESTION = "Our trial has ended. We would like to choose a plan.";
+/** The same request from Home's notice while the trial still runs. */
+export const TRIAL_ENDING_PLAN_QUESTION = "Our trial is ending soon. We would like to choose a plan.";
 /** Where a notice about the trial leads: Settings, whose Plan section shows the dates. */
 const SEE_PLAN = { label: "See your plan", href: appPaths.settings };
 

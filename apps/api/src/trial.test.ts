@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { CLOSING_DATE_REASON, entitlements } from "@ros/core";
-import { TRIAL_ENDED_LINE, TRIAL_PLAN_KEY, type AdminCompany, type CompanyView, type PlanChangeAnswer, type PlanLimitDetails, type TrialExtensionAnswer } from "@ros/contracts";
+import { TRIAL_ENDED_LINE, TRIAL_PLAN_KEY, type AdminCompany, type CompanyView, type HomeView, type PlanChangeAnswer, type PlanLimitDetails, type TrialExtensionAnswer } from "@ros/contracts";
 import { adminAlerts, applications, auditRecords, candidates, companies, dataRequests, events, notifications, roles, screens, users, withPlatform } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -125,6 +125,9 @@ describe("the Trial plan's 30 days", () => {
     expect((await settle()).warned).toBe(0);
     setClock(24);
     expect(await standing()).toMatchObject({ started: true, endingSoon: true, ended: false, daysLeft: 6 });
+    // Home says so above everything, and the request it offers says the trial is still running
+    const home = (await (await json(owner, "GET", "/api/v1/home")).json()) as HomeView;
+    expect(home.notices.find((n) => n.kind === "trial_ending")).toMatchObject({ upgrade: true, ask: { label: "Ask ITS to choose a plan", reason: "Our trial is ending soon. We would like to choose a plan." } });
     expect((await settle()).warned).toBe(1);
     expect((await settle()).warned).toBe(0);
     const week = await ending();

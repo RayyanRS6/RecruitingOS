@@ -8,7 +8,7 @@ import type { Tenant } from "../middleware/session";
 import { askForAiHelpOn } from "./ai-credit";
 import { candidateCounts } from "./candidates";
 import { planRoom } from "./plan-room";
-import { TRIAL_PLAN_QUESTION, companyTrialStanding, trialDateWords } from "./trial";
+import { TRIAL_ENDING_PLAN_QUESTION, TRIAL_PLAN_QUESTION, companyTrialStanding, trialDateWords } from "./trial";
 
 /**
  * GET /api/v1/home: the open and paused jobs with how many people are new to review and how many finished the AI
@@ -41,9 +41,9 @@ async function homeNotices(tx: Tx, t: Pick<Tenant, "companyId" | "role">, now: D
   const [company] = await tx.select({ planKey: companies.planKey, timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
   const notices: HomeNotice[] = [];
   const trial = await companyTrialStanding(tx, t.companyId, now);
-  const choosePlan = mayAsk ? { label: "Ask ITS to choose a plan", reason: TRIAL_PLAN_QUESTION } : null;
-  if (trial?.ended) notices.push({ kind: "trial_ended", title: "Your trial has ended", body: TRIAL_ENDED_LINE, upgrade: true, ask: choosePlan });
-  else if (trial?.endingSoon && trial.endsAt) notices.push({ kind: "trial_ending", title: `Your trial ends on ${trialDateWords(trial.endsAt, company?.timezone)}`, body: "After that, new applications, new jobs and new AI interviews pause until a plan is chosen; everything already started carries on.", upgrade: true, ask: choosePlan });
+  const choosePlan = (reason: string) => (mayAsk ? { label: "Ask ITS to choose a plan", reason } : null);
+  if (trial?.ended) notices.push({ kind: "trial_ended", title: "Your trial has ended", body: TRIAL_ENDED_LINE, upgrade: true, ask: choosePlan(TRIAL_PLAN_QUESTION) });
+  else if (trial?.endingSoon && trial.endsAt) notices.push({ kind: "trial_ending", title: `Your trial ends on ${trialDateWords(trial.endsAt, company?.timezone)}`, body: "After that, new applications, new jobs and new AI interviews pause until a plan is chosen; everything already started carries on.", upgrade: true, ask: choosePlan(TRIAL_ENDING_PLAN_QUESTION) });
   const credit = await aiCreditView(tx, t.companyId, { now, timeZone: company?.timezone, planKey: company?.planKey });
   if (credit?.level && credit.notice) notices.push({ kind: credit.level === "used_up" ? "ai_help_used_up" : "ai_help_warning", title: credit.notice.title, body: credit.notice.body, upgrade: true, ask: mayAsk ? askForAiHelpOn(company?.planKey) : null });
   return notices;
