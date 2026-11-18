@@ -314,8 +314,6 @@ export async function applyPlan(q: Queryable, companyId: string, planKey: string
   return { aiCreditMonthStarted };
 }
 
-/** Requests for a person instead of the screening conversation (Q16): counted, never limited. */
-export const PERSON_REQUESTS = "screen_person_requests";
 /** The share of the monthly allowance at which the owner and ITS are warned (Q17). */
 export const ALLOWANCE_WARN_RATIO = 0.8;
 

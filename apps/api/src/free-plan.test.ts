@@ -1,25 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { entitlements as allowance } from "@ros/core";
-import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type CompanyView, type InviteAnswer, type PlanChangeAnswer, type PlanRoom, type UsageLine } from "@ros/contracts";
+import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type CompanyView, type IntakeSessionList, type InviteAnswer, type PlanChangeAnswer, type PlanLimitDetails, type PlanRoom, type UsageLine } from "@ros/contracts";
 import { adminAlerts, aiRuns, auditRecords, companies, entitlements, events, intakeSessions, invitations, memberships, notifications, roles, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { settleTrials } from "./services/trial";
-import { signInAdmin, signInWithIdentity, usePlan } from "./test-helpers";
+import { plantJob, signInAdmin, signInWithIdentity, usePlan } from "./test-helpers";
 
-const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
+const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. Must-haves: active CA RDH license.";
 const ONE_JOB = "Your Free plan includes one job. Upgrade to post more.";
 const DAY = 86_400_000;
 
-type ApiError = { code: string; message: string; details: { upgrade?: boolean; room: PlanRoom; actions: Array<{ label: string; method: string; path: string; body: Record<string, unknown> }> } };
+type ApiError = { code: string; message: string; details: PlanLimitDetails };
 
 /**
  * The plans of 5 November 2026, Rule 1. A new company starts on Free: active, with no clock. Free is one job ever, counted
  * live from the roles: a job that went live counts for good, and one closed before it ever opened gives its place back.
- * Past it, every way to start a job, and every AI route on a draft with no role yet, stops with the owner's words and an
- * upgrade. And on every plan a closed role can no longer be approved open: that was a way past the limit.
+ * Past it, every way to a new job (starting a draft, writing it, publishing it) stops with the owner's words and the
+ * request to upgrade, before any model call.
  */
 describe("the Free plan's one job", () => {
   let container: Container;
@@ -30,7 +30,8 @@ describe("the Free plan's one job", () => {
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "test" }, body: body === undefined ? undefined : JSON.stringify(body) });
   const read = async <T>(r: Response) => (await r.json()) as T;
   const errorOf = async (r: Response) => (await read<{ error: ApiError }>(r)).error;
-  const room = async (cookie: string) => read<PlanRoom>(await json(cookie, "GET", "/api/v1/intake/room"));
+  /** The plan's room for another job, as the drafts list carries it for the start-a-hire box. */
+  const room = async (cookie: string): Promise<PlanRoom> => (await read<IntakeSessionList>(await json(cookie, "GET", "/api/v1/intake/sessions"))).room;
   /** The company's plan as its own people read it in Settings, and one of its usage lines (none when the plan sets no such limit). */
   const plan = async (cookie: string) => (await read<CompanyView>(await json(cookie, "GET", "/api/v1/companies/current"))).plan;
   const usageLine = async (cookie: string, key: string): Promise<UsageLine | undefined> => (await plan(cookie)).usage.find((l) => l.key === key);
@@ -49,15 +50,10 @@ describe("the Free plan's one job", () => {
     return { cookie, id: (await read<{ id: string }>(r)).id };
   };
   const startDraft = async (cookie: string) => (await read<{ session: { id: string } }>(await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE }))).session.id;
-  /** A job waiting for approval: an ordinary draft, asked for approval. */
-  const jobWaiting = async (cookie: string) => {
-    const r = await json(cookie, "POST", `/api/v1/intake/sessions/${await startDraft(cookie)}/compile`);
-    expect(r.status, await r.clone().text()).toBe(201);
-    await container.drain();
-    return (await read<{ roleId: string }>(r)).roleId;
-  };
-  const approve = async (cookie: string, roleId: string) => {
-    const r = await json(cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
+  /** A job written and not published yet: it uses the plan's place from then on. */
+  const jobWaiting = (companyId: string) => plantJob(container, { companyId, title: "Dental Hygienist", status: "draft" });
+  const publish = async (cookie: string, roleId: string) => {
+    const r = await json(cookie, "POST", `/api/v1/roles/${roleId}/publish`);
     expect(r.status, await r.clone().text()).toBe(200);
     await container.drain();
   };
@@ -116,95 +112,76 @@ describe("the Free plan's one job", () => {
   });
 
   describe("one job ever", () => {
-    it("the first job takes the one place; the next is refused with an upgrade, before any draft or model call", async () => {
+    it("the first job takes the one place; the next is refused with the request to upgrade, before any draft or model call", async () => {
       const { cookie, id } = await newCompany();
-      expect(await room(cookie)).toMatchObject({ ok: true, message: null, holding: [] });
-      const roleId = await jobWaiting(cookie);
-      expect(await room(cookie)).toEqual({ ok: false, limit: 1, used: 1, holding: [], message: ONE_JOB, upgrade: true });
+      expect(await room(cookie)).toMatchObject({ ok: true, message: null, holding: [], ask: null });
+      const roleId = await jobWaiting(id);
+      const full = await room(cookie);
+      expect(full).toEqual({ ok: false, limit: 1, used: 1, holding: [], message: ONE_JOB, ask: { label: "Upgrade", reason: MORE_JOBS_UPGRADE_QUESTION }, upgrade: true });
       const runs = await runCount();
       const refused = await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE });
       expect(refused.status).toBe(402);
       const err = await errorOf(refused);
-      expect(err).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { upgrade: true, room: { ok: false, upgrade: true, holding: [] } } });
+      expect(err).toMatchObject({ code: "limit_reached", message: ONE_JOB });
+      expect(err.details).toEqual({ upgrade: true, ask: full.ask, room: full });
       expect(err.message).not.toMatch(/clos/i);
-      expect(err.details.actions).toHaveLength(1);
-      expect(err.details.actions[0]).toEqual({ label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: MORE_JOBS_UPGRADE_QUESTION } });
       expect(await runCount()).toBe(runs);
       expect((await container.db.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, id), eq(intakeSessions.status, "active"))))).toHaveLength(0);
-      // pressing it sends ITS one request about the plan, with why
-      const asked = await json(cookie, err.details.actions[0].method, err.details.actions[0].path, err.details.actions[0].body);
+      // pressing Upgrade sends ITS one request about the plan, with why
+      const asked = await json(cookie, "POST", "/api/v1/plans/request", { reason: err.details.ask?.reason });
       expect(asked.status, await asked.clone().text()).toBe(201);
       const requests = await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.companyId, id), eq(adminAlerts.kind, PLAN_REQUEST_ALERT_KIND)));
       expect(requests.map((a) => (a.details as { reason?: string }).reason)).toEqual([MORE_JOBS_UPGRADE_QUESTION]);
       // and the job itself is untouched
-      expect((await roleOf(roleId)).status).toBe("pending_approval");
+      expect((await roleOf(roleId)).status).toBe("draft");
     });
 
-    it("every way in stops the same: hire again, the owner conversation, asking for approval on an older draft", async () => {
-      const { cookie } = await newCompany();
+    it("every way to a new job stops the same: starting a draft, writing an older one and publishing it; the words typed are still saved", async () => {
+      const { cookie, id } = await newCompany();
       const older = await startDraft(cookie);
-      const roleId = await jobWaiting(cookie);
-      await approve(cookie, roleId);
-      for (const [path, body] of [["/api/v1/intake/sessions", { fromRoleId: roleId }], [`/api/v1/intake/sessions/${older}/compile`, undefined], [`/api/v1/intake/sessions/${older}/request-approval`, undefined]] as const) {
+      await publish(cookie, await jobWaiting(id));
+      const runs = await runCount();
+      for (const [path, body] of [["/api/v1/intake/sessions", { initialMessage: HIRE }], [`/api/v1/intake/sessions/${older}/draft`, undefined], [`/api/v1/intake/sessions/${older}/publish`, undefined]] as const) {
         const r = await json(cookie, "POST", path, body);
         expect(r.status, path).toBe(402);
-        expect(await errorOf(r), path).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { upgrade: true } });
+        expect(await errorOf(r), path).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { upgrade: true, ask: { label: "Upgrade", reason: MORE_JOBS_UPGRADE_QUESTION } } });
       }
-      // the conversation continues a draft in progress, so it stops only once there is none
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${older}/abandon`)).status).toBe(200);
-      const talk = await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "I need another hygienist." });
-      expect(talk.status).toBe(402);
-      expect(await errorOf(talk)).toMatchObject({ code: "limit_reached", message: ONE_JOB });
+      expect(await runCount()).toBe(runs);
+      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${older}/messages`, { message: "It starts in January." })).status).toBe(200);
     });
 
     it("a job that went live counts for good: closing it frees nothing", async () => {
       const { cookie, id } = await newCompany();
-      const roleId = await jobWaiting(cookie);
-      await approve(cookie, roleId);
+      const roleId = await jobWaiting(id);
+      await publish(cookie, roleId);
       expect((await roleOf(roleId)).openedAt).toBeTruthy();
       await closeOk(cookie, roleId);
-      expect(await room(cookie)).toEqual({ ok: false, limit: 1, used: 1, holding: [], message: ONE_JOB, upgrade: true });
+      expect(await room(cookie)).toMatchObject({ ok: false, limit: 1, used: 1, holding: [], message: ONE_JOB, upgrade: true });
       expect(await usageLine(cookie, "jobs_total")).toMatchObject({ used: 1, limit: 1, words: "1 of 1 jobs in all" });
       expect(await usageLine(cookie, "active_roles")).toMatchObject({ used: 0, limit: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.JOBS_TOTAL))).toEqual({ ok: false, limit: 1, used: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.jobsCounted(tx, id))).toBe(1);
       // the running total is only ever counted from the roles: nothing was written beside it
       expect((await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, id), eq(entitlements.key, allowance.JOBS_TOTAL))))[0].used).toBe(0);
-      expect((await json(cookie, "POST", "/api/v1/intake/sessions", { fromRoleId: roleId })).status).toBe(402);
+      expect((await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE })).status).toBe(402);
     });
 
     it("a job closed before it ever opened gives its place back, and the next one can open", async () => {
-      const { cookie } = await newCompany();
-      const cancelled = await jobWaiting(cookie);
+      const { cookie, id } = await newCompany();
+      const cancelled = await jobWaiting(id);
       expect((await room(cookie)).ok).toBe(false);
       await closeOk(cookie, cancelled);
       expect(await room(cookie)).toMatchObject({ ok: true, used: 0, message: null });
       expect(await usageLine(cookie, "jobs_total")).toMatchObject({ used: 0, limit: 1 });
-      const next = await jobWaiting(cookie);
-      await approve(cookie, next);
+      const next = await jobWaiting(id);
+      await publish(cookie, next);
       expect((await roleOf(next)).status).toBe("open");
       expect((await room(cookie)).ok).toBe(false);
     });
 
-    it("two drafts asked for approval at once make one job", async () => {
-      const { cookie, id } = await newCompany();
-      const [a, b] = [await startDraft(cookie), await startDraft(cookie)];
-      const answers = await Promise.all([a, b].map((s) => json(cookie, "POST", `/api/v1/intake/sessions/${s}/compile`)));
-      expect(answers.map((r) => r.status).sort()).toEqual([201, 402]);
-      expect(await container.db.select().from(roles).where(eq(roles.companyId, id))).toHaveLength(1);
-    });
-
-    it("editing the one job stays allowed, title included", async () => {
-      const { cookie } = await newCompany();
-      const roleId = await jobWaiting(cookie);
-      await approve(cookie, roleId);
-      const edited = await json(cookie, "PATCH", `/api/v1/roles/${roleId}/packet`, { baseVersion: 1, title: "Senior Dental Hygienist" });
-      expect(edited.status, await edited.clone().text()).toBe(200);
-    });
-
     it("an upgrade lifts it at once, because every plan names the key", async () => {
       const { cookie, id } = await newCompany();
-      await jobWaiting(cookie);
+      await jobWaiting(id);
       expect((await room(cookie)).upgrade).toBe(true);
       const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
       expect(moved.status, await moved.clone().text()).toBe(200);
@@ -217,74 +194,24 @@ describe("the Free plan's one job", () => {
 
     it("a company with no row for the limit is unmetered, so existing companies do not change until their plan does", async () => {
       const { cookie, id } = await newCompany();
-      await jobWaiting(cookie);
+      await jobWaiting(id);
       await withPlatform(container.db, (tx) => tx.delete(entitlements).where(and(eq(entitlements.companyId, id), inArray(entitlements.key, [allowance.JOBS_TOTAL, allowance.ACTIVE_ROLES]))));
       expect(await room(cookie)).toMatchObject({ ok: true, limit: null, used: 1 });
       expect(await withTenant(container.db, id, (tx) => allowance.check(tx, id, allowance.JOBS_TOTAL))).toEqual({ ok: true, limit: null, used: 0 });
       expect(await usageLine(cookie, "jobs_total")).toBeUndefined();
     });
-  });
 
-  describe("a company with no room stops spending", () => {
-    /** A Free company at its one job, with an older draft already written beside it. */
-    const atItsJob = async () => {
-      const { cookie, id } = await newCompany();
-      const older = await startDraft(cookie);
-      const written = await json(cookie, "POST", `/api/v1/intake/sessions/${older}/draft`);
-      expect(written.status, await written.clone().text()).toBe(200);
-      const fresh = await startDraft(cookie);
-      const roleId = await jobWaiting(cookie);
-      await approve(cookie, roleId);
-      return { cookie, id, older, fresh, roleId };
-    };
-
-    it("writing a draft, changing a draft by chat and the quick start's suggestions make no model call", async () => {
-      const { cookie, id, older, fresh } = await atItsJob();
-      const runs = await runCount();
-      for (const [session, what] of [[fresh, "a draft not written yet"], [older, "a draft written before"]]) {
-        const r = await json(cookie, "POST", `/api/v1/intake/sessions/${session}/draft`);
-        expect(r.status, what).toBe(402);
-        expect(await errorOf(r), what).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { upgrade: true } });
-      }
-      const change = await json(cookie, "POST", `/api/v1/intake/sessions/${older}/revisions`, { message: "Make it shorter." });
-      expect(change.status).toBe(402);
-      expect(await errorOf(change)).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { actions: [{ label: "Upgrade" }] } });
-      // the suggestions answer as a failed or slow run does: never an error the page must show
-      const suggest = await json(cookie, "POST", "/api/v1/intake/suggestions", { title: "Hygienist" });
-      expect(suggest.status).toBe(200);
-      expect(await read(suggest)).toEqual({ mustHaves: [], questions: [], unavailable: true });
-      expect(await runCount()).toBe(runs);
-      expect(await container.db.select().from(aiRuns).where(and(eq(aiRuns.companyId, id), eq(aiRuns.task, "intake.suggest")))).toHaveLength(0);
-    });
-
-    it("the words typed are still saved, and the job already made can still be changed by chat", async () => {
-      const { cookie, older, roleId } = await atItsJob();
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${older}/messages`, { message: "It starts in January." })).status).toBe(200);
-      const change = await json(cookie, "POST", `/api/v1/roles/${roleId}/revisions`, { message: "Make the description shorter." });
-      expect(change.status, await change.clone().text()).not.toBe(402);
-    });
-
-    it("with room the same routes run as they always did, on any plan", async () => {
-      const { cookie } = await newCompany();
-      const session = await startDraft(cookie);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${session}/draft`)).status).toBe(200);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${session}/revisions`, { message: "Make it shorter." })).status).not.toBe(402);
-      const suggest = await json(cookie, "POST", "/api/v1/intake/suggestions", { title: "Delivery driver" });
-      expect(((await read(suggest)) as { unavailable?: boolean }).unavailable).toBeUndefined();
-    });
-
-    it("a full plan of roles at a time stops them too, in that plan's own words", async () => {
+    it("a full plan of jobs at a time stops them too, in that plan's own words, and asks to talk rather than to upgrade", async () => {
       const { cookie, id } = await newCompany();
       await usePlan(container, id, "core");
       const session = await startDraft(cookie);
-      await jobWaiting(cookie);
-      await jobWaiting(cookie);
+      await jobWaiting(id);
+      await jobWaiting(id);
       const r = await json(cookie, "POST", `/api/v1/intake/sessions/${session}/draft`);
       expect(r.status).toBe(402);
       const err = await errorOf(r);
-      expect(err.message).toMatch(/^Your plan includes 2 roles at a time/);
-      expect(err.details.upgrade).toBeUndefined();
-      expect(err.details.actions[0]).toMatchObject({ label: "Talk to ITS about more roles" });
+      expect(err.message).toMatch(/^Your plan includes 2 jobs at a time/);
+      expect(err.details).toMatchObject({ upgrade: false, ask: { label: "Talk to ITS about more jobs" } });
     });
   });
 

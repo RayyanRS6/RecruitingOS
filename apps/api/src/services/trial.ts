@@ -159,7 +159,7 @@ export async function settleTrials(q: Queryable, now: Date): Promise<{ started: 
 }
 
 /** Which "your trial ends" notice is due for a running trial: the last day's, else the last week's; each once per end date. */
-export function trialEndingNoticeDue(term: TrialTerm, now: Date): "last_day" | "soon" | null {
+function trialEndingNoticeDue(term: TrialTerm, now: Date): "last_day" | "soon" | null {
   const left = Date.parse(term.endsAt) - now.getTime();
   if (left <= 0) return null;
   if (left <= DAY_MS) return term.lastDayNoticeFor === term.endsAt ? null : "last_day";

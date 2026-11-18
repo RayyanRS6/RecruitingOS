@@ -16,7 +16,7 @@ import { openPlanRequest } from "./plan-request";
  * They live on `companies.settings` next to the rest of the company's details. Only the approved text is ever shown to a
  * candidate; a draft never is.
  */
-export type CompanyLogo = NonNullable<CompanySettings["logo"]>;
+type CompanyLogo = NonNullable<CompanySettings["logo"]>;
 
 /** The text a person approved, or null. Never a draft. */
 export function approvedAbout(settings: CompanySettings | null | undefined): string | null {

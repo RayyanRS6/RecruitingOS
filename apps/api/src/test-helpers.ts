@@ -181,7 +181,7 @@ export async function plantJob(container: Container, input: { companyId: string;
     provenance: {},
   });
   return withPlatform(container.db, async (tx) => {
-    const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: input.title, status, currentPacketVersion: 1, acceptingApplications: status === "open", openedAt: status === "draft" ? null : container.engine.clock().toISOString(), createdBy: actor }).returning({ id: roles.id });
+    const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: input.title, status, currentPacketVersion: 1, acceptingApplications: status !== "closed", openedAt: status === "draft" ? null : container.engine.clock().toISOString(), createdBy: actor }).returning({ id: roles.id });
     await tx.insert(rolePackets).values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: status === "draft" ? "proposed" : "approved", source: "human_edit", createdBy: actor });
     return role.id;
   });

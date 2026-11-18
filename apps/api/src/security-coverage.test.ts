@@ -5,7 +5,7 @@ import { applications, auditRecords, events, withTenant } from "@ros/db";
 import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { statusTokenFor, testContainerOptions } from "./test-helpers";
+import { plantJob, statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
  * Item 8 of the founder's instruction of 18 September 2026: the tests that must never be deferred. Tenant isolation,
@@ -36,26 +36,22 @@ describe("release-1 security coverage", () => {
   let ownerAId = "";
 
   const setup = async (cookie: string, name: string, city: string) => {
-    const co = (await (await json(cookie, "POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "20-49", locations: [{ city, region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
+    const co = (await (await json(cookie, "POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "20-49", locations: [{ city, region: "CA", country: "US" }] })).json()) as { id: string };
     await entitlements.applyPlan(container.db, co.id, "growth");
-    const s = (await (await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: `I need a registered dental hygienist in ${city}, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.` })).json()) as { session: { id: string } };
-    const { roleId } = (await (await json(cookie, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
-    await json(cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    return { ...co, roleId };
+    const { slug } = (await (await json(cookie, "GET", "/api/v1/companies/current")).json()) as { slug: string };
+    return { id: co.id, slug, roleId: await plantJob(container, { companyId: co.id, title: "Registered Dental Hygienist" }) };
   };
   const apply = async (slug: string, roleId: string, first: string, email: string) => {
-    const role = (await (await json(ownerA, "GET", `/api/v1/roles/${roleId}`)).json().catch(() => null)) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } } | null;
     const fd = new FormData();
-    fd.set("firstName", first); fd.set("lastName", "Tester"); fd.set("email", email); fd.set("locationText", "Tustin, CA");
+    fd.set("firstName", first); fd.set("lastName", "Tester"); fd.set("email", email);
     fd.set("resume", new File([`${first} Tester, RDH\nRegistered Dental Hygienist 2019 - present`], "r.txt", { type: "text/plain" }));
-    for (const rule of role?.currentPacket.packet.requirements.eligibility ?? []) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
     expect(r.status).toBe(302);
-    // the response is the receipt, or the conversation offered with the application (plan E1); it never carries the status link (Wave 0 item 0.1)
+    // the response is the receipt; it never carries the status link (Wave 0 item 0.1)
     const to = r.headers.get("location") ?? "";
-    expect(to === `/careers/${slug}/jobs/${roleId}/applied` || /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(to)).toBe(true);
+    expect(to).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     await container.drain();
     const token = await statusTokenFor(container, { roleId, email });
     expect(to).not.toContain(token);
@@ -82,7 +78,7 @@ describe("release-1 security coverage", () => {
   it("tenant isolation: another company's owner cannot read or act on anything in company A", async () => {
     expect((await json(ownerB, "GET", `/api/v1/roles/${roleA}`)).status).toBe(404);
     expect((await json(ownerB, "GET", `/api/v1/applications/${applicationA}`)).status).toBe(404);
-    expect((await json(ownerB, "POST", `/api/v1/applications/${applicationA}/actions`, { action: "hold" })).status).toBe(404);
+    expect((await json(ownerB, "POST", `/api/v1/applications/${applicationA}/actions`, { action: "reject" })).status).toBe(404);
     const rowsSeenByB = await withTenant(container.db, companyB, (tx) => tx.select({ id: applications.id }).from(applications));
     expect(rowsSeenByB.some((r) => r.id === applicationA)).toBe(false);
   });
@@ -103,7 +99,7 @@ describe("release-1 security coverage", () => {
 
   it("audit completeness: every privileged read and human decision leaves an audit record with actor, target and reason", async () => {
     await json(ownerA, "GET", `/api/v1/applications/${applicationA}`);
-    await json(ownerA, "POST", `/api/v1/applications/${applicationA}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Coverage test." });
+    await json(ownerA, "POST", `/api/v1/applications/${applicationA}/actions`, { action: "reject" });
     const records = await container.db.select().from(auditRecords).where(eq(auditRecords.companyId, companyA));
     const viewed = records.find((r) => r.action === "candidate.viewed" && r.target?.id === applicationA);
     expect(viewed).toBeTruthy();

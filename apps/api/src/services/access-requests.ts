@@ -32,9 +32,9 @@ import { trialDateWords, writeTrialTerm } from "./trial";
  */
 
 /** The reasons recorded on the audit rows: nobody types one. */
-export const ACCEPTED_REASON = "Accepted from the dashboard";
-export const DECLINED_REASON = "Declined from the dashboard";
-export const REMOVED_REASON = "Access taken away from the dashboard";
+const ACCEPTED_REASON = "Accepted from the dashboard";
+const DECLINED_REASON = "Declined from the dashboard";
+const REMOVED_REASON = "Access taken away from the dashboard";
 
 /**
  * A request's details as they are kept: what a stranger typed is data, so each value is one line and no longer than the

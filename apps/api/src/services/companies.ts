@@ -40,7 +40,7 @@ export function requestSlug(companyId: string): string {
 }
 
 /** What a person who already has a company reads when they try to open another one themselves. */
-export const ANOTHER_COMPANY_MESSAGE = "To open another company, contact ITS.";
+const ANOTHER_COMPANY_MESSAGE = "To open another company, contact ITS.";
 
 /**
  * Which door a signed-in person has. `direct`: their company is live the moment it is created, where sign-up is open
