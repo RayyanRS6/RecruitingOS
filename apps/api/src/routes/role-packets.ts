@@ -1,5 +1,5 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
   AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, PacketFieldEdit, PacketRevisionRequest, RolePacket as RolePacketSchema, SetClosingDate,
@@ -10,7 +10,7 @@ import {
   IntakeSessionError, RequirementFixError, applyRequirementFixes, checkRequirements, decideRevision, loadRevision, loadTeam, mergeRevision, packetFingerprint, payChanged, proposeRevision, sessionView, storeDraftPacket,
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
-import { IntakeEditError, assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { IntakeEditError, assertCan, closingDateProblem, companyHasLocked, emit, guardPacket, normalizeFacts, unresolvedFlags } from "@ros/core";
 import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";

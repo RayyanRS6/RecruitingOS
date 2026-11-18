@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, roles, screens, workflowRuns } from "@ros/db";
+import { aiRuns, applications, assessments, candidates, communications, documents, entitlements, events, jobs, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
 import { createApp } from "./app";

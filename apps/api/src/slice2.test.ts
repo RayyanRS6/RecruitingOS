@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
 import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
 import { and, eq } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, policies, screens, workflowRuns, companies, withTenant } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, entitlements, events, screens, workflowRuns, companies, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -19,7 +19,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   let slug = "";
   let roleId = "";
   let elig: Array<{ key: string }> = [];
-  let firstQuestionKey = "";
   const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })(); // noon Pacific: inside texting hours
   let offset = 0;
   const setClock = (ms: number) => { offset = ms; (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offset); };
@@ -83,7 +82,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; screening: { questions: Array<{ key: string }> } } } };
     expect(role.status).toBe("open");
     elig = role.currentPacket.packet.requirements.eligibility;
-    firstQuestionKey = role.currentPacket.packet.screening.questions[0].key;
   });
   afterAll(async () => { await container.close(); });
 
@@ -178,7 +176,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(run.status).toBe("completed");
   });
 
-  let luisId = "";
 
   let priyaId = "";
   it("reminds once and then closes an AI interview nobody starts: she stays under 'No AI interview yet' (R20-7), told nothing else is needed", async () => {
@@ -232,7 +229,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(second[1].text).toContain(`/c/screen/${scr.token}`);
   });
 
-  let omarId = "";
 
   it("lists notifications and marks them read", async () => {
     const unread = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ id: string }>;

@@ -1,14 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import type { FakeHandler, StructuredRequest } from "@ros/ai";
-import { FOCUS_KEY_PREFIX, FOCUS_QUESTION_WORDS, type LearnedFact, type ScreenTurn, type WrittenQuestion } from "@ros/contracts";
-import { CHAT_WRAP_QUESTION, composeInterviewerBrief } from "@ros/agents";
-import { CHAT_WRAP_KEY, entitlements } from "@ros/core";
-import { aiRuns, applications, candidates, rolePackets, roles, screens, withTenant } from "@ros/db";
-import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { type LearnedFact, type WrittenQuestion } from "@ros/contracts";
+import { entitlements } from "@ros/core";
+import { applications, candidates, rolePackets, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { roleScreeningFunnel } from "./services/screens";
 import { useLaterApplyFlow } from "./test-helpers";
 
 /**
@@ -21,13 +17,9 @@ describe("the company's written questions in chats by text and from an emailed l
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let cookie = "";
-  let companyId = "";
   let slug = "";
   let roleId = "";
   let elig: Array<{ key: string }> = [];
-  // the chats sent by text and from an emailed link, for what the team reads of them afterwards
-  let sentByText = "";
-  let sentOnWeb = "";
   let screening: Array<{ key: string; question: string }> = [];
   // noon Pacific: inside texting hours
   const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })();
@@ -44,9 +36,6 @@ describe("the company's written questions in chats by text and from an emailed l
   const form = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
   const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)))[0];
   const learnedOn = async (applicationId: string): Promise<LearnedFact[]> => ((await container.db.select({ answers: applications.answers }).from(applications).where(eq(applications.id, applicationId)))[0]?.answers.learned ?? []) as LearnedFact[];
-  const emailOutbox = () => (container.integrations.email as FakeEmailAdapter).sent;
-  const textsTo = (phone: string) => (container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === phone).map((m) => m.body);
-  const text = (from: string, body: string, sid: string) => form("/webhooks/twilio/inbound", { From: from, To: "+15550001111", Body: body, MessageSid: sid });
   const pageOf = async (token: string) => (await (await app.request(`/c/screen/${token}`)).text()).replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
   const askedKeys = (s: { transcript: Array<{ role: string; questionKey?: string }> }) => s.transcript.filter((t) => t.role === "assistant" && t.questionKey).map((t) => t.questionKey);
 
@@ -54,7 +43,7 @@ describe("the company's written questions in chats by text and from an emailed l
     const email = `${p.first.toLowerCase()}@written.test`;
     const fd = new FormData();
     fd.set("firstName", p.first); fd.set("lastName", "Tester"); fd.set("email", email);
-    if (p.phone) { fd.set("phone", p.phone); fd.set("smsConsent", "yes"); }
+    if (p.phone) fd.set("phone", p.phone);
     fd.set("resume", new File([`${p.first} Tester\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nRDH license CA active\nPerio maintenance, Dentrix`], "resume.txt", { type: "text/plain" }));
     for (const r of elig) fd.set(`elig_${r.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
@@ -89,7 +78,6 @@ describe("the company's written questions in chats by text and from an emailed l
     cookie = (await json("POST", "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token") })).headers.get("set-cookie")!.split(";")[0];
     const co = (await (await json("POST", "/api/v1/companies", { name: "Written Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     slug = co.slug;
-    companyId = co.id;
     await entitlements.applyPlan(container.db, co.id, "growth");
     // The ITS switch is ignored since 20 Oct 2026 (R20-12); the chats here are a person's new links (see `apply`).
     await useLaterApplyFlow(container, co.id);
@@ -129,7 +117,6 @@ describe("the company's written questions in chats by text and from an emailed l
     expect(scr.progress.writeup).toBeUndefined();
     expect(scr.transcript.some((t) => NOTED.test(t.content))).toBe(false);
     expect((await learnedOn(application.id)).map((f) => f.text)).toEqual([CALM, LATE]);
-    sentOnWeb = application.id;
   });
 
   it("a chat created before keeps the list it began with: the job's screening questions", async () => {

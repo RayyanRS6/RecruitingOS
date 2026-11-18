@@ -11,7 +11,6 @@ describe("sign-up and the first Today", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
-  let companyId = "";
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   type Card = { kind: string; title: string; body: string; actions: Array<{ label: string; method: string; path: string }> };
 
@@ -31,7 +30,6 @@ describe("sign-up and the first Today", () => {
     expect(bad.status).toBe(400);
     const r = await json(owner, "POST", "/api/v1/companies", { name: "First Dental", vertical: "dental", sizeBand: "1-19", timezone: "America/Chicago", locations: [{ city: "Austin", region: "TX", country: "US" }] });
     expect(r.status).toBe(201);
-    companyId = ((await r.json()) as { id: string }).id;
     const current = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { timezone: string };
     expect(current.timezone).toBe("America/Chicago");
   });

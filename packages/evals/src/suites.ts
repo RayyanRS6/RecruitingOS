@@ -4,7 +4,7 @@ import { repeatsMustHave, rulesOut, type DraftRolePacket, type EvidenceAssessmen
 import { findPlaybook } from "@ros/playbooks";
 // The score is a pure function over the stored findings; this package does not depend on @ros/core (its database
 // code), so the eval reads the very same module by path.
-import { matchScore, mustHaveSummary } from "../../core/src/match-score";
+import { matchScore } from "../../core/src/match-score";
 import type { EarlierApplication } from "./scoring-inputs";
 
 /** Evaluation suites (docs/11). Fixtures are synthetic; provenance is recorded on each case. */

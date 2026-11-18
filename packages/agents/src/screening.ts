@@ -1330,7 +1330,7 @@ export const CHAT_CAP_CLOSING = "We have covered as much as we can in this chat.
  * from the chat, or a thank-you) and what happens next, and the page offers "Review and send".
  */
 async function writeReply(q: Queryable, deps: ScreenDeps, b: ScreenBundle, s: { channel: ScreenChannel; actor: Actor; transcript: ScreenTranscriptEntry[]; answers: Record<string, string>; progress: ScreenProgress; message: string; questionKey: string | null; done: boolean; aiRunId?: string; reviewMessage?: string; closing?: string | null }): Promise<TurnResult> {
-  const { screen, app, candidate, company, packet } = b;
+  const { screen, company } = b;
   const review = s.done && isOneVisitFlow(s.progress) && s.channel === "web";
   // A chat that ends off the web (the candidate went on by text) closes with what happens next in the usual words.
   const closedByText = s.done && !!s.progress.chat && s.closing !== undefined;
@@ -1426,7 +1426,7 @@ export function withdrawnMessage(roleTitle: string): string {
  * goes to a person, a paused conversation opens again, and the chat carries on in the job's own words (`turnWithoutModel`).
  */
 export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: TurnInput, pending: Extract<BegunTurn, { kind: "pending" }>, out: RunOutcome<ScreenTurn>): Promise<TurnResult> {
-  const { app, candidate, company, packet } = pending.b;
+  const { candidate, company, packet } = pending.b;
   const screen = pending.b.screen;
   const [fresh] = await q.select().from(screens).where(eq(screens.id, screen.id)).limit(1);
   if (!fresh) return { kind: "error", message: "This conversation is no longer available." };
