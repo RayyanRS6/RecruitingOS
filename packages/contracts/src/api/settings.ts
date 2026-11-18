@@ -66,7 +66,8 @@ export type PlanView = { key: string; name: string; usage: UsageLine[]; aiCredit
  * address candidates see, the company's own (`hiringContact`) or ours when it set none. `about`: the text about the
  * company on its job pages, approved by a person; `aiAssisted` when the assistant drafted it. `aboutDraft`: a text the
  * assistant drafted that nobody has approved yet (never on a public page), with the wording check's finding when it
- * holds something a job page should not say.
+ * holds something a job page should not say. `viewer.mayEdit`: the person looking may change these details (an owner or
+ * an admin).
  */
 export type CompanyView = {
   id: string;
@@ -85,6 +86,7 @@ export type CompanyView = {
   contactShown: { email: string; name: string | null; kind: "company" | "its" };
   careersUrl: string;
   plan: PlanView;
+  viewer: { mayEdit: boolean };
 };
 
 /**
