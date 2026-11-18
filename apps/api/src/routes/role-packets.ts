@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import type { ZodError } from "zod";
 import {
-  AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DescribeBenefits, DraftRolePacket as DraftRolePacketSchema, KeepPacketFlag, PacketFieldEdit, PacketRevisionRequest, RequestRoleApproval, RolePacket as RolePacketSchema, SetClosingDate, UpdateInterviewPlan,
+  AI_HELP_BUSY_LINE, AI_HELP_LINE, ApplyRequirementFixes, CompanyQuestionsEdit, DraftRolePacket as DraftRolePacketSchema, PacketFieldEdit, PacketRevisionRequest, RolePacket as RolePacketSchema, SetClosingDate,
   requirementsCheckReads,
   type Actor, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag, type PacketRevisionProposal, type RequirementsCheck, type RolePacket,
 } from "@ros/contracts";
@@ -10,8 +10,8 @@ import {
   IntakeSessionError, RequirementFixError, applyRequirementFixes, checkRequirements, decideRevision, loadRevision, loadTeam, mergeRevision, packetFingerprint, payChanged, proposeRevision, sessionView, storeDraftPacket,
   type IntakeSessionRow, type MergedRevision, type StoredRevision,
 } from "@ros/agents";
-import { IntakeEditError, assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, membersWithCalendarStatus, normalizeFacts, unresolvedFlags } from "@ros/core";
-import { approvalRequests, companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
+import { IntakeEditError, assertCan, can, closingDateProblem, companyHasLocked, emit, guardPacket, normalizeFacts, unresolvedFlags } from "@ros/core";
+import { companies, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
 import { aiCreditAnswer } from "../services/ai-credit";
@@ -20,117 +20,19 @@ import { diffPackets } from "../services/packet-diff";
 import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fields";
 import { withoutLockedEvents } from "../services/locked-visibility";
 import { withoutUnsentChats } from "../services/screen-visibility";
-import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, materialChanges, mayApproveRoles, startPacketApproval, type PacketRow, type RoleRow } from "../services/packet-versions";
+import { CLOSED_ROLE_MESSAGE, createPacketVersion, currentVersionOf, type PacketRow, type RoleRow } from "../services/packet-versions";
 import type { Container } from "../container";
 import { assertRoomForDraft, loadDraft } from "./intake";
 
 /**
- * The role page's Interview plan and Activity tabs, and "Request approval again" (docs/spec/21 section 7: B8, B9,
- * B11), and the job builder's packet tools (plan Wave C): change by chat (C10), the version diff, the requirements check
- * (C16), the plain-field editor (C11) and the candidate-view preview (C9). Mounted under /api/v1/roles after the role
- * routes, like the posting routes; the same tools for a draft before the role exists are `draftPacketRoutes`, mounted
- * under /api/v1/intake.
+ * The role page's Activity tab and the job builder's packet tools (plan Wave C): change by chat (C10), the requirements
+ * check (C16), the plain-field editor (C11) and the candidate-view preview (C9). Mounted under /api/v1/roles after the
+ * role routes; the same tools for a draft before the role exists are `draftPacketRoutes`, mounted under /api/v1/intake.
  */
 export const rolePacketRoutes = new Hono<Vars>();
 rolePacketRoutes.use("/:id/*", roleScopeGuard);
 
 const TIMELINE_LIMIT = 200;
-
-/** The team members a round can be assigned to, with their scheduling readiness (from the members list). */
-async function interviewerViews(tx: Parameters<typeof membersWithCalendarStatus>[0], companyId: string) {
-  const members = (await membersWithCalendarStatus(tx, companyId)).filter((m) => m.status === "active");
-  return members.map((m) => ({ userId: m.userId, name: m.name ?? m.email, email: m.email, role: m.role, schedulable: m.schedulable }));
-}
-
-/** The plan with names: what the Interview plan tab shows and what the PATCH answers. */
-function planView(packet: typeof rolePackets.$inferSelect, people: Array<{ userId: string; name: string; email: string; role: string; schedulable: boolean }>) {
-  return {
-    version: packet.version,
-    status: packet.status,
-    rounds: packet.packet.interviews.plan.map((r) => ({
-      key: r.key,
-      title: r.title,
-      purpose: r.purpose,
-      durationMinutes: r.durationMinutes,
-      format: r.format,
-      interviewerRoles: r.interviewerRoles,
-      interviewers: r.interviewerUserIds.map((id) => people.find((p) => p.userId === id) ?? { userId: id, name: "Someone no longer on the team", email: "", role: "", schedulable: false }),
-    })),
-  };
-}
-
-rolePacketRoutes.get("/:id/interview-plan", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) return null;
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const current = currentVersionOf(role, packets);
-    if (!current) return null;
-    const people = await interviewerViews(tx, t.companyId);
-    return { ...planView(current, people), team: people };
-  });
-  if (!row) throw new HttpError(404, "not_found", "Role not found.");
-  return c.json(row);
-});
-
-/**
- * Interviewers per round. A new packet version ("Interviewers assigned") that follows the same rules as any edit:
- * current at once when an approver changes an open role, otherwise waiting for approval or kept with the draft.
- */
-rolePacketRoutes.patch("/:id/interview-plan", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "packet.edit");
-  const body = UpdateInterviewPlan.parse(await c.req.json());
-  const container = c.get("container");
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const current = currentVersionOf(role, packets);
-    if (!current) throw new HttpError(409, "no_packet", "This job has no saved details yet.");
-    const people = await interviewerViews(tx, t.companyId);
-    const known = new Set(people.map((p) => p.userId));
-    const plan = current.packet.interviews.plan;
-    for (const r of body.rounds) {
-      // Plain words with no key: the page names a step by its title (review of the live-test fixes, 12 Nov 2026).
-      if (!plan.some((p) => p.key === r.key)) throw new HttpError(400, "unknown_round", "One of these interview steps is no longer on this job. Reload to see the plan as it is now.", { key: r.key });
-      const stranger = r.interviewerUserIds.find((id) => !known.has(id));
-      if (stranger) throw new HttpError(400, "unknown_member", "Every interviewer must be an active member of your team.");
-    }
-    const next = structuredClone(current.packet);
-    next.interviews.plan = plan.map((p) => { const patch = body.rounds.find((r) => r.key === p.key); return patch ? { ...p, interviewerUserIds: [...new Set(patch.interviewerUserIds)] } : p; });
-    const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: next, changeSummary: "Interviewers assigned" });
-    return { ...planView(made.version, people), outcome: made.outcome, team: people, guardChanges: made.guardChanges };
-  });
-  await container.kick();
-  return c.json(result);
-});
-
-/** "Request approval again" on a role that was sent back (or whose approval ran out of time): a new request and a new run. */
-rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "packet.edit");
-  const body = RequestRoleApproval.parse(await c.req.json().catch(() => ({})));
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    if (role.status !== "draft") throw new HttpError(409, "not_a_draft", role.status === "pending_approval" ? "This role is already waiting for approval." : "Only a role that was sent back can be sent for approval again.");
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const version = body.version ? packets.find((p) => p.version === body.version) : packets[0];
-    if (!version) throw new HttpError(404, "version_not_found", "That version does not exist.");
-    await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId: role.id, actor, reason: "asked again" });
-    await tx.update(roles).set({ status: "pending_approval", title: version.packet.identity.title }).where(eq(roles.id, role.id));
-    await emit(tx, { type: "role_packet.proposed", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${version.version}` }, payload: { roleId: role.id, version: version.version, again: true } });
-    const { runId } = await startPacketApproval(tx, container, { companyId: t.companyId, role, version: version.version, actor, rationale: `${actor.name ?? "A team member"} asked for approval again${version.changeSummary ? ` after: ${version.changeSummary}` : ""}. Approve version ${version.version} to open the role and start posting.`, wasOpen: false });
-    return { ok: true, version: version.version, workflowRunId: runId };
-  });
-  await container.kick();
-  return c.json(result, 201);
-});
 
 /**
  * The role's activity: every event about the role itself, its packet versions, or anything that names the role in its
@@ -336,7 +238,7 @@ rolePacketRoutes.post("/:id/revisions/:revisionId/apply", requireTenant, async (
     if (!(await decideRevision(tx, stored.runId, { decision: "applied", at: now, by: actor, version: base.version + 1 }))) throw new HttpError(409, "already_decided", "This change was already saved.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet, changeSummary: `Changed by chat: ${stored.revision.summary}`.slice(0, 500), source: "agent_revision" });
     await emit(tx, { type: "packet.revision_applied", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${made.version.version}` }, payload: { roleId: role.id, version: made.version.version, baseVersion: base.version, revisionId: stored.runId, sections: merged.sections } });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), sections: merged.sections, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+    return { ...made.version, outcome: made.outcome, guardChanges: made.guardChanges, ...(made.paused ? { paused: true } : {}), sections: merged.sections, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result, 201);
@@ -355,24 +257,6 @@ rolePacketRoutes.post("/:id/revisions/:revisionId/discard", requireTenant, async
     if (await decideRevision(tx, stored.runId, { decision: "discarded", at: container.engine.clock().toISOString(), by: actor })) await emit(tx, { type: "packet.revision_discarded", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { roleId: role.id, revisionId: stored.runId } });
   });
   return c.json({ ok: true });
-});
-
-/**
- * What changed between two versions of the role (C10), field by field. `to` defaults to the newest version and `from`
- * to the one before it. Without compensation.read the pay section is left out, like GET /:id/packets.
- */
-rolePacketRoutes.get("/:id/packets/diff", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const num = (v: string | undefined) => (v && /^\d{1,6}$/.test(v) ? Number(v) : null);
-  const askedTo = num(c.req.query("to"));
-  const askedFrom = num(c.req.query("from"));
-  const { versions } = await withTenant(c.get("container").db, t.companyId, (tx) => loadRolePackets(tx, c.req.param("id") ?? ""));
-  const to = askedTo === null ? versions[0] : versions.find((v) => v.version === askedTo);
-  if (!to) throw new HttpError(404, "version_not_found", "That version does not exist.");
-  const from = askedFrom === null ? versions.find((v) => v.version < to.version) ?? null : versions.find((v) => v.version === askedFrom);
-  if (from === undefined) throw new HttpError(404, "version_not_found", "That version does not exist.");
-  return c.json(diffPackets(from?.packet ?? null, to.packet, { from: from?.version ?? null, to: to.version, includePay: can(t.role, "compensation.read") }));
 });
 
 /**
@@ -435,73 +319,10 @@ rolePacketRoutes.post("/:id/requirements-check/apply", requireTenant, async (c) 
     }
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: fixed.packet, changeSummary: `Requirements check: ${fixed.applied.join(" ")}`.slice(0, 500) });
     await emit(tx, { type: "packet.check_applied", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${made.version.version}` }, payload: { roleId: role.id, version: made.version.version, applied: fixed.applied.length, skipped: fixed.skipped.length } });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }), check: checkRequirements(made.version.packet, `v${made.version.version}`, made.version.version) };
+    return { ...made.version, outcome: made.outcome, guardChanges: made.guardChanges, ...(made.paused ? { paused: true } : {}), applied: fixed.applied, skipped: fixed.skipped, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }), check: checkRequirements(made.version.packet, `v${made.version.version}`, made.version.version) };
   });
   await container.kick();
   return c.json(result, 201);
-});
-
-/**
- * Keeps a flagged phrase in a version waiting for approval (C1), with the person's reason, from the role page's approval
- * card. The flag on that same version is stamped with who kept it, why and when; nothing else in the version changes, so
- * the approval already asked for stands and the approver reads the reason beside the phrase. Only a version not yet
- * approved: an approved version never has an open flag. Recorded as an event like every keep.
- */
-rolePacketRoutes.post("/:id/packets/:version/flags/keep", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "packet.edit");
-  const body = KeepPacketFlag.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const out = await withTenant(container.db, t.companyId, async (tx) => {
-    const { role, versions } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
-    refuseClosed(role);
-    const pv = versions.find((v) => String(v.version) === c.req.param("version"));
-    if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
-    if (pv.status !== "proposed") throw new HttpError(409, "not_waiting", "Only a version waiting for approval has wording left to decide on.");
-    const flag = (pv.packet.provenance.flags ?? []).find((f) => f.id === body.flagId);
-    if (!flag) throw new HttpError(404, "flag_not_found", "That check is no longer on this version.");
-    if (flag.kept) throw new HttpError(409, "already_kept", "That wording was already kept, with a reason.");
-    const packet = structuredClone(pv.packet);
-    const kept = { reason: body.reason, by: actor, at: container.engine.clock().toISOString() };
-    packet.provenance.flags = (packet.provenance.flags ?? []).map((f) => (f.id === flag.id ? { ...f, kept } : f));
-    await tx.update(rolePackets).set({ packet }).where(eq(rolePackets.id, pv.id));
-    await emit(tx, { type: "packet.flag_kept", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${pv.version}` }, payload: { roleId: role.id, version: pv.version, flagId: flag.id, rule: flag.rule, reason: body.reason } });
-    return { version: pv.version, flags: packet.provenance.flags, openFlags: unresolvedFlags(packet).length };
-  });
-  return c.json(out);
-});
-
-/**
- * The benefits, written on the approval card (plan D5): the one thing the law asks of the ad that a person fixes by typing.
- * Like keeping a flag, it fills in the version waiting and starts no new one, so the approval already asked for stands and
- * whoever typed it may still decide. It only fills a blank: words already on the version change through Edit, as a new
- * version. The legal check reads it from then on; nothing is public until someone approves.
- */
-rolePacketRoutes.post("/:id/packets/:version/benefits", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "packet.edit");
-  const body = DescribeBenefits.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const out = await withTenant(container.db, t.companyId, async (tx) => {
-    const { role, versions } = await loadRolePackets(tx, c.req.param("id") ?? "", { forWrite: true });
-    refuseClosed(role);
-    const pv = versions.find((v) => String(v.version) === c.req.param("version"));
-    if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
-    const notWaiting = () => new HttpError(409, "not_waiting", "Only the version waiting for approval takes this.");
-    const [req] = await tx.select({ proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))).limit(1);
-    if (!req || Number((req.proposal as { version?: number }).version) !== pv.version || pv.status !== "proposed") throw notWaiting();
-    if (pv.packet.compensation.benefitsSummary?.trim()) throw new HttpError(409, "already_described", "This version already describes the benefits. Change them with Edit.");
-    const packet = structuredClone(pv.packet);
-    packet.compensation.benefitsSummary = body.text;
-    // Still undecided is checked again in the write itself, as approving does: a yes landing at this moment is never given words nobody saw.
-    const [wrote] = await tx.update(rolePackets).set({ packet }).where(and(eq(rolePackets.id, pv.id), isNull(rolePackets.approvedAt))).returning({ id: rolePackets.id });
-    if (!wrote) throw notWaiting();
-    await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${pv.version}` }, payload: { roleId: role.id, version: pv.version, changeSummary: "Benefits written on the approval card", takesEffect: "after_approval", openFlags: unresolvedFlags(packet).length } });
-    return { version: pv.version };
-  });
-  return c.json(out);
 });
 
 /**
@@ -526,7 +347,7 @@ rolePacketRoutes.patch("/:id/packet", requireTenant, async (c) => {
     const edit = applyFieldEdit(base.packet, body, { team, actor, now: container.engine.clock().toISOString() });
     if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? edit.summary });
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), fields: edit.fields, notes: edit.notes, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+    return { ...made.version, outcome: made.outcome, guardChanges: made.guardChanges, ...(made.paused ? { paused: true } : {}), fields: edit.fields, notes: edit.notes, diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result);
@@ -555,7 +376,7 @@ rolePacketRoutes.put("/:id/company-questions", requireTenant, async (c) => {
     if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
     const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? edit.summary });
     // Recorded like every edit: `role_packet.edited`, with the summary ("Edited: quick questions, written questions").
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}), fields: edit.fields, flags: unresolvedFlags(made.version.packet).filter((f) => f.path.startsWith("companyQuestions")), diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
+    return { ...made.version, outcome: made.outcome, guardChanges: made.guardChanges, ...(made.paused ? { paused: true } : {}), fields: edit.fields, flags: unresolvedFlags(made.version.packet).filter((f) => f.path.startsWith("companyQuestions")), diff: diffPackets(base.packet, made.version.packet, { from: base.version, to: made.version.version }) };
   });
   await container.kick();
   return c.json(result);

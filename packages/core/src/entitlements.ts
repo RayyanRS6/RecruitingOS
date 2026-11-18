@@ -65,11 +65,10 @@ export async function seatRoom(q: Queryable, companyId: string, opts: { now: Dat
 }
 
 /**
- * A role uses one of the plan's places from the moment it is created until it closes: while it waits for approval, is
- * sent back for changes, is open or is paused. Closing it (filled, cancelled, no hire) gives the place back, and a role
- * reopened by correcting its outcome takes one again. Counted from the roles themselves, never from a running total.
+ * A role uses one of the plan's places from the moment it is created until it closes: while it is a draft, open or
+ * paused. Closing it gives the place back. Counted from the roles themselves, never from a running total.
  */
-export const ROLE_STATUSES_USING_A_PLACE = ["pending_approval", "draft", "open", "paused"] as const;
+export const ROLE_STATUSES_USING_A_PLACE = ["draft", "open", "paused"] as const;
 
 /** The roles using the plan's places now, oldest first; `except` leaves out a role being created in this transaction. */
 export async function rolesUsingAPlace(q: Queryable, companyId: string, opts: { except?: string } = {}): Promise<Array<{ roleId: string; title: string; status: string }>> {

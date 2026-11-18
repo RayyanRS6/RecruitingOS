@@ -206,7 +206,7 @@ export const PAY_TRANSPARENCY_JURISDICTIONS: readonly string[] = DEFAULT_NOTICES
 /**
  * Candidates for that list, PENDING COUNSEL: Washington DC (pay range on job ads and health benefits before the first
  * interview) and Rhode Island (pay range on request and before discussing pay). Until our lawyer confirms them they are
- * named on the approval card as advisory, never block approval, and are not added to the candidate notice.
+ * named in the legal check as advisory, never block publishing, and are not added to the candidate notice.
  */
 export const PAY_TRANSPARENCY_CANDIDATES: ReadonlyArray<{ jurisdiction: string; note: string; pendingCounsel: true }> = [
   { jurisdiction: "US-DC", note: "Washington DC asks for the pay range on job ads and for health benefits to be described before the first interview.", pendingCounsel: true },
@@ -254,10 +254,10 @@ export function closingDateRequired(input: { jobLocations: Array<Location | null
 }
 
 /**
- * The legal check before a role is approved (plan D5): for the job's places, the pay range, a short benefits
- * description and Colorado's closing date. A missing legal requirement blocks approval (POST /roles/:id/approve answers
- * 409 `legal_check` with the missing items); places pending counsel only add a note. A closing date the law needs and
- * nobody set is not missing: the role gets `defaultClosesOn` when it opens, and the item says so.
+ * The legal check before a job is published (plan D5): for the job's places, the pay range, a short benefits
+ * description and Colorado's closing date. A missing legal requirement blocks publishing (409 `not_ready`, one blocker
+ * for each missing item); places pending counsel only add a note. A closing date the law needs and nobody set is not
+ * missing: the role gets `defaultClosesOn` when it opens, and the item says so.
  */
 export function postingLegalCheck(input: {
   packet: { identity: { locations: Location[]; remotePolicy?: string | null }; compensation?: { min: number; max: number; benefitsSummary?: string | null } | null };
@@ -289,7 +289,7 @@ export function postingLegalCheck(input: {
     items.push({
       key: "benefits", label: "A short description of the benefits", met, blocking: true, jurisdictions: benefitPlaces, pendingCounsel: [],
       detail: met ? "The job ad describes the benefits." : `The law in ${placeNames(benefitPlaces)} asks for a short description of the benefits on the job ad${remote ? ", and this remote job could be done there" : ""}.`,
-      fix: met ? null : "Describe the benefits on the job's approval card, or in Settings (used for every job).",
+      fix: met ? null : "Describe the benefits in the job's pay section, or in Settings (used for every job).",
     });
   }
 

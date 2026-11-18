@@ -1,17 +1,14 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, selfApprovalCheck, unlockedAtFor, unresolvedFlags, waitingSince, zoneShortName, type FollowUpView } from "@ros/core";
-import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
+import { withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
-import { legalCheckFor, legalCheckMessage } from "./packet-approval";
+import { legalCheckFor } from "./publish";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
 import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
 import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, interviewParticipants, interviews, invitations, memberships, postings, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
-import { mayDecideByRole } from "./approvers";
-import { APPROVAL_LABEL } from "./role-report";
 import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
-import { backupsWarmCards, closeAfterHireCards } from "./hire-sheet";
 import { emailsOf, unreachedCandidates, type UnreachedPerson } from "./email-health";
 
 /**

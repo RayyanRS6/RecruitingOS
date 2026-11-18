@@ -17,7 +17,7 @@ export async function afterPlanChange(q: Queryable, input: { companyId: string; 
   const asked = await openPlanRequest(q, companyId);
   await resolveAlertsFor(q, PLAN_REQUEST_ALERT_KIND, companyId, now);
   const words = planChangedWords(input.planName, input.opened);
-  const notice = { companyId, kind: "company.plan_changed", title: words.title, body: words.body, action: { label: "See plan", href: "/setup#setup-company" } };
+  const notice = { companyId, kind: "company.plan_changed" as const, title: words.title, body: words.body, action: { label: "See plan", href: "/setup#setup-company" } };
   await notify(q, { ...notice, roles: PLAN_READERS });
   if (!asked?.requestedById) return;
   const [other] = await q.select({ userId: memberships.userId }).from(memberships).where(and(eq(memberships.companyId, companyId), eq(memberships.userId, asked.requestedById), notInArray(memberships.role, PLAN_READERS), eq(memberships.status, "active"))).limit(1);

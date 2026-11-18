@@ -20,7 +20,7 @@ export function screenDeps(container: Container): ScreenDeps {
     integrations: container.integrations,
     appBaseUrl: container.env.JOBS_BASE_URL,
     signal: (q, input) => container.engine.signal(q, input),
-    onWithdrawn: (q, input) => exitCleanup(q as Tx, container, { ...input, reason: "the candidate withdrew", candidateEmail: "send_cancellation" }),
+    onWithdrawn: (q, input) => exitCleanup(q as Tx, container, { ...input, reason: "the candidate withdrew" }),
     clock: () => container.engine.clock(),
   };
 }

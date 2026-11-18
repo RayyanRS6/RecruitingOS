@@ -1101,9 +1101,9 @@ export type CompiledIntake = { roleId: string; packet: RolePacket; version: numb
 export type ApprovalAsk = CompiledIntake | { error: string; aiRunId: string; noCredit?: boolean; refusedHoldUsd?: number } | { notReady: string[] };
 
 /**
- * "Ask for approval" (C7): creates the role and packet version 1 and hands the transaction to `finalize` (the caller
- * starts the approval workflow and records the plan's allowance there), so everything commits together or nothing
- * does. Refused, with plain reasons, until there is a written draft that is up to date with the answers, the six
+ * Turns the draft into a job: creates the role, as a draft, and packet version 1, and hands the transaction to
+ * `finalize` (the caller publishes the job and records the plan's allowance there), so everything commits together or
+ * nothing does. Refused, with plain reasons, until there is a written draft that is up to date with the answers, the six
  * essentials are in, a person set or confirmed the pay, and no wording check is open.
  *
  * The role is made from the draft the person saw: its words are never rewritten here. The parts set by rule (the pay
@@ -1168,7 +1168,7 @@ export async function requestIntakeApproval(
       .values({
         companyId: input.companyId,
         title: packet.identity.title,
-        status: "pending_approval",
+        status: "draft",
         hiringManagerUserId: input.hiringManagerUserId ?? null,
         playbookId: loaded.playbookRow?.id ?? null,
         playbookVersion: loaded.playbookRow?.version ?? null,
@@ -1182,9 +1182,7 @@ export async function requestIntakeApproval(
       .returning();
     await q.update(intakeSessions).set({ roleId: role.id, status: "compiled", draftPacket: packet }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.compiled", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { roleId: role.id } });
-    await emit(q, { type: "intake.approval_requested", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { roleId: role.id, payConfirmedVia: packet.provenance.payOrigin ?? null } });
     await emit(q, { type: "role.created", companyId: input.companyId, actor: input.actor, subject: { type: "role", id: role.id }, payload: { title: role.title, sessionId: session.id } });
-    await emit(q, { type: "role_packet.proposed", companyId: input.companyId, actor: agent, subject: { type: "role_packet", id: `${role.id}:1` }, payload: { version: 1, assumptions: packet.provenance.assumptions } });
     const compiled: CompiledIntake = { roleId: role.id, packet, version: pv.version, aiRunId: runId };
     if (opts.finalize) await opts.finalize(q, compiled);
     return compiled;

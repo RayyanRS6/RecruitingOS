@@ -42,22 +42,15 @@ export const POLICIES = {
   /** Pressing the confirmation button on the emailed privacy-request link: per link (the posted token) and per address. */
   privacyVerify: { name: "candidate.privacy_verify", rules: [{ by: "token", windowMs: HOUR, limit: 10, field: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   withdraw: { name: "candidate.withdraw", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 20 }] },
-  smsPref: { name: "candidate.sms_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
-  /** "Don't keep me for future roles" on the status page: per link and per address. */
-  talentPoolPref: { name: "candidate.talent_pool_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   /** "Lost your link?": anyone may ask, so per address and per mailbox typed (normalized); the answer is the same whether or not the address is known. */
   linkRequest: { name: "candidate.link_request", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 3, field: "email" }] },
-  schedule: { name: "candidate.schedule", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
-  scheduleNoneWork: { name: "candidate.schedule_none", rules: [{ by: "token", windowMs: HOUR, limit: 20, param: "token" }] },
-  reschedule: { name: "candidate.reschedule", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }] },
-  cancelInterview: { name: "candidate.cancel_interview", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }] },
   apiUser: { name: "api.user", rules: [{ by: "user", windowMs: MIN, limit: 600 }] },
   apiTenant: { name: "api.tenant", rules: [{ by: "tenant", windowMs: MIN, limit: 3000 }] },
   apiAnonymous: { name: "api.anonymous", rules: [{ by: "ip", windowMs: MIN, limit: 300 }] },
   webhookProvider: { name: "webhook.provider", rules: [{ by: "provider", windowMs: MIN, limit: 6000 }] },
   webhookAuthFailed: { name: "webhook.auth_failed", rules: [{ by: "auth_failure", windowMs: 10 * MIN, limit: 60 }] },
   cspReport: { name: "csp.report", rules: [{ by: "ip", windowMs: MIN, limit: 60 }] },
-  /** Every candidate-facing page and feed, read or written, per address: generous, but not unbounded. */
+  /** Every candidate-facing page, read or written, per address: generous, but not unbounded. */
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
   /**
    * The quick start's AI suggestions (Wave S3): each request is a paid model call that makes no draft and uses no plan

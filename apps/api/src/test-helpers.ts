@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { TRIAL_PLAN_KEY, isCompanyVerified, newTrialTerm, type MembershipRole } from "@ros/contracts";
 import { entitlements, grantPlatformRole } from "@ros/core";
-import { applications, candidates, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant } from "@ros/db";
+import { applications, candidates, companies, memberships, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
@@ -139,41 +139,6 @@ export async function useTrial(container: Container, companyId: string): Promise
     const settings = isCompanyVerified(co.settings) && !co.settings.trial ? { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } : co.settings;
     await tx.update(companies).set({ status: "trial", settings }).where(eq(companies.id, companyId));
   });
-}
-
-/**
- * Puts the signed-in member (by their cookie) on an interview for a role, straight into the tables: an interviewer
- * opens only the roles they interview for (roleScopeGuard). The interview is a cancelled one on the role's oldest
- * application, or on a new application when the role has none, so no scheduling starts and nobody is told. `remove`
- * takes away everything it added, for suites that count the role's applications or interviews afterwards.
- */
-export async function putOnInterview(container: Container, app: ReturnType<typeof createApp>, input: { cookie: string; roleId: string }): Promise<{ interviewId: string; applicationId: string; remove: () => Promise<void> }> {
-  const me = (await (await app.request("/api/v1/auth/me", { headers: { cookie: input.cookie } })).json()) as { user: { id: string }; activeCompanyId: string | null };
-  const companyId = me.activeCompanyId;
-  if (!companyId) throw new Error("the member has no active company");
-  const made = await withTenant(container.db, companyId, async (tx) => {
-    let [a] = await tx.select({ id: applications.id, candidateId: applications.candidateId }).from(applications).where(eq(applications.roleId, input.roleId)).orderBy(asc(applications.createdAt)).limit(1);
-    let created = false;
-    if (!a) {
-      const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Ines", lastName: "Interviewed", email: `ines-${randomBytes(3).toString("hex")}@example.com`, firstSource: "direct" }).returning();
-      [a] = await tx.insert(applications).values({ companyId, roleId: input.roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomBytes(16).toString("hex") }).returning({ id: applications.id, candidateId: applications.candidateId });
-      created = true;
-    }
-    const [iv] = await tx.insert(interviews).values({ companyId, applicationId: a.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", timezone: "America/Los_Angeles" }).returning();
-    await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: me.user.id, role: "interviewer", status: "invited" });
-    return { interviewId: iv.id, applicationId: a.id, candidateId: a.candidateId, created };
-  });
-  // straight on the suite's connection, as the suites' own direct reads and writes are (testContainerOptions)
-  const remove = async () => {
-    const db = container.db;
-    await db.delete(interviewParticipants).where(eq(interviewParticipants.interviewId, made.interviewId));
-    await db.delete(interviews).where(eq(interviews.id, made.interviewId));
-    if (made.created) {
-      await db.delete(applications).where(eq(applications.id, made.applicationId));
-      await db.delete(candidates).where(eq(candidates.id, made.candidateId));
-    }
-  };
-  return { interviewId: made.interviewId, applicationId: made.applicationId, remove };
 }
 
 /**

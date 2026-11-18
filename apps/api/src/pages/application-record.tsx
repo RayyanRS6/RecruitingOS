@@ -3,9 +3,9 @@
 import { Hono } from "hono";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { CandidatePrivacyRequest, CandidateSmsPreference, isCompanyVerified, type ApplicationStage, type CandidateScoreRow, type CandidateStep, type DecisionWording, type RolePacket } from "@ros/contracts";
+import { CandidatePrivacyRequest, isCompanyVerified, type ApplicationStage, type CandidateScoreRow, type CandidateStep, type DecisionWording, type RolePacket } from "@ros/contracts";
 import { CLOSE_OUT_TEMPLATE, newTimesDayWords, sendPrivacyAcknowledgment } from "@ros/agents";
-import { CLOSED_OUT_STATUS_LINE, DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, emit, fulfilSmsOptOut, mayWithdraw, notify, onFileNoDateLine, onFileStatusLine, openFollowUpOf, openHumanReview, transition, unlockedAtFor, type NewTimesPromise } from "@ros/core";
+import { CLOSED_OUT_STATUS_LINE, DECISION_STAGES, audit, candidateNewTimesPromise, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, emit, mayWithdraw, notify, onFileNoDateLine, onFileStatusLine, openFollowUpOf, openHumanReview, transition, unlockedAtFor, type NewTimesPromise } from "@ros/core";
 import { applications, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, rolePackets, roles, screens, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
@@ -13,22 +13,20 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { OTHER_APPLICATION_LABEL, otherApplicationsFor, packetOf, recordScoreFor, screensOf, sentAnswersFor, type OtherApplication, type RecordScore, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink } from "../services/applications";
 import { exitCleanup } from "../services/exit-cleanup";
-import { candidateEmailStates } from "../services/interview-create";
 import { learnedFactsFor } from "../services/profile-facts";
-import { optBackIntoTalentPool, optOutOfTalentPool } from "../services/talent-pool";
 import { CORRECTION_LINE, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts } from "./job-facts";
 import { Layout } from "./layout";
 import { LearnedFactsSection } from "./profile-pages";
 import { CARD_PAGE_CSS } from "./signin-link";
-import { MessageThread, THREAD_CSS, threadOf, toldWording } from "./thread";
+import { CHAT_BUBBLE_CSS } from "./conversation-frame";
 import { forTheWeb } from "./web-wording";
 
 /**
  * The candidate's application record (Wave S7, S7-0: moved as it was from pages/candidate.tsx): "Lost your link?", the
- * status page at /c/status/:token, and everything its forms do (privacy requests, withdrawing, a new link, texts, future
- * roles). Mounted on the candidate pages by pages/candidate.tsx.
+ * status page at /c/status/:token, and everything its forms do (privacy requests, withdrawing, a new link). Mounted on
+ * the candidate pages by pages/candidate.tsx.
  */
 const candidatePages = new Hono<Vars>();
 export { candidatePages as recordPages };
@@ -117,7 +115,7 @@ export const STATUS_CSS = `
   .track li > span:nth-child(2) { padding-top: 0; }
   .track li:not(:last-child)::after { top: 15px; bottom: auto; left: calc(50% + 22px); right: calc(-50% + 22px); width: auto; height: 2px; }
 }
-${THREAD_CSS}${recordCss()}${CARD_PAGE_CSS}`;
+${CHAT_BUBBLE_CSS}${recordCss()}${CARD_PAGE_CSS}`;
 
 /**
  * The application record's own parts (Wave S7, S7-E; October 2026 redesign): the pills that jump to each section; "What
@@ -653,8 +651,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   const [company] = await db.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const view = await visibleStage(container, app);
   const told = !view.hidden && DECISION_STAGES.includes(app.stage);
-  const { thread, wording, closedOut, unlockedAt } = await withTenant(container.db, app.companyId, async (tx) => ({
-    thread: await threadOf(tx, app.id),
+  const { wording, closedOut, unlockedAt } = await withTenant(container.db, app.companyId, async (tx) => ({
     wording: told ? await toldWording(tx, { applicationId: app.id, decidedAt: app.stageChangedAt }) : null,
     // Only what left us: a note still waiting has told them nothing yet.
     closedOut: !!app.lockedAt && (await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, ["sent", "delivered", "opened", "clicked"]))).limit(1)).length > 0,
@@ -681,8 +678,6 @@ candidatePages.get("/c/status/:token", async (c) => {
   const noBookedEmail = booked && !!(await withTenant(container.db, app.companyId, (tx) => candidateEmailStates(tx, { interviews: [{ id: iv!.id, attempt: iv!.attempt, status: iv!.status, offeredSlots: iv!.offeredSlots, hasEmail: !!cand?.email }] }))).get(iv!.id);
   // What to prepare (D15): the purpose of the booked round, from the packet version this application runs on.
   const prepare = booked ? await withTenant(container.db, app.companyId, async (tx) => (await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1))[0]?.packet.interviews.plan.find((r) => r.key === iv!.roundKey)?.purpose ?? null) : null;
-  const smsEnabled = container.env.SMS_ENABLED;
-  const smsOn = !!cand?.consent.sms?.granted && !cand?.preferences.smsOptOut;
   const poolOptOut = !!cand?.preferences.talentPoolOptOut;
   const shownStage = view.hidden ? view.before ?? "triaged" : app.stage;
   // Times a person approved and offered are an interview to the candidate, whatever the team's own stage says.
@@ -698,9 +693,6 @@ candidatePages.get("/c/status/:token", async (c) => {
   const progress = progressLine({ step, hasChat: chatStep, chatOpen: chatOpenNow, hadInterview: invitedToInterview, unreviewed });
   // The AI interview still being prepared (20 Oct 2026): its run waits for the reading, or for more interviews (Q17).
   const coming = !lastScreen && !view.hidden ? await withTenant(container.db, app.companyId, (tx) => interviewComing(tx, app)) : null;
-  // "Don't keep me for future roles", from the decision message's link (#future-roles) or the button: it says it was saved.
-  const pool = c.req.query("pool");
-  const poolSaved = (pool === "out" && poolOptOut) || (pool === "in" && !poolOptOut);
   // Dates on the page are the company's days, never the server's (known-bugs row 73).
   const companyZone = company?.timezone ?? "America/Los_Angeles";
   const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut, datePassed: container.engine.clock().getTime() >= closeOutDueAt(app.createdAt).getTime(), jobClosed: ["closed", "filled"].includes(role?.status ?? "") } : null;
@@ -746,7 +738,6 @@ candidatePages.get("/c/status/:token", async (c) => {
         <p>{nextLine({ step, stage: shownStage, poolOptOut, screen: openScreen_ ?? pausedScreen ?? null, interview: booked ? "booked" : offered ? "offered" : null, news, wording, companyName: company?.name ?? "The company", coming, onFile, unreviewed, noBookedEmail })}</p>
         {/* The choice the decision message points to (Q30), one click away from the decision itself. Someone locked when they
             reached it was not offered it: nobody kept them, and their closing message says nothing about it. The button stays below. */}
-        {told && !poolOptOut && !unreviewed ? <p>Would you rather we did not keep your details for future roles? <a href="#future-roles">Say so below</a>; it takes one click.</p> : null}
         {/* A person booked them before they did the AI interview: the booked time is what happens next, so no button says otherwise. Its link keeps working. */}
         {openScreen_ && !booked ? <a class="btn" href={`/c/screen/${openScreen_.token}`}>{openScreen_.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
         {/* The line above already says the team would like to interview them: the card is the time to pick and its button. */}
@@ -774,17 +765,6 @@ candidatePages.get("/c/status/:token", async (c) => {
       {record.packet ? <JobSection packet={record.packet} href={jobHref} /> : null}
       <OtherApplications others={record.others} companyName={companyName} timeZone={companyZone} />
       <h2 id="choices">Your choices</h2>
-      {smsEnabled || smsOn ? (
-        <div class="card">
-          <p><strong>Text messages:</strong> {smsOn ? "on" : "off"}. {cand?.phone || !smsEnabled ? "" : "Add a mobile number by replying to our email to receive texts."}</p>
-          {cand?.phone && (smsOn || smsEnabled) ? (
-            <form method="post" action={`/c/status/${app.statusToken}/sms`}>
-              <input type="hidden" name="pref" value={smsOn ? "off" : "on"} />
-              <button class="btn secondary" type="submit">{smsOn ? "Stop text messages" : "Allow text messages"}</button>
-            </form>
-          ) : null}
-        </div>
-      ) : null}
       {/* Open to anyone still in the process, and to anyone whose decision they have not been told (plan A1). One click
           away (founder brief, 14 October 2026); open when a send without the confirmation box came back (?confirm=withdraw). */}
       {mayWithdraw(app.stage, app.toldState) ? (
@@ -797,23 +777,6 @@ candidatePages.get("/c/status/:token", async (c) => {
           </form>
         </details>
       ) : null}
-      {/* Wave 0 item 0.11: the talent-pool choice is one click either way, and it only ever affects future roles. The
-          decision and closing messages link straight here (#future-roles, Q30). */}
-      {poolOptOut ? (
-        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card" id="future-roles">
-          {poolSaved ? <p role="status"><strong>Saved.</strong></p> : null}
-          <p><strong>Future roles:</strong> you asked us not to keep your details for future roles, so nobody will contact you about other openings at {company?.name}.</p>
-          <input type="hidden" name="pref" value="in" />
-          <button class="btn secondary" type="submit">Keep me for future roles again</button>
-        </form>
-      ) : (
-        <form method="post" action={`/c/status/${app.statusToken}/talent-pool`} class="card" id="future-roles">
-          {poolSaved ? <p role="status"><strong>Saved.</strong></p> : null}
-          <p><strong>Future roles:</strong> {company?.name} may keep your details to tell you about other openings later. This does not change your current application.</p>
-          <button class="btn secondary" type="submit">Don't keep me for future roles</button>
-        </form>
-      )}
-      <MessageThread messages={thread.messages} more={thread.more} companyName={company?.name ?? "The hiring team"} timeZone={cand?.location?.timezone ?? company?.timezone ?? "America/Los_Angeles"} locked={!!onFile} />
       <h2 id="help">Need something?</h2>
       <p>Reply to any of our emails with HUMAN to reach a person, or make a request below.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
@@ -900,7 +863,7 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
       const actor = { kind: "candidate" as const, id: app.candidateId };
       await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "withdrawn", by: "candidate", actor, reason: "withdrawn from the status page" });
       await emit(tx, { type: "application.withdrawn", companyId: app.companyId, actor, subject: { type: "application", id: app.id }, payload: { via: "status_page", fromStage: app.stage } });
-      await exitCleanup(tx, container, { companyId: app.companyId, applicationId: app.id, reason: "the candidate withdrew", actor, candidateEmail: "send_cancellation" });
+      await exitCleanup(tx, container, { companyId: app.companyId, applicationId: app.id, reason: "the candidate withdrew", actor });
       const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
       const [role] = await tx.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
       // The team hears nothing of someone locked (Rule 2): they could not read them, and this would name them.
@@ -937,53 +900,4 @@ candidatePages.post("/c/status/:token/new-link", rateLimit(POLICIES.withdraw), a
       <p class="foot"><a href="/c/link-request">Lost the email? Get your link again</a> · <a href="/privacy">How we handle your information</a></p>
     </Layout>,
   );
-});
-
-candidatePages.post("/c/status/:token/sms", rateLimit(POLICIES.smsPref), async (c) => {
-  const container = c.get("container");
-  const [app] = await container.db.select().from(applications).where(eq(applications.statusToken, c.req.param("token") ?? "")).limit(1);
-  if (!app) return c.notFound();
-  if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
-  const body = await c.req.parseBody();
-  const parsed = CandidateSmsPreference.safeParse({ pref: typeof body.pref === "string" ? body.pref : "" });
-  if (!parsed.success) return c.redirect(`/c/status/${app.statusToken}`);
-  const on = parsed.data.pref === "on";
-  if (on && !container.env.SMS_ENABLED) return c.redirect(`/c/status/${app.statusToken}`); // texting is off (decision M2): nothing to opt in to
-  const [current] = await container.db.select({ preferences: candidates.preferences, consent: candidates.consent }).from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const currentlyOn = !!current?.consent.sms?.granted && !current?.preferences.smsOptOut;
-  if (currentlyOn === on) return c.redirect(`/c/status/${app.statusToken}`); // already so: a repeat changes and records nothing
-  await withTenant(container.db, app.companyId, async (tx) => {
-    const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-    const actor = { kind: "candidate" as const, id: cand.id };
-    const now = new Date().toISOString();
-    await tx.update(candidates).set({ preferences: { ...cand.preferences, smsOptOut: !on }, consent: { ...cand.consent, sms: { granted: on, at: now, source: "status_page" } } }).where(eq(candidates.id, cand.id));
-    await emit(tx, { type: on ? "consent.granted" : "consent.revoked", companyId: app.companyId, actor, subject: { type: "candidate", id: cand.id }, payload: { purpose: "sms", source: "status_page" } });
-  });
-  if (!on) {
-    // an opt-out is a recorded request too: applied at once, confirmed, kept for the audit trail
-    await withPlatform(container.db, async (tx) => {
-      const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-      const actor = { kind: "candidate" as const, id: app.candidateId };
-      const req = await createDataRequest(tx, { companyId: app.companyId, kind: "sms_opt_out", requesterEmail: cand?.email ?? `unknown+${app.candidateId}@example.invalid`, candidateId: app.candidateId, applicationId: app.id, channel: "status_page", verified: true, actor, now: container.engine.clock() });
-      await fulfilSmsOptOut(tx, req, actor, container.engine.clock());
-    });
-  }
-  return c.redirect(`/c/status/${app.statusToken}`);
-});
-
-/**
- * "Don't keep me for future roles" (Wave 0 item 0.11): one click on the status link, confirmed by email; a repeat
- * changes nothing. `pref=in` ("Keep me for future roles again") takes the choice back, with nothing sent. Either way the
- * page comes back at the choice, saying it was saved.
- */
-candidatePages.post("/c/status/:token/talent-pool", rateLimit(POLICIES.talentPoolPref), async (c) => {
-  const container = c.get("container");
-  const [app] = await container.db.select().from(applications).where(eq(applications.statusToken, c.req.param("token") ?? "")).limit(1);
-  if (!app) return c.notFound();
-  if (await anonymizedFor(container, app.candidateId)) return linkGone(c);
-  const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
-  const back = body.pref === "in";
-  if (back) await withTenant(container.db, app.companyId, (tx) => optBackIntoTalentPool(tx, { application: app }));
-  else if (await withTenant(container.db, app.companyId, (tx) => optOutOfTalentPool(tx, container, { application: app, source: "status_page" }))) await container.kick();
-  return c.redirect(`/c/status/${app.statusToken}?pool=${back ? "in" : "out"}#future-roles`);
 });

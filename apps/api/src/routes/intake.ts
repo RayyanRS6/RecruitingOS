@@ -1,16 +1,17 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
-import { AI_HELP_BUSY_LINE, ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, MORE_JOBS_UPGRADE_QUESTION, StartIntake, TRIAL_ENDED_LINE, aiHelpLine, jobsTotalLine, mayOfferUpgrade, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
+import { AI_HELP_BUSY_LINE, ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, StartIntake, aiHelpLine, type Actor, type IntakeSessionSummary, type PublishResult } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
-import { IntakeEditError, aiCreditRoomForJob, aiCreditStanding, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
+import { IntakeEditError, aiCreditStanding, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
 import { entitlements as entitlementRows, events, intakeSessions, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError, messageTooLong } from "../middleware/errors";
 import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
-import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, askForMoreAiHelp, refusedForNow, talkToItsAboutAiHelp, type AiHelpWords } from "../services/ai-credit";
+import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, refusedForNow, type AiHelpWords } from "../services/ai-credit";
 import { briefViewerOf, composeBrief } from "../services/brief";
 import { IntakeSuggestRequest, suggestForQuickStart } from "../services/intake-suggest";
-import { TRIAL_PLAN_QUESTION, companyTrialStanding } from "../services/trial";
+import { limitReached } from "../services/plan-room";
+import { publishResultOf, publishRole } from "../services/publish";
 import type { Container } from "../container";
 
 /**
@@ -113,55 +114,6 @@ function turnReply(r: TurnOutcome) {
     return { error: r.error, recovery: "Try again.", proposedActions: [] };
   }
   return { ...r.turn, benchmark: r.benchmark, benchmarkGap: r.benchmarkGap };
-}
-
-const MORE_ROLES_QUESTION = "We would like to open more roles than our plan includes. Can we talk about adding more?";
-const askAboutPlan = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/plans/request", body: { reason: MORE_ROLES_QUESTION } };
-/** The same request when the trial has ended (founder decision L-02 B): choosing a plan is done by ITS. */
-const askToChoosePlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/plans/request", body: { reason: TRIAL_PLAN_QUESTION } };
-/** The same request when the plan's jobs are all used for good: closing a role would not help. */
-const askToUpgrade = { label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: MORE_JOBS_UPGRADE_QUESTION } };
-
-/** A role's state as the room message names it; an open role needs no word. */
-const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
-
-/**
- * Room on the plan for another role (C13), with the roles using the places, so the owner learns it before answering any
- * question. A role uses a place while it is open, paused, waiting for approval or sent back for changes; closing it gives
- * the place back (polish list: the count once only went up), so a full plan says so and names the roles using the
- * places. There is nowhere in the product to change plans, so a full plan also offers asking ITS about more roles.
- * `newRoleId` is a role created in this very
- * transaction, which is not counted against itself. A trial that has ended comes first (founder decision L-02 B): no
- * new job starts until a plan is chosen, whatever room the plan has, and the message is the owner's one line. No roles are
- * listed then: closing one would not help. The same goes for a plan whose jobs ever are all used (`jobs_total`, Free's one
- * job): nothing closed gives that place back, so no roles are listed, and the way on is to upgrade (`upgrade`).
- * `newDraft`: the question is whether to start a new one, so the AI credit counts too: with too little left to write the
- * job, the owner hears it before anyone types. A draft already written does not ask this: writing it was the dear part, and
- * sending it for approval uses no model.
- */
-async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string; now?: Date; newDraft?: boolean } = {}): Promise<PlanRoom> {
-  const room = await entitlements.roleRoom(tx, companyId, { except: opts.newRoleId });
-  if ((await companyTrialStanding(tx, companyId, opts.now ?? new Date()))?.ended) return { ok: false, limit: room.limit, used: room.used, holding: [], message: TRIAL_ENDED_LINE, trialEnded: true };
-  if (room.lifetime?.full) return { ok: false, limit: room.lifetime.limit, used: room.lifetime.used, holding: [], message: jobsTotalLine((await entitlements.planOf(tx, companyId))?.name, room.lifetime.limit), upgrade: true };
-  const names = room.holding.map((r) => (PLACE_STATUS_WORD[r.status] ? `${r.title} (${PLACE_STATUS_WORD[r.status]})` : r.title));
-  const message = room.ok
-    ? null
-    : `Your plan includes ${room.limit} role${room.limit === 1 ? "" : "s"} at a time, and ${room.limit === 1 ? "it is" : "all are"} in use${names.length ? `: ${names.join(", ")}` : ""}. A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back. Close a role you no longer need, or talk to ITS about adding more.`;
-  if (room.ok && opts.newDraft) {
-    const credit = await aiCreditRoomForJob(tx, companyId, { now: opts.now });
-    if (credit !== "ok") {
-      // On the last plan nothing is above theirs: the line names ITS and the day it starts again, and so does its button.
-      const words = await aiHelpWordsOf(tx, companyId, opts.now ?? new Date());
-      const nothingAbove = words.planKey !== undefined && !mayOfferUpgrade(words.planKey);
-      return { ok: false, limit: room.limit, used: room.used, holding: [], message: aiHelpLine(credit === "used_up" ? "newJob" : "newJobTooBig", words), upgrade: true, aiHelp: true, ...(nothingAbove ? { nothingAbove } : {}) };
-    }
-  }
-  return { ok: room.ok, limit: room.limit, used: room.used, holding: room.holding, message };
-}
-
-function limitReached(t: Tenant, room: PlanRoom): HttpError {
-  const ask = room.trialEnded ? askToChoosePlan : room.aiHelp ? (room.nothingAbove ? talkToItsAboutAiHelp : askForMoreAiHelp) : room.upgrade ? askToUpgrade : askAboutPlan;
-  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "plan.request") ? [ask] : [], room, ...(room.upgrade ? { upgrade: true } : {}) });
 }
 
 /**
@@ -379,58 +331,42 @@ intakeRoutes.post("/sessions/:id/flags/keep", requireTenant, async (c) => {
 });
 
 /**
- * "Ask for approval" (C7): creates the role and its packet version 1 from the draft the person checked, and starts the
- * approval workflow, only once that draft is up to date with the answers, the six essentials are in, a person set or
- * confirmed the pay, and no wording check is open (409 `not_ready` lists what is left, in plain words). The plan's room
- * is checked before anything runs and again in the transaction that creates the role, where the approval starts and the
- * place is recorded; all of that commits together or not at all. `draftFirst` is the older one-step POST /compile.
+ * "Publish job" on a draft: creates the job and its version 1 from the draft the person checked and opens it, in one
+ * transaction (services/publish.ts runs the publish checks: the person's role, the plan, the wording flags, the legal
+ * check). Refused with 409 `not_ready` and what is left, in plain words, until the draft is up to date with the answers,
+ * the essentials are in and a person set or confirmed the pay. The plan's room is checked before anything runs and again
+ * in that transaction, where the place is recorded; all of it commits together or not at all. A second press answers
+ * with the job the first one made. Answers 201 `PublishResult`.
  */
-async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
+intakeRoutes.post("/sessions/:id/publish", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const row = await loadDraft(c, c.req.param("id") ?? "");
   const container = c.get("container");
+  const actor = actorOf(c);
   const first = row.roleId ? null : await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
   if (first && !first.ok) throw limitReached(t, first);
-  let workflowRunId: string | null = null;
-  let result: Awaited<ReturnType<typeof requestIntakeApproval>>;
+  const made: { result: PublishResult | null } = { result: null };
+  let compiled: Awaited<ReturnType<typeof requestIntakeApproval>>;
   try {
-    result = await requestIntakeApproval(container.db, deps(container), { companyId: t.companyId, sessionId: row.id, actor: actorOf(c), hiringManagerUserId: t.userId }, {
-      draftFirst,
-      finalize: async (tx, compiled) => {
-        // Two drafts asked for at once take turns on the plan's count, so together they never go past it.
+    compiled = await requestIntakeApproval(container.db, deps(container), { companyId: t.companyId, sessionId: row.id, actor, hiringManagerUserId: t.userId }, {
+      finalize: async (tx, job) => {
+        // Two drafts published at once take turns on the plan's count, so together they never go past it.
         await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
-        // The new role is already in this transaction: it is the one asking for a place, not one holding it.
-        const again = await planRoom(tx, t.companyId, { newRoleId: compiled.roleId, now: container.engine.clock() });
-        if (!again.ok) throw limitReached(t, again);
-        const { runId } = await container.engine.start(tx, {
-          workflowKey: "role_approval",
-          companyId: t.companyId,
-          subject: { type: "role", id: compiled.roleId },
-          state: { roleId: compiled.roleId, packetVersion: compiled.version },
-          idempotencyKey: `role_approval:${compiled.roleId}:${compiled.version}`,
-          actor: actorOf(c),
-        });
-        workflowRunId = runId;
-        await entitlements.record(tx, t.companyId, "active_roles", 1, "role", { roleId: compiled.roleId });
+        made.result = await publishRole(tx, container, { tenant: t, actor, roleId: job.roleId });
+        await entitlements.record(tx, t.companyId, "active_roles", 1, "role", { roleId: job.roleId });
       },
     });
   } catch (err) {
     return sessionErrors(err);
   }
+  if ("notReady" in compiled) throw new HttpError(409, "not_ready", `Not ready to publish yet. ${compiled.notReady.join(" ")}`, { blockers: compiled.notReady });
+  if ("error" in compiled) return c.json({ error: { code: "ai_failed", message: "The assistant could not write the draft. Everything you confirmed is kept. Try again.", details: { aiRunId: compiled.aiRunId, actions: [] } } }, 502);
+  // The job existed already: answered as it stands when it is published, and published now when it is still a draft.
+  const roleId = compiled.roleId;
+  const result = made.result ?? (await withTenant(container.db, t.companyId, async (tx) => (await publishResultOf(tx, container, roleId)) ?? publishRole(tx, container, { tenant: t, actor, roleId })));
   await container.kick();
-  if ("notReady" in result) throw new HttpError(409, "not_ready", `Not ready to ask for approval yet. ${result.notReady.join(" ")}`, { blockers: result.notReady });
-  if ("error" in result && result.noCredit) throw await creditRefusedDraft(c, result.refusedHoldUsd ?? 0);
-  if ("error" in result) return c.json({ error: { code: "ai_failed", message: "The assistant could not write the draft. Everything you confirmed is kept. Try again.", details: { aiRunId: result.aiRunId, actions: [] } } }, 502);
-  return c.json({ roleId: result.roleId, version: result.version, packet: result.packet, workflowRunId }, 201);
-}
-
-intakeRoutes.post("/sessions/:id/request-approval", requireTenant, (c) => askForApproval(c, false));
-/**
- * The older one-step name for the same action, kept for API clients: writes the draft first when there is none (or when
- * the answers moved on and nobody saved a change on it), then asks for approval under the same rules.
- */
-intakeRoutes.post("/sessions/:id/compile", requireTenant, (c) => askForApproval(c, true));
-
+  return c.json(result, 201);
+});
 /** An owner or admin takes over someone else's draft (C3, founder decision Q6), for example when that person is away or left. */
 intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
   const t = c.get("tenant")!;

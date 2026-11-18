@@ -1,17 +1,17 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { companyVerifiedAt, newTrialTerm, onTrialPlan, oneLine, trialTermOf, typedName, type Actor } from "@ros/contracts";
-import { BOARD_UP_STATES, audit, closingDateRequired, defaultClosingDate, emit, errorForLog, isBoardChannel, notify, raiseAlert, transitionPosting, type PostingState } from "@ros/core";
+import { audit, closingDateRequired, defaultClosingDate, emit, errorForLog, notify, raiseAlert } from "@ros/core";
 import { releaseHeldCommunications } from "@ros/agents";
-import { companies, postings, rolePackets, roles, type Queryable } from "@ros/db";
+import { companies, rolePackets, roles, type Queryable } from "@ros/db";
 import { mailbox, type OutboundEmail, type SendResult } from "@ros/integrations";
-import { armClosingDate, companyVerifiedSignal } from "@ros/workflows";
+import { armClosingDate } from "@ros/workflows";
 import type { Container } from "../container";
 import { trialDateWords, trialPatch } from "./trial";
 
 /**
- * The one-time ITS check of a company that signed itself up (founder decision B7, plan B1) and the getting-started
- * facts kept beside it (plan B2). Every write is a single jsonb statement on companies.settings, so a customer's own
- * settings change and an ITS confirmation made at the same moment never overwrite each other.
+ * The one-time ITS check of a company that signed itself up (founder decision B7, plan B1). Every write is a single
+ * jsonb statement on companies.settings, so a customer's own settings change and an ITS confirmation made at the same
+ * moment never overwrite each other.
  */
 
 /** Who confirmed a company where no ITS check is needed (COMPANY_CHECK=auto: tests, and local journeys that need public pages). */
@@ -22,12 +22,11 @@ export function autoVerification(now: Date): { verifiedAt: string; verifiedBy: A
   return { verifiedAt: now.toISOString(), verifiedBy: AUTO_CHECK_ACTOR };
 }
 
-/** `boardsClosed`: the job-board listings a taking back closed, each with the state it was in, so the undo of a removal can put them back. */
-export type VerificationResult = { companyId: string; name: string; changed: boolean; verifiedAt: string | null; released: number; boardsClosed?: Array<{ postingId: string; from: string }> };
+export type VerificationResult = { companyId: string; name: string; changed: boolean; verifiedAt: string | null; released: number };
 
 /**
- * ITS confirms the company: from now on its careers page, job pages, Google listing and feeds are public, approved roles
- * waiting to be published are woken, and every message to a candidate that waited for the check goes into the queue.
+ * ITS confirms the company: from now on its careers page, job pages and Google listing are public, and every message to
+ * a candidate that waited for the check goes into the queue.
  * The owners and admins are told; the confirmation is audited (the customer sees it in their history) and emitted.
  * Confirming a confirmed company changes nothing, except that any message to a candidate still held goes into the queue
  * (confirming again is the way to repair one that slipped past the first release). Null when there is no such company.
@@ -53,15 +52,13 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
   const released = await releaseHeldCommunications(tx, { companyId: co.id, actor: input.actor, now: input.now });
   await emit(tx, { type: "company.verified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { released } });
   await audit(tx, { companyId: co.id, actor: input.actor, action: "company.verified", target: { type: "company", id: co.id }, reason: input.reason, details: { released } });
-  // Publish runs of roles approved while the company waited resume now (packages/workflows publish-role.ts).
-  await container.engine.signal(tx, { companyId: co.id, key: companyVerifiedSignal(co.id) });
   await giveDefaultClosingDates(tx, container, { companyId: co.id, actor: input.actor, now: input.now });
   if (input.quiet) return { companyId: co.id, name: co.name, changed: true, verifiedAt: at, released };
   await notify(tx, {
     companyId: co.id,
     kind: "company.verified",
     title: "ITS confirmed your company",
-    body: `Your careers page and job pages are public now, and any approved role is being published.${released ? ` ${released} ${released === 1 ? "message" : "messages"} to candidates that ${released === 1 ? "was" : "were"} waiting for this ${released === 1 ? "is" : "are"} on ${released === 1 ? "its" : "their"} way.` : ""}${term ? ` Your 30-day trial starts today and ends on ${trialDateWords(term.endsAt, co.timezone)}.` : ""}`,
+    body: `Your careers page and job pages are public now.${released ? ` ${released} ${released === 1 ? "message" : "messages"} to candidates that ${released === 1 ? "was" : "were"} waiting for this ${released === 1 ? "is" : "are"} on ${released === 1 ? "its" : "their"} way.` : ""}${term ? ` Your 30-day trial starts today and ends on ${trialDateWords(term.endsAt, co.timezone)}.` : ""}`,
     action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });
@@ -70,7 +67,7 @@ export async function verifyCompany(tx: Queryable, container: Container, input: 
 
 /**
  * Colorado's default closing date counts from when the job goes public (row 58): a role that opened while the company
- * waited for this check got no default date (packages/workflows role-approval.ts), so every open or paused role whose
+ * waited for this check got no default date, so every open or paused role whose
  * place asks for one, and has none, gets thirty days from now, with its timer, recorded like the default given at opening.
  */
 async function giveDefaultClosingDates(tx: Queryable, container: Container, input: { companyId: string; actor: Actor; now: Date }): Promise<number> {
@@ -91,11 +88,8 @@ async function giveDefaultClosingDates(tx: Queryable, container: Container, inpu
 }
 
 /**
- * ITS takes its confirmation back (a mistake, or a doubt about the company): the public pages and feeds go offline at
- * once and messages to candidates wait again, including any already queued (the outbox checks before it sends). Every
- * job-board listing that is up (or paused after being up) is closed and named for taking down, as when a role closes
- * (row 63): its apply link stops working with the careers page, so no candidate should meet the listing. When ITS posts
- * for the company, a "take it down" task opens per listing; otherwise the Share tab lists them for the team. Roles,
+ * ITS takes its confirmation back (a mistake, or a doubt about the company): the public pages go offline at once and
+ * messages to candidates wait again, including any already queued (the outbox checks before it sends). Roles,
  * candidates and decisions are untouched. The owners and admins are told in plain words; audited with the reason.
  */
 export async function unverifyCompany(tx: Queryable, input: { companyId: string; actor: Actor; reason: string; now?: Date }): Promise<VerificationResult | null> {
@@ -103,46 +97,17 @@ export async function unverifyCompany(tx: Queryable, input: { companyId: string;
   if (!co) return null;
   if (!companyVerifiedAt(co.settings)) return { companyId: co.id, name: co.name, changed: false, verifiedAt: null, released: 0 };
   await tx.update(companies).set({ settings: sql`${companies.settings} - 'verifiedAt' - 'verifiedBy'` }).where(eq(companies.id, co.id));
-  const now = input.now ?? new Date();
-  const up = (await tx.select().from(postings).where(eq(postings.companyId, co.id))).filter((p) => isBoardChannel(p.channel) && BOARD_UP_STATES.includes(p.status as PostingState));
-  for (const p of up) {
-    await transitionPosting(tx, { postingId: p.id, to: "closed", actor: input.actor, now, reason: "company check taken back", patch: { closureRequired: true } });
-    await emit(tx, { type: "posting.closure_required", companyId: co.id, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, url: p.externalUrl, reason: "company check taken back" } });
-  }
-  await emit(tx, { type: "company.unverified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { boardsClosed: up.length } });
-  await audit(tx, { companyId: co.id, actor: input.actor, action: "company.unverified", target: { type: "company", id: co.id }, reason: input.reason, details: { boardsClosed: up.length } });
-  const boards = up.length ? ` ${up.length === 1 ? "The job-board listing that was up is closed and must be taken down" : `The ${up.length} job-board listings that were up are closed and must be taken down`}; the Share tab of each job says which. Post them again once ITS confirms your company.` : "";
+  await emit(tx, { type: "company.unverified", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: {} });
+  await audit(tx, { companyId: co.id, actor: input.actor, action: "company.unverified", target: { type: "company", id: co.id }, reason: input.reason });
   await notify(tx, {
     companyId: co.id,
     kind: "company.unverified",
     title: "Your careers page is offline while ITS checks your company again",
-    body: `Your careers page and job pages are offline for now, and messages to candidates wait until ITS confirms your company again.${boards} Your roles, candidates and decisions are unchanged. Your ITS contact will be in touch.`,
+    body: `Your careers page and job pages are offline for now, and messages to candidates wait until ITS confirms your company again. Your roles, candidates and decisions are unchanged. Your ITS contact will be in touch.`,
     action: { label: "Open Home", href: "/" },
     roles: ["owner", "admin", "hiring_manager"],
   });
-  return { companyId: co.id, name: co.name, changed: true, verifiedAt: null, released: 0, boardsClosed: up.map((p) => ({ postingId: p.id, from: p.status })) };
-}
-
-/** Merges keys into companies.settings.onboarding (null removes a key), in one statement. */
-async function mergeOnboarding(tx: Queryable, companyId: string, patch: Record<string, unknown>): Promise<void> {
-  const set = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== null));
-  const drop = Object.keys(patch).filter((k) => patch[k] === null);
-  let onboarding = sql`(coalesce(${companies.settings}->'onboarding', '{}'::jsonb) || ${JSON.stringify(set)}::jsonb)`;
-  for (const k of drop) onboarding = sql`(${onboarding} - ${k}::text)`;
-  await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('onboarding', ${onboarding})` }).where(eq(companies.id, companyId));
-}
-
-/** One person hides the getting-started card for themselves (the rest of the team keeps theirs). */
-export async function dismissGettingStarted(tx: Queryable, input: { companyId: string; userId: string; now: Date }): Promise<void> {
-  const by = sql`coalesce(${companies.settings}->'onboarding'->'dismissedBy', '{}'::jsonb) || jsonb_build_object(${input.userId}::text, ${input.now.toISOString()}::text)`;
-  await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('onboarding', coalesce(${companies.settings}->'onboarding', '{}'::jsonb) || jsonb_build_object('dismissedBy', ${by}))` }).where(eq(companies.id, input.companyId));
-}
-
-/** An owner or admin says the AI rules were reviewed (getting started, step 7 of the onboarding checklist). */
-export async function markPoliciesReviewed(tx: Queryable, input: { companyId: string; actor: Actor; now: Date; ip?: string }): Promise<void> {
-  await mergeOnboarding(tx, input.companyId, { policiesReviewedAt: input.now.toISOString(), policiesReviewedBy: input.actor });
-  await audit(tx, { companyId: input.companyId, actor: input.actor, action: "company.updated", target: { type: "company", id: input.companyId }, reason: "the AI rules were reviewed", ...(input.ip ? { ip: input.ip } : {}), details: { fields: ["aiRulesReviewed"] } });
-  await emit(tx, { type: "company.updated", companyId: input.companyId, actor: input.actor, subject: { type: "company", id: input.companyId }, payload: { fields: ["aiRulesReviewed"] } });
+  return { companyId: co.id, name: co.name, changed: true, verifiedAt: null, released: 0 };
 }
 
 /**

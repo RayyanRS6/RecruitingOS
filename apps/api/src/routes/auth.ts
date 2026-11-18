@@ -318,7 +318,7 @@ authRoutes.get("/me", async (c) => {
     .innerJoin(companies, eq(companies.id, memberships.companyId))
     .where(and(eq(memberships.userId, s.user.id), eq(memberships.status, "active")));
   const body: MeResponse = {
-    user: { id: s.user.id, email: s.user.email, name: s.user.name, platformRole: s.user.platformRole },
+    user: { id: s.user.id, email: s.user.email, name: s.user.name, platformRole: s.user.platformRole === "platform_admin" ? "platform_admin" : "none" },
     auth: { provider: s.identityProvider, aal: s.aal, mfaVerifiedAt: s.mfaVerifiedAt },
     memberships: ms.map((m) => ({ companyId: m.companyId, companyName: m.name, companySlug: m.slug, role: m.role as MembershipRole })),
     activeCompanyId: c.get("tenant")?.companyId ?? null,

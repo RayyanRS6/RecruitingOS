@@ -1,18 +1,16 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
-import { AI_HELP_BUSY_LINE, AI_HELP_LINE, GettingStartedRequest, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
+import { AI_HELP_BUSY_LINE, AI_HELP_LINE, UpdateCompany, type Actor } from "@ros/contracts";
 import { outOfCredit } from "@ros/ai";
-import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, emit, newTimesSettingOf, pendingNewTimesRows, revokeSessionsForCompany, setAutoState, zipRecruiterOffered } from "@ros/core";
+import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, emit, revokeSessionsForCompany } from "@ros/core";
 import { auditRecords, companies, memberships, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_MAX_BYTES, inspectLogo, logoFileName, logoKey } from "@ros/integrations";
-import { cancelNewTimesRuns } from "@ros/workflows";
 import { actorOf, clientIp, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { assertRecentAuth } from "../middleware/reauth";
 import { aiCreditAnswer } from "../services/ai-credit";
 import { CUSTOMER_AUDIT_ACTIONS, auditCsv, customerAuditRow, isoTime } from "../services/audit-history";
 import { AboutApproval, AboutDraftRequest, HiringContactInput, aboutWordingProblem, draftAbout, logoMemberPath, logoResponse, profileOf, publicProfileView, type SettingsWithProfile } from "../services/company-settings-profile";
-import { dismissGettingStarted, markPoliciesReviewed } from "../services/company-trust";
 
 /**
  * Company preferences, what the job pages say about the company (plan D10), the customer's audit history and member
@@ -62,18 +60,11 @@ function withoutStoredLogoUrl(raw: unknown, settings: SettingsWithProfile): unkn
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** What switching automatic new times off, or changing their days, did: recorded on the audit record and the event. */
-type NewTimesChange = { before: { auto: boolean; workingDays: number }; after: { auto: boolean; workingDays: number }; pendingChoice: "keep" | "stop" | null; stopped: number };
-
 /**
  * Preferences owners and admins change themselves: name, website, locations, time zone, size, careers-page intro,
- * benefits summary, taking the logo off (it is uploaded below), contact hours, the wording of the candidate notices and
- * the automatic new times after a candidate cancels (founder decision 3A). Every change is audited with the
- * keys that changed and emitted; a reworded notice gets a new version (the date) that the candidate pages show from
- * then on. Rewording a notice, or changing what reaches candidates without a person (the new times), needs a fresh
- * sign-in (audit finding A12). Switching the new times off while people were already told a day for theirs needs the
- * owner's choice for them (`pending`: "keep" or "stop"), never assumed: 409 `pending_choice_needed` with the count. The
- * answer carries `pendingNewTimes`, how many automatic sets are still promised a day.
+ * benefits summary, taking the logo off (it is uploaded below), contact hours and the wording of the candidate notices.
+ * Every change is audited with the keys that changed and emitted; a reworded notice gets a new version (the date) that
+ * the candidate pages show from then on. Rewording a notice needs a fresh sign-in (audit finding A12).
  */
 companySettingsRoutes.patch("/current", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -84,7 +75,6 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
   const [stored] = await withTenant(container.db, t.companyId, (tx) => tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, t.companyId)).limit(1));
   const body = UpdateCompany.parse(withoutStoredLogoUrl(raw, profileOf(stored?.settings) as SettingsWithProfile));
   if (body.settings?.notices) assertRecentAuth(c);
-  if (body.settings?.newTimesAfterCancel) assertRecentAuth(c);
   const now = container.engine.clock();
   const actor = actorOf(c);
   const removedLogo: { key: string | null } = { key: null };
@@ -113,31 +103,6 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
       fields.push("logoUrl");
     }
     if (s.benefitsSummary !== undefined && (s.benefitsSummary || "") !== (existing.settings.benefitsSummary ?? "")) { if (s.benefitsSummary) settings.benefitsSummary = s.benefitsSummary; else delete settings.benefitsSummary; fields.push("benefitsSummary"); }
-    // The company's own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered as a board.
-    if (s.zipRecruiterPlan !== undefined && s.zipRecruiterPlan !== zipRecruiterOffered(existing.settings)) { if (s.zipRecruiterPlan) settings.zipRecruiterPlan = true; else delete settings.zipRecruiterPlan; fields.push("zipRecruiterPlan"); }
-    // The automatic new times after a candidate cancels (founder decision 3A). Changing the days never moves anyone
-    // already told a day: their due moment is stored. Switching off while people were told a day is the owner's call for
-    // them, asked, never assumed: "keep" (they still get them on that day) or "stop" (stopped now, the team takes over).
-    let newTimesChange: NewTimesChange | null = null;
-    const nt = s.newTimesAfterCancel;
-    const before = newTimesSettingOf(existing.settings);
-    if (nt !== undefined && !sameJson({ auto: nt.auto, workingDays: nt.workingDays }, before)) {
-      // Locked, inside the transaction that holds the company row. A candidate's cancel reads the setting under a share
-      // lock on that row (`autoNewTimesPlan`), so a set cannot start waiting while the choice is applied: a cancel that
-      // came first is listed here, and one that comes after reads the setting as saved.
-      const pending = before.auto && !nt.auto ? await pendingNewTimesRows(tx, t.companyId, { lock: true }) : [];
-      if (pending.length && !nt.pending) throw new HttpError(409, "pending_choice_needed", `${pending.length} ${pending.length === 1 ? "person was" : "people were"} already told a day for their new times. Choose whether they still get them.`, { pending: pending.length });
-      newTimesChange = { before, after: { auto: nt.auto, workingDays: nt.workingDays }, pendingChoice: pending.length && nt.pending ? nt.pending : null, stopped: 0 };
-      settings.newTimesAfterCancel = { auto: nt.auto, workingDays: nt.workingDays };
-      fields.push("newTimesAfterCancel");
-      if (nt.pending === "stop") {
-        for (const row of pending) {
-          await setAutoState(tx, { followUpId: row.id, to: "not_sent", reason: "switched_off", actor, now });
-          await cancelNewTimesRuns(tx, container.engine, { companyId: t.companyId, applicationId: row.applicationId, actor, reason: "automatic new times switched off" });
-          newTimesChange.stopped += 1;
-        }
-      }
-    }
     if (s.careersPage?.intro !== undefined && (s.careersPage.intro || "") !== (existing.settings.careersPage?.intro ?? "")) {
       settings.careersPage = { enabled: existing.settings.careersPage?.enabled ?? true, ...(s.careersPage.intro ? { intro: s.careersPage.intro } : {}) };
       fields.push("careersPage");
@@ -152,36 +117,15 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
       if (applied.changed.length) { settings.notices = applied.notices; fields.push("notices"); noticeChanges = applied.changed; }
     }
     if (fields.some((f) => !["name", "timezone", "sizeBand", "locations"].includes(f))) patch.settings = settings;
-    // How many automatic sets are still promised a day once this is saved: Setup says what became of them.
-    const pendingNewTimes = async () => (await pendingNewTimesRows(tx, t.companyId)).length;
-    if (!fields.length) return { row: existing, fields, noticeChanges, pendingNewTimes: await pendingNewTimes() };
+    if (!fields.length) return { row: existing, fields, noticeChanges };
     const [updated] = await tx.update(companies).set(patch).where(eq(companies.id, t.companyId)).returning();
-    // The new times' change is recorded with what it was before, after, the choice for people already told a day and how
-    // many were stopped (no personal data).
-    const newTimes = newTimesChange ? { newTimesAfterCancel: newTimesChange } : {};
-    await audit(tx, { companyId: t.companyId, actor, action: "company.updated", target: { type: "company", id: t.companyId }, reason: "company settings changed", ip: clientIp(c), details: { fields, notices: noticeChanges.map((n) => n.key), ...newTimes } });
+    await audit(tx, { companyId: t.companyId, actor, action: "company.updated", target: { type: "company", id: t.companyId }, reason: "company settings changed", ip: clientIp(c), details: { fields, notices: noticeChanges.map((n) => n.key) } });
     for (const n of noticeChanges) await audit(tx, { companyId: t.companyId, actor, action: "notice.changed", target: { type: "company", id: t.companyId }, reason: n.version ? `reworded ${n.key}` : `standard text restored for ${n.key}`, ip: clientIp(c), details: { key: n.key, version: n.version, previousVersion: n.previousVersion } });
-    await emit(tx, { type: "company.updated", companyId: t.companyId, actor, subject: { type: "company", id: t.companyId }, payload: { fields, notices: noticeChanges.map((n) => ({ key: n.key, version: n.version })), ...newTimes } });
-    return { row: updated, fields, noticeChanges, pendingNewTimes: await pendingNewTimes() };
+    await emit(tx, { type: "company.updated", companyId: t.companyId, actor, subject: { type: "company", id: t.companyId }, payload: { fields, notices: noticeChanges.map((n) => ({ key: n.key, version: n.version })) } });
+    return { row: updated, fields, noticeChanges };
   });
   if (removedLogo.key) await container.integrations.storage.delete(removedLogo.key).catch(() => undefined);
-  return c.json({ ...result.row, changed: result.fields, notices: noticesView(result.row.settings.notices), pendingNewTimes: result.pendingNewTimes });
-});
-
-/**
- * The automatic new times after a candidate cancels (founder decision 3A), for Setup and the Talent page's Cancelled
- * column: on or off, the working days, how many people were already told a day for theirs (Setup asks about them before
- * switching off), and whether ITS has confirmed the company (until then nothing goes automatically). Any member.
- */
-companySettingsRoutes.get("/current/new-times", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "company.read");
-  const view = await withTenant(c.get("container").db, t.companyId, async (tx): Promise<NewTimesSettingView> => {
-    const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
-    if (!co) throw new HttpError(404, "not_found", "Company not found.");
-    return { ...newTimesSettingOf(co.settings), pending: (await pendingNewTimesRows(tx, t.companyId)).length, companyConfirmed: isCompanyVerified(co.settings) };
-  });
-  return c.json(view);
+  return c.json({ ...result.row, changed: result.fields, notices: noticesView(result.row.settings.notices) });
 });
 
 /** Every notice with the text in force for this company, the standard text, and whether the company reworded it. */
@@ -390,23 +334,6 @@ companySettingsRoutes.put("/current/hiring-contact", requireTenant, async (c) =>
     return ["hiringContact"];
   }));
   return c.json(publicProfileView(row, container.env));
-});
-
-/**
- * The getting-started card on Today (plan B2): anyone on the team hides it for themselves ("dismiss"); an owner or
- * admin records that the AI rules were reviewed ("policies_reviewed", audited).
- */
-companySettingsRoutes.post("/current/getting-started", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "company.read");
-  const body = GettingStartedRequest.parse(await c.req.json().catch(() => ({})));
-  if (body.action === "policies_reviewed") assertCan(t.role, "policy.manage");
-  const container = c.get("container");
-  const now = container.engine.clock();
-  await withTenant(container.db, t.companyId, (tx) => body.action === "dismiss"
-    ? dismissGettingStarted(tx, { companyId: t.companyId, userId: t.userId, now })
-    : markPoliciesReviewed(tx, { companyId: t.companyId, actor: actorOf(c), now, ip: clientIp(c) ?? undefined }));
-  return c.json({ ok: true, action: body.action });
 });
 
 /* ---------------------------------------------------------------------------------------------------------- */

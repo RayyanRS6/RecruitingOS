@@ -162,7 +162,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     // interrupted sends; then the health checks (a stale worker, a stale queue). Re-armed even when a run fails (H13).
     engine.registerJob(MAINTENANCE_JOB_KIND, recurring(engine, handle.db, MAINTENANCE_JOB_KIND, DAILY_MS, async (ctx) => {
       // a workflow run about a deleted candidate that is still going is cancelled through the engine itself
-      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, deleteStored: (key) => integrations.storage.delete(key), cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
+      await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
     }));
 
     // The hourly checks, not only with the daily sweep (H3; Wave S5 C2): interrupted sends, the stale queue. A worker

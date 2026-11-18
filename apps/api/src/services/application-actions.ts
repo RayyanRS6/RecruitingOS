@@ -8,9 +8,7 @@ import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
 import { exitCleanup } from "./exit-cleanup";
-import { OFFER_FROM, offerBlockedReason } from "./offers";
 import { AI_INTERVIEW_PAUSED_REASON, LINK_EMAIL_HELD_REASON, REMINDED_RECENTLY_REASON, UNSTARTED_SCREEN_STATUSES, aiInterviewsFor, remindScreen, stopScreenInvitation } from "./screens";
-import { keepInTalentPool } from "./talent-pool";
 import { assertNoNewWork } from "./trial";
 
 /**
@@ -142,7 +140,6 @@ function allowedByState(f: ApplicationFacts): ApplicationCapability[] {
   if (f.stage === "rejected" && f.rejectReason === "eligibility") out.push("review_anyway");
   if (!terminal && f.hasUndecidedInterview) out.push("record_decision");
   if (!terminal) out.push("record_outcome");
-  if (OFFER_FROM.includes(f.stage as ApplicationStage)) out.push("record_offer");
   if (sortable) out.push("set_mark");
   if (f.mark && !terminal && f.stage !== "talent_pool") out.push("clear_mark");
   if (decided(f) && untold(f) && !f.decisionMessagePending) out.push("send_decision");
@@ -193,8 +190,6 @@ function stateReason(cap: ApplicationCapability, f: ApplicationFacts): string {
       return "Only for someone declined on an eligibility answer.";
     case "record_decision":
       return TERMINAL_STAGES.includes(f.stage) ? step : "No finished interview is waiting for a decision.";
-    case "record_offer":
-      return TERMINAL_STAGES.includes(f.stage) || f.stage === "talent_pool" ? step : (offerBlockedReason(f.stage as ApplicationStage) ?? step);
     case "send_decision":
     case "told_in_person":
       return tellingReason(f);
@@ -618,7 +613,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
-      const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
+      const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor });
       const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
       return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after };
     }
@@ -651,18 +646,6 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
       return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId };
-    }
-    case "move_to_talent_pool": {
-      assertCan(t.role, "application.act");
-      await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "talent_pool", by, actor, reason: body.note });
-      // Someone who asked not to be kept for future roles (Wave 0 item 0.11) leaves this role's active list but is never
-      // marked as kept: the team's click does not undo the person's own choice, and the answer says so.
-      const optedOut = (await keepInTalentPool(tx, [app.candidateId])).optedOut.length > 0;
-      await emit(tx, { type: "application.moved_to_talent_pool", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: optedOut ? { talentPoolOptOut: true } : {} });
-      const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "moved to the talent pool", actor, candidateEmail: "private_decision" });
-      // Private like every decision (B6); the answer carries the message a Send would write, a count of one (plan G4), and the safety net's day.
-      const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
-      return { ok: true, stage: "talent_pool", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, ...(optedOut ? { talentPoolOptOut: true } : {}), ...after };
     }
     case "hold":
     case "set_mark": {

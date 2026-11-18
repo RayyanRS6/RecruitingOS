@@ -2,28 +2,25 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { desc, eq, gt, gte, inArray, isNotNull, sql } from "drizzle-orm";
-import { REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, emit, entitlements, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, releaseSuppression, saveBusinessCalendarVersion, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { AI_CREDIT_AVAILABLE, PLAN_REQUEST_ALERT_KIND, ApplyFlowDefaultChange, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, CustomerAccessChange, PUBLIC_PLAN_KEYS, PlanChange, TrialExtensionRequest, candidateScoreShown, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
+import { acknowledgeAlert, aiCreditLines, audit, emit, entitlements, listSuppressions, openAlerts, releaseSuppression, settleAiCreditAlerts, suppressAddress, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK, BUSINESS_TIMEZONE } from "@ros/core";
+import { AI_CREDIT_AVAILABLE, PLAN_REQUEST_ALERT_KIND, ApplyFlowDefaultChange, CandidateScoreSwitchChange, CompanyVerificationChange, CustomerAccessChange, PUBLIC_PLAN_KEYS, PlanChange, TrialExtensionRequest, candidateScoreShown, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
 import { unlockApplicants } from "@ros/workflows";
-import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, roles, screens, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, invitations, jobs, memberships, plans, roles, screens, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
-import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, STANDING_STATUSES, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole } from "@ros/core";
-import { CorrectOutcome } from "@ros/contracts";
+import { PlatformRoleError, STANDING_STATUSES, raiseAlert, resolveAlert, resolveAlertsFor, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole } from "@ros/core";
 import { listCspReports, reviewCspReport } from "@ros/core";
-import { hiringOutcomes, unconfirmedScreens } from "@ros/db";
+import { unconfirmedScreens } from "@ros/db";
 import { adminAlerts } from "@ros/db";
 import { and } from "drizzle-orm";
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
-import { customerReport } from "../services/role-report";
 import { customerAccessRequests, decideAccess, refuseWhileAccessOpen, tellOwnersRemoved, tellPersonDeclined } from "../services/access-requests";
 import { unverifyCompany, verifyCompany } from "../services/company-trust";
-import { resetPublicFeedCache } from "../pages/public-feeds";
-import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
+import { resetSitemapCache } from "../pages/sitemap";
 import { afterPlanChange } from "../services/plan-change";
-import { TRIAL_ENDED_ALERT, extendTrial, replayHeldEmailsForCompany } from "../services/trial";
+import { TRIAL_ENDED_ALERT, extendTrial } from "../services/trial";
 
 /** Platform admin console API (docs/16). Every read is audited with the reason the admin supplies. */
 export const adminRoutes = new Hono<Vars>();
@@ -122,8 +119,8 @@ adminRoutes.post("/customers/:id/access", async (c) => {
   const body = CustomerAccessChange.parse(await c.req.json().catch(() => ({})));
   const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
   const result = await withPlatform(container.db, (tx) => decideAccess(tx, container, { companyId, decision: body.decision, from: body.from, actor, now: container.engine.clock() }));
-  // As the verification route does: the feeds and the sitemap are rebuilt at once.
-  resetPublicFeedCache(container);
+  // As the verification route does: the sitemap is rebuilt at once.
+  resetSitemapCache(container);
   if (result.declined) await tellPersonDeclined(container, result.declined);
   // Taken away (6 November 2026): one email to the owners, said on screen only when it really left.
   const emailed = result.removed ? await tellOwnersRemoved(container, result.removed) : undefined;
@@ -134,7 +131,7 @@ adminRoutes.post("/customers/:id/access", async (c) => {
 /**
  * The one-time ITS check (founder decision B7, plan B1): an administrator confirms a company that signed itself up, after
  * whatever check they made (the kick-off call, the website, a phone number), or takes the confirmation back. Confirming
- * makes the careers page, job pages and feeds public, publishes approved roles and sends every message to candidates that
+ * makes the careers page and job pages public and sends every message to candidates that
  * waited; taking it back puts them offline again and holds messages. A reason and a confirmation are required; the
  * change is audited (the customer sees it, with the reason, in their own history) and the owners are told. A request for
  * access, waiting or declined, answers 409 `access_request_open`: its one door is the route above. `heldOnly`, the
@@ -160,8 +157,8 @@ adminRoutes.post("/customers/:id/verification", async (c) => {
     return body.verified ? verifyCompany(tx, container, { companyId, actor, reason: body.reason, now }) : unverifyCompany(tx, { companyId, actor, reason: body.reason });
   });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");
-  // The feeds and the sitemap are rebuilt at once, so a company taken offline leaves them now, not in five minutes.
-  resetPublicFeedCache(container);
+  // The sitemap is rebuilt at once, so a company taken offline leaves it now, not in five minutes.
+  resetSitemapCache(container);
   await container.kick();
   return c.json({ ok: true, companyId: result.companyId, verified: body.verified, changed: result.changed, verifiedAt: result.verifiedAt, releasedMessages: result.released });
 });
@@ -213,10 +210,7 @@ adminRoutes.post("/customers/:id/trial", async (c) => {
     await refuseWhileAccessOpen(tx, companyId);
     return extendTrial(tx, { companyId, days: body.days, reason: body.reason, actor, now });
   });
-  if (result.wasPaused) {
-    resetPublicFeedCache(container);
-    await replayHeldEmailsForCompany(container, companyId);
-  }
+  if (result.wasPaused) resetSitemapCache(container);
   await container.kick();
   return c.json({ ok: true, companyId, trial: result.standing });
 });
@@ -250,25 +244,6 @@ adminRoutes.post("/customers/:id/candidate-score", async (c) => {
   });
   if (!result) throw new HttpError(404, "not_found", "Company not found.");
   return c.json({ ok: true, companyId, shown: result.shown, changed: result.changed });
-});
-
-/**
- * The customer's report (docs/spec/21 section 7, P1): the ten figures of the role report over every role of the
- * company, plus one line per role. Counts only; never a candidate's name. The reason header is audited by the
- * middleware above, like every other read here.
- */
-adminRoutes.get("/customers/:id/report", async (c) => {
-  const container = c.get("container");
-  const companyId = c.req.param("id") ?? "";
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
-  const result = await withPlatform(container.db, async (tx) => {
-    const [co] = await tx.select({ id: companies.id, name: companies.name, status: companies.status, planKey: companies.planKey }).from(companies).where(eq(companies.id, companyId)).limit(1);
-    if (!co) return null;
-    const { report, roles: roleLines } = await customerReport(tx, { companyId, now: container.engine.clock() });
-    return { company: co, roles: roleLines, report };
-  });
-  if (!result) throw new HttpError(404, "not_found", "Company not found.");
-  return c.json(result);
 });
 
 adminRoutes.get("/runs", async (c) => {
@@ -346,24 +321,7 @@ adminRoutes.get("/failures", async (c) => {
   await entitlements.settleAllowanceAlerts(db);
   await settleAiCreditAlerts(db);
   const alerts = await openAlerts(db);
-  const pendingDeletions = await pendingCredentialDeletions(db);
-  return c.json({ failedRuns, failedJobs, failedAi, alerts, pendingDeletions });
-});
-
-/**
- * Email applications that could not be imported (known-bugs row 120): the webhook answered "queued for review", and this
- * is where they are reviewed. Each can be tried again once its job is taking applications; the email itself is shown.
- */
-adminRoutes.get("/failed-email-applications", async (c) => c.json(await failedEmailApplications(c.get("container"))));
-adminRoutes.post("/failed-email-applications/:id/retry", async (c) => {
-  const container = c.get("container");
-  // an id that is not one never reaches the uuid column
-  if (!z.guid().safeParse(c.req.param("id")).success) throw new HttpError(404, "not_found", "This email is not waiting for a retry.");
-  const out = await retryFailedEmail(container, c.req.param("id"));
-  if (!out.ok) throw new HttpError(409, "not_retried", out.reason);
-  const s = c.get("session")!;
-  await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "admin.bypass", reason: "retried a failed email application", details: { inboundEmailId: c.req.param("id"), applicationId: out.applicationId, duplicate: out.duplicate } });
-  return c.json(out);
+  return c.json({ failedRuns, failedJobs, failedAi, alerts });
 });
 
 /** The email do-not-send list (item 5): what is suppressed, why, and a release once a person has confirmed the address. */
@@ -431,31 +389,8 @@ adminRoutes.post("/alerts/:id/resolve", async (c) => {
 });
 
 /**
- * Retries a credential deletion by hand. The retry is queued for the worker rather than run here: only the worker's
- * database role may read a stored credential (packages/db/scripts/vault-grants.sql), so the API process could never
- * revoke it at the provider itself. The queue runs within seconds when a worker is up; the alert stays open until the
- * deletion is confirmed.
- */
-adminRoutes.post("/integrations/:id/retry-deletion", async (c) => {
-  const s = c.get("session")!;
-  const container = c.get("container");
-  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const integrationId = c.req.param("id") ?? "";
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(integrationId)) throw new HttpError(404, "not_found", "Connection not found.");
-  const [row] = await container.db.select().from(integrations).where(eq(integrations.id, integrationId)).limit(1);
-  if (!row) throw new HttpError(404, "not_found", "Connection not found.");
-  if (!row.secretRef) return c.json({ ok: true, queued: false, deleted: true, status: row.status });
-  const now = container.engine.clock();
-  await container.db.insert(jobs).values({ kind: REVOKE_JOB_KIND, payload: { integrationId: row.id, companyId: row.companyId, actor }, runAt: now.toISOString(), maxAttempts: 8 });
-  await audit(container.db, { companyId: row.companyId, actor, action: "admin.bypass", target: { type: "integration", id: row.id }, reason: "credential deletion retried from the console; queued for the worker" });
-  await container.kick();
-  const [after] = await container.db.select({ secretRef: integrations.secretRef, status: integrations.status, lastError: integrations.lastError }).from(integrations).where(eq(integrations.id, row.id)).limit(1);
-  return c.json({ ok: true, queued: true, deleted: !after?.secretRef, status: after?.status ?? row.status, lastError: after?.lastError ?? null });
-});
-
-/**
  * Model spend by customer, task and model. `?since=YYYY-MM-DD` (optional; the console's Overview asks for "this month")
- * counts only the runs from that day on, the day starting at midnight in the ITS business calendar's time zone. Without
+ * counts only the runs from that day on, the day starting at midnight in the ITS business time zone. Without
  * it, every run, as before.
  */
 adminRoutes.get("/costs", async (c) => {
@@ -467,8 +402,7 @@ adminRoutes.get("/costs", async (c) => {
     const [y, m, d] = day ? [Number(day[1]), Number(day[2]), Number(day[3])] : [0, 0, 0];
     const real = new Date(Date.UTC(y, m - 1, d));
     if (!day || real.getUTCFullYear() !== y || real.getUTCMonth() !== m - 1 || real.getUTCDate() !== d) throw new HttpError(400, "invalid_date", "since must be a date written like 2026-10-01.");
-    const calendar = await loadBusinessCalendar(db, new Date());
-    from = zonedToUtc(y, m, d, 0, 0, calendar.current.timeZone).toISOString();
+    from = zonedToUtc(y, m, d, 0, 0, BUSINESS_TIMEZONE).toISOString();
   }
   const rows = await db
     .select({ companyId: aiRuns.companyId, task: aiRuns.task, model: aiRuns.model, runs: sql<number>`count(*)`, inputTokens: sql<number>`sum(input_tokens)`, outputTokens: sql<number>`sum(output_tokens)`, costUsd: sql<string>`sum(cost_usd)` })
@@ -476,40 +410,6 @@ adminRoutes.get("/costs", async (c) => {
     .where(from ? gte(aiRuns.createdAt, from) : undefined)
     .groupBy(aiRuns.companyId, aiRuns.task, aiRuns.model);
   return c.json(rows.map((r) => ({ ...r, runs: Number(r.runs), inputTokens: Number(r.inputTokens), outputTokens: Number(r.outputTokens), costUsd: Number(r.costUsd) })));
-});
-
-/**
- * The ITS business calendar (correction 12): editable standard hours, time zone, holidays, closures and temporary
- * coverage changes, each change a new version with an effective date.
- */
-adminRoutes.get("/calendar", async (c) => {
-  const db = c.get("container").db;
-  const now = new Date();
-  const loaded = await loadBusinessCalendar(db, now);
-  const versions = await listBusinessCalendarVersions(db);
-  return c.json({
-    current: loaded.current,
-    version: loaded.version,
-    effectiveFrom: loaded.effectiveFrom,
-    description: describeHours(loaded, now),
-    upcoming: versions.filter((v) => v.effectiveFrom > (loaded.effectiveFrom ?? "")).map((v) => ({ id: v.id, version: v.version, effectiveFrom: v.effectiveFrom, note: v.note, createdBy: v.createdBy, createdAt: v.createdAt })),
-    versions: versions.map((v) => ({ id: v.id, version: v.version, effectiveFrom: v.effectiveFrom, timeZone: v.timeZone, note: v.note, createdBy: v.createdBy, createdAt: v.createdAt, holidays: v.holidays.length, closures: v.closures.length, coverageChanges: v.coverageChanges.length })),
-    preview: previewCalendarDays(loaded, now, 28),
-  });
-});
-
-adminRoutes.post("/calendar", async (c) => {
-  const s = c.get("session")!;
-  const body = BusinessCalendarInput.parse(await c.req.json());
-  const db = c.get("container").db;
-  const row = await saveBusinessCalendarVersion(db, {
-    calendar: { timeZone: body.timeZone, hours: body.hours, holidays: body.holidays, closures: body.closures, coverageChanges: body.coverageChanges },
-    effectiveFrom: body.effectiveFrom,
-    note: body.note,
-    actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email },
-  });
-  const loaded = await loadBusinessCalendar(db);
-  return c.json({ id: row.id, version: row.version, effectiveFrom: row.effectiveFrom, inForceNow: loaded.version === row.version, description: describeHours(loaded) }, 201);
 });
 
 adminRoutes.get("/queue", async (c) => {
@@ -601,11 +501,8 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     await afterPlanChange(tx, { companyId, planName: plan.name, opened: opened.unlocked, now: clock });
     return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked, aiCreditMonthStarted };
   });
-  if (result.wasPaused) {
-    // Paused no more: the jobs go back on the feeds, and the emails that arrived meanwhile are added to their jobs.
-    resetPublicFeedCache(container);
-    await replayHeldEmailsForCompany(container, companyId);
-  }
+  // Paused no more: the jobs go back on the sitemap.
+  if (result.wasPaused) resetSitemapCache(container);
   await container.kick();
   return c.json({ ...result.updated, trialEnded: result.leavingTrial, unlocked: result.unlocked, aiCreditMonthStarted: result.aiCreditMonthStarted });
 });
@@ -719,27 +616,6 @@ async function signOutEverywhere(c: Context<Vars>, find: (q: Container["db"]) =>
   await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "session.revoked", target: { type: "user", id: who.id }, reason, details: { email: who.email, sessionsEnded: ended, by: "administrator" } });
   return c.json({ ok: true, sessionsEnded: ended });
 }
-
-adminRoutes.get("/outcomes", async (c) => {
-  const db = c.get("container").db;
-  const rows = await db.select({ id: hiringOutcomes.id, companyId: hiringOutcomes.companyId, companyName: companies.name, applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, milestone: hiringOutcomes.milestone, outcome: hiringOutcomes.outcome, hireDate: hiringOutcomes.hireDate, offerAcceptedAt: hiringOutcomes.offerAcceptedAt, recordedBy: hiringOutcomes.recordedBy, recordedAt: hiringOutcomes.recordedAt, correctionOf: hiringOutcomes.correctionOf, correctedAt: hiringOutcomes.correctedAt, correctionReason: hiringOutcomes.correctionReason })
-    .from(hiringOutcomes).innerJoin(companies, eq(companies.id, hiringOutcomes.companyId)).orderBy(desc(hiringOutcomes.recordedAt)).limit(200);
-  return c.json({ statement: OUTCOME_STATEMENT, outcomes: rows });
-});
-
-adminRoutes.post("/outcomes/:id/correct", async (c) => {
-  const s = c.get("session")!;
-  const body = CorrectOutcome.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  try {
-    const result = await withPlatform(container.db, (tx) => correctOutcome(tx, { outcomeId: c.req.param("id") ?? "", actor, reason: body.reason, outcome: body.outcome, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, declineReason: body.declineReason, now: container.engine.clock() }));
-    return c.json({ ok: true, originalId: result.original.id, correctionId: result.correction.id, outcome: result.correction.outcome });
-  } catch (e) {
-    if (e instanceof OutcomeError) throw new HttpError(e.code === "not_found" ? 404 : ["bad_outcome", "hire_date_required"].includes(e.code) ? 400 : 409, e.code, e.message);
-    throw e;
-  }
-});
 
 /** Content-security-policy violation reports (21 Sep, item 6): reviewed before any enforcement. */
 adminRoutes.get("/csp-reports", async (c) => c.json({ mode: c.get("container").env.CSP_MODE, reports: await listCspReports(c.get("container").db) }));

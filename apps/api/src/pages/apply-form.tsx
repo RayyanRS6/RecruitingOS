@@ -26,7 +26,6 @@ import { JobFacts, publicPay } from "./job-facts";
 import { ContactLink, HelpLine, PreviewNote, type PreviewInfo } from "./job-page";
 import { JOURNEY_CSS, Journey } from "./journey";
 import { Layout, currentNonce } from "./layout";
-import { clearApplicationSource, resolveApplicationSource } from "./links";
 import { fromChatLine } from "./profile-pages";
 import { quickQuestionHelp, withPlainQuestionHelp } from "./question-help";
 
@@ -986,7 +985,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   if (!job || !jobTakesApplications(job, container.engine.clock())) return c.notFound();
   const flow = await applyFlowOf(container, job);
   // Funnel measurement without identity (correction 14): a random per-visit reference, no candidate data, no client script; the source comes from the tracked-link cookie when there is one.
-  void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: resolveApplicationSource(c, job.role.id).source } }).catch(() => undefined);
+  void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: "careers_page" } }).catch(() => undefined);
   // Applied to this company before (S7-F): the emailed link fills in the details on file, each marked for checking, and
   // (Wave S8) lists what their earlier chats here added, each ticked. Without the link nothing earlier is shown.
   const reuse = c.req.query("reuse") ?? "";
@@ -1356,8 +1355,6 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
 
   // The consent record carries the address the trusted proxy reports, never one the client wrote into the header.
   const ip = clientIp(c);
-  // The source comes from the tracked-link cookie when it names this role (docs/spec/20 items 8 and 19); the token itself is never stored.
-  const origin = resolveApplicationSource(c, role.id);
   // The page never shows or links to an existing application (Wave 0 item 0.1), so typing someone else's address changes
   // nothing on their record. A first application waits on the page for its own AI interview (20 Oct 2026, R20-12); a
   // repeat or an address the company already had gets the same waiting room, which opens a detached AI interview whose
@@ -1367,9 +1364,9 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
     const created = await createApplication(tx, container, {
       companyId: company.id,
       roleId: role.id,
-      source: origin.source,
-      sourceDetail: origin.sourceDetail,
-      linkId: origin.linkId,
+      source: "careers_page",
+      sourceDetail: null,
+      linkId: null,
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
       email: parsed.data.email,
@@ -1397,7 +1394,6 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
   });
   drawn.committed = true;
   await container.kick();
-  clearApplicationSource(c);
   // An answer that did not match an eligibility question gets the neutral receipt (E7): nothing said about why.
   return next.kind === "interview" ? toReceipt(c, job, parsed.data.email, "interview", next.applicationId ?? next.conversationId) : toReceipt(c, job, parsed.data.email, next.reason);
 }

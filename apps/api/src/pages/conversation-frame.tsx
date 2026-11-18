@@ -10,7 +10,6 @@ import { anonymizedFor } from "./candidate-shared";
 import { Icon } from "./icons";
 import { Layout, currentNonce } from "./layout";
 import { FOOT_CSS } from "./signin-link";
-import { THREAD_CSS } from "./thread";
 import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
 /**
@@ -24,11 +23,28 @@ import { PERSON_BY_EMAIL, PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 /* The screening conversation (plan Wave E): server-rendered, works without JavaScript, one question at a time.  */
 /* ------------------------------------------------------------------------------------------------------------ */
 
+/** The chat's bubbles: the assistant's messages on the left in white, the candidate's own in peach on the right, a system line centred. */
+export const CHAT_BUBBLE_CSS = `
+.thread { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; padding: 0; list-style: none; }
+.msg { position: relative; max-width: 86%; margin: 0; padding: 11px 16px; border: 1px solid transparent; border-radius: 16px; font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.assistant { align-self: flex-start; max-width: calc(86% - 40px); margin-left: 40px; background: var(--surface); border-color: var(--line); color: var(--ink); border-top-left-radius: 6px; }
+.msg.assistant::before { content: ""; position: absolute; top: 0; left: -40px; width: 28px; height: 28px; border-radius: 9px; background: var(--peach); }
+.msg.assistant::after { content: ""; position: absolute; top: 7px; left: -33px; width: 14px; height: 14px; background: var(--accent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
+.msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink); border-color: var(--line-2); border-color: color-mix(in srgb, var(--accent) 22%, var(--peach)); border-top-right-radius: 6px; }
+.msg.candidate p, .msg.candidate strong { color: inherit; }
+.msg.system { align-self: center; max-width: 100%; padding: 2px 8px; border: 0; background: transparent; color: var(--ink-3); font-size: 13.5px; text-align: center; }
+@media (max-width: 600px) {
+  .msg { max-width: 94%; }
+  .msg.assistant { max-width: calc(100% - 34px); margin-left: 34px; }
+  .msg.assistant::before { left: -34px; width: 26px; height: 26px; }
+  .msg.assistant::after { top: 6px; left: -28px; width: 13px; height: 13px; }
+}
+`;
 /**
  * The conversation's own styles, on top of the page stylesheet (October 2026 redesign, the guided chat of the reference
  * screens): the line on top of every page saying it is the company's AI assistant, as a soft lavender note with its tag;
  * the introduction's points as rows with an icon chip; the question in large type; the assistant's messages on the left
- * in white bubbles and the candidate's own in peach on the right (shared with the status page's messages, thread.tsx); a
+ * in white bubbles and the candidate's own in peach on the right (`CHAT_BUBBLE_CSS`, which the status page shares); a
  * thin progress bar that runs from plum to coral (a native progress element, so no inline style); the tap answers as
  * tiles; the reply box drawn as one field with its Send button (`form.reply`); the quiet actions (skip, a person,
  * later) as plain text links; the line shown while an answer is on its way; the two equal choices; and "check your
@@ -41,7 +57,7 @@ export const SCREEN_CSS = `
 .ai-tag::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--accent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
 h1.question { margin: 14px 0 18px; font-size: 28px; line-height: 1.2; letter-spacing: -0.025em; }
 .lead-in { margin: 20px 0 0; color: var(--ink-2); }
-${THREAD_CSS}
+${CHAT_BUBBLE_CSS}
 .points { display: grid; gap: 0; margin: 22px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
 .points li { display: flex; align-items: center; gap: 14px; margin: 0; padding: 12px 18px 12px 14px; color: var(--ink); font-size: 15px; line-height: 1.45; }
 .points li + li { border-top: 1px solid var(--line); }
