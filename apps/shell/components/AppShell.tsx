@@ -8,25 +8,13 @@ import { appPaths, type NotificationHistoryPage } from "@ros/contracts";
 import { Alert, Avatar, cx, Icon, type IconName, initials, Menu } from "@ros/ui";
 import { ApiError, api } from "@ros/web/src/api/client";
 import { NavLink } from "@ros/web/src/nav";
-import { browserStorage, COMPANY_LINKS, otherCompanies, railCompact, teamRoleWord, unreadBadge } from "@ros/web/src/rail";
+import { ADMIN_LINKS, browserStorage, COMPANY_LINKS, otherCompanies, railCompact, teamRoleWord, unreadBadge } from "@ros/web/src/rail";
 import { watchForEndedSession } from "@ros/web/src/session-ended";
 import type { Me } from "../lib/session";
 import { shownTheme, type Theme, themeCookie } from "../lib/theme";
 import { BrandMark } from "./BrandMark";
 
-/**
- * The ITS console's sections under Console in the rail, each its own address (redesign spec 3.1). Each has an icon, so
- * the rail folded to icons still shows all five and every section stays one click away (spec 3.6).
- */
-export const CONSOLE_LINKS: ReadonlyArray<{ to: string; label: string; icon: IconName }> = [
-  { to: "/admin", label: "Overview", icon: "home" },
-  { to: "/admin/customers", label: "Customers", icon: "building" },
-  { to: "/admin/privacy", label: "Privacy requests", icon: "lock" },
-  { to: "/admin/problems", label: "Problems", icon: "alert" },
-  { to: "/admin/system", label: "System and settings", icon: "settings" },
-];
-
-/** Where this browser remembers that the rail was folded to icons (founder answer F3). */
+/** Where this browser remembers that the rail was folded to icons. */
 export const RAIL_COLLAPSED_KEY = "ros.rail.collapsed";
 
 /** Whether the rail was folded on this browser; false where nothing can be read (blocked site data, a private window). */
@@ -50,8 +38,8 @@ export function rememberRailCollapsed(storage: Storage | null, collapsed: boolea
 
 /**
  * Where the page sits, in the rail's own words (the section, then the page under it when the frame can name it: the
- * job builder, Updates, a console section). Empty for a page the rail does not lead to. A job's own pages are under
- * Jobs; the page's heading names the job.
+ * job builder, Updates). Empty for a page the rail does not lead to. A job's own pages are under Jobs; the page's
+ * heading names the job. Each section of the admin dashboard is a place of its own.
  */
 export function sectionTrail(pathname: string): string[] {
   const under = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
@@ -61,22 +49,18 @@ export function sectionTrail(pathname: string): string[] {
   if (under(appPaths.jobs)) return ["Jobs"];
   if (under(appPaths.allCandidates)) return ["Candidates"];
   if (under(appPaths.settings)) return ["Settings"];
-  if (under("/admin")) {
-    const section = CONSOLE_LINKS.find((l) => (l.to === "/admin" ? pathname === "/admin" : under(l.to)));
-    return section ? ["Console", section.label] : ["Console"];
-  }
-  return [];
+  const admin = ADMIN_LINKS.find((l) => (l.end ? pathname === l.to : under(l.to)));
+  return admin ? [admin.label] : [];
 }
 
 /** The section words that are pages of their own, so a page under them can link back up. */
-const SECTION_PAGES: Readonly<Record<string, string>> = { Home: "/", Jobs: "/roles", Console: "/admin" };
+const SECTION_PAGES: Readonly<Record<string, string>> = { Home: "/", Jobs: "/roles" };
 
 /**
  * The thin bar above a page that sits under another page (a trail only where it has a link back up): the parent as a
- * link, then the page's own word when the frame can name it ("Jobs / Start a hire", "Console / Customers", "Home /
- * Updates"; a job's pages get "Jobs" alone). Null on a section's own page (Home, Jobs, Candidates, Settings, the
- * console's Overview...), whose heading already says where it is. Decided from the address alone, so the bar never
- * appears late.
+ * link, then the page's own word when the frame can name it ("Jobs / Start a hire", "Home / Updates"; a job's pages
+ * get "Jobs" alone). Null on a section's own page (Home, Jobs, Candidates, Settings, a section of the admin
+ * dashboard), whose heading already says where it is. Decided from the address alone, so the bar never appears late.
  */
 export function parentTrail(pathname: string): { parent: { label: string; href: string }; here: string | null } | null {
   const [section, here = null] = sectionTrail(pathname);
@@ -106,12 +90,12 @@ export function markMove(from: MarkBox, to: MarkBox): string | null {
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
- * The highlight behind the current link glides to the next current link (spec 4: a shared highlight). Each list has its
- * own highlight (data-mark="main" | "console"), drawn by the current link alone, so the server and the first
- * draw are the same and nothing starts hidden. After each draw the rail notes where each highlight is; when a different
- * link becomes current, its highlight plays from the old place to the new one on transform (280ms, the soft ease),
- * with the Web Animations API, so it is part of document.getAnimations(). Nothing moves under reduced motion, and a
- * highlight that is not drawn (a folded list, the closed phone menu) is skipped.
+ * The highlight behind the current link glides to the next current link (a shared highlight). It is drawn by the
+ * current link alone (data-mark), so the server and the first draw are the same and nothing starts hidden. After each
+ * draw the rail notes where the highlight is; when a different link becomes current, the highlight plays from the old
+ * place to the new one on transform (280ms, the soft ease), with the Web Animations API, so it is part of
+ * document.getAnimations(). Nothing moves under reduced motion, and a highlight that is not drawn (the closed phone
+ * menu) is skipped.
  */
 function useMarkGlide(rail: RefObject<HTMLElement | null>) {
   const last = useRef(new Map<string, { el: Element; box: MarkBox }>());
@@ -139,11 +123,11 @@ function useMarkGlide(rail: RefObject<HTMLElement | null>) {
 
 /**
  * The lavender highlight behind the current link (absolutely placed under its icon and word). The links themselves are
- * not stacking contexts: every highlight paints at the bottom of its list (the list is `isolate`), under every link of
- * that list, so a highlight gliding past other links never covers their icons and words.
+ * not stacking contexts: the highlight paints at the bottom of the list (the list is `isolate`), under every link of
+ * it, so a highlight gliding past other links never covers their icons and words.
  */
-function Mark({ group }: { group: "main" | "console" }) {
-  return <span data-mark={group} aria-hidden="true" className="absolute inset-0 -z-10 rounded-[inherit] bg-tint" />;
+function Mark() {
+  return <span data-mark="main" aria-hidden="true" className="absolute inset-0 -z-10 rounded-[inherit] bg-tint" />;
 }
 
 // The rail's looks. Phones and tablets get the top bar (max-rail:, under 900px); rail: is the side rail, from 900px.
@@ -158,13 +142,7 @@ const RAIL =
 const LINK =
   "relative flex h-10 items-center gap-3 rounded-xl px-3 text-[14px] font-medium text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 [&.active]:font-semibold [&.active]:text-primary [&.active]:hover:bg-transparent [&_.icon]:shrink-0 [&_.icon]:text-ink-3 [&.active_.icon]:text-primary";
 const LINK_FOLDED = `${LINK} rail:justify-center rail:px-0`;
-// 40px tall in the phone menu (a finger's target), 32px in the side rail's lists.
-const SUB_LINK =
-  "relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13.5px] text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 max-rail:h-10 [&.active]:font-semibold [&.active]:text-primary [&.active]:hover:bg-transparent [&_.icon]:shrink-0 [&_.icon]:text-ink-3 [&.active_.icon]:text-primary";
-const SUB_LINK_FOLDED = `${SUB_LINK} rail:h-10 rail:justify-center rail:rounded-xl rail:px-0`;
-const SUB_LIST = "isolate my-0.5 ml-[22px] grid grid-cols-[minmax(0,1fr)] gap-px border-l border-line py-0.5 pl-2";
 const SECTION = "px-3 pb-1.5 pt-5 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3";
-const SECTION_FIRST = "px-3 pb-1.5 pt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-3 max-rail:pt-0";
 
 /** A link of the rail: icon and word; folded, the icon alone, the word kept for screen readers and in the tooltip. */
 function RailLink(props: { to: string; end?: boolean; icon: IconName; label: string; folded: boolean }) {
@@ -172,7 +150,7 @@ function RailLink(props: { to: string; end?: boolean; icon: IconName; label: str
     <NavLink to={props.to} end={props.end} className={props.folded ? LINK_FOLDED : LINK} title={props.folded ? props.label : undefined}>
       {(active) => (
         <>
-          {active ? <Mark group="main" /> : null}
+          {active ? <Mark /> : null}
           <Icon name={props.icon} />
           <span className={props.folded ? "min-w-0 truncate rail:sr-only" : "min-w-0 truncate"}>{props.label}</span>
         </>
@@ -182,14 +160,14 @@ function RailLink(props: { to: string; end?: boolean; icon: IconName; label: str
 }
 
 /**
- * A mono label over a platform administrator's links (Admin), which it tells apart from the company's own links above
- * them; the folded rail draws a hairline instead (the phone menu keeps the word).
+ * A mono label over the admin dashboard's links (Admin), for a platform administrator who also works in a company: it
+ * tells them apart from the company's own links above. The folded rail draws a hairline instead (the phone menu keeps
+ * the word).
  */
-function SectionLabel({ children, folded, first }: { children: string; folded: boolean; first?: boolean }) {
-  const look = first ? SECTION_FIRST : SECTION;
+function SectionLabel({ children, folded }: { children: string; folded: boolean }) {
   return (
     <>
-      <div className={folded ? `${look} rail:hidden` : look}>{children}</div>
+      <div className={folded ? `${SECTION} rail:hidden` : SECTION}>{children}</div>
       {folded ? <div aria-hidden="true" className="mx-3 my-3 hidden h-px bg-line rail:block" /> : null}
     </>
   );
@@ -197,14 +175,14 @@ function SectionLabel({ children, folded, first }: { children: string; folded: b
 
 /**
  * The signed-in frame (docs/07): the rail, a thin bar with the way back up on a page that sits under another (a job,
- * the job builder, Updates, a console section; none on a section's own page), the development-mode notice, and the
- * page.
+ * the job builder, Updates; none on a section's own page), the development-mode notice, and the page.
  *
  * The rail, top to bottom: the name, the company chip (your role, a "Switch company" menu for someone in more than one
- * company, and a cog to Settings), "Start a hire", then Home, Jobs, Candidates and Settings (Console for platform
- * administrators under its Admin label, with the console's sections listed under it), and, at its foot, who is signed
- * in with Updates (and how many are unread), Sign out and the light/dark theme switch. No slogans and no label over
- * the company's own links. The current link sits on a lavender highlight that glides to the next one.
+ * company, and a cog to Settings), "Start a hire", then Home, Jobs, Candidates and Settings; a platform administrator
+ * gets Companies, Privacy requests and System instead (under an Admin label when they also work in a company); and,
+ * at its foot, who is signed in with Updates (and how many are unread), Sign out and the light/dark theme switch. No
+ * slogans and no label over the company's own links. The current link sits on a lavender highlight that glides to the
+ * next one.
  * On a job's own pages it folds to a column of icons; on every other page the button at its top folds it the same way,
  * and this browser remembers the choice. Under 900px it becomes a top bar: Start a hire, Updates, Sign out and the
  * theme switch stay in it, and the links fold behind a Menu button.
@@ -220,7 +198,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const active = me.memberships.find((m) => m.companyId === me.activeCompanyId);
   const myRole = active?.role ?? null;
   const companyName = active?.companyName ?? null;
-  // Everyone on a company's team may start a hire; ITS staff with no company have none to hire for.
+  // Everyone on a company's team may start a hire; a platform administrator with no company has none to hire for.
   const inCompany = !!me.activeCompanyId;
 
   // How many updates this person has not read: asked for with the frame, again every two minutes while the tab is in
@@ -320,7 +298,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const who = me.user.name ?? me.user.email;
   const roleWord = teamRoleWord(myRole);
   // The company the page is about, under the name in the phone's top bar (wider screens have the rail's company chip).
-  const workspace = companyName ?? (isAdmin ? "ITS staff" : "No company");
+  const workspace = companyName ?? (isAdmin ? "Admin dashboard" : "No company");
   const trail = parentTrail(pathname);
   const width = cx(foldedByChoice ? "max-w-[1280px]" : "max-w-[1040px]", "group-has-[.builder,[data-wide]]/page:max-w-[1440px]");
   return (
@@ -390,25 +368,8 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
           {inCompany ? COMPANY_LINKS.map((l) => <RailLink key={l.to} to={l.to} end={l.end} icon={l.icon} label={l.label} folded={folded} />) : null}
           {isAdmin ? (
             <>
-              <SectionLabel folded={folded} first={!inCompany}>Admin</SectionLabel>
-              <RailLink to="/admin" icon="lock" label="Console" folded={folded} />
-              {/* The console's sections: Console stays marked on all of them, the section itself too. Folded, the rail
-                  still shows them, as icons with their word in the tooltip. */}
-              <ul className={folded ? `${SUB_LIST} rail:ml-0 rail:border-l-0 rail:pl-0` : SUB_LIST} aria-label="Console sections">
-                {CONSOLE_LINKS.map((l) => (
-                  <li key={l.to}>
-                    <NavLink to={l.to} end={l.to === "/admin"} className={folded ? SUB_LINK_FOLDED : SUB_LINK} title={folded ? l.label : undefined}>
-                      {(on) => (
-                        <>
-                          {on ? <Mark group="console" /> : null}
-                          <Icon name={l.icon} size={16} />
-                          <span className={folded ? "min-w-0 flex-1 truncate rail:sr-only" : "min-w-0 flex-1 truncate"}>{l.label}</span>
-                        </>
-                      )}
-                    </NavLink>
-                  </li>
-                ))}
-              </ul>
+              {inCompany ? <SectionLabel folded={folded}>Admin</SectionLabel> : null}
+              {ADMIN_LINKS.map((l) => <RailLink key={l.to} to={l.to} end={l.end} icon={l.icon} label={l.label} folded={folded} />)}
             </>
           ) : null}
         </div>

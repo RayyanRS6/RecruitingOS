@@ -6,13 +6,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * The ITS console's System and settings section (apps/web/src/pages/admin/system.tsx) as the server first draws it from
- * answers shaped like the API's (Wave S6, slice S6-E): workflow runs with status pills and five columns, the run drawer
- * in plain parts, AI runs with five columns, a Sort chip and their own drawer, costs by customer name for this month or
- * all time, Queue health in plain words, the Business calendar and the Administrators unchanged in what they do (their
- * pickers now use the "select" look). Headings kept while loading, figures right-aligned, empty and error states with
- * one way out. Moved here from report-tables.test.ts, demo-fixes-ui.test.ts and tests/web/demo-fixes.test.ts when the
- * console was split into section files (S6-0).
+ * The admin dashboard's System section (apps/web/src/pages/admin/system.tsx and health.tsx) as the server first draws
+ * it from answers shaped like the API's: five parts as tabs. Health (alerts with Acknowledge and Resolve, failed work
+ * with Retry, the queue), Costs by company for this month or all time, Email (the addresses nothing is sent to),
+ * Security reports and Administrators. Headings kept while loading, figures right-aligned, empty and error states
+ * with one way out.
  */
 vi.mock("next/navigation", () => ({
   usePathname: () => "/admin/system",
@@ -23,189 +21,193 @@ vi.mock("next/navigation", () => ({
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
 
 (globalThis as { React?: typeof React }).React = React;
-const { Administrators, AiRunDrawer, AiRuns, CalendarAdmin, Costs, costsSinceKey, monthStartIn, Queue, RunDrawer, Runs, RUNS_READ_LIMIT, SystemSection } = await import("@ros/web/src/pages/admin/system");
-const { dayKey } = await import("@ros/web/src/dates");
+const { Administrators, Costs, costsSinceKey, Email, monthStart, Security, SYSTEM_PARTS, SystemSection } = await import("@ros/web/src/pages/admin/system");
+const { ACK_FOR_ANOTHER, ackIsForAnother, Health, needsAPerson, NONE, Queue, RESOLVED_TOAST } = await import("@ros/web/src/pages/admin/health");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const headings = (html: string) => [...html.matchAll(/<th scope="col"[^>]*>(.*?)<\/th>/g)].map((m) => text(m[1]).trim());
-const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
+const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 
-function client(data: Array<[unknown[], unknown]> = [], me: unknown = admin) {
+function client(data: Array<[readonly unknown[], unknown]> = []) {
   // A query that failed stays failed while the page is drawn (nothing is fetched on the server).
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], me);
+  qc.setQueryData(["me"], admin);
   for (const [key, value] of data) qc.setQueryData(key, value);
   return qc;
 }
-function failed(qc: QueryClient, queryKey: unknown[]) {
+function failed(qc: QueryClient, queryKey: readonly unknown[]) {
   qc.getQueryCache().build(qc, { queryKey }).setState({ status: "error", error: new Error("The server did not answer."), fetchStatus: "idle" });
   return qc;
 }
 
-const customers: [unknown[], unknown] = [["admin", "customers"], [{ id: "co1aaaaaaaa", name: "Bright Dental" }]];
-const run = (id: string, status: string, over: Record<string, unknown> = {}) => ({ id, companyId: "co1aaaaaaaa", workflowKey: "application_intake", status, currentStep: "score_reading", wait: null, attempts: 2, lastError: status === "failed" ? "timeout" : null, updatedAt: daysAgo(3), subject: { type: "application", id: "a1aaaaaaaa" }, ...over });
-const ai = (id: string, task: string, createdAt: string, costUsd: string, latencyMs: number) => ({ id, companyId: "co1aaaaaaaa", agent: "screening", task, model: "fake-1", promptKey: "screen", promptVersion: 3, status: "ok", inputTokens: 10, outputTokens: 20, costUsd, latencyMs, confidence: "high", createdAt });
-const calendarDto = { current: { timeZone: "America/Los_Angeles", hours: {}, holidays: [], closures: [], coverageChanges: [] }, version: null, effectiveFrom: null, description: "Monday to Friday, 9 to 5", upcoming: [], versions: [], preview: [] };
+const companies: [readonly unknown[], unknown] = [["admin", "companies"], [{ id: "co1aaaaaaaa", name: "Bright Dental" }]];
+const noFailures = { failedRuns: [], failedJobs: [], failedAi: [], alerts: [] };
+const queue = { queued: 0, failed: 1, oldestQueuedAt: null, waitingRuns: 2, definitions: ["application_intake", "screen"] };
+const alert = (id: string, kind: string, title: string, over: Record<string, unknown> = {}) => ({ id, kind, severity: "critical", title, body: "Details.", status: "open", companyId: null, target: null, details: {}, createdAt: daysAgo(0), ...over });
+const health = (failures: unknown = noFailures) => render(client([[["admin", "failures"], failures], [["admin", "queue"], queue]]), createElement(Health));
 
-describe("System and settings: the six parts", () => {
-  it("draws its six parts as tabs and opens on Costs", () => {
-    const html = render(client([customers, [["admin", "calendar"], calendarDto], [costsSinceKey(monthStartIn("America/Los_Angeles")), []]]), createElement(SystemSection, { view: null, onView: () => undefined }));
-    for (const label of ["Costs", "Workflows", "AI runs", "Queue health", "Business calendar", "Administrators"]) expect(html).toContain(`data-label="${label}"`);
-    expect(html).toMatch(/aria-selected="true"[^>]*>(?:(?!<\/button>).)*Costs/);
+describe("System: the five parts", () => {
+  it("draws its parts as tabs and opens on Health, also for a part it does not know", () => {
+    expect(SYSTEM_PARTS.map((p) => p.label)).toEqual(["Health", "Costs", "Email", "Security reports", "Administrators"]);
+    for (const view of [null, "workflows", "calendar"]) {
+      const html = render(client([[["admin", "failures"], noFailures], [["admin", "queue"], queue]]), createElement(SystemSection, { view, onView: () => undefined }));
+      expect(html).toContain('<div role="tablist" aria-label="System"');
+      for (const label of ["Health", "Costs", "Email", "Security reports", "Administrators"]) expect(html).toContain(`data-label="${label}"`);
+      expect(html).toMatch(/aria-selected="true"[^>]*>(?:(?!<\/button>).)*Health/);
+      expect(text(html)).toContain("Alerts that need a person (0)");
+    }
+    // nothing of what the old console had besides
+    const html = render(client([[["admin", "failures"], noFailures], [["admin", "queue"], queue]]), createElement(SystemSection, { view: null, onView: () => undefined }));
+    for (const gone of ["Workflows", "AI runs", "Business calendar", "Queue health"]) expect(html, gone).not.toContain(`data-label="${gone}"`);
+  });
+
+  it("draws each part when the address names it", () => {
+    const part = (view: string, data: Array<[readonly unknown[], unknown]>) => text(render(client(data), createElement(SystemSection, { view, onView: () => undefined })));
+    expect(part("costs", [companies, [costsSinceKey(monthStart()), []]])).toContain("No AI spend recorded this month.");
+    expect(part("email", [[["admin", "suppressions"], []]])).toContain("Email addresses we must not send to (0)");
+    expect(part("security", [[["admin", "csp"], { mode: "report-only", reports: [] }]])).toContain("Content-security reports (0 not reviewed yet)");
+    expect(part("admins", [[["admin", "platform-roles"], { grants: [], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]])).toContain("Platform administrators (1)");
   });
 });
 
-describe("System and settings: Workflows", () => {
-  it("keeps the five headings while the runs load, with quiet rows and the status pills above them", () => {
-    const html = render(client(), createElement(Runs));
-    expect(html).toMatch(/<section class="table-wrap scroll"/);
-    expect(headings(html)).toEqual(["Workflow", "Status", "Step", "Updated", "Actions"]);
-    expect(html).toContain('<tbody aria-busy="true">');
-    expect(html.match(/<tr aria-hidden="true">/g)).toHaveLength(4);
-    expect(html).toContain('<span class="sr-only" role="status">Loading…</span>');
-    // the status filter is a row of pills; All is chosen
-    expect(html).toContain('<fieldset aria-label="Show runs"');
-    expect(html).toContain('<button type="button" class="toggle-chip" aria-pressed="true">All</button>');
-    for (const label of ["Running", "Waiting", "Failed", "Done"]) expect(html).toContain(`aria-pressed="false">${label}</button>`);
-    expect(html).not.toContain(">Completed<");
-  });
-
-  it("says when there are no workflow runs", () => {
-    expect(render(client([[["admin", "runs", ""], []]]), createElement(Runs))).toMatch(/<td colspan="5" class="table-empty">No workflow runs yet\.<\/td>/i);
-  });
-
-  it("shows each run in plain words with Retry on a failed one, and counts each status", () => {
-    const rows = [run("run1", "failed"), run("run2", "completed", { workflowKey: "screen", currentStep: "ask" }), run("run3", "completed", { workflowKey: "brand_new_flow" })];
-    const html = render(client([[["admin", "runs", ""], rows]]), createElement(Runs));
+describe("System, Health: alerts", () => {
+  it("counts the alerts that wait for a person, and folds the acknowledged ones and the notices about a company's plan", () => {
+    const list = [alert("al1", "worker.stale", "The worker stopped"), alert("al2", "queue.stale", "Queue is slow", { status: "acknowledged" }), alert("al3", "billing.screens_warning", "AI interviews at 80%", { severity: "warning" }), alert("al4", "plan.requested", "Bright Dental asked to upgrade", { severity: "info" })];
+    expect(list.map(needsAPerson)).toEqual([true, false, false, false]);
+    expect(needsAPerson({ status: "open", kind: "ai.provider_outage" })).toBe(true);
+    const html = health({ ...noFailures, alerts: list });
     const words = text(html);
+    expect(words).toContain("Alerts that need a person (1)");
+    // still listed, every button kept, one click away
+    expect(words).toContain("Acknowledged and plan notices (3)");
+    expect(html.indexOf("The worker stopped")).toBeLessThan(html.indexOf("<details"));
+    expect(html.indexOf("<details")).toBeLessThan(html.indexOf("Queue is slow"));
+    expect(html.slice(html.indexOf("AI interviews at 80%"))).toContain(">Acknowledge</button>");
+  });
+
+  it("offers Resolve on every alert, open or acknowledged; Acknowledge only while it is open", () => {
+    const html = health({ ...noFailures, alerts: [alert("al3", "worker.stale", "The background worker has stopped polling"), alert("al4", "queue.stale", "Queued work is not being picked up", { status: "acknowledged" })] });
+    const open = html.slice(html.indexOf("The background worker has stopped polling"), html.indexOf("Queued work is not being picked up"));
+    const seen = html.slice(html.indexOf("Queued work is not being picked up"), html.indexOf("Failed work"));
+    expect(open).toContain(">Acknowledge</button>");
+    expect(open).toContain(">Resolve</button>");
+    expect(seen).not.toContain(">Acknowledge</button>");
+    expect(seen).toContain(">Resolve</button>");
+    expect(text(seen)).toContain("Acknowledged");
+    expect(RESOLVED_TOAST).toEqual({ title: "Resolved.", detail: "If it happens again, a new alert is raised." });
+  });
+
+  it("offers no Acknowledge on a platform-role alert about the signed-in administrator, and says who acknowledges it", () => {
+    const html = health({ ...noFailures, alerts: [alert("al1", "platform_role.granted", "Platform role granted", { details: { actorId: "s1" } }), alert("al2", "worker.stale", "The worker stopped")] });
+    const own = html.slice(html.indexOf("Platform role granted"), html.indexOf("The worker stopped"));
+    expect(text(own)).toContain(ACK_FOR_ANOTHER);
+    expect(own).not.toContain(">Acknowledge</button>");
+    expect(own).not.toContain(">Resolve</button>");
+    expect(html.slice(html.indexOf("The worker stopped"))).toContain(">Acknowledge</button>");
+    const about = (kind: string, actorId: string | null, targetId: string | null) => ({ kind, details: actorId ? { actorId } : {}, target: targetId ? { type: "user", id: targetId } : null });
+    expect(ackIsForAnother(about("platform_role.granted", "s1", "u9"), "s1")).toBe(true);
+    expect(ackIsForAnother(about("platform_role.bootstrapped", null, "s1"), "s1")).toBe(true);
+    expect(ackIsForAnother(about("platform_role.granted", "s2", "u9"), "s1")).toBe(false);
+    // other alerts, and while it is not known who is signed in, keep the button (the server decides)
+    expect(ackIsForAnother(about("worker.stale", "s1", "s1"), "s1")).toBe(false);
+    expect(ackIsForAnother(about("platform_role.granted", "s1", null), null)).toBe(false);
+  });
+
+  it("names each severity in plain words", () => {
+    const words = text(health({ ...noFailures, alerts: [alert("al5", "worker.stale", "The worker stopped"), alert("al6", "outbox.slow", "Email is slow", { severity: "warning" }), alert("al7", "note", "Heads up", { severity: "info" })] }));
+    expect(words).toContain("Urgent The worker stopped");
+    expect(words).toContain("Check soon Email is slow");
+    expect(words).toContain("For your information Heads up");
+    expect(words).not.toMatch(/\bcritical\b|\bwarning\b/);
+    expect(words).toContain("today");
+    // nothing about a credential kept after a disconnect: calendars are gone
+    expect(words).not.toContain("Retry deletion");
+  });
+});
+
+describe("System, Health: failed work and the queue", () => {
+  it("lists failed runs by their plain name with Retry, background tasks and AI runs that were not OK", () => {
+    const failures = {
+      ...noFailures,
+      failedRuns: [{ id: "r1", companyId: "co1aaaaaaaa", workflowKey: "application_intake", status: "failed", lastError: "model timed out", updatedAt: daysAgo(2), currentStep: "read_resume", attempts: 5, subject: { type: "application", id: "ap1" } }],
+      failedJobs: [{ id: 7, kind: "workflow.tick", lastError: "lease lost", attempts: 5, createdAt: daysAgo(1) }],
+      failedAi: [{ id: "a1", task: "triage", status: "invalid_output", error: "bad json", createdAt: daysAgo(0), model: "claude-haiku-5-5" }],
+    };
+    // up to the queue's card, whose folded list names each workflow with its key
+    const html = health(failures).split("<h2>Queue</h2>")[0];
+    const words = text(html);
+    expect(words).toContain("Failed workflow runs (1)");
+    expect(words).toContain("Reading a new application");
+    expect(words).not.toContain("application_intake");
+    expect(words).toContain("Step: read resume · Tried 5 times · model timed out");
+    expect(words).toContain("2 days ago");
+    expect(html).toContain('aria-label="Retry: Reading a new application"');
+    expect(html.match(/>Retry<\/button>/g)).toHaveLength(1);
+    expect(words).toContain("Background tasks that failed (1) Workflow.tick");
+    expect(words).toContain("Tried 5 times · lease lost");
+    expect(words).toContain("AI runs that were not OK (1) Answer not usable Triage");
+    // a failed run names no candidate and opens nothing: the run browser is gone
+    expect(html).not.toContain("ap1");
+  });
+
+  it("says None in each part with nothing in it", () => {
+    expect(NONE).toBe("None.");
+    const words = text(health());
+    expect(words).toContain(`Alerts that need a person (0) ${NONE}`);
+    expect(words).toContain(`Failed work (0) ${NONE}`);
+  });
+
+  it("gives the queue's figures in plain words, the workflows folded", () => {
+    const html = render(client([[["admin", "queue"], queue]]), createElement(Queue));
+    const words = text(html);
+    for (const fact of ["Jobs waiting to run 0", "Oldest waiting job none", "Jobs that failed 1", "Workflow runs waiting 2", "refresh every 5 seconds"]) expect(words).toContain(fact);
+    // each figure stays a dt and its dd, in the kit's stat cells; that they refresh is the mark beside the title
+    expect(html).toContain('<dt class="stat-cell-label">Jobs that failed</dt><dd class="stat-cell-value text-critical">1</dd>');
+    expect(html).toMatch(/<dl class="stat-strip[^"]*">(?:<div class="stat-cell[^"]*"><dt class="stat-cell-label">[^<]*<\/dt><dd class="stat-cell-value[^"]*">[^<]*<\/dd><\/div>){4}<\/dl>/);
+    expect(html).toContain('<span class="icon-label" title="These figures refresh every 5 seconds.">');
+    expect(html).toMatch(/<details class="more"><summary>Workflows the system can run \(2\)<\/summary>/);
     expect(words).toContain("Reading a new application");
     expect(words).toContain("AI interview");
-    // an unknown workflow reads as words, never with underscores
-    expect(words).toContain("Brand new flow");
-    expect(html).not.toContain("brand_new_flow");
-    expect(words).toContain("Score reading");
-    expect(html).toContain("3 days ago");
-    expect(html.match(/>Retry</g)).toHaveLength(1);
-    expect(html).toContain('aria-pressed="true">All <span class="count">3</span>');
-    expect(html).toContain('aria-pressed="false">Failed <span class="count">1</span>');
-    expect(html).toContain('aria-pressed="false">Done <span class="count">2</span>');
-    expect(html).toContain('aria-pressed="false">Running <span class="count">0</span>');
-    // what left the table lives in the run's drawer
-    expect(html).not.toContain("Attempts");
-    expect(html).not.toContain("timeout");
-    expect(words).not.toContain("of the latest");
   });
 
-  it("says the counts are of the latest 200 when the list is full", () => {
-    const rows = Array.from({ length: RUNS_READ_LIMIT }, (_, i) => run(`r${i}`, "completed"));
-    expect(text(render(client([[["admin", "runs", ""], rows]]), createElement(Runs)))).toContain("Counts are of the latest 200 runs.");
+  it("says so with a way to try again when the failed work or the queue cannot load", () => {
+    const html = render(failed(failed(client(), ["admin", "failures"]), ["admin", "queue"]), createElement(Health));
+    expect(text(html)).toContain("Could not load the alerts and the failed work.");
+    expect(text(html)).toContain("Could not load the queue.");
+    expect(html.match(/>Try again<\/button>/g)).toHaveLength(2);
   });
 
-  it("offers one way back when a status has no runs", () => {
-    const html = render(client([[["admin", "runs", ""], [run("run1", "completed")]], [["admin", "runs", "failed"], []]]), createElement(Runs, { initialShow: "failed" }));
-    expect(html).toContain('aria-pressed="true">Failed <span class="count">0</span>');
-    expect(text(html)).toContain("No runs with this status.");
-    expect(text(html)).toContain("Show all runs");
-  });
-
-  it("opens a run in plain parts: the facts, what happened, AI calls, who did what, and the raw state folded last", () => {
-    const row = run("run1", "failed", { wait: { kind: "timer", until: "2026-10-14T22:10:00.000Z", reason: "retry 2/5" } });
-    const detail = {
-      run: { ...row, state: { applicationId: "a1aaaaaaaa", secretish: "kept in raw" } },
-      steps: [{ seq: 1, stepKey: "read_resume", status: "ok", error: null, output: { kind: "next" }, startedAt: daysAgo(3) }, { seq: 2, stepKey: "score_reading", status: "error", error: "timeout", output: {}, startedAt: daysAgo(3) }],
-      aiRuns: [{ id: "ai1", task: "triage.read", model: "fake-1", promptKey: "triage", promptVersion: 4, status: "ok", inputTokens: 100, outputTokens: 20, costUsd: "0.00123", latencyMs: 900, structuredOutput: { fit: "likely" }, error: null }],
-      events: [{ type: "workflow.step_completed", occurredAt: daysAgo(3), actor: { kind: "system", id: "engine" }, payload: { step: "read_resume" } }],
-    };
-    const html = render(client([customers, [["admin", "run", "run1"], detail]]), createElement(RunDrawer, { row, onClose: () => undefined }));
-    const words = text(html);
-    expect(html).toContain('role="dialog"');
-    expect(html).toContain('aria-label="Reading a new application"');
-    for (const fact of ["Customer", "Bright Dental", "About", "Application", "Waiting on", "Timer until", "(retry 2/5)", "Attempts", "Error", "timeout"]) expect(words).toContain(fact);
-    expect(words).toContain("Retry");
-    // the parts, in order, the raw state last and folded
-    const at = (s: string) => html.indexOf(s);
-    expect(at("What happened")).toBeGreaterThan(0);
-    expect(at("What happened")).toBeLessThan(at("AI calls"));
-    expect(at("AI calls")).toBeLessThan(at("Who did what"));
-    expect(at("Who did what")).toBeLessThan(at("<summary>Raw state</summary>"));
-    expect(html).toMatch(/<details class="more"><summary>Raw state<\/summary>/);
-    expect(words).toContain("Read resume: done");
-    expect(words).toContain("Score reading: failed (timeout)");
-    expect(words).toContain("Triage read · fake-1 · OK · less than $0.01");
-    expect(words).toContain("$0.00123");
-    expect(words).toContain("Workflow step completed");
-    // the JSON is kept, folded, not first
-    expect(at("kept in raw")).toBeGreaterThan(at("<summary>Raw state</summary>"));
+  it("tells the administrator when a press did not work, and a retry reads the failed work again", () => {
+    const source = readFileSync(new URL("../../web/src/pages/admin/health.tsx", import.meta.url), "utf8");
+    expect(source).toContain('errorWords(e, "Could not acknowledge the alert. Try again in a moment.")');
+    expect(source).toContain('errorWords(e, "Could not retry the run. Try again in a moment.")');
+    // Retry puts the run back in the queue through the same endpoint
+    expect(source).toContain("api.post(`/api/v1/admin/runs/${id}/retry`, {}, reason)");
+    expect(source).toContain("qc.invalidateQueries({ queryKey: adminKeys.failures })");
   });
 });
 
-describe("System and settings: AI runs", () => {
-  it("opens latest first with five columns, When and Cost sortable and a Sort chip that also offers time taken", () => {
-    // the older run comes first in the answer
-    const html = render(client([[["admin", "ai"], [ai("ai1", "older_task", daysAgo(2), "0.00100", 900), ai("ai2", "newer_task", daysAgo(0), "0.02000", 1500)]]]), createElement(AiRuns));
-    expect(headings(html)).toEqual(["When", "Task", "Model", "Status", "Cost"]);
-    expect(html).toContain('<th scope="col" aria-sort="descending"><button type="button" class="th-sort">When');
-    expect(html.match(/aria-sort=/g)).toHaveLength(1);
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">Cost');
-    // its name is its visible words (WCAG 2.5.3 label in name), as every other Sort chip
-    expect(html).toContain('aria-haspopup="menu" aria-expanded="false">Sort: When<svg');
-    expect(html).not.toContain('aria-label="Sort AI runs');
-    expect(text(html)).toContain("Sort: When");
-    expect(html).toContain('<td class="num"><span title="$0.02000">$0.02</span><div class="small muted">1500 ms</div></td>');
-    expect(text(html)).toContain("Newer task");
-    expect(text(html)).toContain("OK");
-    expect(html.indexOf("Newer task")).toBeLessThan(html.indexOf("Older task"));
-    expect(html).toMatch(/<section class="table-wrap scroll"/);
-    expect(render(client([[["admin", "ai"], []]]), createElement(AiRuns))).toMatch(/<td colspan="5" class="table-empty">No AI runs recorded yet\.<\/td>/i);
-  });
-
-  it("keeps the headings while the AI runs load, and says so with a way to try again when they cannot", () => {
-    const loading = render(client(), createElement(AiRuns));
-    expect(loading).toContain('<tbody aria-busy="true">');
-    expect(headings(loading)).toEqual(["When", "Task", "Model", "Status", "Cost"]);
-    const broken = render(failed(client(), ["admin", "ai"]), createElement(AiRuns));
-    expect(text(broken)).toContain("Could not load AI runs.");
-    expect(text(broken)).toContain("Try again");
-  });
-
-  it("opens one AI run with its agent, prompt version, tokens, time taken, confidence and result", () => {
-    const row = ai("ai2", "screen.turn", daysAgo(0), "0.02000", 1500);
-    const detail = { run: { ...row, structuredOutput: { next: "Tell me about a hard day." }, error: null, modelVersion: "2026-09" }, events: [] };
-    const html = render(client([customers, [["admin", "ai", "ai2"], detail]]), createElement(AiRunDrawer, { row, onClose: () => undefined }));
-    const words = text(html);
-    expect(html).toContain('aria-label="Screen turn"');
-    for (const fact of ["Bright Dental", "Agent", "Screening", "Prompt", "screen, version 3", "Tokens", "10 in · 20 out", "Cost", "$0.02000", "Time taken", "1500 ms", "Confidence", "High", "Result", "Tell me about a hard day."]) expect(words).toContain(fact);
-  });
-});
-
-describe("System and settings: Costs", () => {
+describe("System: Costs", () => {
   const spend = [{ companyId: "co1aaaaaaaa", task: "triage", model: "fake-1", runs: 4, inputTokens: 1000, outputTokens: 200, costUsd: 0.0123 }, { companyId: null, task: "intake.turn", model: "fake-1", runs: 1, inputTokens: 50, outputTokens: 5, costUsd: 0.002 }];
 
-  it("counts this month from the 1st in the business calendar's time zone", () => {
-    // 8 PM on 31 October in Los Angeles is already 1 November in UTC
-    const evening = new Date("2026-11-01T03:00:00.000Z");
-    expect(monthStartIn("America/Los_Angeles", evening)).toBe("2026-10-01");
-    expect(monthStartIn("UTC", evening)).toBe("2026-11-01");
-    expect(monthStartIn("Not/AZone", new Date(2026, 4, 9))).toBe("2026-05-01");
+  it("counts this month from the 1st on the reader's own calendar", () => {
+    expect(monthStart(new Date(2026, 10, 18, 9, 0))).toBe("2026-11-01");
+    expect(monthStart(new Date(2026, 0, 1, 0, 30))).toBe("2026-01-01");
   });
 
-  it("names the customer, keeps five columns with the figures right-aligned, and puts the tokens under Details", () => {
-    const since = monthStartIn("America/Los_Angeles");
-    const html = render(client([customers, [["admin", "calendar"], calendarDto], [costsSinceKey(since), spend]]), createElement(Costs));
+  it("names the company, keeps five columns with the figures right-aligned, and puts the tokens under Details", () => {
+    const html = render(client([companies, [costsSinceKey(monthStart()), spend]]), createElement(Costs));
     expect(html).toContain('aria-pressed="true">This month</button>');
-    expect(headings(html).slice(0, 5)).toEqual(["Customer", "Task", "Model", "Runs", "Cost"]);
+    expect(headings(html).slice(0, 5)).toEqual(["Company", "Task", "Model", "Runs", "Cost"]);
     expect(html).toContain('<th scope="col" class="num">Cost</th>');
     expect(html).toContain('<td>Bright Dental</td><td>Triage</td><td class="small">fake-1</td><td class="num">4</td><td class="num"><span title="$0.01230">$0.01</span></td>');
-    // spend with no customer is ITS's own; nothing shows as an id slice
-    expect(text(html)).toContain("ITS platform");
+    // spend with no company is the platform's own; nothing shows as an id
+    expect(text(html)).toContain("The platform itself");
     expect(text(html)).toContain("Intake turn");
     expect(html).not.toContain("co1aaaaa<");
     expect(text(html)).toContain("Spent so far this month: $0.01");
-    expect(text(html)).toContain(`Counted from ${since}.`);
-    // no helper line about prices (23 October): "at list prices" rides on the exact total's tooltip
-    expect(text(html)).not.toContain("the fake provider is free");
     expect(html).toContain('title="$0.0143 at list prices"');
     // the tokens: a second table of five, folded
     expect(html).toMatch(/<details class="more"><summary>Details: tokens in and out<\/summary>/);
@@ -215,110 +217,116 @@ describe("System and settings: Costs", () => {
   });
 
   it("keeps the headings when nothing was spent, with one way to see all time", () => {
-    const month = render(client([[["admin", "calendar"], calendarDto], [costsSinceKey(monthStartIn("America/Los_Angeles")), []]]), createElement(Costs));
-    expect(text(month)).toContain("No model spend recorded this month.");
+    const month = render(client([companies, [costsSinceKey(monthStart()), []]]), createElement(Costs));
+    expect(text(month)).toContain("No AI spend recorded this month.");
     expect(text(month)).toContain("Show all time");
-    const all = render(client([[["admin", "costs"], []]]), createElement(Costs, { initialPeriod: "all" }));
+    const all = render(client([companies, [["admin", "costs"], []]]), createElement(Costs, { initialPeriod: "all" }));
     expect(all).toContain('aria-pressed="true">All time</button>');
-    expect(all).toMatch(/<td colspan="5" class="table-empty">No model spend recorded yet\.<\/td>/i);
-    expect(text(all)).toContain("Total model spend recorded: $0.00");
-    // all time counts from no date, so no line says one
-    expect(text(all)).not.toContain("Counted from");
+    expect(all).toMatch(/<td colspan="5" class="table-empty">No AI spend recorded yet\.<\/td>/i);
+    expect(text(all)).toContain("Total AI spend recorded: $0.00");
   });
 
   it("says so with a way to try again when the costs cannot load", () => {
-    const html = render(failed(client(), ["admin", "costs"]), createElement(Costs, { initialPeriod: "all" }));
+    const html = render(failed(client([companies]), ["admin", "costs"]), createElement(Costs, { initialPeriod: "all" }));
     expect(text(html)).toContain("Could not load costs.");
     expect(text(html)).toContain("Try again");
   });
 });
 
-describe("System and settings: Queue health and the Business calendar", () => {
-  it("shows an error with a way to try again when the Queue or the Business calendar cannot load", () => {
-    const queue = render(failed(client(), ["admin", "queue"]), createElement(Queue));
-    expect(text(queue)).toContain("Could not load the queue.");
-    expect(text(queue)).toContain("Try again");
-    expect(queue).not.toContain('aria-busy="true"');
-    const calendar = render(failed(client(), ["admin", "calendar"]), createElement(CalendarAdmin));
-    expect(text(calendar)).toContain("Could not load the business calendar.");
-    expect(text(calendar)).toContain("Try again");
-    expect(calendar).not.toContain('aria-busy="true"');
+describe("System: Email", () => {
+  const suppression = (id: string, address: string, reason: string, count = 2) => ({ id, address, reason, source: "postmark", active: true, count, firstAt: daysAgo(3), lastAt: daysAgo(1), details: {}, releasedAt: null, releaseReason: null });
+  const email = (rows: unknown[]) => render(client([[["admin", "suppressions"], rows]]), createElement(Email));
+
+  it("right-aligns how many times an address bounced, in five columns, with the source under the address", () => {
+    const html = email([suppression("sp1", "old@example.com", "hard_bounce")]);
+    expect(html).toContain('<th scope="col" class="num">Times</th>');
+    expect(html).toContain('<td class="num">2</td>');
+    expect(html.match(/<th /g)).toHaveLength(5);
+    expect(text(html)).toContain("old@example.com Reported by the email provider");
+    expect(text(html)).not.toContain("postmark");
+    expect(text(html)).toContain("Bounced");
   });
 
-  it("gives the queue's five facts in plain words, the workflows folded", () => {
-    const html = render(client([[["admin", "queue"], { queued: 0, failed: 1, oldestQueuedAt: null, waitingRuns: 2, definitions: ["application_intake", "screen"] }]]), createElement(Queue));
-    const words = text(html);
-    for (const fact of ["Jobs waiting to run 0", "Oldest waiting job none", "Jobs that failed 1", "Workflow runs waiting 2", "refresh every 5 seconds"]) expect(words).toContain(fact);
-    // each figure stays a dt and its dd, in the kit's stat cells; that they refresh is the mark beside the title (its
-    // words its name and tooltip), not a line of its own (23 October)
-    expect(html).toContain('<dt class="stat-cell-label">Jobs that failed</dt><dd class="stat-cell-value text-critical">1</dd>');
-    // valid list markup (axe definition-list and dlitem): each pair sits in one div straight under the dl, never two deep
-    expect(html).toMatch(/<dl class="stat-strip[^"]*">(?:<div class="stat-cell[^"]*"><dt class="stat-cell-label">[^<]*<\/dt><dd class="stat-cell-value[^"]*">[^<]*<\/dd><\/div>){4}<\/dl>/);
-    expect(html).toContain('<span class="icon-label" title="These figures refresh every 5 seconds.">');
-    expect(html).not.toMatch(/<p(?: [^>]*)?>(?:(?!<\/p>).)*refresh every 5 seconds/);
-    expect(html).toMatch(/<details class="more"><summary>Workflows the system can run \(2\)<\/summary>/);
-    expect(words).toContain("Reading a new application");
+  it("never offers Release on a spam complaint, and keeps the reason box above the list", () => {
+    const html = email([suppression("sp1", "ok@example.com", "hard_bounce"), suppression("sp2", "angry@example.com", "spam_complaint", 1)]);
+    const spam = html.slice(html.indexOf("angry@example.com"));
+    const bounce = html.slice(html.indexOf("ok@example.com"), html.indexOf("angry@example.com"));
+    expect(bounce).toContain('aria-label="Release ok@example.com"');
+    expect(spam).not.toContain("Release angry@example.com");
+    expect(text(spam)).toContain("Never released");
+    expect(text(html)).toContain("A spam complaint is never released from here: the person asked not to be emailed.");
+    // the release rule (confirm by another channel, never by emailing the address) is the reason field's own label
+    const label = html.indexOf("How you confirmed the address by another channel (required to release; the release is recorded with your reason)");
+    expect(label).toBeGreaterThan(-1);
+    expect(label).toBeLessThan(html.indexOf("<table"));
   });
 
-  it("starts a new calendar version on today's date in the administrator's own calendar, the time zone in a select", () => {
-    const html = render(client([[["admin", "calendar"], calendarDto]]), createElement(CalendarAdmin));
-    expect(html).toContain(`<input id="cal-eff" class="input" type="date" value="${dayKey(new Date())}"/>`);
-    expect(html).toContain('<select id="cal-tz" class="select">');
-    expect(text(html)).toContain("Publish version");
-    // fewer words (23 October): how windows join is shown by the coverage field's example, not a hint under it; the line
-    // explaining what the calendar is for goes
-    expect(html).toContain('placeholder="2026-10-05 2026-10-09 09:00-12:00+13:00-15:00 Conference week"');
-    expect(text(html)).not.toContain("Join several windows with +");
-    expect(text(html)).not.toContain("Service-level clocks count only open hours.");
+  it("offers 'Stop emails to an address' under the list, even when the list is empty, asking for the address and why", () => {
+    const html = email([]);
+    expect(text(html)).toContain(`Email addresses we must not send to (0) ${NONE}`);
+    expect(text(html)).toContain("For someone who asked, by phone or in person, not to be emailed.");
+    expect(html).toContain('id="sup-address"');
+    expect(html).toContain('id="sup-reason"');
+    // nothing typed yet: the button waits
+    expect(html.slice(html.indexOf('id="sup-reason"'))).toMatch(/<button[^>]*disabled/);
+    // only the addresses nothing is sent to: applications by email are gone
+    expect(text(html)).not.toContain("could not be imported");
   });
 });
 
-describe("System and settings: Administrators", () => {
+describe("System: Security reports", () => {
+  it("shows the policy mode, the unreviewed count, the explanation folded under the mode, Mark reviewed and a report that came back", () => {
+    const report = { id: "c1", mode: "report-only", surface: "candidate", documentPath: "/jobs/x", violatedDirective: "style-src", effectiveDirective: null, blockedOrigin: "https://cdn.example", sourceFile: null, lineNumber: null, userAgent: null, count: 3, firstAt: daysAgo(2), lastAt: daysAgo(0), reviewedAt: null, reviewedBy: null, disposition: "expected in dev" };
+    const html = render(client([[["admin", "csp"], { mode: "report-only", reports: [report] }]]), createElement(Security));
+    const words = text(html);
+    expect(words).toContain("Content-security reports (1 not reviewed yet)");
+    expect(words).toContain("Policy: Report only: browsers tell us, nothing is blocked yet");
+    expect(words).toContain("/jobs/x · blocked https://cdn.example · 3 times");
+    expect(words).toContain("Recurred since it was reviewed (\"expected in dev\"); review again.");
+    expect(words).toContain("Candidate pages style-src");
+    // the explanation is one click away: the policy's mode is the summary of its disclosure
+    expect(html).toMatch(/<details class="more[^"]*"><summary>(?:(?!<\/summary>).)*Policy: Report only(?:(?!<\/details>).)*Browsers report what the policy would block/);
+    expect(html).toContain('aria-label="What this report means: style-src on /jobs/x"');
+    expect(html).toContain('aria-label="Mark reviewed: style-src on /jobs/x"');
+  });
+});
+
+describe("System: Administrators", () => {
   it("lists the people in five columns with plain role words, and adds an administrator by email with a reason", () => {
-    const grant = { id: "g1", userId: "u1", email: "ben@its.test", name: "Ben", authProvider: "microsoft", role: "platform_admin", source: "console", grantedBy: { id: "s1", name: "Ada Admin" }, grantReason: "Covers the night shift", grantedAt: daysAgo(10), revokedAt: null, revokedBy: null, revokeReason: null };
+    const grant = { id: "g1", userId: "u1", email: "ben@its.test", name: "Ben", authProvider: "microsoft", role: "platform_admin", source: "console", grantedBy: { kind: "user", id: "s1", name: "Ada Admin" }, grantReason: "Covers the night shift", grantedAt: daysAgo(10), revokedAt: null, revokedBy: null, revokeReason: null };
     const html = render(client([[["admin", "platform-roles"], { grants: [grant], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]]), createElement(Administrators));
     expect(headings(html)).toEqual(["Person", "Role", "Granted", "Reason", "Actions"]);
     const words = text(html);
+    expect(words).toContain("Platform administrators (1)");
     expect(words).toContain("Platform administrator");
     expect(words).toContain("by Ada Admin");
-    expect(words).toContain("Revoke");
+    expect(html).toContain('aria-label="Revoke Ben">Revoke</button>');
     expect(html).not.toContain(">platform admin<");
     expect(words).toContain("Add a platform administrator");
     expect(html).toContain('<input id="pr-email" class="input" value=""/>');
-    // who is told of a grant is the eye beside "Add a platform administrator" (its words its name and tooltip), not a paragraph
-    expect(html).toContain('<span class="icon-label" title="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert.">');
-    expect(words).not.toContain("You cannot grant yourself a role");
+    // who is told of a grant is the eye beside the title (its words its name and tooltip), not a paragraph
+    expect(html).toContain('<span class="icon-label" title="Every other administrator is told, and another administrator must acknowledge the alert.">');
+    // only an administrator can be granted: no recruiter role is offered or named
+    expect(words).not.toContain("recruiter");
   });
 
   it("signs someone out everywhere by the address they sign in with, with a reason and a confirmation", () => {
     const html = render(client([[["admin", "platform-roles"], { grants: [], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]]), createElement(Administrators));
     expect(text(html)).toContain("Sign someone out everywhere");
-    // the one rule that changes what to do first stays; the paragraph about when to use it is gone (23 October)
     expect(text(html)).toContain("For a lost second-factor device, reset it in the identity service first.");
-    expect(text(html)).not.toContain("Use it after a lost or stolen phone");
     expect(html).toContain('id="so-email"');
     expect(html).toContain('id="so-reason"');
     expect(html.slice(html.indexOf('id="so-reason"'))).toMatch(/<button[^>]*disabled/);
     const system = readFileSync(new URL("../../web/src/pages/admin/system.tsx", import.meta.url), "utf8");
-    expect(system).toContain('"/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true }, reason)');
+    expect(system).toContain('"/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true } satisfies RevokeSessions, reason)');
     expect(system).toContain("Yes, sign them out");
   });
 });
 
-describe("the admin console's retries", () => {
-  it("tells the administrator when Retry did not work, and starts the calendar on the local date", () => {
-    const system = readFileSync(new URL("../../web/src/pages/admin/system.tsx", import.meta.url), "utf8");
-    expect(system).toContain('onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the run. Try again in a moment.")');
-    // Retry still puts the run back in the queue through the same endpoint
-    expect(system).toContain("api.post(`/api/v1/admin/runs/${id}/retry`, {}, reason)");
-    // a retried run leaves Problems › Failed work and Overview too
-    expect(system).toContain("qc.invalidateQueries({ queryKey: adminKeys.failures })");
-    // the AI runs' Sort menu sets the order it names (choosing the one in force keeps it); a heading press flips it
-    expect(system).toContain("if (o) s.choose(o.id, o.label, o.kind);");
-    // the business calendar starts on today's date in the administrator's own calendar, never the UTC date
-    expect(system).toContain("const todayKey = () => dayKey(new Date());");
-    expect(system).not.toContain("toISOString().slice(0, 10)");
-    // the AI-run drawer reads the run's own detail
-    expect(system).toContain("`/api/v1/admin/ai-runs/${row.id}`");
+describe("the dashboard calls only what the API keeps", () => {
+  it("names no endpoint of the old console", () => {
+    const dir = new URL("../../web/src/pages/admin/", import.meta.url);
+    const source = ["access.tsx", "companies.tsx", "company.tsx", "Dashboard.tsx", "health.tsx", "plan.tsx", "privacy.tsx", "system.tsx"].map((f) => readFileSync(new URL(f, dir), "utf8")).join("\n");
+    for (const gone of ["/admin/alerts`", "/admin/alerts\"", "/admin/calendar", "/admin/ai-runs", "/admin/runs\"", "/admin/outcomes", "/admin/failed-email-applications", "/retry-deletion", "/verification", "/candidate-score", "/apply-flow", "/report", "/escalations"]) expect(source, gone).not.toContain(gone);
   });
 });

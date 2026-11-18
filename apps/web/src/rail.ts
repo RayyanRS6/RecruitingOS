@@ -2,8 +2,8 @@ import { appPaths, MEMBERSHIP_ROLE_LABEL, type MembershipRole } from "@ros/contr
 
 /**
  * The side rail's decisions (apps/shell/components/AppShell.tsx), kept free of React so they can be tested: a company's
- * four places, when the rail folds to icons, the words for the signed-in person's role, the other companies they can
- * switch to, and how the count of unread updates reads.
+ * four places, a platform administrator's three, when the rail folds to icons, the words for the signed-in person's
+ * role, the other companies they can switch to, and how the count of unread updates reads.
  */
 
 /** A company's places in the rail, in order. "Start a hire" is the button above them. */
@@ -12,6 +12,13 @@ export const COMPANY_LINKS = [
   { to: appPaths.jobs, label: "Jobs", icon: "roles", end: false },
   { to: appPaths.allCandidates, label: "Candidates", icon: "talent", end: false },
   { to: appPaths.settings, label: "Settings", icon: "settings", end: false },
+] as const;
+
+/** The admin dashboard's places in the rail, in order, for a platform administrator. Companies is the dashboard's own address. */
+export const ADMIN_LINKS = [
+  { to: appPaths.admin, label: "Companies", icon: "building", end: true },
+  { to: appPaths.adminPrivacy, label: "Privacy requests", icon: "lock", end: false },
+  { to: appPaths.adminSystem, label: "System", icon: "activity", end: false },
 ] as const;
 
 /** The rail folds to a column of icons on a job's own pages (the job, its candidates, the job builder), where the work needs the width. */

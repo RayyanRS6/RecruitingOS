@@ -1,404 +1,79 @@
 "use client";
 
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, IconLabel, Menu, numHead, Segmented, Skeleton, Table, Tabs, Timeline, useTableSort } from "@ros/ui";
-import { api, ApiError } from "../../api/client";
+import type { AdminCompany, AdminCostRow, CspReports, EmailSuppression, GrantPlatformRole, PlatformRoleGrants, ReleaseSuppression, ReviewCspReport, RevokePlatformRole, RevokeSessions, SessionsRevoked, SuppressAddress } from "@ros/contracts";
+import { Alert, Button, Card, Chip, ErrorState, Field, Icon, IconLabel, numHead, Segmented, Skeleton, Table, Tabs } from "@ros/ui";
+import { api, errorWords } from "../../api/client";
 import { toast } from "../../toast";
-import { dayKey } from "../../dates";
 import { adminKeys, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
-import { aiStatusTone, aiStatusWords, exactMoney, exactWhen, firstUpper, money, runStatusWords, STEP_STATUS_WORDS, whenWords, wordFor, workflowWords } from "./admin-words";
+import { codeWords, exactMoney, exactWhen, money, reasonReady, whenWords, wordFor } from "./admin-words";
+import { Health, NONE } from "./health";
 
 /*
- * The console's System and settings section (redesign spec 3.2, Wave S6 slice S6-E): costs, workflow runs, AI runs,
- * queue health, the business calendar and the administrators. Tables have at most five columns; everything else about a
- * row is in its drawer. Codes read as words (admin-words.ts); the exact figures and times stay in tooltips and drawers.
+ * The dashboard's System section: what an operator still needs, in five parts, each its own `?view=`. Health (alerts,
+ * failed work, the queue; health.tsx), Costs (AI spend), Email (the addresses nothing is sent to), Security reports and
+ * Administrators. Codes read as words (admin-words.ts); the exact figures and times stay in tooltips.
  */
 
-/** "intake.turn" or "screen_invited" -> "Intake turn", "Screen invited": a code with dots, readable. */
-const codeWords = (code: string | null | undefined) => (code ? firstUpper(code.replace(/[._]/g, " ").replace(/\s+/g, " ").trim()) : "");
-
-/** A run's status as a chip tone. */
-const runTone = (s: string) => (s === "failed" ? "critical" : s === "waiting" ? "caution" : s === "completed" ? "good" : "accent");
-
-/** JSON for the folded "raw" parts of a drawer: wrapped, never scrolling the page sideways. */
-function Raw(props: { value: unknown }) {
-  return <pre className="small whitespace-pre-wrap [overflow-wrap:anywhere]">{JSON.stringify(props.value, null, 2)}</pre>;
-}
-
-/** One plain part of a drawer: a small heading over its content, on its own card (the reference console's side card). */
-function DrawerPart(props: { title: string; children: ReactNode }) {
-  return (
-    <Card className="stack">
-      <h3 className="eyebrow">{props.title}</h3>
-      {props.children}
-    </Card>
-  );
-}
-
-/** The facts at the top of a drawer: the kit's "at a glance" rows (dt and dd pairs straight inside), on a card. */
-function Facts(props: { children: ReactNode }) {
-  return (
-    <Card>
-      <dl className="glance">{props.children}</dl>
-    </Card>
-  );
-}
-
-/**
- * One figure of Queue health: the kit's stat cell, its label and number kept a dt and its dd. The pair sits straight in
- * the cell (a dl allows one div between it and its dt/dd, never two), so the cell itself stacks them, as stat-cell-text
- * would.
- */
-function Figure(props: { label: string; children: ReactNode; className?: string }) {
-  return (
-    <div className="stat-cell flex-col items-start justify-center gap-0.5">
-      <dt className="stat-cell-label">{props.label}</dt>
-      <dd className={cn("stat-cell-value", props.className)}>{props.children}</dd>
-    </div>
-  );
-}
-
-/** A toolbar over a list: filters on the left, a note or a control on the right, wrapping on a phone. */
+/** A toolbar over a list: a control on the left, a figure on the right, wrapping on a phone. */
 const TOOLBAR = "flex flex-wrap items-center justify-between gap-3";
 /**
- * A table row's first appearance: it rises in 30ms after the one above it (the eighth and later together; off for reduced
- * motion). The delay carries motion-safe: too, so it comes after the `animation` shorthand, which would reset it. Only for
- * tables whose rows keep their order: a row that moves up is put back in the page with the rows it passes, and each of
- * those would rise in again (so Workflows, newest change first, Costs, by cost, and AI runs, sortable, have none).
+ * A table row's first appearance: it rises in 30ms after the one above it (the eighth and later together; off for
+ * reduced motion). Only for tables whose rows keep their order: a row that moves is put back in the page with the rows
+ * it passes, and each of those would rise in again (so Costs, ordered by cost, has none).
  */
 const ROW_ENTER = "motion-safe:animate-enter motion-safe:[animation-delay:calc(var(--i)*30ms)]";
 const stagger = (i: number) => ({ "--i": Math.min(i, 7) }) as CSSProperties;
-/**
- * Where a row's name that opens its drawer sits (a quiet small Button): the row's title in ink, its text in line with the
- * column, the button's pill showing only under the mouse.
- */
-const NAME_BUTTON = "-ml-2.5 justify-start px-2.5 text-left text-ink";
 
-/** A customer's name from the customers list the console already reads (no API change); an unknown id reads as a short id. */
-function useCustomerNames(): (companyId: string | null) => string {
-  const q = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<Array<{ id: string; name: string }>>("/api/v1/admin/customers", reason) });
-  const names = new Map((q.data ?? []).map((c) => [c.id, c.name]));
-  return (companyId) => (companyId ? (names.get(companyId) ?? `Customer ${companyId.slice(0, 8)}`) : "ITS platform");
+/** A date as the dashboard reads it ("today", "3 days ago", "Oct 3"), the exact time on hover. */
+function When({ at }: { at: string | null | undefined }) {
+  if (!at) return null;
+  return <time dateTime={at} title={exactWhen(at)}>{whenWords(at)}</time>;
 }
 
-/** "3:10 PM" for something that happened today, else "yesterday", "3 days ago", "Oct 3". */
-function whenShort(iso: string): string {
-  const words = whenWords(iso);
-  if (words !== "today") return words;
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/ /g, " ");
-}
-
-/* ------------------------------------------------------------------------------------------------------------------ */
-/* Workflows                                                                                                           */
-/* ------------------------------------------------------------------------------------------------------------------ */
-
-type RunWait = { kind: string; until?: string; reason?: string };
-/** A workflow run as GET /admin/runs lists it (the latest 200, newest change first). */
-export type RunRow = { id: string; companyId: string | null; workflowKey: string; status: string; currentStep: string; wait: RunWait | null; attempts: number; lastError: string | null; updatedAt: string; subject: { type: string; id: string } };
-type RunDetail = {
-  run: RunRow & { state: Record<string, unknown>; startedAt?: string; completedAt?: string | null };
-  steps: Array<{ seq: number; stepKey: string; status: string; error: string | null; output: Record<string, unknown>; startedAt: string }>;
-  aiRuns: Array<{ id: string; task: string; model: string; promptKey: string; promptVersion: number; status: string; inputTokens: number; outputTokens: number; costUsd: string; latencyMs: number; structuredOutput: Record<string, unknown> | null; error: string | null }>;
-  events: Array<{ type: string; occurredAt: string; actor: { kind: string; id: string; name?: string }; payload: Record<string, unknown> }>;
-};
-
-/** The figure GET /admin/runs stops at: counts made from its answer are "of the latest 200". */
-export const RUNS_READ_LIMIT = 200;
-
-/** The status pills over the runs: the same filter values as before; `completed` reads "Done". */
-const RUN_FILTERS = [
-  { id: "", label: "All" },
-  { id: "running", label: runStatusWords("running") },
-  { id: "waiting", label: runStatusWords("waiting") },
-  { id: "failed", label: runStatusWords("failed") },
-  { id: "completed", label: runStatusWords("completed") },
-] as const;
-
-const runsUrl = (show: string) => `/api/v1/admin/runs${show ? `?status=${show}` : ""}`;
-
-/** What a waiting run waits on, in words: "Timer until Oct 14, 2026, 3:10 PM (retry 2/5)". */
-function waitWords(wait: RunWait | null): string {
-  if (!wait) return "";
-  return `${codeWords(wait.kind)}${wait.until ? ` until ${exactWhen(wait.until)}` : ""}${wait.reason ? ` (${wait.reason})` : ""}`;
-}
-
-/** Retry puts a failed run back in the queue (POST /admin/runs/:id/retry), from the list or from its drawer. */
-function useRetryRun() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.post(`/api/v1/admin/runs/${id}/retry`, {}, reason),
-    // Problems › Failed work and Overview list failed runs from GET /admin/failures, so that answer is read again too.
-    onSuccess: () => { toast("Retried. The run is back in the queue."); qc.invalidateQueries({ queryKey: ["admin", "runs"] }); qc.invalidateQueries({ queryKey: ["admin", "run"] }); qc.invalidateQueries({ queryKey: adminKeys.failures }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not retry the run. Try again in a moment."),
-  });
-}
-
-// The parts are exported for SystemSection, Problems (RunDrawer) and the server-render tests (apps/shell/components/admin-system-ui.test.ts).
-/** `initialShow`: the status pill the list opens on (All unless given). */
-export function Runs({ initialShow = "" }: { initialShow?: string }) {
-  const [show, setShow] = useState<string>(initialShow);
-  const [opened, setOpened] = useState<RunRow | null>(null);
-  // the counts come from the unfiltered read; the list for a pill is read for that status, as before
-  const all = useQuery({ queryKey: adminKeys.runs(""), queryFn: () => api.get<RunRow[]>(runsUrl(""), reason) });
-  const q = useQuery({ queryKey: adminKeys.runs(show), queryFn: () => api.get<RunRow[]>(runsUrl(show), reason) });
-  const retry = useRetryRun();
-  const count = (id: string) => (all.data ? (id ? all.data.filter((r) => r.status === id).length : all.data.length) : undefined);
+/** A part with nothing in it: "None.", with a quiet tick. */
+function Empty() {
   return (
-    <div className="stack gap-4">
-      <div className={TOOLBAR}>
-        <fieldset aria-label="Show runs" className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {RUN_FILTERS.map((f) => {
-            const n = count(f.id);
-            return (
-              <button key={f.id || "all"} type="button" className="toggle-chip" aria-pressed={show === f.id} onClick={() => setShow(f.id)}>
-                {f.label}
-                {n !== undefined ? <>{" "}<span className="count">{n}</span></> : null}
-              </button>
-            );
-          })}
-        </fieldset>
-        {all.data && all.data.length >= RUNS_READ_LIMIT ? <span className="small muted">Counts are of the latest {RUNS_READ_LIMIT} runs.</span> : null}
-      </div>
-      {q.error ? <ErrorState message="Could not load runs." onRetry={() => q.refetch()} /> : (
-        <Table
-          head={["Workflow", "Status", "Step", "Updated", ""]}
-          scroll
-          loading={q.data ? undefined : 4}
-          empty={show ? (
-            <span className="row justify-between gap-2.5">
-              <span>No runs with this status.</span>
-              <Button size="sm" variant="secondary" onClick={() => setShow("")}>Show all runs</Button>
-            </span>
-          ) : "No workflow runs yet."}
-        >
-          {/* no entrance here: newest change first, so a retried run moves to the top and the rows it passes would rise in again */}
-          {(q.data ?? []).map((r) => (
-            <tr key={r.id}>
-              <td><Button size="sm" variant="quiet" className={NAME_BUTTON} onClick={() => setOpened(r)}>{workflowWords(r.workflowKey)}</Button></td>
-              <td><Chip tone={runTone(r.status)}>{runStatusWords(r.status)}</Chip></td>
-              <td className="text-ink-2">{codeWords(r.currentStep)}</td>
-              <td className="nowrap text-ink-2"><span title={exactWhen(r.updatedAt)}>{whenShort(r.updatedAt)}</span></td>
-              <td className="text-right">{r.status === "failed" ? <Button size="sm" loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>Retry</Button> : null}</td>
-            </tr>
-          ))}
-        </Table>
-      )}
-      {opened ? <RunDrawer row={opened} onClose={() => setOpened(null)} /> : null}
-    </div>
+    <p className="muted mt-2 flex items-center gap-2 text-[14px]">
+      <Icon name="check-circle" size={16} className="text-good" />
+      {NONE}
+    </p>
   );
 }
 
-/**
- * One workflow run in plain parts (it answers the six questions for any run: what the AI saw, concluded, why, which
- * policy, what the human did, what happened): the facts that left the table, "What happened" (its steps), "AI calls"
- * (one line each, details folded), "Who did what" (its history) and, folded at the bottom, the raw state.
- */
-export function RunDrawer(props: { row: RunRow; onClose: () => void }) {
-  const { row } = props;
-  const q = useQuery({ queryKey: adminKeys.run(row.id), queryFn: () => api.get<RunDetail>(`/api/v1/admin/runs/${row.id}`, reason) });
-  const retry = useRetryRun();
-  const customerName = useCustomerNames();
-  const run = q.data ? { ...row, ...q.data.run } : row;
-  // the status is a chip in the facts just below, so the line under the title leaves it out
-  return (
-    <Drawer
-      open
-      onClose={props.onClose}
-      title={workflowWords(run.workflowKey)}
-      sub={`Step: ${codeWords(run.currentStep)} · updated ${exactWhen(run.updatedAt)}`}
-      actions={run.status === "failed" ? <Button size="sm" variant="primary" loading={retry.isPending} onClick={() => retry.mutate(run.id)}>Retry</Button> : null}
-    >
-      <div className="stack gap-4">
-        <Facts>
-          <dt>Customer</dt><dd>{customerName(run.companyId)}</dd>
-          <dt>About</dt><dd>{codeWords(run.subject.type)} <span className="small muted">{run.subject.id.slice(0, 8)}</span></dd>
-          <dt>Status</dt><dd><Chip tone={runTone(run.status)}>{runStatusWords(run.status)}</Chip></dd>
-          {run.wait ? <><dt>Waiting on</dt><dd>{waitWords(run.wait)}</dd></> : null}
-          <dt>Attempts</dt><dd>{run.attempts}</dd>
-          {run.lastError ? <><dt>Error</dt><dd className="text-critical [overflow-wrap:anywhere]">{run.lastError}</dd></> : null}
-          {/* the code, quieter than the facts (utilities: the glance's own dd rule outranks .small and .muted) */}
-          <dt>Workflow</dt><dd className="text-[13px] text-ink-3">{run.workflowKey}</dd>
-        </Facts>
-        {q.error ? <ErrorState message="Could not load this run." onRetry={() => q.refetch()} /> : !q.data ? <Skeleton lines={6} /> : (
-          <>
-            <DrawerPart title="What happened">
-              {q.data.steps.length === 0 ? <p className="muted">No steps yet.</p> : (
-                <Timeline items={q.data.steps.map((s) => ({ when: s.startedAt, what: `${codeWords(s.stepKey)}: ${wordFor(STEP_STATUS_WORDS, s.status).toLowerCase()}${s.error ? ` (${s.error})` : ""}` }))} />
-              )}
-            </DrawerPart>
-            <DrawerPart title="AI calls">
-              {q.data.aiRuns.length === 0 ? <p className="muted small">No model calls in this run.</p> : q.data.aiRuns.map((a) => (
-                <details key={a.id} className="more">
-                  <summary>{codeWords(a.task)} · {a.model} · {aiStatusWords(a.status)} · {money(Number(a.costUsd))}</summary>
-                  <dl className="kv">
-                    <dt>Prompt</dt><dd>{a.promptKey}, version {a.promptVersion}</dd>
-                    <dt>Tokens</dt><dd>{a.inputTokens} in · {a.outputTokens} out</dd>
-                    <dt>Cost</dt><dd>{exactMoney(Number(a.costUsd), 5)}</dd>
-                    <dt>Time taken</dt><dd>{a.latencyMs} ms</dd>
-                    {a.error ? <><dt>Error</dt><dd className="text-critical">{a.error}</dd></> : null}
-                  </dl>
-                  <div className="mt-3"><Raw value={a.structuredOutput} /></div>
-                </details>
-              ))}
-            </DrawerPart>
-            <DrawerPart title="Who did what">
-              {q.data.events.length === 0 ? <p className="muted small">Nothing recorded yet.</p> : (
-                <Timeline items={q.data.events.map((e) => ({ when: e.occurredAt, what: codeWords(e.type), who: e.actor.name ?? `${e.actor.kind} ${e.actor.id.slice(0, 8)}` }))} />
-              )}
-            </DrawerPart>
-            <details className="more">
-              <summary>Raw state</summary>
-              <div className="stack gap-2.5">
-                <Raw value={q.data.run.state} />
-                {q.data.steps.length ? <><h3 className="eyebrow">Step results</h3><Raw value={q.data.steps.map((s) => ({ step: s.stepKey, status: s.status, output: s.output }))} /></> : null}
-                {q.data.events.some((e) => Object.keys(e.payload).length) ? <><h3 className="eyebrow">History details</h3><Raw value={q.data.events.map((e) => ({ type: e.type, payload: e.payload }))} /></> : null}
-              </div>
-            </details>
-          </>
-        )}
-      </div>
-    </Drawer>
-  );
-}
-
-/* ------------------------------------------------------------------------------------------------------------------ */
-/* AI runs                                                                                                             */
-/* ------------------------------------------------------------------------------------------------------------------ */
-
-/** An AI run as GET /admin/ai-runs lists it (the latest 200). */
-export type AiRunRow = { id: string; companyId: string | null; agent: string; task: string; model: string; promptKey: string; promptVersion: number; status: string; inputTokens: number; outputTokens: number; costUsd: string; latencyMs: number; confidence: string | null; createdAt: string };
-type AiRunDetail = { run: AiRunRow & { structuredOutput: Record<string, unknown> | null; error: string | null; modelVersion?: string | null }; events: RunDetail["events"] };
-
-type AiSort = "when" | "cost" | "latency";
-/** Every order the AI runs had before: When and Cost as headings, all three in the Sort chip. */
-const AI_SORTS: Array<{ id: AiSort; label: string; kind: "date" | "number" }> = [
-  { id: "when", label: "When", kind: "date" },
-  { id: "cost", label: "Cost", kind: "number" },
-  { id: "latency", label: "Time taken", kind: "number" },
-];
-
-export function AiRuns() {
-  const q = useQuery({ queryKey: adminKeys.aiRuns, queryFn: () => api.get<AiRunRow[]>("/api/v1/admin/ai-runs", reason) });
-  const s = useTableSort<AiSort>({ key: "when", dir: "descending" });
-  const [opened, setOpened] = useState<AiRunRow | null>(null);
-  if (q.error) return <ErrorState message="Could not load AI runs." onRetry={() => q.refetch()} />;
-  const sortedBy = AI_SORTS.find((o) => o.id === s.sort?.key) ?? AI_SORTS[0];
-  return (
-    <div className="stack gap-4">
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {/* the visible words are the button's name (WCAG 2.5.3); choosing the order in force keeps it, never flips it */}
-        <Menu
-          label={`Sort: ${sortedBy.label}`}
-          heading="Sort AI runs by"
-          items={AI_SORTS.map((o) => ({ id: o.id, label: o.label, current: o.id === sortedBy.id }))}
-          onSelect={(id) => {
-            const o = AI_SORTS.find((x) => x.id === id);
-            if (o) s.choose(o.id, o.label, o.kind);
-          }}
-        />
-      </div>
-      <Table head={[s.col("when", "When", "date"), "Task", "Model", "Status", s.col("cost", "Cost", "number", { num: true })]} scroll loading={q.data ? undefined : 4} empty="No AI runs recorded yet." announce={s.announce}>
-        {/* no entrance here: a new order moves rows in the page, which would play it again on some of them */}
-        {s.apply(q.data ?? [], { when: (r) => Date.parse(r.createdAt), cost: (r) => Number(r.costUsd), latency: (r) => r.latencyMs }).map((r) => (
-          <tr key={r.id}>
-            <td className="nowrap text-ink-2"><span title={exactWhen(r.createdAt)}>{whenShort(r.createdAt)}</span></td>
-            <td><Button size="sm" variant="quiet" className={NAME_BUTTON} onClick={() => setOpened(r)}>{codeWords(r.task)}</Button></td>
-            <td className="small">{r.model}</td>
-            <td><Chip tone={aiStatusTone(r.status)}>{aiStatusWords(r.status)}</Chip></td>
-            <td className="num"><span title={exactMoney(Number(r.costUsd), 5)}>{money(Number(r.costUsd))}</span><div className="small muted">{r.latencyMs} ms</div></td>
-          </tr>
-        ))}
-      </Table>
-      {opened ? <AiRunDrawer row={opened} onClose={() => setOpened(null)} /> : null}
-    </div>
-  );
-}
-
-/** One AI run: who asked, with which prompt, what it cost and took, how sure it was, and its result (GET /admin/ai-runs/:id). */
-export function AiRunDrawer(props: { row: AiRunRow; onClose: () => void }) {
-  const { row } = props;
-  const q = useQuery({ queryKey: [...adminKeys.aiRuns, row.id], queryFn: () => api.get<AiRunDetail>(`/api/v1/admin/ai-runs/${row.id}`, reason) });
-  const customerName = useCustomerNames();
-  const run = q.data ? { ...row, ...q.data.run } : row;
-  const detail = q.data?.run;
-  // the line under the title is when it ran; its status is a chip in the facts just below
-  return (
-    <Drawer open onClose={props.onClose} title={codeWords(run.task)} sub={exactWhen(run.createdAt)}>
-      <div className="stack gap-4">
-        <Facts>
-          <dt>Customer</dt><dd>{customerName(run.companyId)}</dd>
-          <dt>Agent</dt><dd>{codeWords(run.agent)}</dd>
-          <dt>Model</dt><dd>{run.model}{detail?.modelVersion ? <span className="small muted"> ({detail.modelVersion})</span> : null}</dd>
-          <dt>Prompt</dt><dd>{run.promptKey}, version {run.promptVersion}</dd>
-          <dt>Status</dt><dd><Chip tone={aiStatusTone(run.status)}>{aiStatusWords(run.status)}</Chip></dd>
-          <dt>Tokens</dt><dd>{run.inputTokens} in · {run.outputTokens} out</dd>
-          <dt>Cost</dt><dd>{exactMoney(Number(run.costUsd), 5)}</dd>
-          <dt>Time taken</dt><dd>{run.latencyMs} ms</dd>
-          <dt>Confidence</dt><dd>{run.confidence ? codeWords(run.confidence) : "Not given"}</dd>
-          {detail?.error ? <><dt>Error</dt><dd className="text-critical [overflow-wrap:anywhere]">{detail.error}</dd></> : null}
-        </Facts>
-        {q.error ? <ErrorState message="Could not load this AI run." onRetry={() => q.refetch()} /> : !q.data ? <Skeleton lines={4} /> : (
-          <>
-            <DrawerPart title="Result">
-              {q.data.run.structuredOutput ? <Raw value={q.data.run.structuredOutput} /> : <p className="muted small">No result recorded.</p>}
-            </DrawerPart>
-            {q.data.events.length ? (
-              <DrawerPart title="Who did what">
-                <Timeline items={q.data.events.map((e) => ({ when: e.occurredAt, what: codeWords(e.type), who: e.actor.name ?? `${e.actor.kind} ${e.actor.id.slice(0, 8)}` }))} />
-              </DrawerPart>
-            ) : null}
-          </>
-        )}
-      </div>
-    </Drawer>
-  );
-}
+const timesWord = (n: number) => `${n} ${n === 1 ? "time" : "times"}`;
 
 /* ------------------------------------------------------------------------------------------------------------------ */
 /* Costs                                                                                                               */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-/** One customer, task and model as GET /admin/costs groups the spend. */
-type CostRow = { companyId: string | null; task: string; model: string; runs: number; inputTokens: number; outputTokens: number; costUsd: number };
 type CostPeriod = "month" | "all";
 
-/**
- * The first day of this month in the business calendar's time zone, as GET /admin/costs?since= takes it ("2026-10-01").
- * A zone the browser does not know falls back to the reader's own calendar.
- */
-export function monthStartIn(timeZone: string | undefined, now: Date = new Date()): string {
-  let year = now.getFullYear();
-  let month = now.getMonth() + 1;
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric" }).formatToParts(now);
-    year = Number(parts.find((p) => p.type === "year")?.value ?? year);
-    month = Number(parts.find((p) => p.type === "month")?.value ?? month);
-  } catch {
-    // an unknown zone: the reader's own calendar, read above
-  }
-  return `${year}-${String(month).padStart(2, "0")}-01`;
+/** The first day of this month on the reader's own calendar, as GET /admin/costs?since= takes it ("2026-10-01"). */
+export function monthStart(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-/**
- * The query key of the spend since a date, the same as the Overview's Costs card uses (Overview.tsx), so one answer
- * serves both; the all-time answer keeps the plain key. Both start with adminKeys.costs.
- */
+/** The query key of the spend since a date; the all-time answer keeps the plain key. Both start with adminKeys.costs. */
 export const costsSinceKey = (since: string) => [...adminKeys.costs, "since", since];
 
-/** `initialPeriod`: the spend the part opens on (this month unless given). */
+/** A company's name from the list the dashboard already reads; spend with no company is the platform's own. */
+function useCompanyNames(): (companyId: string | null) => string {
+  const q = useQuery({ queryKey: adminKeys.companies, queryFn: () => api.get<AdminCompany[]>("/api/v1/admin/customers", reason) });
+  const names = new Map((q.data ?? []).map((c) => [c.id, c.name]));
+  return (companyId) => (companyId ? (names.get(companyId) ?? "A company no longer listed") : "The platform itself");
+}
+
+/** AI spend at list prices, by company, task and model, the largest first. `initialPeriod`: the spend it opens on (this month unless given). */
 export function Costs({ initialPeriod = "month" }: { initialPeriod?: CostPeriod }) {
   const [period, setPeriod] = useState<CostPeriod>(initialPeriod);
-  // "This month" counts from the 1st in the business calendar's time zone (redesign spec 3.2)
-  const calendar = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", reason), enabled: period === "month" });
-  const zone = calendar.data?.current.timeZone;
-  const since = period === "month" ? (zone ? monthStartIn(zone) : calendar.error ? monthStartIn(undefined) : null) : null;
+  const since = period === "month" ? monthStart() : null;
   const q = useQuery({
-    queryKey: period === "all" ? adminKeys.costs : costsSinceKey(since ?? ""),
-    queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs${since ? `?since=${since}` : ""}`, reason),
-    enabled: period === "all" || since !== null,
+    queryKey: since ? costsSinceKey(since) : adminKeys.costs,
+    queryFn: () => api.get<AdminCostRow[]>(`/api/v1/admin/costs${since ? `?since=${since}` : ""}`, reason),
   });
-  const customerName = useCustomerNames();
+  const companyName = useCompanyNames();
   const rows = q.data ? [...q.data].sort((a, b) => b.costUsd - a.costUsd) : undefined;
   const total = (rows ?? []).reduce((n, r) => n + r.costUsd, 0);
   return (
@@ -406,26 +81,24 @@ export function Costs({ initialPeriod = "month" }: { initialPeriod?: CostPeriod 
       <div className={TOOLBAR}>
         <Segmented ariaLabel="Which spend" value={period} onChange={setPeriod} options={[{ value: "month", label: "This month" }, { value: "all", label: "All time" }]} />
         {/* "at list prices" rides on the exact figure's tooltip */}
-        {rows ? <p className="text-[14px] text-ink-2">{period === "month" ? "Spent so far this month" : "Total model spend recorded"}: <strong className="ml-1 font-display text-2xl font-bold tracking-[-0.02em] text-ink tabular-nums" title={`${exactMoney(total)} at list prices`}>{money(total)}</strong></p> : null}
+        {rows ? <p className="text-[14px] text-ink-2">{period === "month" ? "Spent so far this month" : "Total AI spend recorded"}: <strong className="ml-1 font-display text-2xl font-bold tracking-[-0.02em] text-ink tabular-nums" title={`${exactMoney(total)} at list prices`}>{money(total)}</strong></p> : null}
       </div>
-      {period === "month" && since ? <p className="small muted -mt-1">{`Counted from ${since}.`}</p> : null}
       {q.error ? <ErrorState message="Could not load costs." onRetry={() => q.refetch()} /> : (
         <>
           <Table
-            head={["Customer", "Task", "Model", numHead("Runs"), numHead("Cost")]}
+            head={["Company", "Task", "Model", numHead("Runs"), numHead("Cost")]}
             scroll
             loading={rows ? undefined : 4}
             empty={period === "month" ? (
               <span className="row justify-between gap-2.5">
-                <span>No model spend recorded this month.</span>
+                <span>No AI spend recorded this month.</span>
                 <Button size="sm" variant="secondary" onClick={() => setPeriod("all")}>Show all time</Button>
               </span>
-            ) : "No model spend recorded yet."}
+            ) : "No AI spend recorded yet."}
           >
-            {/* no entrance here: the rows are ordered by cost, so a new answer can move them and they would rise in again */}
             {(rows ?? []).map((r) => (
-              <tr key={`${r.companyId ?? "its"}-${r.task}-${r.model}`}>
-                <td>{customerName(r.companyId)}</td>
+              <tr key={`${r.companyId ?? "platform"}-${r.task}-${r.model}`}>
+                <td>{companyName(r.companyId)}</td>
                 <td>{codeWords(r.task)}</td>
                 <td className="small">{r.model}</td>
                 <td className="num">{r.runs}</td>
@@ -436,10 +109,10 @@ export function Costs({ initialPeriod = "month" }: { initialPeriod?: CostPeriod 
           {rows?.length ? (
             <details className="more">
               <summary>Details: tokens in and out</summary>
-              <Table head={["Customer", "Task", "Model", numHead("Tokens in"), numHead("Tokens out")]}>
+              <Table head={["Company", "Task", "Model", numHead("Tokens in"), numHead("Tokens out")]}>
                 {rows.map((r) => (
-                  <tr key={`${r.companyId ?? "its"}-${r.task}-${r.model}`}>
-                    <td>{customerName(r.companyId)}</td>
+                  <tr key={`${r.companyId ?? "platform"}-${r.task}-${r.model}`}>
+                    <td>{companyName(r.companyId)}</td>
                     <td>{codeWords(r.task)}</td>
                     <td className="small">{r.model}</td>
                     <td className="num">{r.inputTokens}</td>
@@ -456,136 +129,117 @@ export function Costs({ initialPeriod = "month" }: { initialPeriod?: CostPeriod 
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
-/* Queue health                                                                                                        */
+/* Email                                                                                                               */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-export function Queue() {
-  const q = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<{ queued: number; failed: number; oldestQueuedAt: string | null; waitingRuns: number; definitions: string[] }>("/api/v1/admin/queue", reason), refetchInterval: 5000 });
-  // A failed load says so instead of loading for ever; a failed refresh keeps the last figures on screen.
-  if (!q.data) return q.error ? <ErrorState message="Could not load the queue." onRetry={() => q.refetch()} /> : <Skeleton lines={3} />;
+/** Why an address is on the do-not-send list, in plain words. */
+const SUPPRESSION_WORDS: Readonly<Record<string, string>> = { hard_bounce: "Bounced", spam_complaint: "Spam complaint", soft_bounce_repeated: "Bounced several times", manual: "Added by hand", subscription_change: "Unsubscribed" };
+/** Who put an address on the list. */
+const SUPPRESSION_SOURCE_WORDS: Readonly<Record<string, string>> = { postmark: "Reported by the email provider", admin: "Added by an administrator" };
+
+/** The addresses nothing is sent to: Release with a reason (a spam complaint never), and a form to add one. */
+export function Email() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: adminKeys.suppressions, queryFn: () => api.get<EmailSuppression[]>("/api/v1/admin/email-suppressions", reason) });
+  const [releaseReason, setReleaseReason] = useState("");
+  const release = useMutation({ mutationFn: (id: string) => api.post(`/api/v1/admin/email-suppressions/${id}/release`, { reason: releaseReason.trim() } satisfies ReleaseSuppression, reason), onSuccess: () => { toast("Released. Email to that address is allowed again."); setReleaseReason(""); qc.invalidateQueries({ queryKey: adminKeys.suppressions }); }, onError: (e) => toast(errorWords(e, "Could not release.")) });
+  const rows = q.data ?? [];
   return (
-    // that the figures are live is said by the mark beside the title (its words are its name and tooltip)
-    <Card title="Queue health" aside={<IconLabel icon="activity" label="These figures refresh every 5 seconds." />}>
-      {/* the four figures as the kit's stat cells: one box split by hairlines (each pair stays a dt and its dd) */}
-      <dl className="stat-strip mb-4">
-        <Figure label="Jobs waiting to run">{q.data.queued}</Figure>
-        <Figure label="Oldest waiting job" className="font-sans text-[15px] font-semibold tracking-normal">{q.data.oldestQueuedAt ? exactWhen(q.data.oldestQueuedAt) : "none"}</Figure>
-        <Figure label="Jobs that failed" className={q.data.failed > 0 ? "text-critical" : undefined}>{q.data.failed}</Figure>
-        <Figure label="Workflow runs waiting">{q.data.waitingRuns}</Figure>
-      </dl>
-      <details className="more">
-        <summary>Workflows the system can run ({q.data.definitions.length})</summary>
-        <ul className="list-disc space-y-1 pl-5 text-[14px] marker:text-ink-3">
-          {q.data.definitions.map((d) => <li key={d}>{workflowWords(d)} <span className="small muted">({d})</span></li>)}
-        </ul>
-      </details>
+    // the rule for releasing one is in the reason field's own label; the source of each address is under it in the table
+    <Card title={q.data ? `Email addresses we must not send to (${rows.length})` : "Email addresses we must not send to"}>
+      {q.isLoading ? <Skeleton lines={3} /> : q.error ? <ErrorState message="Could not load the addresses we must not send to." onRetry={() => q.refetch()} /> : rows.length ? (
+        <div className="stack gap-4">
+          <div className="max-w-[520px]">
+            <Field label="How you confirmed the address by another channel (required to release; the release is recorded with your reason)" htmlFor="rel-reason"><input id="rel-reason" className="input" value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} /></Field>
+          </div>
+          <Table head={["Address", "Reason", numHead("Times"), "Last", ""]} label="Email addresses we must not send to">
+            {rows.map((s, i) => (
+              <tr key={s.id} className={ROW_ENTER} style={stagger(i)}>
+                <td><div className="font-semibold wrap-anywhere">{s.address}</div><div className="small muted">{wordFor(SUPPRESSION_SOURCE_WORDS, s.source)}</div></td>
+                <td><Chip tone={s.reason === "spam_complaint" ? "critical" : "caution"}>{wordFor(SUPPRESSION_WORDS, s.reason)}</Chip></td>
+                <td className="num">{s.count}</td>
+                <td className="small nowrap text-ink-2"><When at={s.lastAt} /></td>
+                <td className="text-right">{s.reason === "spam_complaint" ? <span className="small muted">Never released</span> : <Button size="sm" variant="quiet" ariaLabel={`Release ${s.address}`} disabled={!reasonReady(releaseReason)} loading={release.isPending && release.variables === s.id} onClick={() => release.mutate(s.id)}>Release</Button>}</td>
+              </tr>
+            ))}
+          </Table>
+          <p className="small muted flex items-start gap-2"><Icon name="shield" size={16} className="mt-0.5" />A spam complaint is never released from here: the person asked not to be emailed.</p>
+        </div>
+      ) : <Empty />}
+      <StopEmailsToAddress />
     </Card>
   );
 }
 
-/* ------------------------------------------------------------------------------------------------------------------ */
-/* Business calendar                                                                                                   */
-/* ------------------------------------------------------------------------------------------------------------------ */
-
-type HoursWindow = { start: string; end: string };
-type CalendarDto = {
-  current: { timeZone: string; hours: Record<string, HoursWindow[]>; holidays: Array<{ date: string; name: string }>; closures: Array<{ from: string; to: string; name: string }>; coverageChanges: Array<{ from: string; to: string; reason: string; hours: HoursWindow[] | null }> };
-  version: number | null; effectiveFrom: string | null; description: string;
-  upcoming: Array<{ version: number; effectiveFrom: string; note: string }>;
-  versions: Array<{ version: number; effectiveFrom: string; timeZone: string; note: string; createdAt: string; createdBy: { name?: string; id: string } }>;
-  preview: Array<{ date: string; weekday: string; open: HoursWindow[]; reason: string | null }>;
-};
-const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
-const DAY_LABEL: Record<(typeof DAYS)[number], string> = { mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday" };
-const ZONES = ["America/Los_Angeles", "America/Denver", "America/Phoenix", "America/Chicago", "America/New_York"];
-const windowsToText = (ws: HoursWindow[]) => ws.map((w) => `${w.start}-${w.end}`).join(", ");
-const parseWindows = (t: string): HoursWindow[] => t.split(",").map((x) => x.trim()).filter(Boolean).map((x) => { const [start = "", end = ""] = x.split("-").map((y) => y.trim()); return { start, end }; });
-const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
-// Today in the administrator's own calendar: the UTC date read as tomorrow on a US evening, so a version meant to start
-// now said "takes effect on its date".
-const todayKey = () => dayKey(new Date());
-
 /**
- * The ITS business calendar (correction 12): every save is a new version with an effective date; nothing is edited in
- * place.
+ * "Stop emails to an address" (POST /admin/email-suppressions): someone asked by phone or in person not to be emailed,
+ * or an address bounces where the provider does not report it. Why is required and kept with the address.
  */
-export function CalendarAdmin() {
+function StopEmailsToAddress() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", reason) });
-  const [effectiveFrom, setEffectiveFrom] = useState(todayKey());
-  const [timeZone, setTimeZone] = useState("America/Los_Angeles");
-  const [hours, setHours] = useState<Record<string, string>>({});
-  const [holidays, setHolidays] = useState("");
-  const [closures, setClosures] = useState("");
-  const [coverage, setCoverage] = useState("");
-  const [note, setNote] = useState("");
-  const [problem, setProblem] = useState<string | null>(null);
-  useEffect(() => {
-    if (!q.data) return;
-    const c = q.data.current;
-    setTimeZone(c.timeZone);
-    setHours(Object.fromEntries(DAYS.map((d) => [d, windowsToText(c.hours[d] ?? [])])));
-    setHolidays(c.holidays.map((h) => `${h.date} ${h.name}`).join("\n"));
-    setClosures(c.closures.map((x) => `${x.from} ${x.to} ${x.name}`).join("\n"));
-    setCoverage(c.coverageChanges.map((x) => `${x.from} ${x.to} ${x.hours ? windowsToText(x.hours).replace(/, /g, "+") : "closed"} ${x.reason}`).join("\n"));
-  }, [q.data]);
-  const build = () => {
-    const parseDated = (l: string, n: number) => { const parts = l.split(/\s+/); return { dates: parts.slice(0, n), rest: parts.slice(n).join(" ") }; };
-    return {
-      effectiveFrom, timeZone, note,
-      hours: Object.fromEntries(DAYS.map((d) => [d, parseWindows(hours[d] ?? "")])),
-      holidays: lines(holidays).map((l) => { const { dates, rest } = parseDated(l, 1); return { date: dates[0], name: rest || "Holiday" }; }),
-      closures: lines(closures).map((l) => { const { dates, rest } = parseDated(l, 2); return { from: dates[0], to: dates[1], name: rest || "Closed" }; }),
-      coverageChanges: lines(coverage).map((l) => { const { dates, rest } = parseDated(l, 2); const [spec = "", ...why] = rest.split(/\s+/); return { from: dates[0], to: dates[1], hours: spec === "closed" ? null : parseWindows(spec.replace(/\+/g, ",")), reason: why.join(" ") || "coverage change" }; }),
-    };
-  };
-  const save = useMutation({
-    mutationFn: () => api.post<{ version: number; inForceNow: boolean; description: string }>("/api/v1/admin/calendar", build(), reason),
-    onSuccess: (r) => { setProblem(null); toast(`Saved as version ${r.version}${r.inForceNow ? " (in force now)" : " (takes effect on its date)"}.`); qc.invalidateQueries({ queryKey: ["admin", "calendar"] }); },
-    onError: (e) => setProblem(e instanceof ApiError ? `${e.message}${e.details ? ` ${JSON.stringify(e.details)}` : ""}` : "Could not save."),
-  });
-  if (!q.data) return q.error ? <ErrorState message="Could not load the business calendar." onRetry={() => q.refetch()} /> : <Skeleton lines={6} />;
+  const [form, setForm] = useState({ address: "", reason: "" });
+  const add = useMutation({ mutationFn: () => api.post("/api/v1/admin/email-suppressions", { address: form.address.trim(), reason: form.reason.trim() } satisfies SuppressAddress, reason), onSuccess: () => { toast(`Added. Nothing more will be emailed to ${form.address.trim()}.`); setForm({ address: "", reason: "" }); qc.invalidateQueries({ queryKey: adminKeys.suppressions }); }, onError: (e) => toast(errorWords(e, "Could not add the address.")) });
+  const ready = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.address.trim()) && reasonReady(form.reason);
   return (
-    <div className="stack gap-5">
-      <Card title={`In force: ${q.data.description}`}>
-        <p className="small max-w-[75ch] text-ink-2">{q.data.version ? `Version ${q.data.version}, effective ${q.data.effectiveFrom}.` : "Built-in default; no version published yet."}{q.data.upcoming.length ? ` Upcoming: ${q.data.upcoming.map((u) => `v${u.version} from ${u.effectiveFrom}`).join(", ")}.` : ""}</p>
-      </Card>
-      <Card title="Publish a new version">
-        <div className="stack gap-5">
-          {problem ? <Alert tone="critical">{problem}</Alert> : null}
-          <div className="grid-2">
-            <Field label="Effective from" htmlFor="cal-eff"><input id="cal-eff" className="input" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></Field>
-            <Field label="Time zone" htmlFor="cal-tz"><select id="cal-tz" className="select" value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>{[...new Set([...ZONES, timeZone])].map((z) => <option key={z} value={z}>{z}</option>)}</select></Field>
-          </div>
-          <fieldset>
-            <legend className="small mb-2 font-semibold text-ink">Standard hours per day (24-hour windows, comma-separated; blank means closed)</legend>
-            <div className="grid-2 gap-3">
-              {DAYS.map((d) => <Field key={d} label={DAY_LABEL[d]} htmlFor={`cal-${d}`}><input id={`cal-${d}`} className="input" placeholder="09:00-17:00" value={hours[d] ?? ""} onChange={(e) => setHours({ ...hours, [d]: e.target.value })} /></Field>)}
-            </div>
-          </fieldset>
-          <Field label="Holidays (one per line: date, name)" htmlFor="cal-hol"><textarea id="cal-hol" className="textarea" rows={6} value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="2026-11-26 Thanksgiving Day" /></Field>
-          <div className="grid-2">
-            <Field label="ITS closures (one per line: first day, last day, name)" htmlFor="cal-clo"><textarea id="cal-clo" className="textarea" rows={3} value={closures} onChange={(e) => setClosures(e.target.value)} placeholder="2026-12-24 2026-12-31 Year-end closure" /></Field>
-            {/* the placeholder's example shows how several windows join (with +) */}
-            <Field label="Temporary coverage changes (one per line: first day, last day, hours or 'closed', reason)" htmlFor="cal-cov"><textarea id="cal-cov" className="textarea" rows={3} value={coverage} onChange={(e) => setCoverage(e.target.value)} placeholder="2026-10-05 2026-10-09 09:00-12:00+13:00-15:00 Conference week" /></Field>
-          </div>
-          <Field label="Note for the audit record" htmlFor="cal-note"><input id="cal-note" className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why this change" /></Field>
-          <div><Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Publish version</Button></div>
-        </div>
-      </Card>
-      <Card title="Next four weeks">
-        <Table head={["Date", "Day", "Open", "Note"]}>
-          {q.data.preview.map((d) => <tr key={d.date}><td className="nowrap font-semibold">{d.date}</td><td className="text-ink-2">{d.weekday}</td><td>{d.open.length ? windowsToText(d.open) : <Chip tone="neutral">closed</Chip>}</td><td className="small muted">{d.reason ?? ""}</td></tr>)}
-        </Table>
-      </Card>
-      <Card title="Versions">
-        {q.data.versions.length === 0 ? <p className="small muted">No versions yet.</p> : (
-          <Table head={["Version", "Effective", "Time zone", "Note", "Published"]}>
-            {q.data.versions.map((v) => <tr key={v.version}><td className="font-semibold">{v.version}</td><td className="nowrap">{v.effectiveFrom}</td><td className="text-ink-2">{v.timeZone}</td><td>{v.note}</td><td className="small text-ink-2">{new Date(v.createdAt).toLocaleString()} by {v.createdBy.name ?? v.createdBy.id}</td></tr>)}
-          </Table>
-        )}
-      </Card>
+    <div className="-mx-6 mt-6 border-t border-line px-6 pt-6 max-sm:-mx-4 max-sm:px-4">
+      <div className="stack max-w-[520px] gap-3">
+        <h3 className="eyebrow">Stop emails to an address</h3>
+        <p className="small muted">For someone who asked, by phone or in person, not to be emailed. Every message to this address stops, for every company, until it is released.</p>
+        <Field label="Email address" htmlFor="sup-address"><input id="sup-address" className="input" type="email" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
+        <Field label="Why (required)" htmlFor="sup-reason"><input id="sup-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+        <div className="row"><Button variant="secondary" disabled={!ready} loading={add.isPending} onClick={() => add.mutate()}>Add to the list</Button></div>
+      </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* Security reports                                                                                                    */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+/** Which pages a content-security report came from. */
+const CSP_SURFACE_WORDS: Readonly<Record<string, string>> = { candidate: "Candidate pages", app: "Staff app" };
+/** The content-security policy's mode (CSP_MODE). */
+const CSP_MODE_WORDS: Readonly<Record<string, string>> = { "report-only": "Report only: browsers tell us, nothing is blocked yet", enforce: "Enforced: the policy blocks what it does not allow" };
+
+/** Content-security reports: the policy's mode, how many are not reviewed yet, and Mark reviewed with a note. */
+export function Security() {
+  const qc = useQueryClient();
+  const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspReports>("/api/v1/admin/csp-reports", reason) });
+  const [note, setNote] = useState<Record<string, string>>({});
+  const review = useMutation({ mutationFn: (r: { id: string; disposition: string }) => api.post(`/api/v1/admin/csp-reports/${r.id}/review`, { disposition: r.disposition } satisfies ReviewCspReport, reason), onSuccess: () => { toast("Reviewed."); qc.invalidateQueries({ queryKey: adminKeys.csp }); }, onError: (e) => toast(errorWords(e, "Could not review.")) });
+  const reports = csp.data?.reports ?? [];
+  const unreviewed = reports.filter((r) => !r.reviewedAt).length;
+  return (
+    <Card title={csp.data ? `Content-security reports (${unreviewed} not reviewed yet)` : "Content-security reports"}>
+      {/* the policy's mode, and the rule that goes with it folded under it */}
+      {csp.data ? (
+        <details className="more mb-4">
+          <summary><Icon name="shield" size={16} className="text-primary" />Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</summary>
+          <p className="small muted max-w-[75ch]">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
+        </details>
+      ) : null}
+      {csp.isLoading ? <Skeleton lines={3} /> : csp.error ? <ErrorState message="Could not load the content-security reports." onRetry={() => csp.refetch()} /> : reports.length ? (
+        <ul className="-mx-6 divide-y divide-line border-t border-line max-sm:-mx-4">
+          {reports.slice(0, 50).map((r, i) => (
+            <li key={r.id} className={`grid min-w-0 gap-1.5 px-6 py-4 last:pb-0 max-sm:px-4 ${ROW_ENTER}`} style={stagger(i)}>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+                <Chip tone={r.reviewedAt ? "neutral" : "caution"}>{wordFor(CSP_SURFACE_WORDS, r.surface)}</Chip>
+                <strong className="min-w-0 text-[15px] text-ink wrap-anywhere">{r.violatedDirective}</strong>
+                <span className="small muted whitespace-nowrap">· <When at={r.lastAt} /></span>
+              </div>
+              <p className="small muted wrap-anywhere">{`${r.documentPath} · blocked ${r.blockedOrigin ?? "(none)"} · ${timesWord(r.count)}`}</p>
+              <div className="mt-1 grid gap-2">
+                {r.reviewedAt ? <span className="small muted">Reviewed: {r.disposition}</span> : r.disposition ? <span className="small muted">Recurred since it was reviewed ("{r.disposition}"); review again.</span> : null}
+                {!r.reviewedAt ? (
+                  <div className="flex flex-wrap items-center gap-2"><input className="input min-w-0 flex-[1_1_220px] sm:max-w-[360px]" aria-label={`What this report means: ${r.violatedDirective} on ${r.documentPath}`} placeholder="expected in dev / fix needed / policy change" value={note[r.id] ?? ""} onChange={(e) => setNote({ ...note, [r.id]: e.target.value })} /><Button size="sm" variant="secondary" ariaLabel={`Mark reviewed: ${r.violatedDirective} on ${r.documentPath}`} disabled={(note[r.id] ?? "").trim().length < 3} loading={review.isPending && review.variables?.id === r.id} onClick={() => review.mutate({ id: r.id, disposition: note[r.id] })}>Mark reviewed</Button></div>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : <Empty />}
+    </Card>
   );
 }
 
@@ -593,35 +247,33 @@ export function CalendarAdmin() {
 /* Administrators                                                                                                      */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-type RoleGrant = { id: string; userId: string; email: string; name: string | null; authProvider: string | null; role: string; source: string; grantedBy: { name?: string; id: string }; grantReason: string; grantedAt: string; revokedAt: string | null; revokedBy: { name?: string; id: string } | null; revokeReason: string | null };
-
-/** A platform role in words. Only an administrator can be granted; `its_recruiter` names rows already on the ledger. */
-const PLATFORM_ROLE_WORDS: Readonly<Record<string, string>> = { its_recruiter: "ITS recruiter", platform_admin: "Platform administrator" };
+/** A platform role in words. Only an administrator can be granted; another code names a row already on the ledger. */
+const PLATFORM_ROLE_WORDS: Readonly<Record<string, string>> = { platform_admin: "Platform administrator" };
 const roleWords = (code: string) => wordFor(PLATFORM_ROLE_WORDS, code);
 
 /**
- * Platform roles (21 Sep, item 2): the ledger of named people. Grants and revocations need a second factor, a reason,
- * and are seen by every other administrator; nobody can grant themselves anything.
+ * The platform administrators: the ledger of named people. A grant or a revocation needs a reason and a confirmation,
+ * and every other administrator is told; nobody can grant themselves anything, and the last administrator stays.
  */
 export function Administrators() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: adminKeys.platformRoles, queryFn: () => api.get<{ grants: RoleGrant[]; activeAdmins: number; bootstrap: { configured: number; ignored: boolean } }>("/api/v1/admin/platform-roles", reason) });
+  const q = useQuery({ queryKey: adminKeys.platformRoles, queryFn: () => api.get<PlatformRoleGrants>("/api/v1/admin/platform-roles", reason) });
   const [form, setForm] = useState({ email: "", reason: "" });
   const [confirming, setConfirming] = useState(false);
   const [revoking, setRevoking] = useState<{ id: string; reason: string } | null>(null);
-  const grant = useMutation({ mutationFn: () => api.post("/api/v1/admin/platform-roles", { ...form, role: "platform_admin", confirm: true }, reason), onSuccess: () => { toast("Granted. Every other administrator has been told."); setForm({ email: "", reason: "" }); setConfirming(false); qc.invalidateQueries({ queryKey: ["admin", "platform-roles"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not grant.") });
-  const revoke = useMutation({ mutationFn: (r: { id: string; reason: string }) => api.post(`/api/v1/admin/platform-roles/${r.id}/revoke`, { reason: r.reason, confirm: true }, reason), onSuccess: () => { toast("Revoked. Every other administrator has been told."); setRevoking(null); qc.invalidateQueries({ queryKey: ["admin", "platform-roles"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not revoke.") });
-  if (!q.data) return q.error ? <ErrorState message="Could not load platform roles." onRetry={() => q.refetch()} /> : <Skeleton lines={4} />;
+  const grant = useMutation({ mutationFn: () => api.post("/api/v1/admin/platform-roles", { email: form.email.trim(), reason: form.reason.trim(), role: "platform_admin", confirm: true } satisfies GrantPlatformRole, reason), onSuccess: () => { toast("Granted. Every other administrator has been told."); setForm({ email: "", reason: "" }); setConfirming(false); qc.invalidateQueries({ queryKey: adminKeys.platformRoles }); }, onError: (e) => toast(errorWords(e, "Could not grant.")) });
+  const revoke = useMutation({ mutationFn: (r: { id: string; reason: string }) => api.post(`/api/v1/admin/platform-roles/${r.id}/revoke`, { reason: r.reason.trim(), confirm: true } satisfies RevokePlatformRole, reason), onSuccess: () => { toast("Revoked. Every other administrator has been told."); setRevoking(null); qc.invalidateQueries({ queryKey: adminKeys.platformRoles }); }, onError: (e) => toast(errorWords(e, "Could not revoke.")) });
+  if (!q.data) return q.error ? <ErrorState message="Could not load the administrators." onRetry={() => q.refetch()} /> : <Skeleton lines={4} />;
   const active = q.data.grants.filter((g) => !g.revokedAt);
   const past = q.data.grants.filter((g) => g.revokedAt);
   return (
     <div className="stack gap-5">
       {q.data.bootstrap.ignored ? <Alert tone="caution">BOOTSTRAP_ADMIN_EMAILS is still set but administrators already exist. It grants nothing now; remove it from the environment.</Alert> : null}
-      <Card title={`Current platform roles (${q.data.activeAdmins} administrator${q.data.activeAdmins === 1 ? "" : "s"})`}>
+      <Card title={`Platform administrators (${q.data.activeAdmins})`}>
         <Table head={["Person", "Role", "Granted", "Reason", ""]}>
           {active.map((g, i) => (
             <tr key={g.id} className={ROW_ENTER} style={stagger(i)}>
-              <td><span className="font-semibold">{g.name ?? g.email}</span><div className="small muted [overflow-wrap:anywhere]">{g.email}</div></td>
+              <td><span className="font-semibold">{g.name ?? g.email}</span><div className="small muted wrap-anywhere">{g.email}</div></td>
               <td><Chip tone={g.role === "platform_admin" ? "accent" : "neutral"}>{roleWords(g.role)}</Chip></td>
               <td><span title={exactWhen(g.grantedAt)}>{new Date(g.grantedAt).toLocaleDateString()}</span><div className="small muted">by {g.grantedBy.name ?? g.grantedBy.id} · {codeWords(g.source).toLowerCase()}</div></td>
               <td className="small text-ink-2">{g.grantReason}</td>
@@ -629,53 +281,53 @@ export function Administrators() {
                 {revoking?.id === g.id ? (
                   <div className="stack min-w-[200px] gap-2 text-left">
                     <Field label="Reason for revoking" htmlFor={`rr-${g.id}`}><input id={`rr-${g.id}`} className="input" value={revoking.reason} onChange={(e) => setRevoking({ id: g.id, reason: e.target.value })} /></Field>
-                    <div className="row"><Button size="sm" variant="destructive" disabled={revoking.reason.trim().length < 5} loading={revoke.isPending} onClick={() => revoke.mutate(revoking)}>Revoke now</Button><Button size="sm" variant="quiet" onClick={() => setRevoking(null)}>Cancel</Button></div>
+                    <div className="row"><Button size="sm" variant="destructive" disabled={!reasonReady(revoking.reason)} loading={revoke.isPending} onClick={() => revoke.mutate(revoking)}>Revoke now</Button><Button size="sm" variant="quiet" onClick={() => setRevoking(null)}>Cancel</Button></div>
                   </div>
-                ) : <Button size="sm" variant="secondary" onClick={() => setRevoking({ id: g.id, reason: "" })}>Revoke</Button>}
+                ) : <Button size="sm" variant="secondary" ariaLabel={`Revoke ${g.name ?? g.email}`} onClick={() => setRevoking({ id: g.id, reason: "" })}>Revoke</Button>}
               </td>
             </tr>
           ))}
         </Table>
       </Card>
       {/* who is told: an eye beside the title (its words are its name and tooltip). The API's own errors say when the person
-          has not signed in with Microsoft 365 and a second factor yet, or when someone tries to grant themselves a role. */}
-      <Card title="Add a platform administrator" aside={<IconLabel icon="eye" label="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert." />}>
+          has not signed in with Microsoft 365 and a second factor yet, or when someone tries to grant themselves the role. */}
+      <Card title="Add a platform administrator" aside={<IconLabel icon="eye" label="Every other administrator is told, and another administrator must acknowledge the alert." />}>
         <div className="stack max-w-[520px] gap-4">
           <Field label="Staff email" htmlFor="pr-email"><input id="pr-email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="Reason" htmlFor="pr-reason"><input id="pr-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
           {confirming ? (
-            <Alert tone="caution"><div className="row justify-between"><span>Grant {roleWords("platform_admin")} to {form.email}?</span><span className="row"><Button size="sm" variant="primary" loading={grant.isPending} onClick={() => grant.mutate()}>Yes, grant it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
-          ) : <div className="row"><Button variant="primary" disabled={!form.email.includes("@") || form.reason.trim().length < 5} onClick={() => setConfirming(true)}>Grant</Button></div>}
+            <Alert tone="caution"><div className="row justify-between"><span>Make {form.email.trim()} a platform administrator?</span><span className="row"><Button size="sm" variant="primary" loading={grant.isPending} onClick={() => grant.mutate()}>Yes, grant it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+          ) : <div className="row"><Button variant="primary" disabled={!form.email.includes("@") || !reasonReady(form.reason)} onClick={() => setConfirming(true)}>Grant</Button></div>}
         </div>
       </Card>
       <SignOutEverywhere />
-      {past.length ? <Card title="Past roles"><ul className="small list-disc space-y-1.5 pl-5 text-ink-2 marker:text-ink-3">{past.map((g) => <li key={g.id}>{g.email} · {roleWords(g.role)} · granted {new Date(g.grantedAt).toLocaleDateString()} by {g.grantedBy.name ?? g.grantedBy.id} · revoked {g.revokedAt ? new Date(g.revokedAt).toLocaleDateString() : ""} by {g.revokedBy?.name ?? g.revokedBy?.id}: {g.revokeReason}</li>)}</ul></Card> : null}
+      {past.length ? <Card title="Past administrators"><ul className="small list-disc space-y-1.5 pl-5 text-ink-2 marker:text-ink-3">{past.map((g) => <li key={g.id}>{g.email} · {roleWords(g.role)} · granted {new Date(g.grantedAt).toLocaleDateString()} by {g.grantedBy.name ?? g.grantedBy.id} · revoked {g.revokedAt ? new Date(g.revokedAt).toLocaleDateString() : ""} by {g.revokedBy?.name ?? g.revokedBy?.id}: {g.revokeReason}</li>)}</ul></Card> : null}
     </div>
   );
 }
 
 /**
  * "Sign someone out everywhere" (POST /admin/sessions/revoke): after a lost or stolen phone or laptop, or when someone
- * leaves, every session they have ends at once and they must sign in again. A reason and a confirmation; audited.
+ * leaves, every session they have ends at once and they must sign in again. A reason and a confirmation.
  */
 export function SignOutEverywhere() {
   const [form, setForm] = useState({ email: "", reason: "" });
   const [confirming, setConfirming] = useState(false);
   const signOut = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; sessionsEnded: number }>("/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true }, reason),
+    mutationFn: () => api.post<SessionsRevoked>("/api/v1/admin/sessions/revoke", { email: form.email.trim(), reason: form.reason.trim(), confirm: true } satisfies RevokeSessions, reason),
     onSuccess: (r) => { toast(r.sessionsEnded ? `Signed out. ${r.sessionsEnded} session${r.sessionsEnded === 1 ? "" : "s"} ended.` : "Done. They had no open sessions."); setForm({ email: "", reason: "" }); setConfirming(false); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not sign them out."),
+    onError: (e) => toast(errorWords(e, "Could not sign them out.")),
   });
   return (
     <Card title="Sign someone out everywhere">
-      {/* the one rule that changes what to do first; the confirmation says the rest ("Sign … out of every device?") */}
+      {/* the one rule that changes what to do first; the confirmation says the rest */}
       <p className="small muted max-w-[75ch]">For a lost second-factor device, reset it in the identity service first.</p>
       <div className="stack mt-4 max-w-[520px] gap-4">
         <Field label="Email they sign in with" htmlFor="so-email"><input id="so-email" className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
         <Field label="Reason" htmlFor="so-reason"><input id="so-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
         {confirming ? (
           <Alert tone="caution"><div className="row justify-between"><span>Sign {form.email.trim()} out of every device?</span><span className="row"><Button size="sm" variant="destructive" loading={signOut.isPending} onClick={() => signOut.mutate()}>Yes, sign them out</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
-        ) : <div className="row"><Button variant="secondary" disabled={!form.email.includes("@") || form.reason.trim().length < 5} onClick={() => setConfirming(true)}>Sign out everywhere</Button></div>}
+        ) : <div className="row"><Button variant="secondary" disabled={!form.email.includes("@") || !reasonReady(form.reason)} onClick={() => setConfirming(true)}>Sign out everywhere</Button></div>}
       </div>
     </Card>
   );
@@ -685,22 +337,21 @@ export function SignOutEverywhere() {
 /* The section                                                                                                         */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-/** The parts of System and settings, each its own `?view=` (redesign spec 3.1). */
+/** The parts of System, each its own `?view=`. */
 export const SYSTEM_PARTS: SectionPart[] = [
+  { id: "health", label: "Health" },
   { id: "costs", label: "Costs" },
-  { id: "workflows", label: "Workflows" },
-  { id: "ai", label: "AI runs" },
-  { id: "queue", label: "Queue health" },
-  { id: "calendar", label: "Business calendar" },
+  { id: "email", label: "Email" },
+  { id: "security", label: "Security reports" },
   { id: "admins", label: "Administrators" },
 ];
 
-/** The System and settings section (the contract in admin-api.ts): its six parts as underline tabs. */
+/** The System section (the contract in admin-api.ts): its five parts as underline tabs, and the chosen part. */
 export function SystemSection({ view, onView }: SectionProps) {
   const part = partOf(SYSTEM_PARTS, view);
   return (
-    <Tabs label="System and settings" value={part} onChange={onView} items={SYSTEM_PARTS}>
-      {part === "workflows" ? <Runs /> : part === "ai" ? <AiRuns /> : part === "queue" ? <Queue /> : part === "calendar" ? <CalendarAdmin /> : part === "admins" ? <Administrators /> : <Costs />}
+    <Tabs label="System" value={part} onChange={onView} items={SYSTEM_PARTS}>
+      {part === "costs" ? <Costs /> : part === "email" ? <Email /> : part === "security" ? <Security /> : part === "admins" ? <Administrators /> : <Health />}
     </Tabs>
   );
 }

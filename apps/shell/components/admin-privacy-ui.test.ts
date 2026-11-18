@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * The ITS console's Privacy requests section (apps/web/src/pages/admin/privacy.tsx) as the server first draws it from
- * answers shaped like the API's (redesign spec 3.2, Wave S6 slice S6-F): the Open and Closed parts, five columns each,
+ * The admin dashboard's Privacy requests section (apps/web/src/pages/admin/privacy.tsx) as the server first draws it
+ * from answers shaped like the API's: the Open and Closed parts, five columns each,
  * the Sort chip, the button that records a request from the privacy mailbox, and the request drawer that `?open=` opens.
  */
 const address = vi.hoisted(() => ({ search: "" }));
@@ -40,17 +40,17 @@ function client(data: Array<[unknown[], unknown]> = [], me: unknown = admin) {
 }
 
 type Req = ReturnType<typeof request>;
-const request = (id: string, companyName: string, createdAt: string, slaDueAt: string, status = "received", extra: Record<string, unknown> = {}) => ({ id, companyId: "co1", companyName, candidateId: null as string | null, applicationId: null, kind: "access", details: null as string | null, requesterEmail: "maria@example.com", channel: "email", verificationStatus: "pending", verificationNote: null, status, slaDueAt, assignedTo: null as string | null, notes: [] as Array<{ at: string; by: string; text: string }>, counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null as string | null, resolvedAt: status === "fulfilled" || status === "declined" ? daysAgo(1) : null, confirmationSentAt: null as string | null, createdAt, ...extra });
+const request = (id: string, companyName: string, createdAt: string, slaDueAt: string, status = "received", extra: Record<string, unknown> = {}) => ({ id, companyId: "co1", companyName, candidateId: null as string | null, applicationId: null, kind: "access", details: null as string | null, requesterEmail: "maria@example.com", channel: "email", verificationStatus: "pending", verificationNote: null, verifiedAt: null as string | null, status, slaDueAt, assignedTo: null as string | null, notes: [] as Array<{ at: string; by: string; text: string }>, counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null as string | null, resolvedAt: status === "fulfilled" || status === "declined" ? daysAgo(1) : null, confirmationSentAt: null as string | null, createdAt, ...extra });
 // d1 came in last (the API lists newest first) and is due last; d2 is overdue; d3 is done
 const data = (): Req[] => [request("d1", "Avon Dental", daysAgo(5), daysAgo(-10)), request("d2", "Cara Dental", daysAgo(40), daysAgo(1)), request("d3", "Bright Dental", daysAgo(9), daysAgo(-3), "fulfilled")];
 const section = (view: string | null) => createElement(PrivacySection, { view, onView: () => undefined });
 
-describe("the console's privacy requests", () => {
+describe("the dashboard's privacy requests", () => {
   it("lists the open requests in five columns, in the order they came until someone sorts, with Due a sortable heading", () => {
     address.search = "";
     const html = render(client([[["admin", "privacy"], data()]]), section(null));
     const open = from(html, /<section class="table-wrap scroll"/);
-    expect(headings(html)).toEqual(["Customer", "What they asked", "Due", "Status", "Actions"]);
+    expect(headings(html)).toEqual(["Company", "What they asked", "Due", "Status", "Actions"]);
     expect(open).toContain('<th scope="col"><button type="button" class="th-sort">Due');
     // Received is no longer a column: it is the Sort chip's, and the line under what they asked
     expect(html.match(/class="th-sort"/g)).toHaveLength(1);
@@ -59,7 +59,7 @@ describe("the console's privacy requests", () => {
     expect(open).not.toContain("Bright Dental");
     expect(open).toContain('<span class="sr-only" role="status"></span>');
     // plain words, and the overdue one says so
-    expect(open).toContain("Copy of their data");
+    expect(open).toContain("A copy of their information");
     expect(open).toContain("Received 5 days ago · privacy mailbox");
     expect(open).toContain(">New<");
     expect(open).toContain("Not checked yet");
@@ -96,7 +96,7 @@ describe("the console's privacy requests", () => {
   it("keeps the closed list plain, in the same five-column shape", () => {
     address.search = "";
     const html = render(client([[["admin", "privacy"], data()]]), section("closed"));
-    expect(headings(html)).toEqual(["Customer", "What they asked", "Resolved", "Status", "Actions"]);
+    expect(headings(html)).toEqual(["Company", "What they asked", "Resolved", "Status", "Actions"]);
     expect(html).toContain('<th scope="col">Resolved</th>');
     expect(html).not.toContain("th-sort");
     expect(html).not.toContain("Sort:");
@@ -123,7 +123,7 @@ describe("the console's privacy requests", () => {
     const req = request("d2", "Cara Dental", daysAgo(40), daysAgo(1), "received", { kind: "delete", assignedTo: "s1", notes: [{ at: daysAgo(2), by: "Ada Admin", text: "Asked counsel." }] });
     const html = render(client([[["admin", "privacy"], [req]], [["admin", "privacy", "d2"], req]]), section(null));
     address.search = "";
-    expect(html).toContain('role="dialog" aria-modal="true" aria-label="Deletion / anonymization · Cara Dental"');
+    expect(html).toContain('role="dialog" aria-modal="true" aria-label="Deletion · Cara Dental"');
     const drawer = from(html, 'role="dialog"');
     expect(drawer).toContain("from the privacy mailbox · reference d2");
     for (const words of ["<dt>Status</dt>", "<dt>Verified</dt>", "<dt>Assigned</dt>", "<dt>Due</dt>", "Not checked yet", ">overdue<", "You", "Assign to me", "Verify the requester", "Could not verify", "Asked counsel.", "Add note", "Send to counsel", "Counsel approved", "Counsel declined", "I confirm counsel approved this anonymization", "Fulfil and confirm to the requester", "Decline with this explanation"]) {

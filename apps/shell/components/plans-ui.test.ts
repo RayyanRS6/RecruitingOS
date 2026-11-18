@@ -6,9 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The plans on screen, as the server first draws them from answers shaped like the API's: the one Upgrade and its sheet,
- * the room alert, a person past the plan's candidates per job as one card, and the console's Change plan and customer
- * row. Customers read the AI help as words or a percentage, never dollars; ITS reads dollars. Nothing here names anyone
- * locked. (Settings' Plan and Team sections, Home's notices and the candidate panel are drawn in their own tests.)
+ * the room alert, and a person past the plan's candidates per job as one card. Companies read the AI help as words or a
+ * percentage, never dollars. Nothing here names anyone locked. (Settings' Plan and Team sections, Home's notices and
+ * the candidate panel are drawn in their own tests; the admin dashboard's plan, in dollars, in admin-companies-ui.test.ts.)
  */
 const nav = vi.hoisted(() => ({ search: "", path: "/", params: {} as Record<string, string> }));
 vi.mock("next/navigation", () => ({
@@ -23,13 +23,9 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { Upgrade, UpgradeSheet } = await import("@ros/web/src/components/Upgrade");
 const { LockedCandidates, LockedCard } = await import("@ros/web/src/components/LockedCandidates");
 const { RoomAlert } = await import("@ros/web/src/components/RoomAlert");
-const { CustomersSection, aiCreditDollars, planChangedToast, planLimitsLine, planPriceLine } = await import("@ros/web/src/pages/admin/customers");
-const { attentionRows } = await import("@ros/web/src/pages/admin/Overview");
-const { needsAPerson } = await import("@ros/web/src/pages/admin/problems");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const me = (role: string) => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
-const admin = { ...me("owner"), user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null };
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 
 function client(data: Array<[readonly unknown[], unknown]> = [], who: unknown = me("owner")) {
@@ -179,77 +175,5 @@ describe("a person past the plan's candidates per job", () => {
     expect(html).toContain('aria-label="Locked candidate"');
     expect(text(html)).toContain("Locked Upgrade to view more candidates. Upgrade");
     expect(html.match(/class="locked-card /g)).toHaveLength(1);
-  });
-});
-
-describe("the console", () => {
-  const customer = (over: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "free", status: "active", roles: 1, applications: 6, aiCostUsd: 1.2, lastActivityAt: daysAgo(1), createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, applyFlowDefault: "form_then_screen", screeningConversations: { used: 4, limit: null }, aiCredit: { monthly: false, spentUsd: 1.2, limitUsd: 10, percent: 12, level: null, resetsAt: null }, lockedApplicants: 3, planRequestSince: daysAgo(1), ...over });
-  const section = (search: string, rows: unknown[], plansAnswer: unknown = []) => {
-    nav.search = search;
-    nav.path = "/admin/customers";
-    return render(client([[["admin", "customers"], rows], [["admin", "alerts"], []], [["admin", "plans"], plansAnswer]], admin), createElement(CustomersSection, { view: null, onView: () => undefined }));
-  };
-  const planRows = [
-    { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, seats: 2 } },
-    { key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, limits: { active_roles: 3, jobs_total: null, candidates_per_job: 25, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 2000, seats: 3 } },
-    { key: "pro", name: "Pro", prices: { monthlyUsd: 149 }, limits: {} },
-    { key: "ultra", name: "Ultra", prices: { monthlyUsd: 399 }, limits: {} },
-    { key: "design_partner", name: "Design Partner", prices: { monthlyUsd: 0 }, limits: {} },
-  ];
-
-  it("a customer's row and Overview say the AI credit in dollars, how many are locked, and that it asked to upgrade", () => {
-    const words = text(section("", [customer()]));
-    expect(words).toContain("$1.20 of $10 AI credit");
-    expect(words).toContain("3 locked");
-    expect(words).toContain("Asked to upgrade");
-    // unlimited chats on a plan the credit meters are not worth a line
-    expect(words).not.toContain("chats this month");
-    const overview = text(section("?open=co1", [customer()]));
-    expect(overview).toContain("Plan Free · Active Change plan");
-    expect(overview).toContain("$1.20 of $10 AI credit 3 locked Asked to upgrade");
-    const used = text(section("", [customer({ aiCredit: { monthly: true, spentUsd: 20, limitUsd: 20, percent: 100, level: "used_up", resetsAt: "2026-12-05T12:00:00Z" } })]));
-    expect(used).toContain("$20.00 of $20 AI credit this month, resets December 5");
-    expect(used).toContain("AI credit used up");
-  });
-
-  it("Change plan lists the plans in the API's order with what each costs and includes; a retired plan the company is on stays chosen", () => {
-    const html = section("?open=co1&tab=plan", [customer()], planRows);
-    const words = text(html);
-    expect([...html.matchAll(/<option value="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["free", "basic", "pro", "ultra", "design_partner"]);
-    expect(words).toContain("$0 a month · 1 job ever · 5 candidates a job · $10 AI credit in all · 2 seats");
-    const retired = section("?open=co1&tab=plan", [customer({ planKey: "growth" })], planRows);
-    expect([...retired.matchAll(/<option value="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["free", "basic", "pro", "ultra", "design_partner", "growth"]);
-    expect(retired).toMatch(/<option value="growth" selected="">Growth<\/option>/);
-    // nothing to change it to is offered until another is picked
-    expect(text(retired)).not.toContain("Why (required");
-  });
-
-  it("a plan's line, its price, its dollars and the toast", () => {
-    // an older plan's limits
-    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, seats: null })).toBe("3 active jobs · 300 AI interviews a month · unlimited seats");
-    expect(planLimitsLine({ active_roles: 3, jobs_total: null, candidates_per_job: null, text_screens: 300, ai_credit_total_cents: null, ai_credit_monthly_cents: null, seats: null })).toBe("3 active jobs · 300 AI interviews a month · unlimited seats");
-    expect(planLimitsLine({ active_roles: 30, jobs_total: null, candidates_per_job: null, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 20000, seats: null })).toBe("30 active jobs · $200 AI credit a month · unlimited seats");
-    expect(planLimitsLine({})).toBe("");
-    expect(planPriceLine({ monthlyUsd: 149 })).toBe("$149 a month");
-    expect(planPriceLine(undefined)).toBeNull();
-    expect(aiCreditDollars({ monthly: false, spentUsd: 9.87, limitUsd: 10, resetsAt: null })).toBe("$9.87 of $10 AI credit");
-    expect(planChangedToast("Bright Dental", "Pro", false, 1).detail).toBe("The new limits apply at once. This month's usage stays; the reset date does not move. 1 locked candidate opens now.");
-    expect(planChangedToast("Bright Dental", "Pro", false, 3).detail).toContain("3 locked candidates open now.");
-    expect(planChangedToast("Bright Dental", "Pro").detail).toBe("The new limits apply at once. This month's usage stays; the reset date does not move.");
-  });
-
-  it("the toast after a move up from Free says AI help starts a new month today, the part ITS may be asked about; other allowances keep their dates", () => {
-    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates.");
-    expect(planChangedToast("Bright Dental", "Basic", false, 2, true).detail).toBe("The new limits apply at once. AI help starts a new month today; other allowances keep their dates. 2 locked candidates open now.");
-    expect(planChangedToast("Bright Dental", "Basic", false, 0, true).detail).not.toContain("the reset date does not move");
-  });
-
-  it("Overview names a customer low on AI credit and one who asked to upgrade; those notices do not count as alerts waiting for a person", () => {
-    const rows = attentionRows({ customers: [customer({ aiCredit: { monthly: false, spentUsd: 10, limitUsd: 10, percent: 100, level: "used_up", resetsAt: null } })] as never });
-    expect(rows.map((r) => r.text)).toEqual(["Bright Dental has used all its AI credit", "1 customer asked to upgrade"]);
-    expect(rows[0].action.href).toBe("/admin/customers?open=co1&tab=plan");
-    expect(rows[1].action.href).toBe("/admin/customers?open=co1&tab=plan");
-    for (const kind of ["billing.ai_credit_warning", "billing.ai_credit_used_up"]) expect(needsAPerson({ status: "open", kind })).toBe(false);
-    expect(needsAPerson({ status: "open", kind: "ai.provider_outage" })).toBe(true);
   });
 });

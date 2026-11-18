@@ -10,7 +10,7 @@ import { buildAppCsp } from "./csp";
 /**
  * No other site may frame the application's pages (X-Frame-Options DENY beside the policy's frame-ancestors 'none'), and
  * the paths mounted on Hono keep the one value Hono sets: Next.js keeps a configured header over a route's own, so DENY
- * there would also break the résumé the candidate panel frames from /api, and a referrer policy there would replace the
+ * there would also break the resume the candidate panel frames from /api, and a referrer policy there would replace the
  * one the API's form pages rely on (Origin on their posts, apps/api/src/middleware/same-site.ts). A rule is matched by the
  * regular expression a build writes for it to the routes manifest; the mounts (app/<mount>/route.ts) and the pages
  * (page.tsx) are read from app/.
@@ -36,13 +36,13 @@ describe("framing of the application's pages", () => {
     expect(mounts).toContainEqual({ path: "/api", catchAll: true });
     expect(mounts).toContainEqual({ path: "/healthz", catchAll: false });
     expect(pages).toEqual(expect.arrayContaining(["/", "/login", "/roles/123", "/admin", "/setup/company"]));
-    // the console's sections, each its own page (Wave S6); /admin/privacy is the console's, not the mounted /privacy
-    expect(pages).toEqual(expect.arrayContaining(["/admin/customers", "/admin/privacy", "/admin/problems", "/admin/system"]));
+    // the dashboard's sections, each its own page; /admin/privacy is the dashboard's, not the mounted /privacy
+    expect(pages).toEqual(expect.arrayContaining(["/admin/privacy", "/admin/system"]));
 
     for (const m of mounts) {
       for (const path of m.catchAll ? [m.path, `${m.path}/`, `${m.path}/v1/x`] : [m.path]) expect(framed.test(path), path).toBe(false);
     }
-    // the résumé inside the candidate panel (plan H5): Hono answers it with SAMEORIGIN, and nothing here may replace that
+    // the resume inside the candidate panel: Hono answers it with SAMEORIGIN, and nothing here may replace that
     expect(framed.test("/api/v1/applications/a1/documents/d1/inline")).toBe(false);
     for (const path of pages) expect(framed.test(path), path).toBe(true);
     // the not-found page, and paths that only begin like a mount, are the application's

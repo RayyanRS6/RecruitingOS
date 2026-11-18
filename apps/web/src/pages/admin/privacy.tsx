@@ -2,31 +2,34 @@
 
 import { type CSSProperties, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type AdminCompany, DATA_REQUEST_KIND_LABEL, DataRequestKind, type DataRequestView } from "@ros/contracts";
 import { Alert, Button, Card, Chip, Dialog, Drawer, ErrorState, Field, Menu, nextSort, Skeleton, type SortDir, sortAnnouncement, sortRows, Table, type TableHead, Tabs } from "@ros/ui";
-import { api, ApiError, type Me } from "../../api/client";
+import { api, errorWords, type Me } from "../../api/client";
 import { useNavigate, useSearchParams } from "../../nav";
 import { toast } from "../../toast";
-import { adminKeys, type CustomerRow, type DataRequest, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
+import { adminKeys, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { exactWhen, privacyStatusWords, verificationWords, whenWords, wordFor } from "./admin-words";
 
 /*
- * The console's Privacy requests section (redesign spec 3.2, Wave S6 slice S6-F): two parts, Open and Closed, each a
- * table of five columns; a button that opens the form for a request that came to the privacy mailbox; and the request
- * drawer, which keeps every step of today's sheet (verify, notes, assign, counsel, fulfil, decline, send the confirmation
- * again, preview the export). What is sent to the API is unchanged.
+ * The dashboard's Privacy requests section: two parts, Open and Closed, each a table of five columns; a button that
+ * opens the form for a request that came to the privacy mailbox; and the request drawer with every step (verify,
+ * notes, assign, counsel, fulfil, decline, send the confirmation again, preview the export).
  */
 
-const KIND_LABEL: Record<string, string> = { access: "Copy of their data", correct: "Correction", delete: "Deletion / anonymization", sms_opt_out: "Stop texts", human_review: "Human review", withdrawal: "Withdrawal" };
-/** Where a request came from: the candidate's own status link, the public form (confirmed by an emailed link), the privacy mailbox, or the console. */
-const SOURCE_LABEL: Record<string, string> = { status_page: "status page", email_form: "public form", email: "privacy mailbox", admin: "console" };
+/** A privacy request as the API answers it. */
+type DataRequest = DataRequestView;
+
+/** Where a request came from: the candidate's own status link, the public form (confirmed by an emailed link), the privacy mailbox, or the dashboard. */
+const SOURCE_LABEL: Record<string, string> = { status_page: "status page", email_form: "public form", email: "privacy mailbox", admin: "dashboard" };
 const STATUS_TONE: Record<string, "neutral" | "accent" | "needs" | "good" | "caution" | "critical"> = { received: "needs", in_progress: "accent", awaiting_counsel: "caution", fulfilled: "good", declined: "neutral" };
 /** The candidate fields a correction can change (the API's names stay as they are; only the words on screen are plain). */
 const CORRECTION_FIELDS: Array<[string, string]> = [["firstName", "First name"], ["lastName", "Last name"], ["email", "Email"], ["phone", "Phone"], ["locationText", "Location"]];
 const CLOSED_STATUSES = ["fulfilled", "declined"];
-/** A deadline this close (in days) is shown as coming up, as the Overview counts it (redesign spec 3.2). */
+/** A deadline this close (in days) is shown as coming up. */
 export const PRIVACY_DUE_SOON_DAYS = 5;
 
-const kindWords = (kind: string) => wordFor(KIND_LABEL, kind);
+/** What was asked for, in the contract's words; a kind recorded earlier that is gone reads as its own words. */
+const kindWords = (kind: string) => wordFor(DATA_REQUEST_KIND_LABEL, kind);
 const sourceWords = (channel: string) => wordFor(SOURCE_LABEL, channel);
 const isVerified = (code: string) => code.startsWith("verified");
 const verificationTone = (code: string) => (isVerified(code) ? "good" : code === "failed" ? "critical" : "caution");
@@ -62,7 +65,7 @@ export const PRIVACY_SORTS: Array<{ id: string; label: string; key: "received" |
 ];
 const SORT_HEADING = { received: "Received", due: "Due" } as const;
 
-/** The parts of Privacy requests, each its own `?view=` (redesign spec 3.1). */
+/** The parts of Privacy requests, each its own `?view=`. */
 export const PRIVACY_PARTS: SectionPart[] = [{ id: "open", label: "Open" }, { id: "closed", label: "Closed" }];
 
 /**
@@ -70,7 +73,7 @@ export const PRIVACY_PARTS: SectionPart[] = [{ id: "open", label: "Open" }, { id
  * after a counsel decision is recorded and the administrator confirms; nothing here is automatic.
  *
  * The Privacy requests section (the contract in admin-api.ts). `?open=<request id>` in the address opens that request's
- * drawer, so the Overview and a link can land on it.
+ * drawer, so a link can land on it.
  */
 export function PrivacySection({ view, onView }: SectionProps) {
   const part = partOf(PRIVACY_PARTS, view);
@@ -80,7 +83,7 @@ export function PrivacySection({ view, onView }: SectionProps) {
   const openParam = search.get("open");
   const [openId, setOpenId] = useState<string | null>(openParam);
   // The drawer follows the address both ways: a link followed while this page is open opens its request, and choosing
-  // the other part (the console drops ?open=) closes it, so a reload or Back shows what was on screen.
+  // the other part (the dashboard drops ?open=) closes it, so a reload or Back shows what was on screen.
   useEffect(() => {
     setOpenId(openParam);
   }, [openParam]);
@@ -132,10 +135,10 @@ export function PrivacySection({ view, onView }: SectionProps) {
         {q.error ? (
           <ErrorState message="Could not load privacy requests." onRetry={() => q.refetch()} />
         ) : part === "closed" ? (
-          <Table head={["Customer", "What they asked", "Resolved", "Status", ""]} label="Closed privacy requests" loading={q.isLoading ? 3 : 0} empty="No closed requests yet.">
+          <Table head={["Company", "What they asked", "Resolved", "Status", ""]} label="Closed privacy requests" loading={q.isLoading ? 3 : 0} empty="No closed requests yet.">
             {closedRows.map((r, i) => (
               <tr key={r.id} className={ROW_ENTER} style={stagger(i)}>
-                <td className="font-semibold">{r.companyName ?? "Unknown customer"}</td>
+                <td className="font-semibold">{r.companyName ?? "Unknown company"}</td>
                 <td><AskedCell r={r} /></td>
                 <td className="nowrap text-ink-2" title={exactWhen(r.resolvedAt)}>{whenWords(r.resolvedAt)}</td>
                 <td><Chip tone={STATUS_TONE[r.status] ?? "neutral"}>{privacyStatusWords(r.status)}</Chip></td>
@@ -144,11 +147,11 @@ export function PrivacySection({ view, onView }: SectionProps) {
             ))}
           </Table>
         ) : (
-          <Table head={["Customer", "What they asked", dueHead, "Status", ""]} label="Open privacy requests" scroll announce={announce} loading={q.isLoading ? 4 : 0} empty="No open privacy requests.">
+          <Table head={["Company", "What they asked", dueHead, "Status", ""]} label="Open privacy requests" scroll announce={announce} loading={q.isLoading ? 4 : 0} empty="No open privacy requests.">
             {/* no entrance here: a new order moves rows in the page, which would play it again on some of them */}
             {sortRequests(openRows, sort).map((r) => (
               <tr key={r.id}>
-                <td className="font-semibold">{r.companyName ?? "Unknown customer"}</td>
+                <td className="font-semibold">{r.companyName ?? "Unknown company"}</td>
                 <td><AskedCell r={r} /></td>
                 <td className="nowrap" title={exactWhen(r.slaDueAt)}><DueWords r={r} /></td>
                 <td>
@@ -179,7 +182,7 @@ function summaryLine(openRows: DataRequest[]): string {
   return bits.join(" · ");
 }
 
-const openLabel = (r: DataRequest) => `Open the request from ${r.companyName ?? "this customer"}: ${kindWords(r.kind)}`;
+const openLabel = (r: DataRequest) => `Open the request from ${r.companyName ?? "this company"}: ${kindWords(r.kind)}`;
 
 /** What the person asked for, and under it when it came in and from where. */
 function AskedCell({ r }: { r: DataRequest }) {
@@ -207,16 +210,16 @@ function DueWords({ r }: { r: DataRequest }) {
   return <span className="text-ink-2">{days(d)} left</span>;
 }
 
-const EMPTY_FORM = { companyId: "", requesterEmail: "", kind: "access", details: "" };
+const EMPTY_FORM: { companyId: string; requesterEmail: string; kind: DataRequestKind; details: string } = { companyId: "", requesterEmail: "", kind: "access", details: "" };
 
 /**
- * "Record a request from the privacy mailbox": today's four fields in a dialog. What is sent is unchanged. The requester
- * is not verified by recording: the drawer's "Verify the requester" step stays open until someone confirms the sender.
+ * "Record a request from the privacy mailbox": four fields in a dialog (POST /admin/data-requests). The requester is
+ * not verified by recording: the drawer's "Verify the requester" step stays open until someone confirms the sender.
  */
 function RecordRequestDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState(EMPTY_FORM);
-  const customers = useQuery({ queryKey: adminKeys.customers, queryFn: () => api.get<Array<Pick<CustomerRow, "id" | "name">>>("/api/v1/admin/customers", reason) });
+  const companies = useQuery({ queryKey: adminKeys.companies, queryFn: () => api.get<AdminCompany[]>("/api/v1/admin/customers", reason) });
   const create = useMutation({
     mutationFn: () => api.post("/api/v1/admin/data-requests", { ...form, details: form.details || undefined }, reason),
     onSuccess: () => {
@@ -225,7 +228,7 @@ function RecordRequestDialog({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: adminKeys.privacy });
       onClose();
     },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record."),
+    onError: (e) => toast(errorWords(e, "Could not record.")),
   });
   return (
     <Dialog
@@ -240,17 +243,17 @@ function RecordRequestDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <div className="stack">
-        <Field label="Customer" htmlFor="pr-co">
+        <Field label="Company" htmlFor="pr-co">
           <select id="pr-co" className="select" value={form.companyId} onChange={(e) => setForm({ ...form, companyId: e.target.value })}>
-            <option value="">{customers.isLoading ? "Loading customers…" : "Choose"}</option>
-            {(customers.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="">{companies.isLoading ? "Loading companies…" : "Choose"}</option>
+            {(companies.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </Field>
-        {customers.error ? <ErrorState message="Could not load the customers." onRetry={() => customers.refetch()} /> : null}
+        {companies.error ? <ErrorState message="Could not load the companies." onRetry={() => companies.refetch()} /> : null}
         <Field label="Requester email" htmlFor="pr-em"><input id="pr-em" className="input" type="email" value={form.requesterEmail} onChange={(e) => setForm({ ...form, requesterEmail: e.target.value })} /></Field>
         <Field label="Kind" htmlFor="pr-kind">
-          <select id="pr-kind" className="select" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-            {Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          <select id="pr-kind" className="select" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as DataRequestKind })}>
+            {DataRequestKind.options.map((kind) => <option key={kind} value={kind}>{DATA_REQUEST_KIND_LABEL[kind]}</option>)}
           </select>
         </Field>
         <Field label="What they wrote (summary)" htmlFor="pr-det"><input id="pr-det" className="input" value={form.details} onChange={(e) => setForm({ ...form, details: e.target.value })} /></Field>
@@ -265,7 +268,7 @@ function assignedWords(assignedTo: string | null, myUserId: string | null | unde
   return assignedTo === myUserId ? "You" : "Another administrator";
 }
 
-/** The request drawer (redesign spec 3.2): where it stands first, then each step that is still open. */
+/** The request drawer: where it stands first, then each step that is still open. */
 function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: adminKeys.privacyRequest(id), queryFn: () => api.get<DataRequest>(`/api/v1/admin/data-requests/${id}`, reason) });
@@ -281,7 +284,7 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
     qc.invalidateQueries({ queryKey: adminKeys.privacy });
     qc.invalidateQueries({ queryKey: adminKeys.privacyRequest(id) });
   };
-  const act = useMutation({ mutationFn: (input: { path: string; body?: unknown }) => api.post(`/api/v1/admin/data-requests/${id}/${input.path}`, input.body ?? {}, reason), onSuccess: () => { toast("Recorded."); refresh(); }, onError: (e) => toast(e instanceof ApiError ? e.message : "That didn't work.") });
+  const act = useMutation({ mutationFn: (input: { path: string; body?: unknown }) => api.post(`/api/v1/admin/data-requests/${id}/${input.path}`, input.body ?? {}, reason), onSuccess: () => { toast("Recorded."); refresh(); }, onError: (e) => toast(errorWords(e, "That didn't work.")) });
   const r = q.data;
   if (!r) {
     return (
@@ -359,7 +362,7 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
           </Card>
         ) : <Alert tone="info">{r.status === "fulfilled" ? "Done" : "Declined"} {exactWhen(r.resolvedAt)}: {r.resolution}{r.confirmationSentAt ? " · confirmation sent" : ""}</Alert>}
         {closedReq && r.kind === "delete" && !r.confirmationSentAt ? (
-          // the email after the commit failed: nothing retries it on its own, so the console offers it
+          // the email after the commit failed: nothing retries it on its own, so the drawer offers it
           <Alert tone="caution">
             <div className="row justify-between">
               <span>The requester has not been told yet: the confirmation email did not go.</span>

@@ -24,7 +24,8 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 // The shell's tsconfig leaves JSX to Next.js ("preserve"), so under the test runner it compiles to React.createElement.
 (globalThis as { React?: typeof React }).React = React;
-const { AppShell, CONSOLE_LINKS, RAIL_COLLAPSED_KEY, markMove, parentTrail, railCollapsedIn, rememberRailCollapsed, sectionTrail } = await import("./AppShell");
+const { AppShell, RAIL_COLLAPSED_KEY, markMove, parentTrail, railCollapsedIn, rememberRailCollapsed, sectionTrail } = await import("./AppShell");
+const { ADMIN_LINKS } = await import("@ros/web/src/rail");
 // The page-enter templates, one per section of the signed-in app (Next.js keys a template by the segment below it).
 const templates = {
   "(company)": (await import("../app/(app)/(company)/template")).default,
@@ -43,6 +44,8 @@ function meAs(role: string | null, extra: Partial<Me> = {}): Me {
   };
 }
 const admin = () => meAs(null, { user: { id: "a1", email: "staff@its.test", name: "ITS Staff", platformRole: "platform_admin" } });
+/** A platform administrator who also works in a company. */
+const adminInCompany = () => meAs("owner", { user: { id: "a1", email: "staff@its.test", name: "ITS Staff", platformRole: "platform_admin" } });
 
 /** Where the frame keeps its count of unread updates. */
 const UNREAD_KEY = ["notifications", "history", "frame"];
@@ -155,44 +158,55 @@ describe("the rail", () => {
     // the chip still names the company in use and keeps its cog to Settings
     expect(html).toMatch(/<strong[^>]*>Bright Dental<\/strong>/);
     expect(html).toContain('aria-label="Company settings"');
-    // ITS staff with no company have no chip, so no switcher
+    // a platform administrator with no company has no chip, so no switcher
     expect(render(admin())).not.toContain('aria-label="Switch company"');
   });
 
-  it("gives ITS staff without a company the console and Sign out: no company chip, no Start a hire, none of a company's places", () => {
+  it("gives a platform administrator without a company the dashboard's three places and Sign out: no company chip, no Start a hire, none of a company's places", () => {
+    nav.path = "/admin";
     const html = render(admin());
-    expect(html).toContain("ITS staff");
+    expect(html).toContain("Admin dashboard");
     expect(html).not.toContain('aria-label="Company settings"');
     expect(html).not.toContain('href="/roles/new"');
-    for (const href of ["/roles", "/talent", "/setup", "/updates"]) expect(html, href).not.toContain(`<a href="${href}"`);
-    expect(html).toContain('href="/admin"');
+    for (const href of ["/", "/roles", "/talent", "/setup", "/updates"]) expect(html, href).not.toContain(`<a href="${href}"`);
     expect(html).toContain(">Sign out</span></button>");
+    // nothing of the old console, and no label over the only links there are
+    for (const gone of ["Console", "Overview", "Customers", "Problems", "System and settings", "ITS staff"]) expect(html, gone).not.toContain(gone);
+    expect(html).not.toMatch(/<div class="[^"]*font-mono[^"]*">Admin<\/div>/);
   });
 
-  it("lists the console's five sections under Console for a platform administrator, marking the one open", () => {
+  it("lists Companies, Privacy requests and System for a platform administrator, in that order, marking the one open", () => {
     nav.path = "/admin";
     let html = render(admin());
-    expect(html).toMatch(/<ul class="[^"]*" aria-label="Console sections">/);
-    const links = CONSOLE_LINKS.map((l) => [l.label, l.to]);
-    expect(links).toEqual([["Overview", "/admin"], ["Customers", "/admin/customers"], ["Privacy requests", "/admin/privacy"], ["Problems", "/admin/problems"], ["System and settings", "/admin/system"]]);
-    // each with an icon, so the folded rail still shows all five (every section one click away)
-    for (const [label, href] of links) expect(html, label).toMatch(new RegExp(`<a href="${esc(href)}"[^>]*>(<span data-mark="console"[^>]*></span>)?<svg[^>]*>${IN}</svg><span[^>]*>${label}</span></a>`));
+    const links = ADMIN_LINKS.map((l) => [l.label, l.to]);
+    expect(links).toEqual([["Companies", "/admin"], ["Privacy requests", "/admin/privacy"], ["System", "/admin/system"]]);
+    // each with an icon, so the folded rail still shows all three
+    for (const [label, href] of links) expect(html, label).toMatch(new RegExp(`<a href="${esc(href)}"[^>]*>(<span data-mark="main"[^>]*></span>)?<svg${IN}</svg><span[^>]*>${label}</span></a>`));
     const at = links.map(([label]) => html.indexOf(`>${label}</span></a>`));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
-    // on /admin: Console and Overview are marked, no other section
-    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]* active" aria-current="page"><span data-mark="main"[^>]*></span><svg${IN}</svg><span[^>]*>Console</span></a>`));
-    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]* active" aria-current="page"><span data-mark="console"[^>]*></span><svg[^>]*>${IN}</svg><span[^>]*>Overview</span></a>`));
-    expect(html.match(/aria-current="page"/g)).toHaveLength(2);
-    // on a section: Console stays marked, the section is marked, Overview is not (it matches /admin only)
-    nav.path = "/admin/problems";
+    // on /admin (also with a company open in its drawer): Companies is marked, and nothing else
+    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]* active" aria-current="page"><span data-mark="main"[^>]*></span><svg${IN}</svg><span[^>]*>Companies</span></a>`));
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    // on another section: that section is marked, Companies is not (it matches /admin only)
+    nav.path = "/admin/system";
     html = render(admin());
-    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]* active" aria-current="page"><span data-mark="main"[^>]*></span><svg${IN}</svg><span[^>]*>Console</span></a>`));
-    expect(html).toMatch(new RegExp(`<a href="/admin/problems" class="[^"]* active" aria-current="page"><span data-mark="console"[^>]*></span><svg[^>]*>${IN}</svg><span[^>]*>Problems</span></a>`));
-    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]*"><svg[^>]*>${IN}</svg><span[^>]*>Overview</span></a>`));
-    expect(html.match(/aria-current="page"/g)).toHaveLength(2);
+    expect(html).toMatch(new RegExp(`<a href="/admin/system" class="[^"]* active" aria-current="page"><span data-mark="main"[^>]*></span><svg${IN}</svg><span[^>]*>System</span></a>`));
+    expect(html).toMatch(new RegExp(`<a href="/admin" class="[^"]*"><svg${IN}</svg><span[^>]*>Companies</span></a>`));
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     // a company member who is not a platform administrator never sees them
-    expect(render(meAs("owner"))).not.toContain("Console sections");
+    for (const href of ["/admin", "/admin/privacy", "/admin/system"]) expect(render(meAs("owner")), href).not.toContain(`<a href="${href}"`);
+  });
+
+  it("gives a platform administrator who also works in a company both sets of places, the dashboard's under an Admin label", () => {
+    nav.path = "/";
+    const html = render(adminInCompany());
+    for (const href of ["/", "/roles", "/talent", "/setup", "/admin", "/admin/privacy", "/admin/system"]) expect(html, href).toContain(`<a href="${href}"`);
+    expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Admin<\/div>/);
+    // the label sits between the company's places and the dashboard's
+    expect(html.indexOf(">Settings</span></a>")).toBeLessThan(html.indexOf(">Admin</div>"));
+    expect(html.indexOf(">Admin</div>")).toBeLessThan(html.indexOf(">Companies</span></a>"));
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
   });
 
   it("offers a button that folds the rail to icons, except on a job's pages where it is folded already", () => {
@@ -204,13 +218,13 @@ describe("the rail", () => {
     expect(html).not.toContain("data-collapsed");
     nav.path = "/roles/r-open/talent";
     expect(render(meAs("owner"))).not.toContain('aria-label="Fold the menu to icons"');
-    // folded, the console's sections stay in the rail as icons, each named in its tooltip and to screen readers
+    // folded, the dashboard's places stay in the rail as icons, each named in its tooltip and to screen readers
     nav.path = "/roles/r-open";
-    const folded = render(admin());
+    const folded = render(adminInCompany());
     expect(folded).toContain('data-rail="compact"');
-    expect(folded).toMatch(/<ul class="[^"]*" aria-label="Console sections">/);
-    expect(folded).not.toMatch(/<ul class="[^"]*rail:hidden[^"]*" aria-label="Console sections">/);
-    for (const l of CONSOLE_LINKS) expect(folded, l.label).toMatch(new RegExp(`<a href="${esc(l.to)}" class="[^"]*" title="${l.label}"><svg[^>]*>${IN}</svg><span class="[^"]* rail:sr-only[^"]*">${l.label}</span></a>`));
+    for (const l of ADMIN_LINKS) expect(folded, l.label).toMatch(new RegExp(`<a href="${esc(l.to)}" class="[^"]*" title="${l.label}"><svg${IN}</svg><span class="[^"]* rail:sr-only[^"]*">${l.label}</span></a>`));
+    // the Admin label gives way to a hairline in the folded rail (the phone menu keeps the word)
+    expect(folded).toMatch(/<div class="[^"]*font-mono[^"]* rail:hidden">Admin<\/div><div aria-hidden="true" class="[^"]*h-px[^"]*"><\/div>/);
   });
 
   it("offers the light/dark theme switch beside Sign out, on every page and in the folded rail too", () => {
@@ -237,9 +251,9 @@ describe("the rail", () => {
     // the Menu button sits in the top row, Start a hire in the second
     expect(html).toMatch(/<button type="button" class="btn secondary sm [^"]*max-rail:row-start-1[^"]*" aria-expanded="false" aria-controls="rail-links">/);
     expect(html).toMatch(/<a href="\/roles\/new" class="btn primary [^"]*max-rail:row-start-2[^"]*"/);
-    // the console's sections (for an administrator): 32px in the side rail, 40px on a phone
+    // every place in the menu is a 40px row, the dashboard's too
     nav.path = "/admin";
-    expect(render(admin())).toMatch(/<a href="\/admin\/customers" class="[^"]*\bh-8\b[^"]*max-rail:h-10\b/);
+    for (const l of ADMIN_LINKS) expect(render(admin()), l.label).toMatch(new RegExp(`<a href="${esc(l.to)}" class="[^"]*\\bh-10\\b`));
   });
 
   it("remembers the folded rail on this browser, and never fails where storage cannot be read or written", () => {
@@ -306,7 +320,7 @@ describe("the highlight behind the current link", () => {
     nav.path = "/";
   });
 
-  it("is drawn inside the current link only, one per list, hidden from screen readers and never hidden on the first draw", () => {
+  it("is drawn inside the current link only, hidden from screen readers and never hidden on the first draw", () => {
     nav.path = "/roles";
     const html = render(meAs("owner"));
     expect(html.match(/data-mark="main"/g)).toHaveLength(1);
@@ -320,21 +334,21 @@ describe("the highlight behind the current link", () => {
     for (const page of [html, job]) expect(page).not.toMatch(/\sstyle="/);
   });
 
-  it("paints under every link of its list, so gliding past a link never covers its icon and word", () => {
+  it("paints under every link of the list, so gliding past a link never covers its icon and word", () => {
     nav.path = "/roles/r-draft";
     const owner = render(meAs("owner"));
-    nav.path = "/admin/problems";
-    const consoleHtml = render(admin());
-    // no link is a stacking context of its own; each list is one, so its highlights sit at its bottom
-    for (const html of [owner, consoleHtml]) {
+    nav.path = "/admin/system";
+    const dashboard = render(admin());
+    // no link is a stacking context of its own; the list is one, so the highlight sits at its bottom
+    for (const html of [owner, dashboard]) {
       expect(html).not.toMatch(/<a [^>]*class="[^"]*\bisolate\b/);
       expect(html).toMatch(/<div class="isolate [^"]*" id="rail-links"/);
+      expect(html.match(/data-mark=/g)).toHaveLength(1);
     }
-    expect(consoleHtml).toMatch(/<ul class="isolate [^"]*" aria-label="Console sections">/);
     // hovering the current link leaves its highlight in view
     // (a job's page folds the rail, so Jobs carries its tooltip there)
     expect(owner).toMatch(/<a href="\/roles" class="[^"]*\[&amp;\.active\]:hover:bg-transparent[^"]* active" title="Jobs" aria-current="page">/);
-    expect(consoleHtml).toMatch(/<a href="\/admin\/problems" class="[^"]*\[&amp;\.active\]:hover:bg-transparent[^"]* active" aria-current="page">/);
+    expect(dashboard).toMatch(/<a href="\/admin\/system" class="[^"]*\[&amp;\.active\]:hover:bg-transparent[^"]* active" aria-current="page">/);
   });
 
   it("glides from where it stood to the new link on transform, and stays put when nothing moved", () => {
@@ -359,23 +373,23 @@ describe("the bar above the page", () => {
     expect(sectionTrail("/roles/r-open/talent")).toEqual(["Jobs"]);
     expect(sectionTrail("/talent")).toEqual(["Candidates"]);
     expect(sectionTrail("/setup")).toEqual(["Settings"]);
-    expect(sectionTrail("/admin")).toEqual(["Console", "Overview"]);
-    expect(sectionTrail("/admin/problems")).toEqual(["Console", "Problems"]);
+    // each section of the admin dashboard is a place of its own
+    expect(sectionTrail("/admin")).toEqual(["Companies"]);
+    expect(sectionTrail("/admin/privacy")).toEqual(["Privacy requests"]);
+    expect(sectionTrail("/admin/system")).toEqual(["System"]);
     // a page that is gone is nowhere in the rail
-    expect(sectionTrail("/interviews/i1")).toEqual([]);
-    expect(sectionTrail("/nothing-here")).toEqual([]);
+    for (const gone of ["/interviews/i1", "/admin/customers", "/admin/problems", "/nothing-here"]) expect(sectionTrail(gone), gone).toEqual([]);
   });
 
   it("links back up only from a page under another, naming the page when the frame can", () => {
     const jobsUp = { label: "Jobs", href: "/roles" };
     expect(parentTrail("/roles/new")).toEqual({ parent: jobsUp, here: "Start a hire" });
     expect(parentTrail("/updates")).toEqual({ parent: { label: "Home", href: "/" }, here: "Updates" });
-    expect(parentTrail("/admin/customers")).toEqual({ parent: { label: "Console", href: "/admin" }, here: "Customers" });
     // a job's pages keep the way back up without the job's name, so the bar never appears late
     expect(parentTrail("/roles/r-open")).toEqual({ parent: jobsUp, here: null });
     expect(parentTrail("/roles/r-open/talent")).toEqual({ parent: jobsUp, here: null });
-    // a section's own page: its heading says where it is, so there is no bar (the console's Overview is Console itself)
-    for (const path of ["/", "/roles", "/talent", "/setup", "/admin", "/nothing-here", ""]) expect(parentTrail(path), path).toBeNull();
+    // a section's own page: its heading says where it is, so there is no bar
+    for (const path of ["/", "/roles", "/talent", "/setup", "/admin", "/admin/privacy", "/admin/system", "/nothing-here", ""]) expect(parentTrail(path), path).toBeNull();
   });
 
   it("draws the trail with its link back up and never the company (the rail's chip names it), adds no landmark, and leaves the page its 1040px column (wider where a page needs it)", () => {
@@ -406,14 +420,10 @@ describe("the bar above the page", () => {
       expect(html, path).toMatch(/<div class="group\/page[^"]*"><main id="main"/);
       expect(html, path).not.toContain('<span aria-hidden="true">/</span>');
     }
-    nav.path = "/admin";
-    expect(render(admin())).toMatch(/<div class="group\/page[^"]*"><main id="main"/);
-    nav.path = "/admin/customers";
-    const section = render(admin());
-    expect(section).not.toMatch(/<div class="group\/page[^"]*"><main id="main"/);
-    expect(section).toMatch(/<a href="\/admin" class="[^"]*">Console<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Customers<\/span>/);
-    // the bar adds no current-page mark: the rail's two links (Console and the section) keep the only ones
-    expect(section.match(/aria-current="page"/g)).toHaveLength(2);
+    for (const path of ["/admin", "/admin/privacy", "/admin/system"]) {
+      nav.path = path;
+      expect(render(admin()), path).toMatch(/<div class="group\/page[^"]*"><main id="main"/);
+    }
     nav.path = "/updates";
     expect(render(meAs("owner"))).toMatch(/<a href="\/" class="[^"]*">Home<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Updates<\/span>/);
     // a job's page: the way back up is there from the first draw, without the job's name
@@ -433,11 +443,6 @@ describe("the rail's foot and labels", () => {
     }
   });
 
-  it("keeps the ITS staff's Admin label, which tells the console apart from the company's links", () => {
-    nav.path = "/admin";
-    const html = render(admin());
-    expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Admin<\/div>/);
-  });
 });
 
 describe("the page as it opens", () => {
