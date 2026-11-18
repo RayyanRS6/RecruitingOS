@@ -254,10 +254,7 @@ describe("the words around the preview", () => {
 });
 
 describe("who may try different weights (roles.ts canTryWeights)", () => {
-  it("is whoever may edit the job and read its applicants, never on a grant about one candidate", () => {
-    expect(["owner", "admin", "hiring_manager", "recruiter", "hr", "interviewer", null, undefined].map((r) => canTryWeights(r))).toEqual([true, true, true, true, false, false, false, false]);
-    expect(canTryWeights("recruiter", { applicationId: "app-1" })).toBe(false);
-    expect(canTryWeights("recruiter", { applicationId: null })).toBe(true);
-    expect(canTryWeights("owner", null)).toBe(true);
+  it("is whoever may edit the job and read its applicants", () => {
+    expect(["owner", "admin", "hiring_manager", "hr", "interviewer", null, undefined].map((r) => canTryWeights(r))).toEqual([true, true, true, false, false, false, false]);
   });
 });

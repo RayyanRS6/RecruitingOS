@@ -33,8 +33,8 @@ describe("the trial's row on Home and Settings", () => {
     expect(trialDate(lateEvening, "Not/AZone")).toBe("October 31");
   });
 
-  it("asks ITS about a plan in the request form, never in one click", () => {
-    expect(TRIAL_ASK).toEqual({ kind: "ask", about: "all", topic: "plan", question: "We would like to choose a plan to keep hiring after our trial." });
+  it("asks ITS about a plan from the upgrade sheet, never in one click, and says why", () => {
+    expect(TRIAL_ASK).toBe("We would like to choose a plan to keep hiring after our trial.");
   });
 });
 

@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AI_HELP_LINE, type PublicPlan } from "../../packages/contracts/src";
-import { boardLockedWords, cannotSeeYetWords, firstChoice, isPlanAsk, moreLockedWords, planFacts, priceWords, reasonOf, reportLockedLabel } from "../../apps/web/src/upgrade";
+import { boardLockedWords, cannotSeeYetWords, firstChoice, isPlanAsk, moreLockedWords, planFacts, priceWords, reasonOf, reportLockedLabel, requestSentWords } from "../../apps/web/src/upgrade";
 import { draftNoRoom, problemAsk, turnProblem } from "../../apps/web/src/pages/new-role/rules";
-import { aboutWords, reopenHint, requestStateWords } from "../../apps/web/src/recruiter-requests";
-import { presetOf } from "../../apps/web/src/recruiter-access";
 
 /**
  * The upgrade path's words and rules (the plans of 5 November 2026, Rule 5), as a page reads them without a browser. The sheet
  * compares the four plans with prices in dollars and the AI help in words, never in dollars; a request about the plan opens
- * the sheet instead of going in one click; and running out of AI help or of jobs offers an upgrade, never "try again" or a
- * free person in its place.
+ * the sheet instead of going in one click; and running out of AI help or of jobs offers an upgrade, never "try again".
  */
 const plan = (over: Partial<PublicPlan>): PublicPlan => ({ key: "basic", name: "Basic", monthlyUsd: 49, activeRoles: 3, jobsTotal: null, candidatesPerJob: 25, seats: 3, aiHelp: "About 600 candidates a month", current: false, ...over });
 const free = plan({ key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit" });
@@ -45,51 +42,37 @@ describe("what the sheet says of each plan", () => {
 
 describe("what a request about the plan is", () => {
   it("an action about the plan opens the sheet, with why; anything else stays as it was", () => {
-    const upgrade = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: "We would like more AI help." } };
+    const upgrade = { label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } };
     expect(isPlanAsk(upgrade)).toBe(true);
     expect(reasonOf(upgrade.body)).toBe("We would like more AI help.");
     expect(reasonOf({})).toBeUndefined();
-    expect(isPlanAsk({ path: "/api/v1/escalations", body: { kind: "review", roleId: "r1" } })).toBe(false);
+    expect(isPlanAsk({ path: "/api/v1/roles/r1/pause" })).toBe(false);
     expect(isPlanAsk({ path: "/roles/r1/talent" })).toBe(false);
-    // the form's own preset keeps the topic, which is what sends it to the sheet (components/AskRecruiter.tsx)
-    expect(presetOf(upgrade.body)).toEqual({ kind: "ask", about: "all", question: "We would like more AI help.", topic: "plan" });
   });
 
-  it("on the team's own list it is about the plan, with nothing about access when it is reopened", () => {
-    expect(aboutWords({ scope: "company", roleTitle: null, candidateName: null, topic: "plan" })).toBe("Your plan");
-    expect(aboutWords({ scope: "company", roleTitle: null, candidateName: null })).toBe("All of your hiring");
-    expect(reopenHint("Kai", null, 14)).toBe("Reopening sets a new reply-by time, and it goes back to ITS.");
-    expect(reopenHint("Kai", "this role and its candidates", 14)).toContain("this role and its candidates");
-  });
-
-  it("while it is open it is with ITS, and no recruiter is working on their hiring; any other request reads as it always did", () => {
-    expect(requestStateWords({ status: "open", topic: "plan" })).toBe("Waiting for ITS");
-    expect(requestStateWords({ status: "claimed", topic: "plan" })).toBe("ITS is on it");
-    expect(requestStateWords({ status: "resolved", topic: "plan" })).toBe("Answered");
-    expect(requestStateWords({ status: "open" })).toBe("Waiting for a recruiter");
-    expect(requestStateWords({ status: "in_progress" })).toBe("A recruiter is on it");
+  it("while a request is with ITS, the day it was sent stands in the button's place", () => {
+    expect(requestSentWords("2026-11-18T12:00:00Z")).toBe("Request sent on November 18, 2026");
   });
 });
 
 describe("out of AI help, or out of jobs, in the job builder", () => {
-  const recruiter = { label: "Bring in a recruiter", body: { kind: "ask", scope: "company", intakeSessionId: "s1" } };
-  const upgrade = { label: "Upgrade", path: "/api/v1/escalations", body: { topic: "plan" } };
+  const upgrade = { label: "Upgrade", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } };
 
   it("a turn with no AI help left says its own line, with no 'could not reply', and the way on is the Upgrade", () => {
     const p = turnProblem({ error: "AI credit used up", recovery: AI_HELP_LINE.turn, proposedActions: [upgrade], upgrade: true });
     expect(p?.message).toBe(AI_HELP_LINE.turn);
     expect(p?.message).not.toContain("could not reply");
-    expect(p).toMatchObject({ upgrade: true, ask: { label: "Upgrade" } });
+    expect(p).toMatchObject({ upgrade: true, ask: { label: "Upgrade", reason: "We would like more AI help." } });
     // any other failure reads as it always did
-    expect(turnProblem({ error: "provider", recovery: "Try again, or bring in a recruiter." })).toEqual({ message: "The assistant could not reply just now. Try again, or bring in a recruiter.", ask: null });
+    expect(turnProblem({ error: "provider", recovery: "Try again." })).toEqual({ message: "The assistant could not reply just now. Try again.", ask: null });
     expect(turnProblem({})).toBeNull();
   });
 
-  it("a refusal to upgrade never offers a recruiter in its place, also for someone who may not ask; any other failure does", () => {
-    expect(problemAsk({ details: { upgrade: true, actions: [upgrade] } }, recruiter)).toMatchObject({ label: "Upgrade" });
-    expect(problemAsk({ details: { upgrade: true, actions: [] } }, recruiter)).toBeNull();
-    expect(problemAsk({ details: {} }, recruiter)).toBe(recruiter);
-    expect(problemAsk(null, recruiter)).toBe(recruiter);
+  it("a refusal carries its own request about the plan; any other failure offers none", () => {
+    expect(problemAsk({ details: { upgrade: true, actions: [upgrade] } })).toMatchObject({ label: "Upgrade" });
+    expect(problemAsk({ details: { upgrade: true, actions: [] } })).toBeNull();
+    expect(problemAsk({ details: {} })).toBeNull();
+    expect(problemAsk(null)).toBeNull();
   });
 });
 

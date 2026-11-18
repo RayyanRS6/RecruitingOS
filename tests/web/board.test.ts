@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { BoardCard, BoardPlacement, BoardView, MatchScore, PoolSummary } from "../../apps/web/src/api/client";
 import {
-  BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, RECRUITER_CHECK, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT, VIEW_SWITCH_LABEL,
+  BOARD_COLUMNS, DECLINE_CHOICES, GROUP_WORDS, NEEDS_EYE_WARNING, NO_DECLINE_HERE, POOL_CARD_NOTE, REVIEW_FOOT, REVIEW_SUB, SORT_TEXT, VIEW_SWITCH_LABEL,
   answerPath, appliedNote, appliedToast, applyLabel, batchItems, boardOrder, boardPersonPath, boardSearch, cardChip, cardFacts, confidenceChip, countsLine, evidenceLines, headerCounts, extraWarnings, groupCount, initialReview, isTicked, laneRow,
-  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText, snapshotOf, snapshotPlace, snapshotScore,
+  lookedAtLine, modeFrom, needsReason, poolCardView, previewByPerson, previewItems, readyCounts, readyLine, reasonLine, reviewFootNote, reviewRows, rowWarnings, scoreText,
   sortedText, summarySentences, tickable, togglePick, type ReviewState,
 } from "../../apps/web/src/pages/board/board-model";
 import { SAFETY_NET_NOTE } from "../../apps/web/src/talent-list";
 
 /**
  * The pool board's pure pieces (plan F6-F10; founder decisions B2, B4, B5, B6): the board's words and cards, Review and
- * apply's groups, ticks, reasons and counter, the one-click questions, Today's pool card and the board a recruiter is
- * asked to check. The board only suggests: everything here keeps decisions private and says that nobody is emailed.
+ * apply's groups, ticks, reasons and counter, the one-click questions and Today's pool card. The board only suggests:
+ * everything here keeps decisions private and says that nobody is emailed.
  */
 let n = 0;
 function score(value: number | null, over: Partial<MatchScore> = {}): MatchScore {
@@ -185,10 +185,6 @@ describe("the board", () => {
     expect(summarySentences(summary({ sentences: ["5 people on the board.", stricter.words, "Ana Holt has waited longest: 4 days."], stricter }))).toEqual(["Ana Holt has waited longest: 4 days."]);
     expect(summarySentences(summary({ sentences: ["Nobody to sort yet."] }))).toEqual(["Nobody to sort yet."]);
   });
-
-  it("asks a recruiter to check the board in plain words", () => {
-    expect(RECRUITER_CHECK).toMatch(/check how the board sorted/);
-  });
 });
 
 describe("Review and apply", () => {
@@ -290,7 +286,7 @@ describe("Review and apply", () => {
     expect(GROUP_WORDS.longlist).toMatch(/Private, no email\.$/);
     // nobody is emailed now, and the safety net (Q27; founder decision D-03) is named in one short line rather than
     // promising that nothing ever goes by itself
-    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so).");
     expect(GROUP_WORDS.not_moving_forward).toBe(`Filed privately; nobody is emailed now. ${SAFETY_NET_NOTE}`);
     expect(REVIEW_SUB).toBe("Untick anyone you want to decide yourself. Unticked people stay where they are.");
     expect(REVIEW_FOOT).toBe("Private: nobody is emailed now.");
@@ -298,7 +294,7 @@ describe("Review and apply", () => {
 
   it("names the safety net in the footer while anyone ticked is filed as not moving forward (D-03)", () => {
     expect(reviewFootNote({ not_moving_forward: 0 })).toBeNull();
-    expect(reviewFootNote({ not_moving_forward: 2 })).toBe("Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(reviewFootNote({ not_moving_forward: 2 })).toBe("Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so).");
   });
 
   it("offers the fixed reasons in the team's words, never closing the role", () => {
@@ -348,7 +344,7 @@ describe("one-click questions", () => {
   // (founder, 23 Oct 2026: fewer words); pool-board.test.ts checks the panel as drawn.
 });
 
-describe("Today's pool card and the board a recruiter checks", () => {
+describe("Today's pool card", () => {
   it("shows two sentences and up to three next steps naming people, each opening their panel over the board", () => {
     const steps = ["a", "b", "c", "d"].map((id) => ({ applicationId: id, name: `Person ${id}`, kind: "interview" as const, label: "Interview", reason: "Strong evidence." }));
     const v = poolCardView(summary({ nextSteps: steps }));
@@ -357,31 +353,11 @@ describe("Today's pool card and the board a recruiter checks", () => {
     expect(boardPersonPath("r1", "a")).toBe("/roles/r1/talent?view=board&open=a");
     expect(POOL_CARD_NOTE).toBe("Nothing moves until you apply it, and nobody is emailed.");
   });
-
-  it("reads the board snapshot from a request's context, and nothing else", () => {
-    const snap = { capturedAt: "2026-10-09T10:00:00.000Z", summary: { sentences: ["2 people on the board."], counts: { shortlist: 1, longlist: 0, not_moving_forward: 1 } }, people: [{ applicationId: "a1", name: "Ana Holt", column: "shortlist", state: "suggested", score: 91, reason: "Match score 91.", needsYourEye: null, nextStep: "Interview" }, { applicationId: "a2", name: "Sofia Lind", column: null, state: "waiting", score: null, reason: "Still applying.", needsYourEye: null, nextStep: null }, { applicationId: "a3", name: "Eve Lund", column: "shortlist", state: "done", score: 88, reason: "Already sorted.", needsYourEye: null, nextStep: null }] };
-    const read = snapshotOf({ company: {}, board: snap });
-    expect(read?.people).toHaveLength(3);
-    expect(snapshotPlace(read!.people[0])).toBe("Shortlist");
-    expect(snapshotPlace(read!.people[1])).toBe("No AI interview yet");
-    expect(snapshotPlace(read!.people[2])).toBe("Shortlist (already sorted)");
-    expect(snapshotOf({ company: {} })).toBeNull();
-    expect(snapshotOf(undefined)).toBeNull();
-    expect(snapshotOf({ board: { capturedAt: 1, people: [] } })).toBeNull();
-  });
-
-  it("labels a snapshot's résumé-only score, as the list does (R20-9), and reads an older snapshot without the label", () => {
-    expect(snapshotScore({ score: 88, interview: "not_done", basis: "Résumé only: no AI interview" })).toEqual({ text: "88/100 · Résumé only", title: "Résumé only: no AI interview" });
-    expect(snapshotScore({ score: 88, interview: "being_scored", basis: "Résumé only for now: AI interview done, being scored" }).text).toBe("88/100 · Résumé only");
-    expect(snapshotScore({ score: 91, interview: "done", basis: "From the résumé and the AI interview" })).toEqual({ text: "91/100", title: "From the résumé and the AI interview" });
-    expect(snapshotScore({ score: 91 })).toEqual({ text: "91/100" });
-    expect(snapshotScore({ score: null, interview: "not_done_yet" })).toEqual({ text: "No score yet" });
-  });
 });
 
 describe("the words", () => {
   it("never borrow another product's verdict words", () => {
-    const words = [SORT_TEXT, REVIEW_FOOT, REVIEW_SUB, POOL_CARD_NOTE, RECRUITER_CHECK, NEEDS_EYE_WARNING, NO_DECLINE_HERE, ...Object.values(GROUP_WORDS), ...BOARD_COLUMNS.flatMap((c) => [c.title, c.sub])].join(" ");
+    const words = [SORT_TEXT, REVIEW_FOOT, REVIEW_SUB, POOL_CARD_NOTE, NEEDS_EYE_WARNING, NO_DECLINE_HERE, ...Object.values(GROUP_WORDS), ...BOARD_COLUMNS.flatMap((c) => [c.title, c.sub])].join(" ");
     expect(words).not.toMatch(/Clear fit|Worth a look|Likely no|\bSolid\b|Long shot|Kanvis/i);
   });
 });

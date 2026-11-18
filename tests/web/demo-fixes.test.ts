@@ -54,7 +54,7 @@ describe("the role page while the worker catches up", () => {
     // once caught up, the rail's dot and the Posting tab follow
     expect(page).toContain('qc.invalidateQueries({ queryKey: ["roles"] });');
     const plan = read("../../apps/web/src/pages/RolePlan.tsx");
-    expect(plan).toContain('if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} roleId={role.id} />;');
+    expect(plan).toContain('if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} />;');
     expect(plan).toContain("Getting the approval ready");
     // the card's own wait ends where the page stops reading the role again (6 November 2026): no spinner for ever
     expect(plan).toContain("const t = window.setTimeout(() => setStalled(true), CATCH_UP_FOR_MS);");
@@ -67,7 +67,7 @@ describe("the role page while the worker catches up", () => {
     const after = read("../../apps/web/src/pages/AfterApproval.tsx");
     expect(after).toContain("const t = window.setTimeout(() => setSlow(true), CATCH_UP_FOR_MS);");
     expect(after).toContain('(slow ? OPENING_TAKES_LONGER : "Getting the job ready on its channels. This takes a moment.")');
-    expect(OPENING_TAKES_LONGER).toBe("This is taking longer than it should. The Share tab shows where it stands; if the job is not live in a few minutes, bring in a recruiter.");
+    expect(OPENING_TAKES_LONGER).toBe("This is taking longer than it should. The Share tab shows where it stands.");
   });
 });
 

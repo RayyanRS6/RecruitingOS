@@ -303,7 +303,7 @@ describe("the candidate panel's new parts", () => {
     expect(historyItem(ev("note.added", { noteId: "n1", starter: "after_interview" }))?.what).toBe("Added a private team note");
     expect(historyItem(ev("note.updated", { noteId: "n1", removed: true }))?.what).toBe("Removed their private team note");
     expect(historyItem(ev("application.untold_fallback", { action: "sent" }))).toMatchObject({ who: "The system", told: "Told by the decision message." });
-    expect(historyItem(ev("application.untold_fallback", { action: "recruiter", why: "the settings ask for approval before a decision message goes" }))?.why).toBe("Nothing was sent, because the settings ask for approval before a decision message goes.");
+    expect(historyItem(ev("application.untold_fallback", { action: "not_sent", why: "the settings ask for approval before a decision message goes" }))?.why).toBe("Nothing was sent, because the settings ask for approval before a decision message goes.");
     // the person's "offer made" is told once, by its own line
     expect(historyItem(ev("human.override", { action: "offer_made" }))).toBeNull();
   });

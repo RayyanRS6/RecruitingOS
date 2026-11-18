@@ -250,7 +250,7 @@ describe("the strip and the row's words", () => {
   });
 
   it("says the safety net in one short line for lists that know neither the day nor the setting (D-03)", () => {
-    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(SAFETY_NET_NOTE).toBe("If nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so).");
   });
 
   it("calls the match filter's first choice All matches, never 'Any reading'", () => {

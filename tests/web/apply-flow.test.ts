@@ -17,9 +17,8 @@ describe("since 20 October 2026 (R20-12)", () => {
 });
 
 describe("who sees the control", () => {
-  it("is ITS staff only: a platform administrator or an ITS recruiter, never a customer", () => {
+  it("is ITS staff only: a platform administrator, never a customer", () => {
     expect(isItsStaff(me("platform_admin"))).toBe(true);
-    expect(isItsStaff(me("its_recruiter"))).toBe(true);
     expect(isItsStaff(me("none"))).toBe(false);
     expect(isItsStaff(null)).toBe(false);
   });

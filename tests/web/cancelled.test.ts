@@ -102,7 +102,6 @@ describe("the candidate panel's card", () => {
     expect(body(waiting)).toBe("New times go to them automatically on Thursday, October 15, as your settings say. Send them now instead, or stop the automatic set.");
     expect(body(view({ auto: { state: "waiting_check", dueAt: "2026-10-15T16:00:00.000Z", dueDay: "2026-10-15" } }))).toBe("New times were due on Thursday, October 15. They wait until ITS confirms your company again.");
     expect(body(view({ auto: { state: "none", reason: "switched_off", reasonText: "Automatic new times are off in Settings." } }))).toBe("Automatic new times are off in Settings. Send new times when you are ready, or decide.");
-    expect(body(view({ auto: { state: "not_sent", reason: "takeover", reasonText: "An ITS recruiter is running this role, so nothing was sent automatically." } }))).toBe("An ITS recruiter is running this role, so nothing was sent automatically. Send new times when you are ready, or decide.");
     // nobody has hours to offer times from: the team's send is refused, so the card never invites one
     expect(body(view({ auto: { state: "none", reason: "no_hours", reasonText: "Not everyone on the interview has hours to offer, so nothing goes automatically: set a date and time from their page." } }))).toBe("Not everyone on the interview has hours to offer, so nothing goes automatically: set a date and time from their page. Or decide.");
     // back under Cancelled after a decision was taken back, the set not pending
@@ -202,7 +201,7 @@ describe("the candidate panel's card", () => {
   });
 
   it("gives the History tab the same reasons the API gives the team", () => {
-    for (const reason of ["switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed", "no_hours"]) {
+    for (const reason of ["switched_off", "already_used", "reschedules_used", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed", "no_hours"]) {
       expect(notSentReasonText(reason), reason).toBe(autoReasonText(reason, { state: "not_sent", resolved: true }));
     }
     for (const reason of ["left_process", "details_deleted", "not_asked", "no_show", undefined]) expect(notSentReasonText(reason)).toBeNull();

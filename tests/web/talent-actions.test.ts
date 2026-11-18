@@ -16,7 +16,7 @@ const mark = (over: Partial<ActiveMark>): ActiveMark => ({ id: "m1", mark: "shor
 /** A decision filed on Wednesday, October 14 (in the reader's own calendar): the fifth working day after is Wednesday, October 21. */
 const NOW = new Date("2026-10-14T12:00:00");
 /** The safety net with the company's setting not in the answer: both ways, with the day. */
-const NET = "If nobody tells them first, the standard message goes by itself on Wednesday, October 21 (or an ITS recruiter is brought in, if your settings say so).";
+const NET = "If nobody tells them first, the standard message goes by itself on Wednesday, October 21 (or your team is reminded, if your settings say so).";
 
 describe("what the page says after a choice", () => {
   it("gives every outcome of the candidate's message its own words, and says 'not told' whenever nothing went", () => {
@@ -31,8 +31,8 @@ describe("what the page says after a choice", () => {
     expect(PRIVATE_DECISION).toMatch(/^Private: the candidate was not told\./);
     // the answer's decision message says which way the company's settings run it
     expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: { policy: "sends", to: "luis@example.com" } }, NOW).detail).toBe(`${PRIVATE_DECISION} If nobody tells them first, the standard message goes by itself on Wednesday, October 21.`);
-    expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: { policy: "needs_approval", to: "luis@example.com" } }, NOW).detail).toBe(`${PRIVATE_DECISION} If nobody tells them first, an ITS recruiter is brought in on Wednesday, October 21. Nothing is sent by itself.`);
-    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, NOW)).toMatch(/an ITS recruiter is brought in/);
+    expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: { policy: "needs_approval", to: "luis@example.com" } }, NOW).detail).toBe(`${PRIVATE_DECISION} If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.`);
+    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, NOW)).toBe("If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.");
     // an older answer without the notice falls back on whether a message went
     expect(actionToast("reject", {}, NOW).detail).toBe(`${PRIVATE_DECISION} ${NET}`);
     for (const n of NOTICES) if (n !== "queued") expect(actionToast("reject", { candidateNotice: n }).detail).not.toMatch(/on its way/);
@@ -211,8 +211,8 @@ describe("the private decline step", () => {
     const booked = { title: "Phone screen", startsAt: "2026-10-14T18:00:00.000Z", timezone: "America/New_York", status: "scheduled", offeredSlots: [] };
     expect(declineSummary("sends", { hasEmail: true, now: NOW })).toEqual(["Private: nothing is sent to them now.", "If nobody tells them first, the standard message goes by itself on Wednesday, October 21."]);
     expect(declineSummary("sends", { hasEmail: true, interviews: [booked], now: NOW })[0]).toBe("Private: the decision is not sent now. Their interview is called off, and they get a short note saying so.");
-    expect(declineSummary("needs_approval", { hasEmail: true, now: NOW })[1]).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, October 21. Nothing is sent by itself.");
-    expect(declineSummary("sends", { hasEmail: false, now: NOW })[1]).toMatch(/an ITS recruiter is brought in/);
+    expect(declineSummary("needs_approval", { hasEmail: true, now: NOW })[1]).toBe("If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.");
+    expect(declineSummary("sends", { hasEmail: false, now: NOW })[1]).toMatch(/your team is reminded/);
     // each line stays short enough to read at a glance
     for (const line of declineSummary("sends", { hasEmail: true, interviews: [booked, booked], now: NOW })) expect(line.split(" ").length).toBeLessThanOrEqual(22);
   });
@@ -252,85 +252,18 @@ describe("the private decline step", () => {
     expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: hint, untoldFallbackOn: "2026-11-23" }, LIVE).detail).toBe(`${PRIVATE_DECISION} ${net}`);
   });
 
-  // The second look at the safety-net day fix (12 November 2026, finding #13): for someone locked whose promised date comes
-  // first, the line before the click named the fifth working day and the toast after it the day before that date
-  it("before the click, someone locked is told by the day before the date they were promised when that comes first, the day the toast after it names", () => {
-    const LA = "America/Los_Angeles";
-    const hint = { policy: "sends" as const, to: "pia@example.com" };
-    // applied at 10 AM on Monday, November 2 in Los Angeles: promised an email by Wednesday, December 2
-    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
-    // ITS declines her at 3 PM on Wednesday, November 25, already Thursday morning for a reader in Karachi
-    const wed = new Date("2026-11-25T23:00:00.000Z");
-    const net = "If nobody tells them first, the standard message goes by itself on Tuesday, December 1.";
-    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: pia })[1]).toBe(net);
-    expect(safetyNetAfterDecision({ decisionMessage: hint }, wed, undefined, LA, undefined, pia)).toBe(net);
-    expect(actionToast("reject", { candidateNotice: "not_told", decisionMessage: hint, untoldFallbackOn: "2026-12-01" }, wed).detail).toBe(`${PRIVATE_DECISION} ${net}`);
-    // anyone else: five working days (the page knows no holidays, so Wednesday, December 2)
-    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: { lockedAt: null, createdAt: pia.createdAt } })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 2.");
-    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 2.");
-    // once that day has passed, today: 3 PM on Wednesday, December 9
-    expect(declineSummary("sends", { hasEmail: true, now: new Date("2026-12-09T23:00:00.000Z"), timeZone: LA, person: pia })[1]).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, December 9.");
-  });
-
-  // Left out by the second look at the safety-net day fix (d2a6ef4): nothing goes to someone locked with no address on file
-  // and nobody is brought in, as their card now says (17 November 2026)
-  it("before the click, someone locked with no email address on file reads that no message goes, as on their card", () => {
-    const LA = "America/Los_Angeles";
-    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
-    const wed = new Date("2026-11-25T23:00:00.000Z");
-    const none = "No message goes: no email address on file.";
-    expect(declineSummary("sends", { hasEmail: false, now: wed, timeZone: LA, person: pia })).toEqual(["Private: nothing is sent to them now.", none]);
-    // "No hire" passes the same person
-    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, wed, undefined, LA, undefined, pia)).toBe(none);
-    // with an address it still goes by itself; anyone else with none still brings in a recruiter
-    expect(declineSummary("sends", { hasEmail: true, now: wed, timeZone: LA, person: pia })[1]).toBe("If nobody tells them first, the standard message goes by itself on Tuesday, December 1.");
-    expect(declineSummary("sends", { hasEmail: false, now: wed, timeZone: LA, person: { lockedAt: null, createdAt: pia.createdAt } })[1]).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, December 2. Nothing is sent by itself.");
-    expect(safetyNetAfterDecision({ decisionMessage: { policy: "sends", to: null } }, wed, undefined, LA)).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, December 2. Nothing is sent by itself.");
-  });
-
-  // The review of the live-test fixes (17 November 2026): between the decline step and the card, which both said no message
-  // goes, the toast still said an ITS recruiter is brought in, since it read the answer alone (`decisionMessage.to` null)
-  it("after the click, someone locked with no email address on file reads that no message goes, as before the click and on their card", () => {
-    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" };
-    const wed = new Date("2026-11-25T23:00:00.000Z");
-    const none = "No message goes: no email address on file.";
-    // the answer to a decision about her, as ITS under a grant gets it
-    const answer = { candidateNotice: "not_told" as const, dispositionSent: false, decisionMessage: { policy: "sends" as const, to: null }, untoldFallbackOn: "2026-12-01" };
-    expect(actionToast("reject", answer, wed, pia)).toEqual({ title: "Moved to Not moving forward.", detail: `${PRIVATE_DECISION} ${none}` });
-    expect(outcomeToast("no_hire", answer, wed, pia).detail).toBe(`${PRIVATE_DECISION} ${none}`);
-    expect(outcomeToast("employer_declined", answer, wed, pia).detail).toBe(`${PRIVATE_DECISION} ${none}`);
-    expect(decisionToast("not_moving_forward", answer, wed, pia).detail).toBe(`${PRIVATE_DECISION} ${none}`);
-    expect(actionToast("move_to_talent_pool", answer, wed, pia).detail).toBe(`The candidate was not told. ${none}`);
-    for (const t of [actionToast("reject", answer, wed, pia), outcomeToast("no_hire", answer, wed, pia), decisionToast("not_moving_forward", answer, wed, pia)]) expect(t.detail).not.toMatch(/ITS recruiter/);
-    // the interviews it called off are still said first
-    expect(actionToast("reject", { ...answer, interviewsCancelled: 1, interviewOffNotes: 0 }, wed, pia).detail).toBe(`${PRIVATE_DECISION} Their interview is stopped; no times had gone to them, so nothing was sent about it. ${none}`);
-    // with an address it still goes by itself on the day named; anyone else with none still brings in a recruiter
-    const net = "If nobody tells them first, the standard message goes by itself on Tuesday, December 1.";
-    expect(actionToast("reject", { ...answer, decisionMessage: { policy: "sends", to: "pia@example.com" } }, wed, pia).detail).toBe(`${PRIVATE_DECISION} ${net}`);
-    const recruiter = "If nobody tells them first, an ITS recruiter is brought in on Tuesday, December 1. Nothing is sent by itself.";
-    expect(actionToast("reject", answer, wed, { lockedAt: null, createdAt: pia.createdAt }).detail).toBe(`${PRIVATE_DECISION} ${recruiter}`);
-    expect(actionToast("reject", answer, wed).detail).toBe(`${PRIVATE_DECISION} ${recruiter}`);
-    expect(outcomeToast("no_hire", answer, wed).detail).toBe(`${PRIVATE_DECISION} ${recruiter}`);
-    expect(decisionToast("not_moving_forward", answer, wed).detail).toBe(`${PRIVATE_DECISION} ${recruiter}`);
-  });
-
   // Second review of the live-test fixes, 12 November 2026 (#18): a toast built from part of the answer would fall back to the
   // reader's own count and bring the live test's two days back, and no browser run would see it
   it("every toast after a decision gets the whole answer, and every line before the click reads the company's calendar", () => {
     const src = (path: string) => readFileSync(new URL(`../../apps/web/src/${path}`, import.meta.url), "utf8");
-    // with the person the panel's decision is about, so the toast says what the line before the click said for someone
-    // locked with no address (the review of the live-test fixes, 17 November 2026)
-    expect(src("pages/candidate-panel/hooks.ts")).toContain("actionToast(body.action, r, undefined, person)");
+    expect(src("pages/candidate-panel/hooks.ts")).toContain("actionToast(body.action, r)");
     expect(src("pages/People.tsx")).toContain("actionToast(input.body.action, r)");
     const panel = src("pages/candidate-panel/needs-you.tsx");
-    expect(panel).toContain("outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a)");
-    expect(panel).toContain("decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) }, undefined, a)");
-    // the decline step and the eligibility hold's decline
-    expect(panel).toContain("useCandidateAction(a.id, roleId, () => onClose(), a)");
-    expect(panel).toContain("useCandidateAction(a.id, roleId, () => setConfirming(false), a)");
-    // and, for someone locked, the date they were promised (the second look at the safety-net day fix, #13)
-    expect(panel).toContain("declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays, person: a })");
-    expect(panel).toContain("safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays, a)");
+    expect(panel).toContain("outcomeToast(form.outcome, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) })");
+    expect(panel).toContain("decisionToast(body.decision, { ...r, decisionMessage: r.decisionMessage ?? decisionHint(a) })");
+    // the lines before the click: the decline step's, and "No hire"'s
+    expect(panel).toContain("declineSummary(a.declineMessage, { hasEmail: !!a.candidate.email, interviews, timeZone, workDays })");
+    expect(panel).toContain("safetyNetAfterDecision({ decisionMessage: decisionHint(a) }, undefined, undefined, timeZone, workDays)");
     const close = src("components/ClosingMessage.tsx");
     expect(close).toContain("closeRoleToast(res, ");
     expect(close).toContain("safetyNetDate(new Date().toISOString(), undefined, timeZone, workDays)");
@@ -353,17 +286,17 @@ describe("the private decline step", () => {
   });
 
   it("closing a role never says nothing will go by itself: the safety net (Q27) is named the way the settings run it, with its day (D-03 A)", () => {
-    // settings ask for approval: nothing goes by itself, a recruiter is brought in
-    expect(closeRoleToast({ movedToTalentPool: 2, closingMessage: { policy: "needs_approval" } }, undefined, true, NOW).detail).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, an ITS recruiter is brought in on Wednesday, October 21. Nothing is sent by itself.");
+    // settings ask for approval: nothing goes by itself, the team is reminded
+    expect(closeRoleToast({ movedToTalentPool: 2, closingMessage: { policy: "needs_approval" } }, undefined, true, NOW).detail).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. Send the closing message when you are ready. If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.");
     // only a person sends decision messages: tell them yourself
-    expect(closeRoleToast({ movedToTalentPool: 1, closingMessage: { policy: "not_sent" } }, undefined, true, NOW).detail).toBe("The one person still in the process moved to your talent pool, privately: nobody is told yet. Under your settings no message is sent: tell each of them yourself, then record it on their page. If nobody tells them first, an ITS recruiter is brought in on Wednesday, October 21. Nothing is sent by itself.");
+    expect(closeRoleToast({ movedToTalentPool: 1, closingMessage: { policy: "not_sent" } }, undefined, true, NOW).detail).toBe("The one person still in the process moved to your talent pool, privately: nobody is told yet. Under your settings no message is sent: tell each of them yourself, then record it on their page. If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.");
     // the setting not known: both ways are said
-    expect(closeRoleToast({ movedToTalentPool: 2 }, undefined, true, NOW).detail).toMatch(/If nobody tells them first, the closing message goes by itself on Wednesday, October 21 \(or an ITS recruiter is brought in, if your settings say so\)\.$/);
+    expect(closeRoleToast({ movedToTalentPool: 2 }, undefined, true, NOW).detail).toMatch(/If nobody tells them first, the closing message goes by itself on Wednesday, October 21 \(or your team is reminded, if your settings say so\)\.$/);
   });
 
   it("HR, who may close a role but not tell candidates, is told who sends the closing message instead of being asked to", () => {
     const hr = closeRoleToast({ movedToTalentPool: 2, closingMessage: null }, "Job closed; the outcome is recorded with your name.", false, NOW).detail!;
-    expect(hr).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. An owner, admin, hiring manager or recruiter sends them the closing message; it waits on their Home page. If nobody tells them first, the closing message goes by itself on Wednesday, October 21 (or an ITS recruiter is brought in, if your settings say so).");
+    expect(hr).toBe("The 2 people still in the process moved to your talent pool, privately: nobody is told yet. An owner, admin or hiring manager sends them the closing message; it waits on their Home page. If nobody tells them first, the closing message goes by itself on Wednesday, October 21 (or your team is reminded, if your settings say so).");
     expect(hr).not.toMatch(/you send/i);
   });
 });
@@ -478,11 +411,11 @@ describe("evidence marks", () => {
 
   it("says the scorecard could not be written only when the latest screen's run gave up", () => {
     const withScreens = (screens: Array<Partial<ApplicationDetail["screens"][number]>>) => ({ screens } as unknown as ApplicationDetail);
-    expect(scorecardUnavailable(withScreens([{ scorecard: "unavailable", recruiterAsked: true }]))).toEqual({ unavailable: true, recruiterAsked: true });
-    expect(scorecardUnavailable(withScreens([{ scorecard: "writing" }]))).toEqual({ unavailable: false, recruiterAsked: false });
+    expect(scorecardUnavailable(withScreens([{ scorecard: "unavailable" }]))).toBe(true);
+    expect(scorecardUnavailable(withScreens([{ scorecard: "writing" }]))).toBe(false);
     // an older screen's failure is not the one on the page
-    expect(scorecardUnavailable(withScreens([{ scorecard: "ready" }, { scorecard: "unavailable", recruiterAsked: true }]))).toEqual({ unavailable: false, recruiterAsked: false });
-    expect(scorecardUnavailable(withScreens([]))).toEqual({ unavailable: false, recruiterAsked: false });
+    expect(scorecardUnavailable(withScreens([{ scorecard: "ready" }, { scorecard: "unavailable" }]))).toBe(false);
+    expect(scorecardUnavailable(withScreens([]))).toBe(false);
   });
 
   it("asks the reader to read a low-confidence reading themselves, without calling it a closer look", () => {

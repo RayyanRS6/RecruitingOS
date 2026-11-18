@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Screen, ScreeningFunnel, TimelineEvent } from "../../apps/web/src/api/client";
-import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, NOT_SENT_YET, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, aiInterviewCard, aiInterviewLine, answerLines, declineReasonFor, callNotesBody, callNotesMayStayOpen, callNotesQuestions, callNotesState, callNotesToast, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, noScreenWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
+import { APPLIED_IN_ONE_VISIT, DIDNT_FINISH_LINE, NOT_SENT_YET, SCREEN_STATUS_LABEL, STILL_APPLYING_LINE, aiInterviewCard, aiInterviewLine, answerLines, declineReasonFor, funnelLines, generalNotes, hiddenAnswersLine, isRecruiterNote, minutesWords, noScreenWords, offeredWithApplication, overviewScreenLine, recruiterNoteLabel, screenOrigin, shareWords, transcriptBubble, unansweredWords } from "../../apps/web/src/screen-view";
 
 /**
  * The screening conversation as the team reads it (plan Wave E): "Applied, then did the AI interview", questions the
- * candidate chose not to answer, answers changed before sending, a recruiter's call notes kept apart from the
- * candidate's own words, who may add those notes, and a role's figures in plain words.
+ * candidate chose not to answer, answers changed before sending, stored notes from a call kept apart from the
+ * candidate's own words, and a role's figures in plain words.
  */
 const at = "2026-10-08T10:00:00.000Z";
 const questions = [
@@ -62,7 +62,7 @@ describe("how the conversation reached them", () => {
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "invited" })))).toBe("AI interview not sent yet: their answers appear here once they send them. Nothing about Sofia waits on you until then.");
     expect(overviewScreenLine(a(screen({ invitedVia: "apply", status: "paused" })))).toContain("paused while the assistant is not working");
     expect(overviewScreenLine(a(screen({ status: "declined_by_candidate" })))).toContain("Nobody is declined for it; their score is from the résumé alone.");
-    expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("A recruiter contacts them");
+    expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("Your team follows up with them.");
     expect(overviewScreenLine(a(screen({ status: "human_requested" })))).toContain("was not sent, so you won't see it");
     // closed unfinished: that it happened, never what they said nor how far they got (founder decision of 9 October 2026)
     expect(overviewScreenLine(a(screen({ status: "unfinished" })))).toBe("Didn't finish the AI interview: they did not send their answers, even after one reminder, so you won't see them. The AI review and match score use their application only.");
@@ -97,7 +97,7 @@ describe("answers the candidate has not sent (founder decision of 9 October 2026
     expect(hiddenAnswersLine(hidden({ status: "unfinished" }))).toBe(DIDNT_FINISH_LINE);
     expect(DIDNT_FINISH_LINE).toMatch(/^Didn't finish the AI interview/);
     expect(hiddenAnswersLine(hidden({ status: "declined_by_candidate" }))).toBe("They sent their application without the conversation, so there are no answers to show.");
-    expect(hiddenAnswersLine(hidden({ status: "human_requested" }))).toContain("a recruiter adds notes from the call");
+    expect(hiddenAnswersLine(hidden({ status: "human_requested" }))).toBe("They asked for a person. Anything they typed before asking was not sent, so you won't see it.");
     expect(hiddenAnswersLine(hidden({ status: "completed", progress: { askedKeys: [], currentQuestionKey: null, completedBy: "recruiter_call" } }))).toContain("only the recruiter's notes are shown");
     expect(hiddenAnswersLine(hidden({ status: "abandoned" }))).toContain("not sent");
     // started, then closed when they withdrew from their status page or the team declined them while still applying
@@ -168,67 +168,6 @@ describe("each answer and what they did with it", () => {
     expect(isRecruiterNote({ role: "system", source: "recruiter_call" })).toBe(true);
     expect(isRecruiterNote({ role: "candidate", source: "chat" })).toBe(false);
     expect(recruiterNoteLabel(null)).toBe("Notes from a call by a recruiter. Not the candidate's own words.");
-  });
-});
-
-describe("a recruiter's notes from a call (plan E3)", () => {
-  const detail = (status: string | null, stage = "screen_invited") => ({ stage, screens: status ? [screen({ status })] : [] });
-
-  it("is for recruiters only, the company's own or ITS under a grant", () => {
-    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer", null]) expect(callNotesState(detail("human_requested"), role).show, String(role)).toBe(false);
-    expect(callNotesState(detail("human_requested"), "recruiter")).toEqual({ show: true, prominent: true });
-  });
-
-  it("waits at the top when the candidate asked for a person, and is a quiet choice otherwise", () => {
-    expect(callNotesState(detail("in_progress"), "recruiter")).toEqual({ show: true, prominent: false });
-    expect(callNotesState(detail("unfinished"), "recruiter")).toEqual({ show: true, prominent: false });
-    expect(callNotesState(detail(null, "triaged"), "recruiter")).toEqual({ show: true, prominent: false });
-  });
-
-  it("with no conversation yet the notes are the screening and finish it; only an existing one can stay open", () => {
-    expect(callNotesMayStayOpen(detail(null, "triaged"))).toBe(false);
-    expect(callNotesMayStayOpen(detail("human_requested"))).toBe(true);
-    expect(callNotesMayStayOpen(detail("in_progress"))).toBe(true);
-  });
-
-  it("is not offered once the conversation is complete, withdrawn or stopped, or past the screening step", () => {
-    for (const status of ["completed", "abandoned", "cancelled"]) expect(callNotesState(detail(status), "recruiter").show, status).toBe(false);
-    expect(callNotesState(detail("human_requested", "interview_scheduled"), "recruiter").show).toBe(false);
-    expect(callNotesState(detail("human_requested", "rejected"), "recruiter").show).toBe(false);
-  });
-
-  it("about someone locked it is there at any stage, as a quiet choice: the API keeps the notes on the Notes tab whatever the stage (the check of 9 November 2026, C4)", () => {
-    const locked = (stage: string) => ({ ...detail(null, stage), lockedAt: "2026-10-01T17:00:00.000Z" });
-    // a closed job moved them to its talent pool, they withdrew, or ITS declined them, and then they wrote back
-    for (const stage of ["talent_pool", "withdrawn", "rejected", "received"]) expect(callNotesState(locked(stage), "recruiter"), stage).toEqual({ show: true, prominent: false });
-    // still for recruiters only
-    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer", null]) expect(callNotesState(locked("talent_pool"), role).show, String(role)).toBe(false);
-    // someone the team can read keeps the screening's stages
-    expect(callNotesState(detail(null, "talent_pool"), "recruiter").show).toBe(false);
-  });
-
-  it("sends only what was written, per question where it fits, and says what it did", () => {
-    expect(callNotesBody({ q_saturdays: "  Yes, mornings.  ", q_pay: "   " }, " Warm. ", true)).toEqual({ notes: [{ questionKey: "q_saturdays", text: "Yes, mornings." }, { text: "Warm." }], complete: true });
-    expect(callNotesBody({ q_pay: "" }, "", true)).toBeNull();
-    expect(callNotesBody({}, "Left a voicemail.", false)).toEqual({ notes: [{ text: "Left a voicemail." }], complete: false });
-    expect(callNotesToast({ completed: true }, "Sofia").detail).toContain("never as their own words");
-    expect(callNotesToast({ completed: false }, "Sofia")).toEqual({ title: "Notes added.", detail: "The conversation stays open for Sofia." });
-    // About someone locked there is no conversation to keep open and no scorecard to write.
-    expect(callNotesToast({ completed: false, keptAsNote: true }, "Sofia")).toEqual({ title: "Notes kept.", detail: "They are on the Notes tab. Sofia is locked, so no AI review is written." });
-  });
-
-  it("lists the questions the conversation asks, so each note keeps its question (Wave S8: the written ones on a conversation created since)", () => {
-    const written = [{ key: "wq_calm", question: "Tell us about a time you calmed a nervous patient.", required: true, source: "company" as const }];
-    const labels = { mustHaves: [], competencies: [], questions: questions.slice(0, 2), written };
-    const keys = (screens: Screen[], packetLabels: typeof labels | Omit<typeof labels, "written"> = labels) => callNotesQuestions({ screens, packetLabels }).map((q) => q.key);
-    // since Wave S8, and the conversation the notes start when there is none: the written questions
-    expect(keys([screen({ status: "human_requested", progress: { askedKeys: [], currentQuestionKey: null, asks: "written" } })])).toEqual(["wq_calm"]);
-    expect(keys([])).toEqual(["wq_calm"]);
-    // its open questions first, as it asks them
-    expect(keys([screen({ status: "in_progress", progress: { askedKeys: [], currentQuestionKey: null, asks: "written", focusQuestions: [{ key: "unknown_1", question: "Is your license current?" }] } })])).toEqual(["unknown_1", "wq_calm"]);
-    // one from before asks the job's screening questions; an older answer without `written` gives them too
-    expect(keys([screen({ status: "in_progress" })])).toEqual(["q_saturdays", "q_pay"]);
-    expect(keys([], { mustHaves: [], competencies: [], questions: questions.slice(0, 2) })).toEqual(["q_saturdays", "q_pay"]);
   });
 });
 

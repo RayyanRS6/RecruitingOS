@@ -133,8 +133,8 @@ describe("what the form sends, and why it cannot yet", () => {
     // the plan's people win; someone who unticked everyone by hand is not overruled
     expect(defaultInterviewers({ roundKey: "r1", applicationPlan: [{ key: "r1", interviewerUserIds: ["wes"] }], activeMemberIds: active, fallbackUserId: "dana" })).toEqual(["wes"]);
     expect(defaultInterviewers({ roundKey: "r1", applicationPlan: [{ key: "r1", interviewerUserIds: [] }], picked: [], activeMemberIds: active, fallbackUserId: "dana" })).toEqual([]);
-    // someone not on the team (an ITS recruiter under a grant) is never ticked for them
-    expect(defaultInterviewers({ roundKey: "r1", applicationPlan: [{ key: "r1", interviewerUserIds: [] }], activeMemberIds: active, fallbackUserId: "its-recruiter" })).toEqual([]);
+    // someone not on the team is never ticked for them
+    expect(defaultInterviewers({ roundKey: "r1", applicationPlan: [{ key: "r1", interviewerUserIds: [] }], activeMemberIds: active, fallbackUserId: "not-on-the-team" })).toEqual([]);
     expect(defaultInterviewers({ roundKey: "r1", applicationPlan: [], activeMemberIds: null, fallbackUserId: "dana" })).toEqual([]);
   });
 });

@@ -27,7 +27,7 @@ const READS_A_PERSON = /\b(?:from|leftJoin|innerJoin|rightJoin|fullJoin)\(candid
 
 /**
  * Who reads the `candidates` table, per file, as of Rule 3. Lower is fine; higher needs a line here saying why that read cannot
- * reach the team, or which filter it goes through (`visibleTo`, `notLocked`, `hiddenAmong`, or the path guard).
+ * reach the team, or which filter it goes through (`visibleTo`, `notLocked`, or the path guard).
  */
 const CANDIDATE_READERS: Record<string, number> = {
   // Behind the path guard (middleware/candidate-lock.ts): only ever reached with an application the reader may read.
@@ -49,8 +49,6 @@ const CANDIDATE_READERS: Record<string, number> = {
   "apps/api/src/services/new-times.ts": 2,
   "apps/api/src/services/pool.ts": 1,
   "apps/api/src/services/role-report.ts": 2,
-  // `/escalations/mine`: only the applications `hiddenAmong` left in.
-  "apps/api/src/routes/approvals-escalations-events.ts": 1,
   // The console and privacy requests: ITS is not the paying customer (Rule 3, item 6).
   "apps/api/src/routes/privacy-requests.ts": 3,
   "packages/core/src/privacy-requests.ts": 6,
@@ -75,13 +73,12 @@ const CANDIDATE_READERS: Record<string, number> = {
   "packages/agents/src/email-failures.ts": 3,
   "packages/agents/src/orchestrator.ts": 3,
   "packages/agents/src/screening.ts": 1,
-  "packages/core/src/escalations.ts": 1,
   "packages/core/src/interview-followups.ts": 1,
   "packages/workflows/src/definitions/application-intake.ts": 1,
   "packages/workflows/src/definitions/new-times.ts": 1,
   "packages/workflows/src/definitions/schedule-interview.ts": 1,
   "packages/workflows/src/definitions/screen.ts": 1,
-  "packages/workflows/src/new-times-reopen.ts": 3,
+  "packages/workflows/src/new-times-reopen.ts": 2,
 };
 
 /** Where the parenthesis opened at `open` closes: strings and templates skipped, a template's `${...}` read as code, so a template inside one is too. */
@@ -132,7 +129,7 @@ function notifyCalls(source: string): Array<{ line: number; text: string }> {
 
 /** Whether a notice's words use a person's name: an interpolation of one of these, which is not the team's or ITS's own. */
 const NAMES_SOMEONE = /\$\{[^}]*\b(?:firstName|lastName|candidateName|name|who)\b[^}]*\}/g;
-const NOT_A_CANDIDATE = /\b(?:actor|recruiter|r\.recruiter|user|member|author|sender|p|u)\??\.name\b|\bsenderName\b|\bactor\.name\b|\bwho\.map\b/;
+const NOT_A_CANDIDATE = /\b(?:actor|user|member|author|sender|p|u)\??\.name\b|\bsenderName\b|\bactor\.name\b|\bwho\.map\b/;
 
 /** Notices that use one of those words for someone who is not a candidate, by what they are about. Add one with a reason. */
 const ABOUT_THE_TEAM: ReadonlySet<string> = new Set([
@@ -190,7 +187,7 @@ describe("a notice that names someone", () => {
     expect(named('await notify(tx, { companyId, kind: "x", title: `${cand.firstName} withdrew`, body: "b" });')).toEqual(["${cand.firstName}"]);
     expect(named('await notify(q, {\n  companyId,\n  kind: "x",\n  title: `${name} wrote back`,\n  body: "b",\n});')).toEqual(["${name}"]);
     expect(named('notify(tx, { companyId, about: app.id, kind: "x", title: `${name} wrote back`, body: "b" });')).toEqual([]);
-    expect(named('notify(tx, { companyId, kind: "x", title: `${actor.name} picked up your request`, body: "b" });')).toEqual([]);
+    expect(named('notify(tx, { companyId, kind: "x", title: `${actor.name} approved the job`, body: "b" });')).toEqual([]);
     expect(named('notify(tx, { companyId, kind: "x", title: `${role.title} is live`, body: "(see below)" });')).toEqual([]);
     // A template inside a template, a closing parenthesis in the words, and the next call's `about` not counting for this one.
     expect(named('await notify(q, { kind: "x", title: `${a ? `${cand.firstName} (new)` : ")"} left`, body: "b" });\nawait notify(q, { about: app.id, kind: "y", title: "t", body: "b" });')).toEqual(["${a ? `${cand.firstName}"]);

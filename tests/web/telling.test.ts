@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, DecisionMessageResult } from "../../apps/web/src/api/client";
 import {
-  LOCKED_NO_EMAIL_LINE, PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, lockedSafetyNetDay, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
+  PERSONAL_LINE_HINT, SAFETY_NET_WORKING_DAYS, THREAD_LONG, WORDING_HINT, bulkUndoMillis, bulkUndoneToast, closingResultToast, closingSendLabel, closingSheetLines, dayWords, namedDay, replyOwnWords, safetyNetActed, safetyNetDate,
   safetyNetLine, safetyNetPromise, safetyNetShort, safetyNetWorkDays, sendButtonLabel, sendPolicyLine, sentWithUndoToast, suggestedLineNote, threadItems, threadParts, undoFailedToast, undoMillisLeft, undoable, undoneToast, wordingChoices,
   HIDDEN_LINK_NOTE,
 } from "../../apps/web/src/telling";
@@ -21,22 +21,22 @@ function asReaderIn(zone: string, read: () => void): void {
 }
 
 describe("the safety net said when a decision is filed (Q27)", () => {
-  it("never says nothing goes by itself: under 'Do it' the message goes, otherwise a recruiter is brought in, and unknown says both", () => {
+  it("never says nothing goes by itself: under 'Do it' the message goes, otherwise the team is reminded, and unknown says both", () => {
     expect(safetyNetPromise("sends", "the closing message")).toBe("If nobody tells them within 5 working days, the closing message goes to them by itself.");
-    expect(safetyNetPromise("needs_approval")).toBe("Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
+    expect(safetyNetPromise("needs_approval")).toBe("Nothing is sent by itself: if nobody tells them within 5 working days, your team is reminded.");
     expect(safetyNetPromise("not_sent")).toBe(safetyNetPromise("needs_approval"));
-    expect(safetyNetPromise()).toBe("If nobody tells them within 5 working days, the standard message goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).");
+    expect(safetyNetPromise()).toBe("If nobody tells them within 5 working days, the standard message goes by itself (if your settings ask for approval or keep these messages with a person, your team is reminded instead and nothing is sent).");
   });
 
   it("says it in one short line, with the day when it is known (founder decision D-03 A)", () => {
     const on = new Date("2026-10-21T12:00:00");
     expect(safetyNetShort({ policy: "sends", hasEmail: true, on })).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, October 21.");
     expect(safetyNetShort({ policy: "sends", hasEmail: true, on, who: "Maria", what: "the closing message" })).toBe("If nobody tells Maria first, the closing message goes by itself on Wednesday, October 21.");
-    // settings that keep these messages with a person, or no address: a recruiter, and nothing goes by itself
-    expect(safetyNetShort({ policy: "needs_approval", on })).toBe("If nobody tells them first, an ITS recruiter is brought in on Wednesday, October 21. Nothing is sent by itself.");
-    expect(safetyNetShort({ policy: "sends", hasEmail: false, on })).toMatch(/an ITS recruiter is brought in/);
+    // settings that keep these messages with a person, or no address: the team is reminded, and nothing goes by itself
+    expect(safetyNetShort({ policy: "needs_approval", on })).toBe("If nobody tells them first, your team is reminded on Wednesday, October 21. Nothing is sent by itself.");
+    expect(safetyNetShort({ policy: "sends", hasEmail: false, on })).toMatch(/your team is reminded/);
     // the setting not known: both ways; the day not known: after five working days
-    expect(safetyNetShort({ on })).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, October 21 (or an ITS recruiter is brought in, if your settings say so).");
+    expect(safetyNetShort({ on })).toBe("If nobody tells them first, the standard message goes by itself on Wednesday, October 21 (or your team is reminded, if your settings say so).");
     expect(safetyNetShort({ policy: "sends" })).toBe("If nobody tells them first, the standard message goes by itself after 5 working days.");
   });
 });
@@ -168,7 +168,7 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
   // Second review of the live-test fixes, 12 November 2026 (#28, #36): the card read "5 working days have passed" from noon
   // on the named day by the reader's own clock, the evening before in Los Angeles for an owner reading in Pakistan, when the
   // next daily check sent nothing
-  it("says the day has come once the company's today reaches it, whatever the reader's clock, and names a recruiter's day on the company's calendar", () => {
+  it("says the day has come once the company's today reaches it, whatever the reader's clock, and names the day the team was reminded on the company's calendar", () => {
     const LA = "America/Los_Angeles";
     const a = { ...base, rejectedAt: "2026-11-12T04:00:00.000Z", stageChangedAt: "2026-11-12T04:00:00.000Z", untoldFallbackOn: "2026-11-18" };
     asReaderIn("Asia/Karachi", () => {
@@ -176,61 +176,15 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
       expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-11-18T07:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Wednesday, November 18.");
       // midnight there: the day has come, and the next daily check sends it
       expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-11-18T08:00:00.000Z"), timeZone: LA })).toBe("5 working days have passed: the standard message goes to Luis with the next daily check, unless you act now.");
-      // a recruiter brought in at 10 PM on Wednesday the 18th in Los Angeles, already Thursday morning in Karachi
-      const acted = { ...a, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-11-19T06:00:00.000Z", actor: { kind: "system", id: "untold_safety_net" }, payload: { action: "recruiter" } }] };
-      expect(safetyNetLine({ a: acted, waitingApproval: false, timeZone: LA })).toMatch(/^An ITS recruiter was brought in on Wednesday, November 18 to make sure Luis is told\./);
+      // the team reminded at 10 PM on Wednesday the 18th in Los Angeles, already Thursday morning in Karachi
+      const acted = { ...a, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-11-19T06:00:00.000Z", actor: { kind: "system", id: "untold_safety_net" }, payload: { action: "not_sent" } }] };
+      expect(safetyNetLine({ a: acted, waitingApproval: false, timeZone: LA })).toBe("Your team was reminded on Wednesday, November 18 that Luis has not been told. You can still send the message or record it.");
       // before the company's zone has loaded: the reader's own calendar
-      expect(safetyNetLine({ a: acted, waitingApproval: false })).toMatch(/^An ITS recruiter was brought in on Thursday, November 19 /);
+      expect(safetyNetLine({ a: acted, waitingApproval: false })).toMatch(/^Your team was reminded on Thursday, November 19 /);
     });
     // the card reads the company's zone
     const card = readFileSync(new URL("../../apps/web/src/pages/candidate-panel/telling.tsx", import.meta.url), "utf8");
     expect(card).toContain("safetyNetLine({ a, waitingApproval: !!waiting || !!a.decisionMessageWaiting, timeZone })");
-  });
-
-  // The second look at the safety-net day fix (12 November 2026, finding #13): for someone locked the day the API names can be
-  // the day before the date they were promised when they applied, before five working days have passed
-  it("for someone locked, says once the day has come that the message goes with the next daily check, never that five working days have passed", () => {
-    const LA = "America/Los_Angeles";
-    const decided = "2026-11-25T23:00:00.000Z"; // 3 PM on Wednesday, November 25 in Los Angeles
-    const pia = { lockedAt: "2026-11-02T18:00:00.000Z", createdAt: "2026-11-02T18:00:00.000Z" }; // promised Wednesday, December 2
-    const a = { ...base, rejectedAt: decided, stageChangedAt: decided, untoldFallbackOn: "2026-12-01", lockedAt: pia.lockedAt };
-    asReaderIn("Asia/Karachi", () => {
-      // noon on Tuesday, December 1 in Karachi, 11 PM on Monday the 30th in Los Angeles: the day is still ahead
-      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-12-01T07:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Tuesday, December 1.");
-      // midnight there: the day has come, three working days after the decision
-      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-12-01T08:00:00.000Z"), timeZone: LA })).toBe("The standard message goes to Luis with the next daily check, unless you act now.");
-      // the page's own count before the click: the day before her date, before the fifth working day (Wednesday, December 2)
-      expect(dayWords(safetyNetDate(decided, 5, LA)!)).toBe("Wednesday, December 2");
-      expect(dayWords(lockedSafetyNetDay(safetyNetDate(decided, 5, LA), pia, new Date(decided), LA)!)).toBe("Tuesday, December 1");
-    });
-    // before the company's zone has loaded, the reader's own calendar
-    asReaderIn(LA, () => expect(dayWords(lockedSafetyNetDay(safetyNetDate(decided), pia, new Date(decided))!)).toBe("Tuesday, December 1"));
-    // nobody else's day moves, and no day stays no day
-    const on = safetyNetDate(decided, 5, LA);
-    expect(lockedSafetyNetDay(on, { lockedAt: null, createdAt: pia.createdAt }, new Date(decided), LA)).toBe(on);
-    expect(lockedSafetyNetDay(null, pia, new Date(decided), LA)).toBeNull();
-  });
-
-  // Left out by the second look at the safety-net day fix (d2a6ef4): someone locked is told by itself or not at all, so with no
-  // address on file nothing goes to them and nobody is brought in, while their card said an ITS recruiter is (17 November 2026)
-  it("for someone locked with no email address on file, says no message goes, before the day, after it and once the check has run", () => {
-    const LA = "America/Los_Angeles";
-    const none = "No message goes: no email address on file.";
-    const a = { ...base, lockedAt: "2026-09-30T15:00:00.000Z", untoldFallbackOn: "2026-10-12", candidate: { ...base.candidate, email: null } };
-    expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe(none);
-    expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-13T12:00:00.000Z"), timeZone: LA })).toBe(none);
-    expect(safetyNetLine({ a: { ...a, untoldFallbackOn: null }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z") })).toBe(none);
-    // the daily check found nobody to send it to: nothing went, and nobody was brought in
-    const checked = { ...a, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-10-12T14:00:00.000Z", actor: { kind: "system", id: "candidate_lock" }, payload: { action: "not_sent", locked: true } }] };
-    expect(safetyNetActed(checked.timeline)).toBeNull();
-    expect(safetyNetLine({ a: checked, waitingApproval: false, timeZone: LA })).toBe(none);
-    expect(LOCKED_NO_EMAIL_LINE).toBe(none);
-    // the line before the click says the same for them
-    expect(safetyNetShort({ policy: "sends", hasEmail: false, locked: true, on: namedDay("2026-10-12") })).toBe(none);
-    // someone locked with an address, and anyone else with none, read as before
-    expect(safetyNetLine({ a: { ...a, candidate: base.candidate }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, the standard message goes by itself on Monday, October 12.");
-    expect(safetyNetLine({ a: { ...a, lockedAt: null }, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z"), timeZone: LA })).toBe("If nobody tells Luis first, an ITS recruiter is brought in on Monday, October 12. Nothing is sent by itself.");
-    expect(safetyNetShort({ policy: "sends", hasEmail: false, on: namedDay("2026-10-12") })).toBe("If nobody tells them first, an ITS recruiter is brought in on Monday, October 12. Nothing is sent by itself.");
   });
 
   it("says, in one short line, on which day the standard message goes by itself if nobody tells them first (D-03 A)", () => {
@@ -239,17 +193,17 @@ describe("the safety net on the 'not told yet' card (Q27)", () => {
     expect(line.split(" ").length).toBeLessThanOrEqual(16);
   });
 
-  it("brings in a recruiter instead, and sends nothing, when the settings ask for approval, keep it with a person, or there is no address", () => {
+  it("reminds the team instead, and sends nothing, when the settings ask for approval, keep it with a person, or there is no address", () => {
     for (const a of [{ ...base, declineMessage: "needs_approval" as const }, { ...base, declineMessage: "not_sent" as const }, { ...base, candidate: { ...base.candidate, email: null } }]) {
-      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z") })).toBe("If nobody tells Luis first, an ITS recruiter is brought in on Monday, October 12. Nothing is sent by itself.");
+      expect(safetyNetLine({ a, waitingApproval: false, now: new Date("2026-10-06T12:00:00.000Z") })).toBe("If nobody tells Luis first, your team is reminded on Monday, October 12. Nothing is sent by itself.");
     }
   });
 
-  it("says so once the day has passed, and once a recruiter was brought in; and says nothing when told, waiting for approval, or undecided", () => {
+  it("says so once the day has passed, and once the team was reminded; and says nothing when told, waiting for approval, or undecided", () => {
     expect(safetyNetLine({ a: base, waitingApproval: false, now: new Date("2026-10-13T12:00:00.000Z") })).toMatch(/with the next daily check/);
-    const acted = { ...base, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-10-12T14:00:00.000Z", actor: { kind: "system", id: "untold_safety_net" }, payload: { action: "recruiter" } }] };
-    expect(safetyNetActed(acted.timeline)).toEqual({ action: "recruiter", at: "2026-10-12T14:00:00.000Z" });
-    expect(safetyNetLine({ a: acted, waitingApproval: false })).toMatch(/^An ITS recruiter was brought in on Monday, October 12 to make sure Luis is told\./);
+    const acted = { ...base, timeline: [{ type: "application.untold_fallback", occurredAt: "2026-10-12T14:00:00.000Z", actor: { kind: "system", id: "untold_safety_net" }, payload: { action: "not_sent" } }] };
+    expect(safetyNetActed(acted.timeline)).toEqual({ action: "reminded", at: "2026-10-12T14:00:00.000Z" });
+    expect(safetyNetLine({ a: acted, waitingApproval: false })).toMatch(/^Your team was reminded on Monday, October 12 that Luis has not been told\./);
     expect(safetyNetLine({ a: { ...base, toldState: "sent" }, waitingApproval: false })).toBeNull();
     expect(safetyNetLine({ a: base, waitingApproval: true })).toBeNull();
     expect(safetyNetLine({ a: { ...base, stage: "triaged" }, waitingApproval: false })).toBeNull();

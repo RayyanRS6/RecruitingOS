@@ -336,16 +336,6 @@ describe("the panel's wiring", () => {
     expect(card).toContain("orderCompetencyFindings(result.competencyFindings, skills)");
     expect(card).toContain('{c.evidence?.quote ? <span className={LIST_QUOTE}> "{c.evidence.quote}"</span>');
     expect(card).toContain("{c.note ?");
-    // "Something wrong?" reaches an ITS recruiter now (plan F11): the toast says what the API did, not a promise
-    expect(card).toContain('toast(r.message ?? "Flagged and recorded.", "Nothing changes for the candidate.")');
-    expect(card).not.toContain("improve the system");
-    // choosing a kind asks first, saying what the recruiter will see and for how long; only an ITS recruiter's own flag goes at once
-    expect(card).toContain('title="Ask an ITS recruiter to check this AI review?"');
-    expect(card).toContain("const choose = (k: string) => { if (staff) flag.mutate(k); else setKind(k); };");
-    // a menu, not a dropdown: an arrow key only moves through the kinds; Enter or a click chooses (WCAG 3.2.2)
-    expect(card).toContain('<Menu label="Something wrong?" ariaLabel="Something wrong with this assessment?"');
-    expect(card).not.toContain("<select");
-    expect(card).toContain(`export const FLAG_SHARE = \`This asks an ITS recruiter to check the AI review. Once they pick it up they see \${accessWords("application")}. \${ACCESS_LIMITS}\`;`);
   });
 
   it("shows the bars costliest first with the full marks folded, and the confidence chip apart from the score", () => {

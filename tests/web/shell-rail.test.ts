@@ -74,26 +74,22 @@ describe("the rail's shape", () => {
     expect(railCompact(null)).toBe(false);
   });
 
-  it("lists the company's roles only for a member, never for an ITS recruiter under a grant", () => {
-    const member = { activeCompanyId: "co1", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }], staffAccess: null };
-    const staff = { activeCompanyId: "co1", memberships: [], staffAccess: { companyName: "Bright Dental" } };
-    const elsewhere = { activeCompanyId: "co2", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }], staffAccess: null };
+  it("lists the company's roles only for a member", () => {
+    const member = { activeCompanyId: "co1", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }] };
+    const elsewhere = { activeCompanyId: "co2", memberships: [{ companyId: "co1", companyName: "Bright Dental", role: "owner" }] };
     expect(railListsRoles(member)).toBe(true);
-    expect(railListsRoles(staff)).toBe(false);
     expect(railListsRoles(elsewhere)).toBe(false);
-    expect(railListsRoles({ activeCompanyId: null, memberships: [], staffAccess: null })).toBe(false);
+    expect(railListsRoles({ activeCompanyId: null, memberships: [] })).toBe(false);
     expect(railListsRoles(null)).toBe(false);
     expect(activeCompanyOf(member)).toEqual({ name: "Bright Dental", role: "owner", member: true });
-    expect(activeCompanyOf(staff)).toEqual({ name: "Bright Dental", role: null, member: false });
     expect(activeCompanyOf(undefined)).toEqual({ name: null, role: null, member: false });
   });
 
-  it("names the person's role in plain words, and an ITS recruiter's limited access", () => {
-    expect(teamRoleWord("owner", false)).toBe("Owner");
-    expect(teamRoleWord("hiring_manager", false)).toBe("Hiring manager");
-    expect(teamRoleWord("hr", false)).toBe("HR");
-    expect(teamRoleWord(null, true)).toBe("ITS recruiter, limited access");
-    expect(teamRoleWord(null, false)).toBeNull();
+  it("names the person's role in plain words", () => {
+    expect(teamRoleWord("owner")).toBe("Owner");
+    expect(teamRoleWord("hiring_manager")).toBe("Hiring manager");
+    expect(teamRoleWord("hr")).toBe("HR");
+    expect(teamRoleWord(null)).toBeNull();
   });
 });
 
@@ -111,13 +107,9 @@ describe("a role's status pill", () => {
 describe("the company switcher's choices (rows 9, 49)", () => {
   const m = (companyId: string, companyName: string, role = "owner") => ({ companyId, companyName, role });
   it("lists every other company the person works in, by name, and nothing for one company", () => {
-    const me = { activeCompanyId: "c2", memberships: [m("c1", "Zephyr Dental", "hr"), m("c2", "Bright Dental"), m("c3", "Alpine Clinic", "interviewer")], staffAccess: null };
+    const me = { activeCompanyId: "c2", memberships: [m("c1", "Zephyr Dental", "hr"), m("c2", "Bright Dental"), m("c3", "Alpine Clinic", "interviewer")] };
     expect(otherCompanies(me)).toEqual([{ companyId: "c3", companyName: "Alpine Clinic", role: "interviewer" }, { companyId: "c1", companyName: "Zephyr Dental", role: "hr" }]);
-    expect(otherCompanies({ activeCompanyId: "c2", memberships: [m("c2", "Bright Dental")], staffAccess: null })).toEqual([]);
+    expect(otherCompanies({ activeCompanyId: "c2", memberships: [m("c2", "Bright Dental")] })).toEqual([]);
     expect(otherCompanies(null)).toEqual([]);
-  });
-
-  it("offers nothing to an ITS recruiter inside a customer under a grant", () => {
-    expect(otherCompanies({ activeCompanyId: "c9", memberships: [m("c1", "Own Co")], staffAccess: { companyName: "Customer Co" } })).toEqual([]);
   });
 });

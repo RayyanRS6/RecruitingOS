@@ -11,7 +11,7 @@ import { canApproveRole, canChangeCompany, canDecideInterviews, canDecline, canE
  * refuses (the role page's posting controls, Edit, Close, the Talent link and the Report tab), and never hidden from a
  * role the API allows. The role page's words and the interview defaults are pure functions, tested here too.
  */
-const ROLES = ["owner", "admin", "hiring_manager", "hr", "interviewer", "recruiter"] as const;
+const ROLES = ["owner", "admin", "hiring_manager", "hr", "interviewer"] as const;
 const MIRRORS: Array<[string, (role: string) => boolean, Permission]> = [
   ["canManageRole", canManageRole, "role.manage"],
   ["canEditPacket", canEditPacket, "packet.edit"],
@@ -47,11 +47,11 @@ describe("the web pages' copy of the permission matrix", () => {
     expect(canShareJob(null)).toBe(false);
   });
 
-  it("hiring managers and HR see postings read-only; HR may close a role, a recruiter may not", () => {
+  it("hiring managers and HR see postings read-only; HR may close a role, an interviewer may not", () => {
     expect(canManageRole("hiring_manager")).toBe(false);
     expect(canManageRole("hr")).toBe(false);
     expect(canRecordOutcome("hr")).toBe(true);
-    expect(canRecordOutcome("recruiter")).toBe(false);
+    expect(canRecordOutcome("interviewer")).toBe(false);
     expect(canEditPacket("hr")).toBe(false);
     expect(canSeeTalent("interviewer")).toBe(false);
   });
@@ -162,7 +162,7 @@ describe("what an interview that never took place offers next", () => {
   it("offers times again when the candidate let them expire, and a new interview after a cancellation", () => {
     expect(againChoice(at("offer_expired"), [at("offer_expired")], "owner")).toBe("offer_again");
     expect(againChoice(at("cancelled"), [at("cancelled")], "hiring_manager")).toBe("approve_new");
-    expect(againChoice(at("cancelled", "interview_complete"), [], "recruiter")).toBe("approve_new");
+    expect(againChoice(at("cancelled", "interview_complete"), [], "admin")).toBe("approve_new");
   });
 
   it("offers nothing once they have moved on, another interview exists, or the role may not do it", () => {
@@ -183,7 +183,7 @@ describe("what an interview that never took place offers next", () => {
   it("offers 'Send new times' for someone under Cancelled with nothing in motion, before offering times again or a new interview", () => {
     const under = (status: string, times: string, stage = "interview_recommended") => ({ ...at(status, stage), followUp: { id: "f1", reason: "asked_new_times" as const, times } });
     expect(againChoice(under("cancelled", "none"), [], "owner")).toBe("send_new_times");
-    expect(againChoice(under("offer_expired", "expired"), [], "recruiter")).toBe("send_new_times");
+    expect(againChoice(under("offer_expired", "expired"), [], "admin")).toBe("send_new_times");
     // a candidate who did not come: a new interview for the same round, from the same card
     expect(againChoice(under("no_show", "none", "interview_complete"), [], "hiring_manager")).toBe("send_new_times");
     // new times already being prepared, held, out or not delivered: nothing more to send from here

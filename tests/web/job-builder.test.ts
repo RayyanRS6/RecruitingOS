@@ -1,13 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { presetOf } from "../../apps/web/src/recruiter-access";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, IntakeFactsPatch, RolePacket as RolePacketSchema, packetVisibility, type IntakeFacts, type IntakeQuestion, type IntakeServerState, type IntakeSessionView } from "../../packages/contracts/src/index";
 import { SOMEONE_NEW as CORE_SOMEONE_NEW, applyAnswers, applyFactsPatch, draftFactsKey, intakeReadiness, normalizeFacts } from "../../packages/core/src/intake-builder";
 import { VERTICAL_TO_PLAYBOOK, findPlaybook, matchPlaybookRole } from "../../packages/playbooks/src/index";
 import { samplePacket } from "../../packages/agents/src/fixtures/sample-packet";
 import {
   NEW_ROLE_FRESH_HREF, SOMEONE_NEW, addOwn, answerOf, answerPayload, answersFirst, answersPayload, approvalHelp, askFromDetails, basicsChips, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck,
-  composerPlaceholder, deckFor, draftOutOfDate, draftRecruiterAsk, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
+  composerPlaceholder, deckFor, draftOutOfDate, draftSections, draftSteps, draftTitle, draftingNow, echoText, enterSends, errorWords, goTo, initialCards, isDiscardDraft,
   marketRange, marketSource, mayHireAgain, mayTakeOverDrafts, messageLimit, messageProblem, nextLabel, parseAmount, payCardProblem, payFormFrom, payPayload, payProblem, pickHint, readinessList,
   blockersHeading, redraftWarning, refusedLines, removeOwn, sectionOfPath, setDraft, setPayForm, startHireHref, togglePick, turnProblem, typeInstead, typedWithCards, DRAFT_SEEN_BY, TAKEN_OVER_TOAST, type CardState, type Deck, type PayForm,
 } from "../../apps/web/src/pages/new-role/rules";
@@ -483,25 +482,20 @@ describe("pay", () => {
   });
 });
 
-describe("failures, the hand-off and Today", () => {
-  it("a failed turn says what to do, never the model's error, and carries the recruiter hand-off with the draft", () => {
-    const reply = { error: "schema_violation: missing assistantMessage", recovery: "Try again, or bring in a recruiter to finish it with you.", proposedActions: [{ kind: "ask_recruiter", label: "Bring in a recruiter", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", intakeSessionId: "s1", question: "Please help" } }] };
-    const p = turnProblem(reply)!;
+describe("failures and Today", () => {
+  it("a failed turn says what to do, never the model's error, and carries the server's request about the plan when it offers one", () => {
+    const p = turnProblem({ error: "schema_violation: missing assistantMessage", recovery: "Try again.", proposedActions: [] })!;
+    expect(p.message).toBe("The assistant could not reply just now. Try again.");
     expect(p.message).not.toMatch(/schema/);
-    expect(p.message).toMatch(/bring in a recruiter/);
-    expect(p.ask).toEqual({ label: "Bring in a recruiter", body: { kind: "ask", scope: "company", intakeSessionId: "s1", question: "Please help" } });
+    expect(p.ask).toBeNull();
     expect(turnProblem({ assistantMessage: "Hi" })).toBeNull();
     expect(turnProblem(null)).toBeNull();
-    expect(askFromDetails({ aiRunId: "r", actions: reply.proposedActions })?.body).toMatchObject({ intakeSessionId: "s1" });
+    // a refusal that offers the Upgrade carries it: the button's words and why it is asked
+    const actions = [{ kind: "ask", label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } }];
+    expect(askFromDetails({ aiRunId: "r", actions })).toEqual({ label: "Upgrade", reason: "We would like more AI help." });
     expect(askFromDetails(undefined)).toBeNull();
     expect(errorWords({ status: 409, message: "This draft has already produced a role." })).toBe("This draft has already produced a role.");
     expect(errorWords(new TypeError("Failed to fetch"))).toMatch(/Check your connection/);
-    // offered on every failure, even one that carries no offer: the same request the server makes, with the draft
-    const own = draftRecruiterAsk("s1");
-    expect(own).toEqual({ label: "Bring in a recruiter", body: { kind: "ask", scope: "company", intakeSessionId: "s1", question: "Please help me finish drafting this role. The assistant could not finish it with me." } });
-    expect(presetOf(own.body)).toMatchObject({ kind: "ask", about: "all", intakeSessionId: "s1" });
-    const server = readFileSync(new URL("../../apps/api/src/routes/intake.ts", import.meta.url), "utf8");
-    expect(server).toContain(`const DRAFT_HELP_QUESTION = "${own.body.question}";`);
   });
 
   it("names the draft in the address, never the person's words", () => {
@@ -521,7 +515,7 @@ describe("failures, the hand-off and Today", () => {
   it("says truthfully who sees a draft, lets owners and admins find and take over the team's drafts, and words the take-over for every starter (Q6)", () => {
     expect(DRAFT_SEEN_BY).toBe("you, owners and admins can see it");
     expect(["owner", "admin"].every(mayTakeOverDrafts)).toBe(true);
-    expect(["hiring_manager", "hr", "recruiter", "interviewer", null, undefined].some(mayTakeOverDrafts)).toBe(false);
+    expect(["hiring_manager", "hr", "interviewer", null, undefined].some(mayTakeOverDrafts)).toBe(false);
     expect(TAKEN_OVER_TOAST.body).toMatch(/Unless they are an owner or an admin, they can no longer work on it/);
     const roles = readFileSync(new URL("../../apps/web/src/pages/Roles.tsx", import.meta.url), "utf8");
     expect(roles).not.toContain("only you see this");

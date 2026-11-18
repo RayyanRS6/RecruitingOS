@@ -24,8 +24,7 @@ const ALLOWED: Record<string, number> = {
   "apps/api/src/routes/admin.ts": 11,
   "apps/api/src/routes/auth-mfa.tsx": 3,
   "apps/api/src/routes/auth-shared.ts": 1,
-  "apps/api/src/routes/auth.ts": 3,
-  "apps/api/src/routes/companies.ts": 2,
+  "apps/api/src/routes/auth.ts": 2,
   "apps/api/src/routes/privacy-requests.ts": 4,
   "apps/api/src/test-helpers.ts": 5, // +1 Wave 0: statusTokenFor reads a test application's link, which now travels only by email
   "apps/api/src/webhooks/postmark.ts": 8,

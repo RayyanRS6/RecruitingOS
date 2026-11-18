@@ -7,8 +7,8 @@ import { shareTargets } from "../../apps/api/src/services/job-urls";
 import type { PostingView, PostingsResponse, RolePacket } from "../../apps/web/src/api/client";
 import {
   aboutDraftOf, aboutProblem, addDays, approveRequest, autoActionsLine, boardsOnTheLine, boardStatus, boardTicksToast, careersStatus, closingDateLine, closingDateProblem, closingDateRequiredFor,
-  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, isPostingTaskKind, legalLines,
-  liveEditWords, logoProblem, logoUrlOf, materialChangesOf, noBoardsLine, opensOwnApp, outdatedBoardsLine, pollInterval, previewHref, previewOfEdit, previewPageHref, queueKindLabel,
+  closingDateToast, dayWords, destinationsOf, draftClosingDateKey, googleStatus, interviewersNote, isClosingDateAction, legalLines,
+  liveEditWords, logoProblem, logoUrlOf, materialChangesOf, noBoardsLine, opensOwnApp, outdatedBoardsLine, pollInterval, previewHref, previewOfEdit, previewPageHref,
   readDraftClosingDate, savedBoardsKey, savedVersionToast, shareSubject, shareTargetsFor, shareTextFor, todayIn, unsavedBoards, writeDraftClosingDate,
 } from "../../apps/web/src/publishing";
 
@@ -39,7 +39,7 @@ const packet = (over: Partial<{ title: string; min: number; max: number; region:
 const posting = (over: Partial<PostingView>): PostingView => ({
   id: "p1", channel: "indeed", status: "ready_to_post", externalUrl: null, intakeToken: null, instructions: null, steps: [], error: null, publishedAt: null, publicUrlRecordedAt: null, verifiedAt: null, verifiedBy: null,
   verificationNote: null, verificationError: null, verificationAttempts: 0, pausedAt: null, closedAt: null, closureRequired: false, closureConfirmedAt: null, closureConfirmedBy: null,
-  name: "Indeed", stateLabel: "Ready to post", isBoard: true, link: null, package: null, stillUp: false, chosen: true, postedBy: "its", task: null, showsOldVersion: false, ...over,
+  name: "Indeed", stateLabel: "Ready to post", isBoard: true, link: null, package: null, stillUp: false, chosen: true, showsOldVersion: false, ...over,
 });
 
 const READY = { state: "ready", pollAfterSeconds: null, message: "Everything is prepared.", checksPending: 0 } as const;
@@ -79,17 +79,13 @@ describe("the screen right after approval (D2)", () => {
     expect(careersStatus(undefined, { state: "preparing" })).toMatchObject({ label: "Getting it ready", working: true });
   });
 
-  it("says who has a board: waiting for ITS, the ITS recruiter by name, or the team", () => {
-    expect(boardStatus(posting({}), READY).label).toBe("Waiting for ITS");
-    expect(boardStatus(posting({ task: { id: "t", kind: "post_job", status: "claimed", label: "Post the job on Indeed", recruiterName: "Pat Poster", createdAt: "", resolvedAt: null, notDone: false, note: null } }), READY).label).toBe("Pat Poster at ITS is posting it");
-    // a task ITS closed as not possible is never shown as under way or done
-    expect(boardStatus(posting({ task: { id: "t", kind: "post_job", status: "resolved", label: "Post the job on Indeed", recruiterName: "Pat Poster", createdAt: "", resolvedAt: "2026-10-08T10:00:00.000Z", notDone: true, note: "No job slots left." } }), READY)).toMatchObject({ label: "ITS could not post it", tone: "caution", done: false });
-    expect(boardStatus(posting({ postedBy: "you" }), READY)).toMatchObject({ label: "Waiting for you to post it", tone: "caution" });
+  it("says a board waits for the team to post it, and when a closed listing is still up", () => {
+    expect(boardStatus(posting({}), READY)).toMatchObject({ label: "Waiting for you to post it", tone: "caution", done: false });
     expect(boardStatus(posting({ status: "closed", closureRequired: true }), READY)).toMatchObject({ label: "Still up: to be taken down", tone: "critical" });
   });
 
   const view = (over: Partial<PostingsResponse> = {}): Pick<PostingsResponse, "postings" | "publishing" | "urls" | "emailIn" | "boards" | "closingDate"> => ({
-    postings: [posting({ id: "c", channel: "careers_page", name: "Careers page", isBoard: false, postedBy: null, status: "posted_manually" }), posting({ id: "g", channel: "google_jobs", name: "Google for Jobs", isBoard: false, postedBy: null, status: "submitted_integration" }), posting({ id: "i" })],
+    postings: [posting({ id: "c", channel: "careers_page", name: "Careers page", isBoard: false, status: "posted_manually" }), posting({ id: "g", channel: "google_jobs", name: "Google for Jobs", isBoard: false, status: "submitted_integration" }), posting({ id: "i" })],
     publishing: READY,
     urls: { careers: "https://jobs.test/c/acme", job: "https://jobs.test/c/acme/jobs/r1", apply: "https://jobs.test/c/acme/jobs/r1/apply" },
     emailIn: { address: "r1@in.test", connected: false, shown: false, status: "failed", error: null },
@@ -104,7 +100,7 @@ describe("the screen right after approval (D2)", () => {
     expect(list[0]).toMatchObject({ name: "Your careers page", url: "https://jobs.test/c/acme/jobs/r1", copy: { text: "https://jobs.test/c/acme/jobs/r1" } });
     expect(list[0].detail).toContain("Apply by Friday, October 30, 2026");
     expect(list[1].detail).toMatch(/Marked found once someone sees it in a Google search/);
-    expect(list[2].detail).toBe("ITS is posting this on Indeed from your company's own account.");
+    expect(list[2].detail).toBe("You post this on Indeed from your own account. The Share tab has the words to paste and the steps.");
     const withEmail = destinationsOf(view({ emailIn: { address: "r1@in.test", connected: true, shown: true, status: "live_verified", error: null } }));
     expect(withEmail.map((d) => d.key)).toEqual(["careers_page", "google_jobs", "email_in", "indeed"]);
     // a chosen board not prepared yet shows as being got ready; a board a person closed (never up) is left out
@@ -122,9 +118,9 @@ describe("the screen right after approval (D2)", () => {
     expect(interviewersNote({ rounds: 3, roundsWithoutInterviewers: 2 })).toMatch(/^2 of the 3 interview rounds have nobody named/);
     for (const n of [1, 2]) expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: n })).not.toMatch(/offered times|straight away|Choose who interviews now/);
     expect(interviewersNote({ rounds: 2, roundsWithoutInterviewers: 0 })).toBeNull();
-    expect(outdatedBoardsLine(["indeed"], "its")).toBe("Indeed still shows the earlier version. ITS has a task to update it from your company's account.");
-    expect(outdatedBoardsLine(["linkedin_basic", "indeed"], "self")).toBe("LinkedIn, Indeed still show the earlier version. Update them from your own account, then confirm on the Share tab.");
-    expect(outdatedBoardsLine([], "its")).toBeNull();
+    expect(outdatedBoardsLine(["indeed"])).toBe("Indeed still shows the earlier version. Update it from your own account, then confirm on the Share tab.");
+    expect(outdatedBoardsLine(["linkedin_basic", "indeed"])).toBe("LinkedIn, Indeed still show the earlier version. Update them from your own account, then confirm on the Share tab.");
+    expect(outdatedBoardsLine([])).toBeNull();
   });
 
   it("is a calm confirmation with a tick, 'Go to your job' as the main button and 'Share it now'", () => {
@@ -186,13 +182,13 @@ describe("a change to a live job (D4, founder decision Q10)", () => {
     expect(liveEditWords([])).toMatchObject({ heading: "This change goes live when you confirm", confirm: "Make it live" });
     expect(liveEditWords(["pay", "title"]).body).toMatch(/^It changes the pay and the job title, so it needs the same approval as a new role/);
     expect(liveEditWords(["pay"]).confirm).toBe("Save and ask for approval");
-    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: ["indeed"] }, "its")).toEqual({ title: "Version 4 is live.", detail: "Indeed still shows the earlier version. ITS has a task to update it from your company's account." });
-    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [] }, "its")).toEqual({ title: "Version 4 is live.", detail: "The job page shows it now." });
+    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: ["indeed"] })).toEqual({ title: "Version 4 is live.", detail: "Indeed still shows the earlier version. Update it from your own account, then confirm on the Share tab." });
+    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [] })).toEqual({ title: "Version 4 is live.", detail: "The job page shows it now." });
     // a paused job: current, shown once it resumes (never "live")
-    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [], paused: true }, "its")).toEqual({ title: "Version 4 is current.", detail: "It shows when you resume the job." });
-    expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: { changes: ["pay"], words: "This changes the pay, so it needs the same approval as a new role before it goes live.", youMayConfirm: true } }, "its").detail).toMatch(/As the company's only owner, you confirm it yourself on the approval card/);
-    expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: null }, "its").title).toBe("Saved as version 5. It takes effect once an approver says yes.");
-    expect(savedVersionToast({ version: 2, outcome: "proposed", guardChanges: ["The ceiling was raised to the top of the range."] }, "self")).toEqual({ title: "Saved as version 2 with the draft.", detail: "The ceiling was raised to the top of the range." });
+    expect(savedVersionToast({ version: 4, outcome: "approved_current", boardsShowingOldVersion: [], paused: true })).toEqual({ title: "Version 4 is current.", detail: "It shows when you resume the job." });
+    expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: { changes: ["pay"], words: "This changes the pay, so it needs the same approval as a new role before it goes live.", youMayConfirm: true } }).detail).toMatch(/As the company's only owner, you confirm it yourself on the approval card/);
+    expect(savedVersionToast({ version: 5, outcome: "proposed_pending_approval", needsApproval: null }).title).toBe("Saved as version 5. It takes effect once an approver says yes.");
+    expect(savedVersionToast({ version: 2, outcome: "proposed", guardChanges: ["The ceiling was raised to the top of the range."] })).toEqual({ title: "Saved as version 2 with the draft.", detail: "The ceiling was raised to the top of the range." });
   });
 
   it("shows the job page with the unsaved words laid over the saved version's preview", () => {
@@ -273,7 +269,7 @@ describe("the closing date (D7, founder decision Q12)", () => {
     expect(isClosingDateAction({ method: "POST", path: "/api/v1/roles/r1/closing-date" })).toBe(true);
     expect(isClosingDateAction({ method: "GET", path: "/roles/r1?tab=posting#closing-date" })).toBe(false);
     const home = read("../../apps/web/src/pages/Home.tsx");
-    expect(home).toContain("isClosingDateAction(a) ? a.body ?? {}");
+    expect(home).toContain("api.post<unknown>(a.path, isDiscardDraft(a) ? {} : a.body ?? {})");
     expect(home).toContain('closing_date: "Closing date"');
     expect(read("../../apps/web/src/pages/RoleDetail.tsx")).toContain('const wantsClose = search.get("close") === "1";');
   });
@@ -328,11 +324,11 @@ describe("sharing (D8)", () => {
   });
 });
 
-describe("board ticks and ITS posting tasks (D6, D3)", () => {
+describe("board ticks (D6)", () => {
   it("says what saving the ticks does", () => {
-    expect(boardTicksToast({ before: ["indeed"], after: ["indeed", "linkedin_basic"], roleStatus: "open", whoPosts: "its" })).toEqual({ title: "Boards saved: Indeed, LinkedIn.", detail: "ITS posts the job on LinkedIn from your company's account." });
-    expect(boardTicksToast({ before: ["indeed"], after: [], roleStatus: "open", whoPosts: "self" })).toEqual({ title: "No job boards for this job.", detail: "Indeed closed; take the listing down from your own account if it was up." });
-    expect(boardTicksToast({ before: [], after: ["indeed"], roleStatus: "pending_approval", whoPosts: "its" }).detail).toMatch(/^Nothing is posted until the job is approved/);
+    expect(boardTicksToast({ before: ["indeed"], after: ["indeed", "linkedin_basic"], roleStatus: "open" })).toEqual({ title: "Boards saved: Indeed, LinkedIn.", detail: "LinkedIn is being prepared for you to post." });
+    expect(boardTicksToast({ before: ["indeed"], after: [], roleStatus: "open" })).toEqual({ title: "No job boards for this job.", detail: "Indeed closed; take the listing down from your own account if it was up." });
+    expect(boardTicksToast({ before: [], after: ["indeed"], roleStatus: "pending_approval" }).detail).toMatch(/^Nothing is posted until the job is approved/);
   });
 
   // The live smoke test of 4 Nov 2026: Indeed unticked on the approval card, "Approve and publish" pressed without "Save
@@ -405,21 +401,9 @@ describe("board ticks and ITS posting tasks (D6, D3)", () => {
     for (const key of ['["role", role.id]', '["postings", role.id]', '["brief"]']) expect(refresh).toContain(key);
   });
 
-  it("names the posting tasks in the queue in words", () => {
-    expect(queueKindLabel("post_job")).toBe("Post a job");
-    expect(queueKindLabel("take_down_job")).toBe("Take a job listing down");
-    expect(queueKindLabel("stuck_role")).toBe("stuck role");
-    expect(isPostingTaskKind("update_job")).toBe(true);
-    expect(isPostingTaskKind("ask")).toBe(false);
-    const queue = read("../../apps/web/src/pages/RecruiterQueue.tsx");
-    expect(queue).toContain("<PostingTaskPanel id={e.id} task={e.postingTask}");
-    expect(queue).toContain(`/api/v1/escalations/\${id}/posting/\${input.path}`);
-  });
-
-  it("the Posting tab says ITS is posting, never 'from your own account', when ITS posts", () => {
+  it("the Share tab says the team posts each board from its own account", () => {
     const tab = read("../../apps/web/src/pages/RolePosting.tsx");
-    expect(tab).toContain(`ITS is posting this on \${p.name} from your company's own account`);
-    expect(tab).toContain('"Posted by ITS from your company\'s own account"');
+    expect(tab).toContain('"Posted by your team from your own account"');
   });
 });
 

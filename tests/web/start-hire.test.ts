@@ -30,7 +30,7 @@ describe("where Start a hire goes", () => {
   });
 
   it("is offered exactly to the roles the API lets start a hire", () => {
-    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer", "recruiter"] as const) expect(canStartHire(role), role).toBe(can(role, "role.create"));
+    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer"] as const) expect(canStartHire(role), role).toBe(can(role, "role.create"));
     expect(canStartHire("interviewer")).toBe(false);
     expect(canStartHire("hr")).toBe(false);
     expect(canStartHire(null)).toBe(false);

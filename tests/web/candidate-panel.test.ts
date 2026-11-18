@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationDetail, Screen, TimelineEvent } from "../../apps/web/src/api/client";
 import { screenAnswerQuestion, screenQuestionText } from "../../apps/web/src/evidence";
-import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, offersNewInterviewLink, panelQuestions, panelSearch, panelTabFrom, recruiterEventsFor, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
+import { ASSISTANT_NOTE_LABEL, DECLINE_REASONS, DRAFTED_WORDS, NO_COMPOSE, OWN_WORDS, activeInterviews, chatGapLines, composeFor, dayKey, hasUnsent, historyItem, historyItems, holdDateBounds, latestByTab, markSeen, neighbours, offersNewInterviewLink, panelQuestions, panelSearch, panelTabFrom, suggestionAndDecision, unreadTabs, whoDid, writeupLines, writeupOverviewLine, writeupSummary } from "../../apps/web/src/pages/candidate-panel/helpers";
 
 /**
  * The candidate panel's rules (plan A10): its address, next and previous, the unread markers, the hold's dates, the
@@ -158,34 +158,12 @@ describe("History: who did what, why, and what the candidate was told", () => {
     expect(historyItem(ev("human.override", { action: "override_eligibility", note: "Exam next week" }))).toMatchObject({ what: "Kept them in after the eligibility answer", why: "Exam next week" });
   });
 
-  it("lists everything newest first, with recruiter help joined in from its own records", () => {
-    const events = [
-      { ...ev("recruiter.requested", { applicationId: "app1", kind: "review" }, undefined, "2026-10-02T10:00:00.000Z"), subjectType: "escalation", subjectId: "e1" },
-      { ...ev("recruiter.claimed", {}, { kind: "recruiter", id: "r1", name: "Paula" }, "2026-10-03T10:00:00.000Z"), subjectType: "escalation", subjectId: "e1" },
-      { ...ev("recruiter.resolved", { resolution: "Worth a working interview." }, { kind: "recruiter", id: "r1", name: "Paula" }, "2026-10-04T10:00:00.000Z"), subjectType: "escalation", subjectId: "e1" },
-      { ...ev("recruiter.requested", { applicationId: "someone-else" }), subjectType: "escalation", subjectId: "e2" },
-      { ...ev("recruiter.claimed", {}), subjectType: "escalation", subjectId: "e2" },
-    ];
-    const help = recruiterEventsFor("app1", events);
-    expect(help.map((e) => e.type)).toEqual(["recruiter.requested", "recruiter.claimed", "recruiter.resolved"]);
-    const items = historyItems([ev("application.received", {}, { kind: "candidate", id: "c" }, "2026-10-01T10:00:00.000Z")], help);
-    expect(items.map((i) => i.what)).toEqual(["The ITS recruiter answered", "An ITS recruiter picked up the request", "Asked an ITS recruiter for help", "Applied"]);
-    expect(items[0]).toMatchObject({ who: "Paula (ITS recruiter)", why: "Worth a working interview." });
-  });
-
-  // The second look at the review of the live-test fixes: a hold a person decided closes ITS's request, or notes it on one a
-  // recruiter took, as the system; the History said a recruiter answered when nobody at ITS had done anything.
-  it("says the system closed a request ITS no longer needed, never that a recruiter answered it", () => {
-    const intake = { kind: "system", id: "workflow:application_intake", name: "Recruiting OS" };
-    const decided = "Someone has now decided about this application, so nothing more is needed.";
-    const closed = historyItem(ev("recruiter.resolved", { resolution: decided, holdDecided: true }, intake));
-    expect(closed).toMatchObject({ what: "The request to ITS was closed", who: "The system", why: decided });
-    expect(closed?.what).not.toBe("The ITS recruiter answered");
-    // a stopped step that finished once ITS tried it again closes its request the same way
-    expect(historyItem(ev("recruiter.resolved", { resolution: "ITS ran the stopped step again and it finished. Nothing more is needed from you.", retriedRun: true }, { kind: "system", id: "workflow:retry", name: "Recruiting OS" }))?.what).toBe("The request to ITS was closed");
-    expect(historyItem(ev("recruiter.replied", { messageId: "m1" }, intake))).toMatchObject({ what: "A note was added to the request for the recruiter", who: "The system" });
-    // a recruiter's own note keeps its words
-    expect(historyItem(ev("recruiter.replied", { messageId: "m2" }, { kind: "recruiter", id: "r1", name: "Paula" }))).toMatchObject({ what: "The ITS recruiter wrote about the request", who: "Paula (ITS recruiter)" });
+  it("lists everything newest first", () => {
+    const items = historyItems([
+      ev("application.received", {}, { kind: "candidate", id: "c" }, "2026-10-01T10:00:00.000Z"),
+      ev("application.stage_changed", { from: "triaged", to: "screen_invited" }, undefined, "2026-10-03T10:00:00.000Z"),
+    ]);
+    expect(items.map((i) => i.what)).toEqual(['Now "Invited to an AI interview"', "Applied"]);
   });
 
   it("tells what became of the assistant's suggestions: asked, approved by whom, 'Not now', closed, run out of time", () => {
@@ -270,8 +248,7 @@ describe("History: who did what, why, and what the candidate was told", () => {
     // the new times themselves
     expect(historyItem(ev("interview.new_times_sent", { via: "auto", attempt: 2 }, sys))).toMatchObject({ what: "New times sent automatically, as they asked", who: "The system" });
     expect(historyItem(ev("interview.new_times_sent", { via: "person", attempt: 2 }, sys))?.what).toBe("New times sent");
-    expect(historyItem(ev("interview.new_times_not_sent", { reason: "takeover", from: "waiting" }, sys))).toMatchObject({ what: "The automatic new times did not go", why: "An ITS recruiter is running this role, so nothing was sent automatically." });
-    expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }))?.why).toBe("Automatic new times were switched off in Settings.");
+    expect(historyItem(ev("interview.new_times_not_sent", { reason: "switched_off", from: "waiting" }, sys))).toMatchObject({ what: "The automatic new times did not go", why: "Automatic new times were switched off in Settings." });
     // the staff side says "screening chat", as the drawer's tab and menu do
     expect(historyItem(ev("application.stage_changed", { from: "triaged", to: "screen_invited" }))?.what).toBe('Now "Invited to an AI interview"');
     expect(historyItem(ev("application.stage_changed", { from: "screening", to: "screen_complete" }))?.what).toBe('Now "AI interview done"');
@@ -293,7 +270,7 @@ describe("History: who did what, why, and what the candidate was told", () => {
       ...["rebooked", "moved_by_team", "team_cancelled"].map((how) => ev("application.left_cancelled", { how })),
       ev("interview.new_times_sent", { via: "auto" }),
       ev("interview.new_times_sent", { via: "batch" }),
-      ...["switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed"].map((reason) => ev("interview.new_times_not_sent", { reason })),
+      ...["switched_off", "already_used", "reschedules_used", "was_on_hold", "stopped_by_team", "team_acted", "candidate_replied", "company_not_checked", "no_interviewers", "no_email", "interview_changed"].map((reason) => ev("interview.new_times_not_sent", { reason })),
       ev("human.override", { action: "interview.new_times" }),
       ev("human.override", { action: "interview.new_times_stop" }),
     ];

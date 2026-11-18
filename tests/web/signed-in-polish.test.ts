@@ -35,8 +35,8 @@ describe("the 'still reviewing' note in Setup (plan G10)", () => {
 });
 
 describe("who reads the team's notes (Q24)", () => {
-  it("is the hiring team and an ITS recruiter with access; never an interviewer", () => {
-    for (const r of ["owner", "admin", "hiring_manager", "hr", "recruiter"]) expect(canReadNotes(r), r).toBe(true);
+  it("is the hiring team; never an interviewer", () => {
+    for (const r of ["owner", "admin", "hiring_manager", "hr"]) expect(canReadNotes(r), r).toBe(true);
     expect(canReadNotes("interviewer")).toBe(false);
     expect(canReadNotes(null)).toBe(false);
   });

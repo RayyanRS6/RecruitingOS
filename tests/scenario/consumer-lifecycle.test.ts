@@ -157,22 +157,15 @@ describe("End-to-end hiring scenario: Glow Theory (beauty brand, 60 people) hire
     for (const s of asmt.result.strengths) expect(s.evidence.source).toBe("application");
   });
 
-  it("Today answers the four questions and the owner can flag an assessment for review", async () => {
+  it("Today answers the four questions, and a reading's three model runs are linked to the one it keeps", async () => {
     const brief = (await (await json("GET", "/api/v1/brief")).json()) as { summary: string; cards: Array<{ kind: string }> };
     expect(brief.summary).toMatch(/needs? you · \d+ strong candidates? ready · \d+ at risk · \d+ handled for you since yesterday/);
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     const asmt = (await container.db.select().from(assessments).where(eq(assessments.applicationId, a.id)))[0];
-    const r = await json("POST", `/api/v1/applications/${a.id}/assessments/${asmt.id}/flag`, { kind: "missing_context", note: "We told it agency-only experience is a deal-breaker." });
-    expect(r.status).toBe(200);
     const { aiRuns } = await import("@ros/db");
-    const [run] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, asmt.aiRunId!));
-    expect((run.humanOverride as { kind: string }).kind).toBe("missing_context");
-    // the reading is three model runs, each linked to the one it keeps, and the flag marks every one (known bugs 87, 109)
+    // the reading is three model runs, each linked to the one it keeps (known bugs 87, 109)
     const linked = (await container.db.select().from(aiRuns)).filter((x) => (x.finalOutcome as { readingOf?: string } | null)?.readingOf === asmt.aiRunId);
     expect(linked).toHaveLength(3);
-    for (const x of linked) {
-      expect((x.finalOutcome as { readings: string[] }).readings).toHaveLength(3);
-      expect((x.humanOverride as { kind: string }).kind).toBe("missing_context");
-    }
+    for (const x of linked) expect((x.finalOutcome as { readings: string[] }).readings).toHaveLength(3);
   });
 });

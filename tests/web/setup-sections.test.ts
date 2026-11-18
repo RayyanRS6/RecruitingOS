@@ -26,7 +26,7 @@ describe("Settings' tabs and cards", () => {
     expect(on("team")).toEqual(["setup-team"]);
     expect(on("notifications")).toEqual(["setup-notifications", "setup-availability", "setup-shortcut"]);
     expect(on("rules")).toEqual(["setup-rules", "setup-boards", "setup-new-times"]);
-    expect(on("security")).toEqual(["setup-sessions", "setup-recruiters", "setup-services", "setup-audit"]);
+    expect(on("security")).toEqual(["setup-sessions", "setup-services", "setup-audit"]);
     // the tabs are drawn from the list, each panel with the strip's ids; they run down the side (the kit's vertical tabs)
     expect(page).toContain("<Tabs items={tabs.map((t) => ({ id: t.id, label: t.label }))} label=\"Settings\" value={active} onChange={pick} idBase={TABS_ID} orientation=\"vertical\" />");
     for (const t of SETTINGS_TABS) expect(page).toContain(`{panel("${t.id}", `);
@@ -73,7 +73,7 @@ describe("old links into Settings", () => {
     expect(settingsLanding({ hash: "#setup-profile" })).toEqual({ tab: "company", section: "setup-profile" });
     expect(settingsLanding({ hash: "#setup-team" })).toEqual({ tab: "team", section: "setup-team" });
     expect(settingsLanding({ hash: "#setup-rules" })).toEqual({ tab: "rules", section: "setup-rules" });
-    expect(settingsLanding({ hash: "#setup-recruiters" })).toEqual({ tab: "security", section: "setup-recruiters" });
+    expect(settingsLanding({ hash: "#setup-sessions" })).toEqual({ tab: "security", section: "setup-sessions" });
     // the hash wins over a tab named in the query
     expect(settingsLanding({ hash: "#setup-rules", tab: "team" })).toEqual({ tab: "rules", section: "setup-rules" });
     expect(tabOfSection("setup-audit")).toEqual({ tab: "security", section: "setup-audit" });

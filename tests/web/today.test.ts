@@ -35,7 +35,6 @@ describe("the getting-started card's buttons", () => {
   it("say what they did in plain words", () => {
     expect(setupActionToast({ label: "Hide these steps", method: "POST", path: "/api/v1/companies/current/getting-started", body: { action: "dismiss" } })).toEqual({ title: "Steps hidden.", detail: "Only for you; the rest of your team still sees theirs." });
     expect(setupActionToast({ label: "I've reviewed them", method: "POST", path: "/api/v1/companies/current/getting-started", body: { action: "policies_reviewed" } }).title).toBe("Marked as reviewed.");
-    expect(setupActionToast({ label: "Draft it with an ITS recruiter", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company" } }).title).toBe("Sent to ITS.");
     expect(setupActionToast({ label: "I've reviewed them", method: "POST", path: "/api/v1/companies/current/getting-started", body: { action: "policies_reviewed" } }).detail).toBe("You can change the AI rules in Settings at any time.");
   });
 });
@@ -81,12 +80,12 @@ describe("Home's rows", () => {
   });
 
   it("gives getting started its own card, shows the empty card only alone, and lists what needs a person first", () => {
-    const cards = [{ kind: "getting_started" }, { kind: "escalation" }, { kind: "decision" }, { kind: "screening" }, { kind: "needs_review" }, { kind: "empty" }];
+    const cards = [{ kind: "getting_started" }, { kind: "screening" }, { kind: "decision" }, { kind: "needs_review" }, { kind: "empty" }];
     const { setup, rows, empty } = homeRows(cards);
     expect(setup).toEqual({ kind: "getting_started" });
     expect(empty).toEqual({ kind: "empty" });
-    expect(rows.map((r) => r.kind)).toEqual(["decision", "needs_review", "escalation", "screening"]);
-    expect(isFyi("escalation") && isFyi("screening") && !isFyi("decision")).toBe(true);
+    expect(rows.map((r) => r.kind)).toEqual(["decision", "needs_review", "screening"]);
+    expect(isFyi("screening") && !isFyi("decision")).toBe(true);
     expect(homeRows([])).toEqual({ setup: null, rows: [], empty: null });
   });
 
