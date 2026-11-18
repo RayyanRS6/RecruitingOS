@@ -374,7 +374,7 @@ export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "xs" |
 
 /**
  * The head of a section on a page: an optional eyebrow, the heading (an H2 by default, display 24px; an H3 at 19px)
- * with a line under it, and an action on the right (a TextLink such as "All applicants"). `id` goes on the heading, for
+ * with a line under it, and an action on the right (a `text-link` such as "All jobs"). `id` goes on the heading, for
  * aria-labelledby or a link to it.
  */
 export function SectionHeader(props: { title: ReactNode; sub?: ReactNode; eyebrow?: ReactNode; action?: ReactNode; id?: string; level?: 2 | 3 }) {

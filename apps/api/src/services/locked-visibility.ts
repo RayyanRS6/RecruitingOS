@@ -45,7 +45,7 @@ async function applicationOfEvents(tx: Tx, rows: EventRow[]): Promise<Map<number
 const UNPLACED_SUBJECTS = new Set(["escalation", "interview", "approval_request"]);
 
 /**
- * The activity entries the team may see: one rule for every list of them, built like `withoutUnsentChats`. An entry is held
+ * The activity entries the team may see: one rule for every list of them. An entry is held
  * back when it is about someone locked, whichever way it says so: its subject (an application, or a screen or message
  * of one), the application its payload names, the workflow run working on them, or the person
  * themselves when everything they have here is locked (someone also visible on another job shows through that job).
