@@ -1,75 +1,40 @@
-import { CHAT_WRAP_KEY, FOCUS_KEY_PREFIX, answerKeyWords, type ApplyMode, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningFunnel, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type TapAnswer, type TapFormat } from "@ros/contracts";
-import { screenAnswersSent } from "./screen-answers";
+import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, type ChatCounter, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningQuestion, type ScreenProgress, type TapAnswer, type TapFormat } from "@ros/contracts";
 
 /**
- * Applying and the screening conversation in one visit (plan Wave E; founder decision B1/Q15). The pure rules: which
- * flow a role uses, who still counts as applying, which questions can be answered by tapping and the words a tap is
- * recorded as, and the per-role figures of how the conversation goes. No model and no database here.
+ * The AI interview's plan and its tap answers: which items the chat must close and in what order, what the chat does
+ * next with the item being asked, which questions can be answered by tapping, and the words a tap is recorded as. Pure
+ * rules: no model and no database here.
  */
 
-/**
- * What ITS's old "apply and talk in one visit" switch says for a role (its own setting, else the company's default, else
- * "form now, conversation later"). Kept readable only: since 20 October 2026 (R20-12) every applicant takes the same path
- * (the AI interview after the résumé is read, on the page and by email), so no flow decision reads it.
- */
-export function resolveApplyMode(role: { applyMode?: string | null }, settings: { applyFlowDefault?: string | null } | null | undefined): ApplyMode {
-  if (role.applyMode === "one_visit" || role.applyMode === "form_then_screen") return role.applyMode;
-  return settings?.applyFlowDefault === "one_visit" ? "one_visit" : "form_then_screen";
-}
-
-/** What a company's roles follow when ITS has not set a default for it (see `resolveApplyMode`). */
-export const APPLY_FLOW_FALLBACK: ApplyMode = "form_then_screen";
-
-/** Screens that come with the application: offered in the visit (before 20 Oct 2026), or every applicant's AI interview since. */
-const WITH_APPLICATION: readonly string[] = ["apply", "with_application"];
-
-/**
- * "Still applying" (E6): the conversation that comes with the application, not yet finished, sent without it, handed to
- * a person or closed. Until then nothing about them reaches the owner's alerts. Since 20 October 2026 (R20-4) that is
- * every applicant's AI interview, and since Step 3 (R20-7) it is a part of "No AI interview yet" (`aiInterviewOf`, the
- * invited and started states), kept for the role's figures and one release of the `stillApplying` alias.
- */
-export function isStillApplying(screen: { status: string; invitedVia?: string | null } | null | undefined): boolean {
-  return !!screen && WITH_APPLICATION.includes(screen.invitedVia ?? "") && ["invited", "reminded", "in_progress", "paused"].includes(screen.status);
-}
-
-/** A conversation offered with the application (E1): the fixed introduction, check-your-answers, and pause on an outage. */
-export function isOneVisitFlow(progress: Pick<ScreenProgress, "flow"> | null | undefined): boolean {
-  return progress?.flow === "one_visit";
-}
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The Kanvis-style chat's plan (Wave S7; the contracts in s7-contracts.md, section 2b)                            */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/**
- * The chat's closing question's key ("Wrapping up"): it lives in @ros/contracts beside the closing question's words, so
- * every reader names the closing answer by that question (`answerKeyWords`).
- */
-export { CHAT_WRAP_KEY } from "@ros/contracts";
-/** At most this many "About your experience" items (the résumé reading's open questions first, then the gaps). */
+/** At most this many must-haves the CV reading did not find shown are asked about. */
 export const CHAT_GAP_LIMIT = 4;
 
 /**
- * The plan when the chat starts (fixed in code; the model never writes it): the gaps first (`About your experience`),
- * then the written questions (`Required questions`), in order. The chat begins in the first section that has an item;
- * with neither it goes straight to "Wrapping up".
+ * The plan when the chat starts, fixed in code (the model never writes it): the job's interview questions in the job's
+ * order, then the must-haves the CV reading did not find shown (`gaps`, at most `CHAT_GAP_LIMIT`). The closing question
+ * is asked after every item and is never one of them.
  */
-export function buildChatPlan(input: { gaps: string[]; written: Array<{ key: string; required: boolean }>; at: string }): ChatPlan {
-  const seen = new Set<string>();
+export function buildChatPlan(input: { questions: readonly string[]; gaps: readonly string[]; at: string }): ChatPlan {
+  const seen = new Set<string>([CHAT_WRAP_KEY]);
   const items: ChatItem[] = [];
-  for (const key of input.gaps) {
-    if (seen.has(key) || key === CHAT_WRAP_KEY || items.length >= CHAT_GAP_LIMIT) continue;
+  for (const key of input.questions) {
+    if (seen.has(key)) continue;
     seen.add(key);
+    items.push({ key, kind: "question", required: true, state: "open", step: "direct", pushes: 0 });
+  }
+  let gaps = 0;
+  for (const key of input.gaps) {
+    if (seen.has(key) || gaps >= CHAT_GAP_LIMIT) continue;
+    seen.add(key);
+    gaps += 1;
     items.push({ key, kind: "gap", required: false, state: "open", step: "direct", pushes: 0 });
   }
-  for (const w of input.written) {
-    if (seen.has(w.key) || w.key === CHAT_WRAP_KEY || items.length >= 20) continue;
-    seen.add(w.key);
-    items.push({ key: w.key, kind: "written", required: w.required, state: "open", step: "direct", pushes: 0 });
-  }
-  const section: ChatSection = items.some((i) => i.kind === "gap") ? "experience" : items.length ? "required" : "wrapping_up";
-  return { v: 1, section, items, current: null, builtAt: input.at };
+  return { v: 1, section: sectionOf(items[0] ?? null), items, current: null, builtAt: input.at };
+}
+
+/** The section an item belongs to; with no item, the close. */
+function sectionOf(item: Pick<ChatItem, "kind"> | null): ChatSection {
+  return !item ? "wrapping_up" : item.kind === "gap" ? "experience" : "required";
 }
 
 /** An item that needs nothing more: covered, settled as not known, or skipped. */
@@ -136,12 +101,25 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
   });
   // An item settled as not known while it is still the current question (the move came with this turn) stays so.
   const at = items.find((i) => i.key === current) ?? null;
-  const section: ChatSection = at ? (at.kind === "gap" ? "experience" : "required") : current === CHAT_WRAP_KEY || items.every(chatItemSettled) ? "wrapping_up" : items.find((i) => !chatItemSettled(i))?.kind === "gap" ? "experience" : "required";
+  const section: ChatSection = at ? sectionOf(at) : current === CHAT_WRAP_KEY || items.every(chatItemSettled) ? "wrapping_up" : sectionOf(items.find((i) => !chatItemSettled(i)) ?? null);
   return { ...plan, items, section, current: at ? at.key : null };
 }
 
+/**
+ * The chat header's counter: how many of the job's interview questions are closed (answered with something concrete,
+ * settled as not known, or skipped), out of how many, and the section's name. Must-haves asked about never count. Null
+ * before the chat has a plan.
+ */
+export function chatCounter(plan: ChatPlan | null | undefined): ChatCounter | null {
+  if (!plan) return null;
+  const required = plan.items.filter((i) => i.kind === "question" && i.required);
+  const done = required.filter(chatItemSettled).length;
+  const section = CHAT_SECTION_LABEL[plan.section];
+  return { done, required: required.length, section: plan.section, label: required.length ? `${done} of ${required.length} required · ${section}` : section };
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
-/* Tap answers (E12)                                                                                             */
+/* Tap answers                                                                                                   */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 export const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
@@ -166,12 +144,12 @@ const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
  * pay questions take a range; "when could you start" a date; "which days" the days of the week; a factual question
  * (eligibility, availability, logistics) that can only be answered yes or no, because it starts "Do you", "Are you",
  * "Can you"… and asks nothing open, two buttons. Its kind alone never makes it one: "Which certifications do you hold…?"
- * asks them to list, so it is typed (live test, 12 November 2026), and so is one that asks "whether" beside something
- * else ("Can you confirm your RDH license state and whether it is currently active?"), which a bare Yes does not answer.
- * A relative clause that only places a noun after in, at, on, to, near or within asks nothing open (`RELATIVE_CLAUSE`):
- * "Do you hold an active RDA license in the state where this office is located?" keeps its buttons, while "Can you
- * confirm the state where you are licensed?" asks which state and is typed (the review of the live-test fixes). Skills,
- * examples and motivation are always typed: they need the candidate's own words.
+ * asks them to list, so it is typed, and so is one that asks "whether" beside something else ("Can you confirm your RDH
+ * license state and whether it is currently active?"), which a bare Yes does not answer. A relative clause that only
+ * places a noun after in, at, on, to, near or within asks nothing open (`RELATIVE_CLAUSE`): "Do you hold an active RDA
+ * license in the state where this office is located?" keeps its buttons, while "Can you confirm the state where you are
+ * licensed?" asks which state and is typed. Skills, examples and motivation are always typed: they need the candidate's
+ * own words.
  */
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();
@@ -224,7 +202,7 @@ export function tapAnswerText(format: TapFormat, answer: TapAnswer, now: Date = 
   }
 }
 
-/** The tap shapes `tapAnswerText` writes in the candidate's voice, and the same in the assistant's (22 Oct 2026 try-out). */
+/** The tap shapes `tapAnswerText` writes in the candidate's voice, and the same in the assistant's. */
 const TAP_ECHO: ReadonlyArray<[RegExp, (rest: string) => string]> = [
   [/^I'm looking for (.+)$/, (rest) => rest],
   [/^I can start on (.+)$/, (rest) => `you could start on ${rest}`],
@@ -233,11 +211,10 @@ const TAP_ECHO: ReadonlyArray<[RegExp, (rest: string) => string]> = [
 const FIRST_PERSON = /\b(?:I|I'm|I've|I'd|I'll|me|my|mine|myself)\b/i;
 
 /**
- * A tap said back in the chat's "Noted: …" line, in the assistant's voice (22 Oct 2026 try-out: the line read "Noted:
- * I'm looking for $18 to $20 an hour."): the bare value for pay ("$18 to $20 an hour"), "you could start on Monday,
- * November 16, 2026", "you can work Monday and Friday", and "Yes" or "No" as they are. The recorded answer stays the
- * candidate's own sentence. Null for words of any other shape that speak in the first person, so the line says only
- * "Noted." rather than say their "I" back to them.
+ * A tap said back in the chat's "Noted: …" line, in the assistant's voice: the bare value for pay ("$18 to $20 an
+ * hour"), "you could start on Monday, November 16, 2026", "you can work Monday and Friday", and "Yes" or "No" as they
+ * are. The recorded answer stays the candidate's own sentence. Null for words of any other shape that speak in the first
+ * person, so the line says only "Noted." rather than say their "I" back to them.
  */
 export function tapEcho(words: string): string | null {
   const w = words.trim().replace(/[.!?]+$/, "");
@@ -247,55 +224,4 @@ export function tapEcho(words: string): string | null {
     if (m) return said(m[1]);
   }
   return FIRST_PERSON.test(w) ? null : w;
-}
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* How the conversation goes for a role (E13)                                                                     */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-export type FunnelScreen = { status: string; invitedVia?: string | null; startedAt: string | null; completedAt: string | null; progress: ScreenProgress; transcript: ScreenTranscriptEntry[] };
-
-/**
- * The figures from a role's screens (the latest per application). Counts only: never a name, an answer, or anything
- * worked out from a conversation nobody sent (founder decision of 9 October 2026): no skip, no time taken, and no
- * question where someone stopped. Every conversation that stopped was, by definition, never sent, so where people stop
- * is not counted at all; even a count could point at the one person the team sees "Didn't finish the conversation" on.
- * A skipped question is named by `questions`, else by the job's `mustHaves` or the closing question (`answerKeyWords`);
- * the résumé reading's open questions a screen started with are one row, under their plain name.
- */
-export function screeningFunnel(rows: FunnelScreen[], questions: Array<{ key: string; question: string }>, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): ScreeningFunnel {
-  const started = rows.filter((r) => r.startedAt);
-  const finished = rows.filter((r) => r.status === "completed");
-  // The time to finish, from conversations the candidates sent: one finished on a recruiter's call is timed from words
-  // the candidate typed and never sent.
-  const minutes = finished
-    .filter((r) => screenAnswersSent(r))
-    .map((r) => {
-      const first = r.transcript.find((t) => t.role === "candidate")?.at ?? r.startedAt;
-      const end = r.progress.submittedAt ?? r.completedAt;
-      return first && end ? (Date.parse(end) - Date.parse(first)) / 60_000 : null;
-    })
-    .filter((m): m is number => m !== null && m >= 0)
-    .sort((a, b) => a - b);
-  const median = minutes.length ? (minutes.length % 2 ? minutes[(minutes.length - 1) / 2] : (minutes[minutes.length / 2 - 1] + minutes[minutes.length / 2]) / 2) : null;
-  // Skips are counted from conversations the candidates sent: what someone did with a question they never sent stays
-  // theirs (founder decision of 9 October 2026), even in a count. The résumé reading's open questions a screen started
-  // with ("Ask about this in a screen") are each candidate's own, so `unknown_1` is another question on every screen:
-  // their skips are one row, under a plain name, never their words, and a person counts once in it however many they skipped.
-  const skipKey = (k: string) => (k.startsWith(FOCUS_KEY_PREFIX) && !questions.some((q) => q.key === k) ? FOCUS_KEY_PREFIX : k);
-  const skippedCount = new Map<string, number>();
-  for (const r of rows) if (screenAnswersSent(r)) for (const k of new Set((r.progress.declined ?? []).map(skipKey))) skippedCount.set(k, (skippedCount.get(k) ?? 0) + 1);
-  // A skip is kept under the key the chat asked it by: a must-have's gap question and the closing question are named in
-  // words too, and a key nothing names in plain words, never as the key (`answerKeyWords`).
-  const label = (key: string) => questions.find((q) => q.key === key)?.question ?? answerKeyWords(key, mustHaves);
-  return {
-    offered: rows.length,
-    started: started.length,
-    finished: finished.length,
-    unfinished: rows.filter((r) => r.status === "unfinished").length,
-    stillApplying: rows.filter((r) => isStillApplying(r)).length,
-    medianMinutes: median === null ? null : Math.round(median * 10) / 10,
-    personChosen: { contactMe: rows.filter((r) => r.status === "human_requested").length, sendWithout: rows.filter((r) => r.status === "declined_by_candidate").length },
-    skipped: [...skippedCount.entries()].sort((a, b) => b[1] - a[1]).map(([key, count]) => ({ key, question: label(key), count })),
-  };
 }

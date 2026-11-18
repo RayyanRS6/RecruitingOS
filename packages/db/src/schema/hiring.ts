@@ -271,6 +271,8 @@ export type ApplicationAcknowledgment = { at: string; noticeVersions: string[]; 
  * on this application's form, opened from the emailed reuse link (`KeptFact`); never part of the résumé reading's input.
  */
 export type ApplicationAnswers = {
+  /** The application form's answers by question key: "yes" or "no", the chosen option's words, or the number as typed. An application sent before the form had one list of questions keeps its answers under `eligibility` and `quick`. */
+  form?: Record<string, string>;
   eligibility?: Record<string, unknown>;
   screening?: Record<string, unknown>;
   noResume?: Record<string, string>;

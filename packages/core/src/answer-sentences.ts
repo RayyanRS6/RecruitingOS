@@ -1,27 +1,17 @@
-import type { CompanyQuestions, EligibilityRule } from "@ros/contracts";
-import { quickQuestionsOf } from "./apply-questions";
+import { formAnswerViews, type FormQuestion } from "@ros/contracts";
 
 /**
- * The candidate's answers on the form as plain sentences, the question and the answer they gave, one per question
- * ("Do you hold an active CA RDH license? Yes."). Wave S7: the AI readings are given these instead of the raw answers
- * (fairness findings of 15 Oct 2026: a reading quoted '"rdh_license":"yes"'), the evidence rules accept them as the
- * candidate's own words, and the chat is given them so it never asks again what the form already asked. One wording
- * for all three, so a quote of one is always found again.
+ * The answers a candidate gave on the application form, as stored and as plain sentences. The CV reading is given the
+ * sentences as evidence, the evidence rules accept a quote of one as the candidate's own words, and the AI interview is
+ * given them so it never asks again what the form asked. One wording for all three, so a quote is always found again.
  */
-export type AnswerSentence = { key: string; source: "eligibility" | "company"; sentence: string };
 
-function words(value: unknown, unit: string | null): string | null {
-  if (Array.isArray(value)) {
-    const list = value.filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
-    return list.length ? list.join(", ") : null;
-  }
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "number" && Number.isFinite(value)) return unit ? `${value} ${unit}` : String(value);
-  if (typeof value !== "string" || !value.trim()) return null;
-  const v = value.trim();
-  if (/^(yes|y|true)$/i.test(v)) return "Yes";
-  if (/^(no|n|false)$/i.test(v)) return "No";
-  return unit ? `${v} ${unit}` : v;
+/** What an application stores of its form: the answers by question key, and for an application from an older form the two places it kept them. */
+export type StoredFormAnswers = { form?: Record<string, string> | null; eligibility?: Record<string, unknown> | null; quick?: Record<string, string> | null };
+
+/** Every answer of one application's form, by question key. */
+export function formAnswersOf(answers: StoredFormAnswers | null | undefined): Record<string, unknown> {
+  return { ...(answers?.eligibility ?? {}), ...(answers?.quick ?? {}), ...(answers?.form ?? {}) };
 }
 
 /** The sentence for one question and its answer: the question as asked, then the answer, ending in a full stop. */
@@ -32,15 +22,9 @@ export function answerSentence(question: string, answer: string): string {
 }
 
 /**
- * Every answered question of "Questions from <Company>", in the form's order (`quickQuestionsOf`): the eligibility
- * answers from `answers.eligibility`, the quick ones from `answers.quick`. A question left unanswered has no sentence.
+ * Every answered question of the form as one sentence ("Do you hold an active CA RDH license? Yes."), in the form's
+ * order. A question left unanswered has no sentence.
  */
-export function applicationAnswerSentences(packet: { requirements: { eligibility: EligibilityRule[] }; companyQuestions?: CompanyQuestions | null }, answers: { eligibility?: Record<string, unknown> | null; quick?: Record<string, string> | null } | null | undefined): AnswerSentence[] {
-  const out: AnswerSentence[] = [];
-  for (const q of quickQuestionsOf(packet)) {
-    const raw = q.source === "eligibility" ? answers?.eligibility?.[q.key] : answers?.quick?.[q.key];
-    const said = words(raw, q.kind === "number" ? q.unit : null);
-    if (said) out.push({ key: q.key, source: q.source, sentence: answerSentence(q.question, said) });
-  }
-  return out;
+export function formAnswerSentences(questions: readonly FormQuestion[], answers: Readonly<Record<string, unknown>> | null | undefined): Array<{ key: string; sentence: string }> {
+  return formAnswerViews(questions, answers).flatMap((v) => (v.answer ? [{ key: v.key, sentence: answerSentence(v.question, v.answer) }] : []));
 }

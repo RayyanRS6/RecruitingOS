@@ -1,14 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, notLike, or, sql, type SQL } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { SCREEN_ACTIVE_STATUSES, type Actor } from "@ros/contracts";
 import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, events, hiringOutcomes, inboundEmails, interviewFollowups, interviews, jobs, notifications, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { SYSTEM_ACTOR, emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
 import { normalizeEmail } from "./auth";
 import { dedupeKey } from "./dedupe";
-import { openingQuestionsOf, screenAnswersOf, withoutCandidateWords } from "./screen-answers";
-import { DECISION_STAGES, canTransition, transition } from "./stages";
+import { storedScreenWords, withoutCandidateWords } from "./screen-answers";
+import { canTransition, transition } from "./stages";
 
 /**
  * Candidate privacy requests (correction 7, docs/runbooks/privacy-requests.md). Everything here is the recorded,
@@ -87,10 +87,12 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
   if (!cand) throw new Error("candidate not found");
   const apps = await q.select().from(applications).where(eq(applications.candidateId, cand.id));
   const docs = await q.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, textExtracted: documents.textExtracted, createdAt: documents.createdAt }).from(documents).where(eq(documents.candidateId, cand.id));
-  // A screen's answers live in two places (screen-answers.ts): the export carries every one of them, with the opening questions in the words they were asked.
+  // Everything they said in each AI interview: the transcript, the recorded answers, and what an older row keeps beside them (`storedScreenWords`).
   const scrRows = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
-  // The written-up answers of Review & send (Wave S7) are their words condensed: in the export when there are any.
-  const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), ...(s.progress?.writeup ? { writtenUp: s.progress.writeup.answers } : {}), createdAt: s.createdAt }));
+  const scr = scrRows.map((s) => {
+    const words = storedScreenWords(s);
+    return { applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: words.answers, openingQuestions: words.openingQuestions, ...(words.writtenUp.length ? { writtenUp: words.writtenUp } : {}), createdAt: s.createdAt };
+  });
   const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, status: communications.status, deliveredAt: communications.deliveredAt, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
   const outbound = comms.filter((c) => c.direction === "outbound");
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
@@ -104,7 +106,7 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
     // Rule 2), and since when: one plain field, with no word about a plan.
     applications: apps.map((a) => {
       const openedAt = history.find((e) => e.type === "application.unlocked" && e.subjectId === a.id)?.occurredAt;
-      return { id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}), ...(a.lockedAt ? { hiringTeamCanSeeThis: false } : openedAt ? { hiringTeamCanSeeThis: true, hiringTeamCanSeeThisSince: openedAt } : {}) };
+      return { id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(a.stage === "rejected" ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}), ...(a.lockedAt ? { hiringTeamCanSeeThis: false } : openedAt ? { hiringTeamCanSeeThis: true, hiringTeamCanSeeThisSince: openedAt } : {}) };
     }),
     documents: docs,
     screens: scr,
@@ -175,7 +177,7 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
   if (!appIds.length) return;
   // The applications are locked first, in one order, so a deletion and a team member's action at the same moment take turns.
   await q.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
-  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, ["invited", "reminded", "in_progress", "paused"])));
+  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, [...SCREEN_ACTIVE_STATUSES])));
   for (const s of scr) {
     await q.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
     await emit(q, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "deletion_request" } });

@@ -1,5 +1,5 @@
 import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
-import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, moreAppliedTitle } from "@ros/contracts";
+import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, appPaths, moreAppliedTitle } from "@ros/contracts";
 import { applications, candidates, companies, events, notifications, type Queryable } from "@ros/db";
 import { zonedParts } from "./time-zone";
 import { limitOf, planOf } from "./entitlements";
@@ -106,7 +106,7 @@ export const MORE_APPLIED_KIND = "entitlement.more_applied";
  * wants this group as it happens, says the same thing. Returns how many people it reached.
  */
 export async function tellMoreApplied(q: Queryable, input: { companyId: string; roleId: string; roleTitle: string; now?: Date }): Promise<number> {
-  const href = `/roles/${input.roleId}/talent`;
+  const href = appPaths.candidates(input.roleId);
   const [last] = await q.select({ at: notifications.createdAt }).from(notifications).where(and(eq(notifications.companyId, input.companyId), eq(notifications.kind, MORE_APPLIED_KIND), sql`${notifications.action}->>'href' = ${href}`)).orderBy(desc(notifications.createdAt)).limit(1);
   const [company] = await q.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
   const zone = company?.timezone ?? "UTC";
