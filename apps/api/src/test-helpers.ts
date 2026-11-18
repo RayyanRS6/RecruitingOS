@@ -161,15 +161,50 @@ export async function signInAs(container: Container, app: ReturnType<typeof crea
   return cookie;
 }
 
+/** Signs a person in by the emailed link, as a new owner does, and answers their session cookie. */
+export async function signInByEmailLink(app: ReturnType<typeof createApp>, email: string): Promise<string> {
+  const asked = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+  const { devLink } = (await asked.json()) as { devLink: string };
+  const used = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
+  return used.headers.get("set-cookie")!.split(";")[0];
+}
+
+/**
+ * A new owner and their company, made as the app makes them (with open sign-up the company is live at once). Answers
+ * the owner's cookie, the company's id and the word in its public addresses (`/careers/<slug>`).
+ */
+export async function seedCompany(app: ReturnType<typeof createApp>, input: { email: string; name: string; timezone?: string }): Promise<{ owner: string; companyId: string; slug: string }> {
+  const owner = await signInByEmailLink(app, input.email);
+  const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie: owner }, body: body ? JSON.stringify(body) : undefined });
+  const made = await json("POST", "/api/v1/companies", { name: input.name, vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }], ...(input.timezone ? { timezone: input.timezone } : {}) });
+  if (made.status !== 201) throw new Error(`could not create ${input.name} (${made.status}): ${await made.text()}`);
+  const { id } = (await made.json()) as { id: string };
+  const { slug } = (await (await json("GET", "/api/v1/companies/current")).json()) as { slug: string };
+  return { owner, companyId: id, slug };
+}
+
+/**
+ * The application form as a browser without script posts it: who they are, the acknowledgment ticked, and a resume
+ * inside the form (`resume: null` posts none). Any field can be given, overridden, or left out with null.
+ */
+export function applicationForm(fields: Record<string, string | null> = {}, resume: string | null = "Registered Dental Hygienist at Coastal Family Dentistry 2019 - present\nRDH license CA active\nRadiography certificate\nDentrix"): FormData {
+  const fd = new FormData();
+  const filled: Record<string, string | null> = { firstName: "Maria", lastName: "Reyes", email: "maria.reyes@example.com", acknowledged: "yes", ...fields };
+  for (const [name, value] of Object.entries(filled)) if (value !== null) fd.set(name, value);
+  if (resume !== null) fd.set("resume", new File([`${filled.firstName ?? ""} ${filled.lastName ?? ""}\n${filled.email ?? ""}\n${resume}\n`], "resume.txt", { type: "text/plain" }));
+  return fd;
+}
+
 /**
  * A job written straight into the tables, with its one version live: for suites whose subject is not the job builder
  * (who may see a company's jobs, what is public, what an administrator reads). Open and taking applications unless
- * `status` says otherwise; a draft has no opening day. Answers the job's id.
+ * `status` says otherwise; a draft has no opening day. `packet` changes the job record before it is stored (its
+ * questions, its places, its words). Answers the job's id.
  */
-export async function plantJob(container: Container, input: { companyId: string; title: string; status?: "draft" | "open" | "paused" | "closed" }): Promise<string> {
+export async function plantJob(container: Container, input: { companyId: string; title: string; status?: "draft" | "open" | "paused" | "closed"; packet?: (packet: RolePacket) => void }): Promise<string> {
   const status = input.status ?? "open";
   const actor = { kind: "system" as const, id: "test_seed" };
-  const packet = RolePacket.parse({
+  const written = RolePacket.parse({
     identity: { title: input.title, locations: [{ city: "Irvine", region: "CA", country: "US" }], employmentType: "full_time", schedule: "Monday to Friday, 8 to 5", remotePolicy: "onsite" },
     compensation: { basis: "hourly", currency: "USD", min: 24, max: 28, discloseRange: true },
     description: { publicJobDescription: `We are hiring: ${input.title}. You will seat patients, take digital x-rays and keep the rooms ready.` },
@@ -180,6 +215,8 @@ export async function plantJob(container: Container, input: { companyId: string;
     compliance: {},
     provenance: {},
   });
+  input.packet?.(written);
+  const packet = RolePacket.parse(written);
   return withPlatform(container.db, async (tx) => {
     const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: input.title, status, currentPacketVersion: 1, acceptingApplications: status !== "closed", openedAt: status === "draft" ? null : container.engine.clock().toISOString(), createdBy: actor }).returning({ id: roles.id });
     await tx.insert(rolePackets).values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: status === "draft" ? "proposed" : "approved", source: "human_edit", createdBy: actor });
