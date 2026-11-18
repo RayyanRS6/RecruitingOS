@@ -24,6 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { Home } = await import("@ros/web/src/pages/Home");
 const { Jobs } = await import("@ros/web/src/pages/Jobs");
 const { Job } = await import("@ros/web/src/pages/Job");
+const { JobEditor } = await import("@ros/web/src/pages/job/JobEditor");
 const { Settings } = await import("@ros/web/src/pages/Settings");
 
 const plain = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
@@ -189,6 +190,34 @@ describe("a job's page", () => {
     const html = render(qc, createElement(Job));
     expect(text(html)).toContain("We could not find that job");
     expect(html).toContain('<a href="/roles" class="btn primary">Go to Jobs</a>');
+  });
+
+  describe("the one editor", () => {
+    const editor = (target: { kind: "job"; roleId: string; baseVersion: number; live: boolean } | { kind: "draft"; sessionId: string }) => render(client("owner"), createElement(JobEditor, { packet: jobDetail("r1", "open").packet as NonNullable<RoleDetail["packet"]>, target, onClose: () => undefined, onSaved: () => undefined }));
+
+    it("is a side sheet with every part of the record as plain fields, each group saying who sees it, and Save waiting for a change", () => {
+      const html = editor({ kind: "job", roleId: "r1", baseVersion: 2, live: true });
+      expect(html).toContain('role="dialog" aria-modal="true" aria-label="Edit the job"');
+      expect([...html.matchAll(/<legend class="[^"]*">([^<]+)</g)].map((m) => m[1])).toEqual(["The job", "Pay", "Job description", "Must-haves (up to 6)", "Nice-to-haves", "Skills (up to 8)", "Screening questions (up to 10)", "AI interview"]);
+      expect(html).toContain('<input id="ed-title" class="input" value="Dental Assistant"/>');
+      expect(html).toMatch(/<input id="ed-pay-min" class="input" inputMode="decimal" value="24"\/>/);
+      expect(html).toMatch(/<input id="ed-must-0" class="input[^"]*" placeholder="[^"]*" value="Active RDA licence"\/>/);
+      expect(html).toMatch(/<textarea id="ed-form-options-1"[^>]*>Days\nEvenings<\/textarea>/);
+      // what a good answer shows is the team's, and says so; candidates never see it
+      expect(html).toMatch(/<label for="ed-ask-model-0">What a good answer shows \(optional\)<\/label><span class="icon-label" title="[^"]*">/);
+      // nothing changed yet: Save waits; a published job says its changes go live at once
+      expect(html).toMatch(/<button type="button" class="btn primary" disabled=""[^>]*>Save<\/button>/);
+      expect(text(html)).toContain("Saved changes show on the job page at once.");
+      // every row can be moved and removed by name
+      expect(html).toContain('aria-label="Move must-have 2 up"');
+      expect(html).toContain('aria-label="Remove question 1"');
+    });
+
+    it("is the same editor on a written draft, which nobody can see yet", () => {
+      const html = editor({ kind: "draft", sessionId: "s1" });
+      expect(html).toContain('aria-label="Edit the job"');
+      expect(text(html)).not.toContain("Saved changes show on the job page at once.");
+    });
   });
 
   describe("the Share tab", () => {
