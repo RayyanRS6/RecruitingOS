@@ -3,17 +3,17 @@
 import type { DraftRolePacket } from "@ros/contracts";
 import { candidateNotices, type Notice } from "@ros/core";
 import type { ContactLine } from "../services/company-settings-profile";
-import { applySteps, applyTimeLine, type ApplyFlowView } from "../services/job-preview";
+import { APPLY_TIME_LINE, applySteps } from "../services/job-preview";
 import { Description } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
 import { Layout, type ShareTags } from "./layout";
 
 /**
- * The job page, shared by the public pages (pages/careers-pages.tsx) and the authenticated preview (pages/preview.tsx,
- * plan D1), taking the packet, the company and, for a preview, what to say about it; the apply form, shared the same way,
- * is pages/apply-form.tsx (moved there as it was in Wave S7, S7-0). A preview carries no structured data, no share tags, no form that sends anything and no link to a public
- * address that may not exist yet; it is marked "not public yet" and kept out of search results.
+ * The job page, shared by the public pages (pages/careers-pages.tsx) and the team's preview (pages/preview.tsx), taking
+ * the job record, the company and, for a preview, what to say about it; the apply form, shared the same way, is
+ * pages/apply-form.tsx. A preview carries no structured data, no share tags, no form that sends anything and no link to
+ * a public address that may not exist yet; it is marked "not public yet" and kept out of search results.
  */
 
 /** What the pages say about the company: only text a person approved, the logo we store, and who answers before applying. */
@@ -26,7 +26,7 @@ export type JobPageRole = {
   closedMessage: string | null;
   /** The day the role opened (roles.openedAt); null before it is public. */
   postedOn: string | null;
-  /** "Apply by Friday, October 30, 2026" when the role has a closing date (plan D7). */
+  /** "Apply by Friday, October 30, 2026" when the job has a closing date. */
   applyBy: string | null;
 };
 
@@ -67,29 +67,26 @@ export function ContactLink(props: { contact: ContactLine }) {
   return <>{props.contact.name ? `${props.contact.name} at ` : ""}<a href={`mailto:${props.contact.email}`}>{props.contact.email}</a></>;
 }
 
-/** The pre-apply line (plan D10): help applying, or a change to how to apply because of a disability, from a person. */
+/** The pre-apply line: help applying, or a change to how to apply because of a disability, from a person. */
 export function HelpLine(props: { contact: ContactLine; class?: string }) {
   return <p class={props.class ?? "help-line"}>Need help applying, or a change to how you apply because of a disability? Email <ContactLink contact={props.contact} /> and a person will help.</p>;
 }
 
 /**
- * The inside of the Apply now button (founder decision Q2 = A, 10 October 2026): a plum circle with an arrow, then the
- * words. On a mouse's hover or a keyboard's focus the plum fill slides across the words (CSS only, layout.tsx). The fill
- * and the arrow are decoration, hidden from screen readers; the words are the button's name.
+ * The inside of the Apply now button: a plum circle with an arrow, then the words. On a mouse's hover or a keyboard's
+ * focus the plum fill slides across the words (CSS only, layout.tsx). The fill and the arrow are decoration, hidden from
+ * screen readers; the words are the button's name.
  */
 function ApplyInner() {
   return <><span class="go-fill" aria-hidden="true" /><span class="go-icon"><Icon name="arrow-right" /></span><span class="go-text">Apply now</span></>;
 }
 
-/**
- * Four things that are true of every application here: how long (the conversation included, when it follows the form;
- * plan E8), what to send, who decides, how to reach a person.
- */
-export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "contact">; packet: Pick<DraftRolePacket, "screening">; flow: ApplyFlowView }) {
+/** Four things that are true of every application here: how long it takes, what to send, who decides, how to reach a person. */
+export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "contact"> }) {
   return (
     <ul class="points">
-      <li><Icon name="clock" /><span>{applyTimeLine(props.packet, { companyName: props.company.name, flow: props.flow })}</span></li>
-      <li><Icon name="paperclip" /><span>A resume, or a few lines about your work. No cover letter.</span></li>
+      <li><Icon name="clock" /><span>{APPLY_TIME_LINE}</span></li>
+      <li><Icon name="paperclip" /><span>Your resume. No cover letter.</span></li>
       <li><Icon name="people" /><span>People at {props.company.name} make every hiring decision.</span></li>
       <li><Icon name="mail" /><span>Questions? Email <ContactLink contact={props.company.contact} /> to reach a person.</span></li>
     </ul>
@@ -100,8 +97,8 @@ export function FourPoints(props: { company: Pick<JobPageCompany, "name" | "cont
 export const AI_NOTICE_LINE = "This employer uses AI to help organize applications; people make every hiring decision.";
 
 /**
- * The AI notice, kept short on the first view (founder brief, 14 October 2026): a notice box with one plain sentence and
- * "How AI is used" under it. The full text is always in the page, as written, so nothing the notice must say is lost.
+ * The AI notice, kept short on the first view: a notice box with one plain sentence and "How AI is used" under it. The
+ * full text is always in the page, as written, so nothing the notice must say is lost.
  */
 export function AiNotice(props: { text: string; line: string }) {
   return (
@@ -115,30 +112,9 @@ export function AiNotice(props: { text: string; line: string }) {
   );
 }
 
-/** The first sentence of a step, never cut inside the company's name ("Dr. Lee Dental"). */
-function firstSentence(text: string, companyName: string): string {
-  const mask = "\u0000";
-  const masked = companyName ? text.split(companyName).join(mask) : text;
-  const first = masked.match(/^[\s\S]*?[.!?](?=\s+[A-Z]|\s*$)/)?.[0] ?? masked;
-  return companyName ? first.split(mask).join(companyName) : first;
-}
-
-/**
- * "What to expect" at a glance (founder brief, 14 October 2026): at most four short lines, from the same steps every
- * page lists (services/job-preview.ts `applySteps`: applying, the conversation, each interview, the decision). Applying
- * and the conversation keep their first sentence; the interviews share one line. The full steps stay one click away.
- * `noConversation`: the steps of a job past its limit, which have no conversation between applying and the interviews.
- */
-export function expectAtAGlance(steps: string[], companyName: string, opts: { noConversation?: boolean } = {}): string[] {
-  if (steps.length < 3) return steps.map((s) => firstSentence(s, companyName));
-  const rounds = steps.slice(opts.noConversation ? 1 : 2, -1);
-  const interviews = rounds.length === 0 ? null : rounds.length === 1 ? rounds[0] : `Interviews: ${rounds.join(", ")}`;
-  return [firstSentence(steps[0], companyName), opts.noConversation ? null : firstSentence(steps[1], companyName), interviews, steps[steps.length - 1]].filter((s): s is string => !!s);
-}
-
 /**
  * The "not public yet" note at the top of a preview, with what the page is still missing. The disabled form shows by
- * itself that it sends nothing, so the note says only where the page stands (fewer words, 23 October 2026).
+ * itself that it sends nothing, so the note says only where the page stands.
  */
 export function PreviewNote(props: { preview: PreviewInfo }) {
   const p = props.preview;
@@ -157,9 +133,9 @@ export type JobPageProps = {
   role: JobPageRole;
   /** Every notice for the job's places; the page decides which it renders. */
   notices: Notice[];
-  /** How applicants meet the AI interview (services/job-preview.ts `APPLY_FLOW`): what the time and the steps say. */
-  flow: ApplyFlowView;
-  /** The benefits the law (or the company) has the page describe: the role's own, else the company's (Setup). */
+  /** The job is past its plan's candidates per job: the steps promise no review (services/job-preview.ts `applySteps`). */
+  onFile: boolean;
+  /** The benefits the law (or the company) has the page describe: the job's own, else the company's (Settings). */
   benefits: string | null;
   links: { careers: string | null; apply: string };
   preview?: PreviewInfo;
@@ -169,12 +145,11 @@ export type JobPageProps = {
 };
 
 /**
- * The job page (plan D10): the company with its logo, the title, every fact as a pill and a first Apply button; then the
- * description in headed sections, what the team is looking for, what would be nice, the benefits, the steps and the
- * notices, and what the company says about itself; beside it, an apply card that stays in view with four true points
- * and how to reach a person. On a phone the card becomes a bar held at the bottom of the screen (CSS only) and the
- * points move into the page. The steps show at a glance and the AI notice as one line (founder brief, 14 October
- * 2026); the full steps and the notice's full text are one click away, in the page.
+ * The job page: the company with its logo, the title, every fact as a pill and a first Apply button; then the full
+ * description in headed sections, what the team is looking for, what would be nice, the benefits, what to expect and
+ * the notices, and what the company says about itself; beside it, an apply card that stays in view with four true
+ * points and how to reach a person. On a phone the card becomes a bar held at the bottom of the screen (CSS only) and
+ * the points move into the page. The AI notice shows as one line, with its full text one click away, in the page.
  */
 export function JobPage(props: JobPageProps) {
   const { packet, company, role, preview } = props;
@@ -184,7 +159,6 @@ export function JobPage(props: JobPageProps) {
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   const niceToHaves = packet.requirements.niceToHaves.map((m) => m.text.trim()).filter(Boolean);
   const careers = props.links.careers;
-  const steps = applySteps(packet, { companyName: company.name, flow: props.flow });
   return (
     <Layout title={preview ? `Preview: ${title} at ${company.name}` : `${title} at ${company.name}`} jsonLd={preview ? undefined : props.jsonLd} wide description={preview ? undefined : props.description} share={preview ? undefined : props.share} noindex={!!preview}>
       {preview ? <PreviewNote preview={preview} /> : null}
@@ -205,7 +179,7 @@ export function JobPage(props: JobPageProps) {
         <div class="job-main">
           {role.accepting ? (
             <div class="card points-card">
-              <FourPoints company={company} packet={packet} flow={props.flow} />
+              <FourPoints company={company} />
               <HelpLine contact={company.contact} />
             </div>
           ) : null}
@@ -219,13 +193,7 @@ export function JobPage(props: JobPageProps) {
             {props.benefits ? <h2>Benefits</h2> : null}
             {props.benefits ? <p class="pre">{props.benefits}</p> : null}
             <h2>What to expect</h2>
-            <ol class="steps">
-              {expectAtAGlance(steps, company.name, { noConversation: props.flow === "on_file" }).map((s) => <li>{s}</li>)}
-            </ol>
-            <details class="more">
-              <summary>More about each step</summary>
-              <ol class="steps">{steps.map((s) => <li>{s}</li>)}</ol>
-            </details>
+            <ol class="steps">{applySteps({ companyName: company.name, onFile: props.onFile }).map((s) => <li>{s}</li>)}</ol>
             {notices.map((n) => (n.key === "ai_use" ? <AiNotice text={n.text} line={AI_NOTICE_LINE} /> : <p class="notice">{n.text}</p>))}
           </div>
           {company.about ? (
@@ -242,15 +210,14 @@ export function JobPage(props: JobPageProps) {
             <div class="card apply-card">
               {role.applyBy ? <p class="apply-by"><Icon name="calendar" />{role.applyBy}</p> : null}
               <a class="btn go" href={props.links.apply}><ApplyInner /></a>
-              <FourPoints company={company} packet={packet} flow={props.flow} />
+              <FourPoints company={company} />
               <HelpLine contact={company.contact} />
             </div>
           </div>
         ) : null}
       </div>
-      {/* Coming back to the job (spec-s7 step 9): the application record is where they see where things stand and the
-          decision once told; the link goes again to the address they applied with, never to this page. A preview has
-          no public links, so it has no foot. */}
+      {/* Coming back to the job: their status page is where they see where things stand; its link goes again to the
+          address they applied with, never to this page. A preview has no public links, so it has no foot. */}
       {preview ? null : <p class="foot"><a href="/c/link-request">Already applied? See your application</a> · <a href="/privacy">How we handle your information</a></p>}
     </Layout>
   );

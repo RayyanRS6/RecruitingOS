@@ -7,7 +7,6 @@ import { isCompanyLive, jobNoticesFor, jobPastItsLimit, type Notice } from "@ros
 import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
-import { APPLY_FLOW, type ApplyFlowView } from "../services/job-preview";
 import { Layout } from "./layout";
 
 /**
@@ -21,8 +20,8 @@ export function jobNotices(packet: RolePacket, company: Pick<typeof companies.$i
 }
 
 /**
- * How a candidate corrects what went with their form, said the same way wherever they read it (Review & send and their
- * application's page): the request on their application's page, whose link is in the email about their application.
+ * How a candidate corrects what went with their form, said the same way wherever they read it ("Check your answers" and
+ * their status page): the request on their status page, whose link is in the email about their application.
  */
 export const CORRECTION_LINE = "To correct something, use \"Ask for a copy, a fix, deletion, or a person's review\" on your application's page; its link is in the email we sent you when you applied.";
 
@@ -39,18 +38,18 @@ export function screenPath(token: string): string {
 }
 
 /**
- * The "accepting applications" switch and a pause (docs/spec/20 item 16) both keep the job page up and close the form:
- * the page says so, the apply routes answer 404, and nobody already in the process is touched. A closing date (plan D7)
- * turns the same switch off at the end of its day; a form opened before then may still be sent for a while.
+ * A pause and a closing date that has passed both keep the job page up and close the form: the page says so, the apply
+ * routes answer 404, and nobody already in the process is touched. A form opened before the closing date may still be
+ * sent for a while.
  */
 export function acceptingApplications(role: { status: string; acceptingApplications: boolean }): boolean {
   return role.status === "open" && role.acceptingApplications;
 }
 
 /**
- * Whether this job takes a new application now: the job's own rule above, and the company's trial not ended (founder
- * decision L-02 B). A trial that ended reads to candidates exactly like a job that is not taking applications: the same
- * neutral line, never a word about a trial or a plan.
+ * Whether this job takes a new application now: the job's own rule above, and the company's trial not ended. A trial
+ * that ended reads to candidates exactly like a job that is not taking applications: the same neutral line, never a
+ * word about a trial or a plan.
  */
 export function jobTakesApplications(job: { role: { status: string; acceptingApplications: boolean }; company: { planKey: string; settings: unknown } }, now: Date): boolean {
   return acceptingApplications(job.role) && !trialPaused(job.company, now);
@@ -78,15 +77,15 @@ export async function loadJob(db: Vars["Variables"]["container"]["db"], slug: st
 export type Job = NonNullable<Awaited<ReturnType<typeof loadJob>>>;
 
 /**
- * What this job's public pages say about applying: past its plan's candidates per job a new applicant is on file, with no AI
- * interview and no AI reading of the form's résumé (the plans of 5 November 2026, Rule 2). Read from the job, never from who
- * is asking, and in the same words for everyone: never a word about a plan.
+ * Whether this job is past its plan's candidates per job: a new applicant is then kept on file, and nobody reads their
+ * resume, a person or the AI. Its public pages say so in the on-file words (packages/core/src/candidate-lock.ts), read
+ * from the job and never from who is asking, the same for everyone, and never with a word about a plan.
  */
-export async function applyFlowOf(container: Pick<Container, "db">, job: { company: { id: string }; role: { id: string } }): Promise<ApplyFlowView> {
-  return (await withTenant(container.db, job.company.id, (tx) => jobPastItsLimit(tx, { companyId: job.company.id, roleId: job.role.id }))) ? "on_file" : APPLY_FLOW;
+export function pastItsLimit(container: Pick<Container, "db">, job: { company: { id: string }; role: { id: string } }): Promise<boolean> {
+  return withTenant(container.db, job.company.id, (tx) => jobPastItsLimit(tx, { companyId: job.company.id, roleId: job.role.id }));
 }
 
-/** After a fulfilled deletion the link is dead: the page says so and nothing is recorded or sent (docs/readiness/14). */
+/** After a fulfilled deletion the link is dead: the page says so and nothing is recorded or sent. */
 export async function anonymizedFor(container: Container, candidateId: string): Promise<boolean> {
   const [cand] = await container.db.select({ anonymizedAt: candidates.anonymizedAt }).from(candidates).where(eq(candidates.id, candidateId)).limit(1);
   return !!cand?.anonymizedAt;

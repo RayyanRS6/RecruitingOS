@@ -10,13 +10,12 @@ import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
 import type { Tenant, Vars } from "../middleware/session";
 import { loadDraft } from "../routes/intake";
 import { approvedAbout, contactLineFor, logoMemberPath } from "../services/company-settings-profile";
-import { APPLY_FLOW, previewNote, type ApplyFlowView } from "../services/job-preview";
+import { previewNote } from "../services/job-preview";
 import { jobUrls } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
 import { ApplyFormPage } from "./apply-form";
 import { JobPage, type JobPageCompany, type JobPageRole, type PreviewInfo } from "./job-page";
 import { Layout } from "./layout";
-import { withPlainQuestionHelp } from "./question-help";
 
 /**
  * The team's preview of a job page: the very page and apply form candidates get, drawn by the same components
@@ -73,18 +72,18 @@ function profileGaps(company: CompanyRow): string[] {
   ];
 }
 
-/** The job page or the apply form for a packet, with the preview's note and its own links. */
-function render(c: Context<Vars>, input: { packet: DraftRolePacket; company: CompanyRow; role: JobPageRole; preview: PreviewInfo; flow: ApplyFlowView }) {
+/** The job page or the apply form for a job record, as a job with room for more applicants shows them, with the preview's note and its own links. */
+function render(c: Context<Vars>, input: { packet: DraftRolePacket; company: CompanyRow; role: JobPageRole; preview: PreviewInfo }) {
   const container = c.get("container");
-  const { packet, company, role, preview, flow } = input;
+  const { packet, company, role, preview } = input;
   const notices = jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
   const view = previewCompany(company, container);
   c.header("Cache-Control", "no-store");
   c.header("X-Robots-Tag", "noindex, nofollow");
   if (c.req.query("view") === "apply") {
-    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={withPlainQuestionHelp(packet)} notices={notices} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" flow={flow} links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
+    return c.html(<ApplyFormPage company={{ slug: company.slug, name: company.name, contact: view.contact }} role={{ id: role.id }} packet={packet} notices={notices} privacyEmail={container.env.PRIVACY_EMAIL} formOpened="" onFile={false} links={{ job: preview.jobHref, uploadIntent: "" }} preview={preview} />);
   }
-  return c.html(<JobPage packet={packet} company={view} role={role} notices={notices} flow={flow} benefits={benefitsDescriptionFor(packet.compensation, company.settings)} links={{ careers: null, apply: preview.applyHref }} preview={preview} />);
+  return c.html(<JobPage packet={packet} company={view} role={role} notices={notices} onFile={false} benefits={benefitsDescriptionFor(packet.compensation, company.settings)} links={{ careers: null, apply: preview.applyHref }} preview={preview} />);
 }
 
 /** The preview's own addresses: the same path it was opened at, with the version and the view. */
@@ -112,15 +111,15 @@ async function rolePreview(c: Context<Vars>) {
       const pv = asked ? versions.find((v) => String(v.version) === asked) : versions[0];
       if (!pv) throw new HttpError(404, "version_not_found", "That version does not exist.");
       const [company] = await tx.select().from(companies).where(eq(companies.id, role.companyId)).limit(1);
-      return { role, pv, company, current: currentVersionOf(role, versions), flow: APPLY_FLOW };
+      return { role, pv, company, current: currentVersionOf(role, versions) };
     });
-    const { role, pv, company, flow } = found;
+    const { role, pv, company } = found;
     const packet = RolePacket.parse(pv.packet);
     const meta = previewNote({ packet, company, source: { kind: "job", status: role.status, current: found.current?.version === pv.version } });
     const preview: PreviewInfo = { notPublicYet: meta.notPublicYet, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, { version: String(pv.version) }), publicHref: meta.notPublicYet ? null : jobUrls(container.env, { slug: company.slug, roleId: role.id }).job };
     // Shown as candidates will meet it once it is live: taking applications, with its closing date when it has one.
     const view: JobPageRole = { id: role.id, accepting: true, closedMessage: null, postedOn: role.openedAt, applyBy: role.applicationsCloseOn ? applyByLabel(role.applicationsCloseOn) : null };
-    return render(c, { packet, company, role: view, preview, flow });
+    return render(c, { packet, company, role: view, preview });
   } catch (err) {
     return problemPage(c, err);
   }
@@ -134,12 +133,11 @@ async function draftPreview(c: Context<Vars>) {
     if (row.status !== "active") throw new HttpError(409, "not_active", "This draft has already become a job, or it was set aside. Open the job to preview it.");
     if (!row.draftPacket) throw new HttpError(409, "no_draft", "Write the job first; then you can preview it.");
     const container = c.get("container");
-    const flow = APPLY_FLOW;
     const [company] = await withTenant(container.db, t.companyId, (tx) => tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1));
     if (!company) throw new HttpError(404, "not_found", "Company not found.");
     const meta = previewNote({ packet: row.draftPacket, company, source: { kind: "draft" } });
     const preview: PreviewInfo = { notPublicYet: true, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, {}), publicHref: null };
-    return render(c, { packet: row.draftPacket, company, role: { id: row.id, accepting: true, closedMessage: null, postedOn: null, applyBy: null }, preview, flow });
+    return render(c, { packet: row.draftPacket, company, role: { id: row.id, accepting: true, closedMessage: null, postedOn: null, applyBy: null }, preview });
   } catch (err) {
     return problemPage(c, err);
   }

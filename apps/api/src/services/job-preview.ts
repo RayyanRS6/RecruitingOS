@@ -1,4 +1,5 @@
 import { EMPLOYMENT_TYPE_LABEL, REMOTE_POLICY_LABEL, type DraftRolePacket } from "@ros/contracts";
+import { afterApplyingSteps } from "@ros/agents";
 import { ON_FILE_LAST_STEP, isCompanyLive, jobNoticesFor, payShown } from "@ros/core";
 import type { companies } from "@ros/db";
 
@@ -11,45 +12,21 @@ import type { companies } from "@ros/db";
 export const WORK_MODEL_LABEL: Readonly<Record<string, string>> = REMOTE_POLICY_LABEL;
 export const EMPLOYMENT_LABEL: Readonly<Record<string, string>> = EMPLOYMENT_TYPE_LABEL;
 
-/**
- * How a job's applicants meet the AI interview, as its pages tell it. "one_visit": a short form, then the AI interview.
- * "later": by email only. "on_file": the job is past its plan's candidates per job, so a new applicant meets no AI
- * interview and nothing reads their resume: the pages say a short form, promise neither, and never say why.
- */
-export type ApplyFlowView = "one_visit" | "later" | "on_file";
-export const APPLY_FLOW: ApplyFlowView = "one_visit";
-
-/** The form alone, in minutes. */
+/** The application form, in minutes. */
 export const FORM_MINUTES = 3;
 
-/** Applying in one visit, the form and the AI interview, rounded up to five minutes. */
-export function oneVisitMinutes(packet: { screening: { maxMinutes: number } }): number {
-  return Math.ceil((FORM_MINUTES + packet.screening.maxMinutes) / 5) * 5;
-}
-
-/** How long applying takes, in the words of the job page, its apply card and the form. */
-export function applyTimeLine(packet: { screening: Pick<DraftRolePacket["screening"], "maxMinutes"> }, input: { companyName: string; flow: ApplyFlowView }): string {
-  return input.flow === "one_visit" ? `About ${oneVisitMinutes(packet)} minutes, including a short AI interview with ${input.companyName}'s AI assistant.` : `A short form, about ${FORM_MINUTES} minutes.`;
-}
+/** How long applying takes, on the job page's apply card. */
+export const APPLY_TIME_LINE = `A short form, about ${FORM_MINUTES} minutes.`;
 
 /**
- * The steps the candidate can expect, the same on every job page and its preview. It gives the job's own length, never
- * a number of questions. On a job past its limit (`on_file`) there is no AI interview to name, and the last step is the
- * promise that holds for someone nobody may read: a real answer by a date. That step is DRAFT WORDING PENDING COUNSEL
- * (packages/core/src/candidate-lock.ts).
+ * "What to expect" on the job page and its preview: applying is a short form, and what follows it is what the receipt
+ * and the email say (`afterApplyingSteps`). An AI interview is never part of applying. `onFile`: the job is past its
+ * plan's candidates per job, so the page promises no review: its last step is DRAFT WORDING PENDING COUNSEL
+ * (packages/core/src/candidate-lock.ts), and it never says why.
  */
-export function applySteps(packet: Pick<DraftRolePacket, "screening">, input: { companyName: string; flow: ApplyFlowView }): string[] {
-  if (input.flow === "on_file") return [`Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`, ON_FILE_LAST_STEP];
-  const first = input.flow === "one_visit"
-    ? [
-        `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`,
-        `A short AI interview with ${input.companyName}'s AI assistant, about ${packet.screening.maxMinutes} minutes. It opens right after the form, usually within a minute, and its link comes by email too, so you can do it later. It is not a test: you can skip a question, stop and come back later, or ask for a person instead.`,
-      ]
-    : [
-        `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`,
-        `Possibly a short written conversation with ${input.companyName}'s AI assistant (online, about ${packet.screening.maxMinutes} minutes). If so, we email you the link.`,
-      ];
-  return [...first, "A decision, and a real answer either way."];
+export function applySteps(input: { companyName: string; onFile: boolean }): string[] {
+  const form = `Send a short form, about ${FORM_MINUTES} minutes. We confirm by email.`;
+  return input.onFile ? [form, ON_FILE_LAST_STEP] : [form, ...afterApplyingSteps(input.companyName)];
 }
 
 type Company = Pick<typeof companies.$inferSelect, "locations" | "settings">;

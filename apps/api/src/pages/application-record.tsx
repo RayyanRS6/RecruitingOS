@@ -12,26 +12,29 @@ import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { packetOf, screensOf, sentAnswersFor, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink, withdrawApplication } from "../services/applications";
+import { contactLineFor } from "../services/company-settings-profile";
 import { CORRECTION_LINE, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts } from "./job-facts";
+import { ContactLink } from "./job-page";
 import { Layout } from "./layout";
 import { CARD_PAGE_CSS } from "./signin-link";
 import { CHAT_BUBBLE_CSS } from "./conversation-frame";
 import { forTheWeb } from "./web-wording";
 
 /**
- * The candidate's application record: "Lost your link?", the status page at /c/status/:token, and everything its forms
- * do (privacy requests, withdrawing, a new link). Mounted on the candidate pages by pages/candidate.tsx.
+ * The candidate's own pages about their application: "Lost your link?", the status page at /c/status/:token, and
+ * everything its forms do (privacy requests, withdrawing, a new link). Mounted on the candidate pages by
+ * pages/candidate.tsx.
  */
 const candidatePages = new Hono<Vars>();
 export { candidatePages as recordPages };
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* "Lost your link?" (Wave 0 item 0.1): the status link goes again to the address on file, never to the page.   */
+/* "Lost your link?": the status link goes again to the address on file, never to the page.                      */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The form's one field, checked here (the shared contracts stay as they are in this wave). */
+/** The form's one field. */
 const LinkRequestForm = z.object({ email: z.email().max(254) });
 
 function LinkRequestPage(props: { error?: string; email?: string }) {
@@ -85,11 +88,10 @@ candidatePages.post("/c/link-request", rateLimit(POLICIES.linkRequest), async (c
 });
 
 /**
- * The progress line the status page leads with (Wave S2, slice K4; Kanvis-like; October 2026 redesign): a clean stepper
- * in one card, a numbered circle per step joined by a line, past steps filled in plum with a tick, the current one
- * ringed in plum with a lavender halo (and announced as the current step). Down the page on a phone, across it from 600
- * pixels. No motion. The messages about the application read as a conversation (plan G7), in the screening
- * conversation's look.
+ * The status page's styles. The steps it leads with: one card, a numbered circle per step joined by a line, past steps
+ * filled in plum with a tick, the current one ringed in plum with a lavender halo (and announced as the current step).
+ * Down the page on a phone, across it from 600 pixels. No motion. Their chat, read back word for word, wears the AI
+ * interview's own look (`CHAT_BUBBLE_CSS`).
  */
 export const STATUS_CSS = `
 .track { display: grid; margin: 22px 0 14px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; counter-reset: track; }
@@ -114,13 +116,11 @@ export const STATUS_CSS = `
 ${CHAT_BUBBLE_CSS}${recordCss()}${CARD_PAGE_CSS}`;
 
 /**
- * The application record's own parts (Wave S7, S7-E; October 2026 redesign): the pills that jump to each section; "What
- * happens next" as the "your next step" card (`.next-step`: its heading as a small eyebrow with a coral dot, the line in
- * display type, the one thing to do); the status card as one strip of label-over-value cells; the match score with its
- * bars (native progress elements, so no inline style; the colour band from the tokens); the answers read back (the
- * assistant's notes in a lavender block with a plum rule); the details as label/value rows; and the other applications
- * as the rows of one list with their pills. Tokens only, no motion, no button rules. A function, so the status page's
- * stylesheet above can name it before this point in the file.
+ * The status page's own parts: the pills that jump to each section; "What happens next" as the "your next step" card
+ * (`.next-step`: its heading as a small eyebrow with a coral dot, the line in display type, the one thing to do); the
+ * status card as one strip of label-over-value cells; the answers read back, with a pill for one skipped or changed; and
+ * the details as label/value rows. Tokens only, no motion, no button rules. A function, so the status page's stylesheet
+ * above can name it before this point in the file.
  */
 function recordCss(): string {
   return `
@@ -137,42 +137,14 @@ div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 .card.status > div { display: grid; align-content: start; gap: 4px; margin: 0; padding: 16px 20px; border: 0; box-shadow: -1px 0 0 var(--line), 0 -1px 0 var(--line); }
 .card.status > div > :first-child { color: var(--ink-2); font-size: 13px; font-weight: 400; }
 .card.status > div > :last-child { min-width: 0; color: var(--ink); font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em; text-align: left; overflow-wrap: anywhere; }
-.score-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 6px 0 8px; }
-.score-num { color: var(--ink); font-family: var(--display); font-size: 48px; font-weight: 700; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-.score-num small { margin-left: 4px; color: var(--ink-3); font-family: var(--ui); font-size: 16px; font-weight: 600; letter-spacing: 0; }
-.score-head > span:last-child { padding: 3px 12px; border-radius: var(--r-pill); background: var(--tint-2); color: var(--primary); font-family: var(--ui); font-size: 14px; font-weight: 600; letter-spacing: 0; }
-.bars { display: grid; gap: 14px; margin: 12px 0; padding: 0; list-style: none; }
-.bar-head { display: flex; justify-content: space-between; gap: 12px; font-size: 14.5px; }
-.bar-head span:first-child { min-width: 0; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
-.bar-head span:last-child { flex: 0 1 auto; color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
-.bars progress { display: block; width: 100%; height: 8px; margin-top: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--line); -webkit-appearance: none; appearance: none; }
-.bars progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--line); }
-.bars progress::-webkit-progress-value { border-radius: var(--r-pill); background: var(--good); }
-.bars progress::-moz-progress-bar { border-radius: var(--r-pill); background: var(--good); }
-.bars .partial progress::-webkit-progress-value { background: var(--caution); }
-.bars .partial progress::-moz-progress-bar { background: var(--caution); }
-.bars .short progress::-webkit-progress-value { background: var(--critical); }
-.bars .short progress::-moz-progress-bar { background: var(--critical); }
-.bars .shown progress::-webkit-progress-value { background: var(--primary); }
-.bars .shown progress::-moz-progress-bar { background: var(--primary); }
 .said { display: grid; gap: 14px; margin: 10px 0 0; padding: 0; list-style: none; }
 .said > li + li { padding-top: 14px; border-top: 1px solid var(--line); }
 .said-q { margin: 0 0 4px; color: var(--ink); font-weight: 600; }
 .said .pre { margin: 0; color: var(--ink-2); }
-.said-note { margin: 8px 0 0; padding: 8px 12px; border-left: 2px solid var(--primary); border-radius: 0 10px 10px 0; background: var(--tint); color: var(--ink-2); font-size: 14px; }
 .state { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 10px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--ink-2); font-size: 12.5px; font-weight: 600; line-height: 1.3; white-space: nowrap; }
-.state.needs_you { background: var(--accent-soft); color: var(--accent-ink); }
-.state.waiting { background: var(--tint-2); color: var(--primary); }
 .details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 10px 0 0; font-size: 14.5px; }
 .details dt { color: var(--ink-2); }
 .details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
-ul.apps { display: block; margin: 12px 0 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
-ul.apps > li.card { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0; padding: 14px 18px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-ul.apps > li.card + li.card { border-top: 1px solid var(--line); }
-ul.apps strong { color: var(--ink); font-size: 15px; }
-ul.apps .state { margin-left: 6px; }
-ul.apps .meta { margin: 2px 0 0; font-size: 13px; }
-.app-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 @media (hover: hover) and (pointer: fine) { .jump a:hover { border-color: var(--line-strong); color: var(--ink); } }
 @media (pointer: coarse) { .jump a { min-height: 40px; } }
 @media (max-width: 600px) {
@@ -209,25 +181,27 @@ function onFileLine(onFile: OnFile, companyName: string): string {
   return onFile.datePassed ? CLOSED_OUT_STATUS_LINE : onFileStatusLine(companyName, onFile.byDay);
 }
 
-const REVIEWING_LINE = "The hiring team is reviewing your application. You will hear from them either way.";
+/** Said while a person may still decide: it promises no answer, because nothing answers a candidate by itself. */
+const REVIEWING_LINE = "The hiring team is reviewing your application.";
+/** Said once their job has closed to someone not hired and not told a decision: what is true, and nothing more. */
+const JOB_CLOSED_LINE = "This job is no longer taking applications.";
 
 /**
  * The line under the steps, in the candidate's words: what is happening now and what they can do. `interview`: their AI
- * interview's link is open (`open`), they have begun it (`started`), or they sent their answers (`sent`).
+ * interview's link is open (`open`), they have begun it (`started`), or they sent their answers (`sent`);
+ * `interviewUntil`: the day an open link closes. `jobClosed`: the job has closed, which by itself tells nobody a decision.
  */
-function nextLine(input: { step: CandidateStep; stage: ApplicationStage; interview: "open" | "started" | "sent" | null; companyName: string; onFile: OnFile | null }): string {
+function nextLine(input: { step: CandidateStep; stage: ApplicationStage; interview: "open" | "started" | "sent" | null; interviewUntil: string | null; companyName: string; onFile: OnFile | null; jobClosed: boolean }): string {
   const { step, stage } = input;
+  if (step === "decision") return stage === "hired" ? "You are on the team." : stage === "withdrawn" ? "You withdrew this application. Thank you for your time." : "Thank you for applying. This role did not work out.";
   if (input.onFile && (step === "received" || step === "under_review")) return onFileLine(input.onFile, input.companyName);
+  if (input.jobClosed) return JOB_CLOSED_LINE;
   if (step === "received") return stage === "applied" ? "We are confirming your application now." : "Your application is in. We are checking the basics.";
   if (step === "under_review") return REVIEWING_LINE;
-  if (step === "interview") {
-    if (input.interview === "started") return "Finish your AI interview whenever you are ready. Your answers so far are saved.";
-    if (input.interview === "open") return "Your next step is a short AI interview with the hiring team's AI assistant. It is waiting for you, whenever suits you.";
-    return input.interview === "sent" ? "Thanks for completing the AI interview. The team is reviewing your answers." : REVIEWING_LINE;
-  }
-  if (stage === "hired") return "You are on the team.";
-  if (stage === "withdrawn") return "You withdrew this application. Thank you for your time.";
-  return "Thank you for applying. This role did not work out.";
+  const until = input.interviewUntil ? ` Its link stays open until ${input.interviewUntil}.` : "";
+  if (input.interview === "started") return `Your AI interview is saved where you left it.${until}`;
+  if (input.interview === "open") return `Your next step is a short AI interview with the hiring team's AI assistant.${until}`;
+  return input.interview === "sent" ? "Thanks for completing the AI interview. The team is reviewing your answers." : REVIEWING_LINE;
 }
 
 /** A day on the status page ("Oct 14, 2026"), in the company's time zone. */
@@ -359,7 +333,9 @@ function JobSection(props: { packet: RolePacket; href: string | null }) {
  * The candidate's status page. It leads with the steps (Received, Under review, AI interview for someone who was
  * shortlisted, Decision once they were told) and the one line on what happens next, with the button into their AI
  * interview while its link is open. Never the team's stage names, and never a score. Not selected shows only once the
- * candidate was told; until then the page stands where it was and withdrawing stays open. A line says a person decides.
+ * candidate was told; until then the page stands where it was and withdrawing stays open. Once the job has closed,
+ * someone not hired and not told reads that it takes no more applications, and nothing is promised or offered. A line
+ * says a person decides.
  */
 candidatePages.get("/c/status/:token", async (c) => {
   const container = c.get("container");
@@ -379,8 +355,10 @@ candidatePages.get("/c/status/:token", async (c) => {
     return { screens: all, packet, closedOut, sent: sentAnswersFor({ app, packet, screens: all }) };
   });
   const newest = record.screens[0];
-  // A private decision closed their AI interview: nothing of it is offered, and the page stands where it was.
-  const open = !view.hidden && newest && SCREEN_ACTIVE_STATUSES.includes(newest.status as ScreenStatus) ? newest : null;
+  const jobClosed = role?.status === "closed";
+  // A private decision closed their AI interview: nothing of it is offered, and the page stands where it was. Nor is one
+  // offered on a job that has closed.
+  const open = !view.hidden && !jobClosed && newest && SCREEN_ACTIVE_STATUSES.includes(newest.status as ScreenStatus) ? newest : null;
   const shownStage = view.hidden ? view.before ?? "triaged" : app.stage;
   const step = candidateStep(app.stage, app.toldState, view.before);
   // The AI interview is a step for someone at it, and behind someone who began or sent one; never one that did not happen.
@@ -389,7 +367,7 @@ candidatePages.get("/c/status/:token", async (c) => {
   // Dates on the page are the company's days, never the server's.
   const companyZone = company?.timezone ?? "America/Los_Angeles";
   const companyName = company?.name ?? "the company";
-  const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut: record.closedOut, datePassed: container.engine.clock().getTime() >= closeOutDueAt(app.createdAt).getTime(), jobClosed: role?.status === "closed" } : null;
+  const onFile: OnFile | null = app.lockedAt ? { byDay: closeOutDayWords(closeOutDueAt(app.createdAt), companyZone), closedOut: record.closedOut, datePassed: container.engine.clock().getTime() >= closeOutDueAt(app.createdAt).getTime(), jobClosed } : null;
   const decision = decisionHeadline(step, shownStage);
   const jobHref = company && role && isCompanyLive(company.settings) && role.currentPacketVersion && role.status !== "draft" ? `/careers/${company.slug}/jobs/${role.id}` : null;
   const jump = [
@@ -408,7 +386,7 @@ candidatePages.get("/c/status/:token", async (c) => {
       {/* Where things stand, then the one thing to do now. */}
       <div class="next-step">
         <h2>What happens next</h2>
-        <p>{nextLine({ step, stage: shownStage, interview: open ? (open.status === "in_progress" ? "started" : "open") : shownStage === "screen_complete" ? "sent" : null, companyName: company?.name ?? "The company", onFile })}</p>
+        <p>{nextLine({ step, stage: shownStage, interview: open ? (open.status === "in_progress" ? "started" : "open") : shownStage === "screen_complete" ? "sent" : null, interviewUntil: open?.expiresAt ? statusDay(open.expiresAt, companyZone) : null, companyName: company?.name ?? "The company", onFile, jobClosed })}</p>
         {open ? <a class="btn" href={`/c/screen/${open.token}`}>{open.status === "in_progress" ? "Continue your AI interview" : "Start your AI interview"}</a> : null}
         {c.req.query("withdrawn") === "1" ? <div class="card" role="status"><strong>Your application is withdrawn.</strong><p>Thank you for your time. If you have a question, reply to any of our emails.</p></div> : null}
       </div>
@@ -440,7 +418,7 @@ candidatePages.get("/c/status/:token", async (c) => {
         </details>
       ) : null}
       <h2 id="help">Need something?</h2>
-      <p>Reply to any of our emails with HUMAN to reach a person, or make a request below.</p>
+      <p>To reach a person, email <ContactLink contact={contactLineFor(company?.settings, container.env)} />, or make a request below.</p>
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
       {/* Requests about their information, and a review by a person, one click away. */}
       <details class="more">
@@ -526,7 +504,7 @@ candidatePages.post("/c/status/:token/withdraw", rateLimit(POLICIES.withdraw), a
 });
 
 /**
- * "Get a new link" (known-bugs row 48): the status link is replaced by a new random one and this one stops working. The
+ * "Get a new link": the status link is replaced by a new random one and this one stops working. The
  * new link goes by email to the address on file, never to this page: whoever pressed may be someone the link was
  * forwarded to. The answer is a page of its own, since the address it was pressed from no longer opens anything.
  */

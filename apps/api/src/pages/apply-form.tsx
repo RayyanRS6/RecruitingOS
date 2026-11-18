@@ -2,6 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { ApplyRequest, ApplySource, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type DraftRolePacket, type FormAnswers, type FormQuestion, type RolePacket } from "@ros/contracts";
+import { afterApplyingSteps } from "@ros/agents";
 import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, candidateNotices, closeOutDayWords, closeOutDueAt, emit, onFileFormLine, onFileReceiptLine, openPayload, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
@@ -15,8 +16,8 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { createApplication, markUploadUsed, uploadAlreadyUsed, withNewApplication, type ResumeInput as ResumeUpload } from "../services/applications";
 import { formOpenedBefore, lateApplicationAllowed, sealFormOpened } from "../services/closing-date";
 import { contactLineFor, type ContactLine } from "../services/company-settings-profile";
-import { FORM_MINUTES, type ApplyFlowView } from "../services/job-preview";
-import { acceptingApplications, applyFlowOf, jobNotices, jobTakesApplications, loadJob, maskEmail, type Job } from "./candidate-shared";
+import { FORM_MINUTES } from "../services/job-preview";
+import { acceptingApplications, jobNotices, jobTakesApplications, loadJob, maskEmail, pastItsLimit, type Job } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts, publicPay } from "./job-facts";
 import { HelpLine, PreviewNote, type PreviewInfo } from "./job-page";
@@ -29,8 +30,8 @@ import { withPlainQuestionHelp } from "./question-help";
  * pages/candidate.tsx.
  *
  * The form asks who they are, their resume, the job's screening questions, and the acknowledgment. Nothing is read by AI
- * before Send, and no answer holds anyone. On a job past its plan's candidates per job (`flow` "on_file") the form is the
- * same, with the line that says so before Send beside the required notices, which keep every word.
+ * before Send, and no answer holds anyone. On a job past its plan's candidates per job (`onFile`) the form is the same,
+ * with the line that says so before Send beside the required notices, which keep every word.
  */
 const candidatePages = new Hono<Vars>();
 export { candidatePages as applyPages };
@@ -69,8 +70,8 @@ export type ApplyFormProps = {
   privacyEmail: string;
   /** The sealed "form opened at" value (services/closing-date.ts): a form opened before the closing date may still be sent. */
   formOpened: string;
-  /** "on_file": the job is past its plan's candidates per job, and the form says so before Send. */
-  flow: ApplyFlowView;
+  /** The job is past its plan's candidates per job, and the form says so before Send. */
+  onFile: boolean;
   /** `apply`: where the form sends the application. A preview has none: its form sends nothing. */
   links: { job: string; uploadIntent: string; apply?: string };
   /** Where they came from (`?src=` on the job page), carried in the form and recorded with the application. */
@@ -109,9 +110,9 @@ function TransparencyBlock(props: { company: { name: string }; notices: Notice[]
         <summary>Read the full notice</summary>
         <p><strong>{props.company.name}</strong> runs this hiring process and is the employer. People at {props.company.name} make every hiring decision. Software helps organize and summarize applications, and works out a match score from what you send, checked against the job's requirements; the team sees what the score is based on, and a person always decides.</p>
         {props.onFile ? <p>{ON_FILE_SOFTWARE_LINE}</p> : null}
-        <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, where you are based, your resume or your answers about your work, and your answers to the questions above.</p>
+        <p><strong>What we collect:</strong> your name, your email, your phone number if you give one, your resume, and your answers to the questions above.</p>
         <p><strong>Why:</strong> to consider you for this position and to contact you about it. Nothing else.</p>
-        <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; an Identified Talent Solutions recruiter only if {props.company.name} brings one in to help; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
+        <p><strong>Who can see it:</strong> the hiring team at {props.company.name}; and the companies that run this service for us: hosting, file storage, email delivery, and the AI service that helps organize applications. Each does only its own job; the privacy page linked below says what each one does.</p>
         <p><strong>Your choices:</strong> after you apply, we email you a link to your own status page, where you can ask for a copy of your information, correct it, withdraw your application, or delete your information. You can also email <a href={`mailto:${props.privacyEmail}`}>{props.privacyEmail}</a> at any time. A person handles every request.</p>
         <p><a href="/privacy">Read how we handle your information</a></p>
         {props.notices.map((n) => <p class="notice">{n.text}</p>)}
@@ -184,10 +185,6 @@ function ApplyFields(props: ApplyFormProps & { questions: FormQuestion[] }) {
   const invalid = (field: string) => (missing.has(field) ? "true" : undefined);
   return (
     <>
-      <section class="card resume-card" aria-labelledby="resume-title">
-        <h2 id="resume-title">Your resume</h2>
-        <ResumeField kept={props.state?.resume ?? null} resumeLost={!!props.state?.resumeLost} invalid={missing.has("resume")} />
-      </section>
       <h2 id="details-title">Your details</h2>
       <label for="firstName">First name</label>
       <input id="firstName" type="text" name="firstName" required autocomplete="given-name" value={v.firstName ?? ""} aria-invalid={invalid("firstName")} />
@@ -195,8 +192,12 @@ function ApplyFields(props: ApplyFormProps & { questions: FormQuestion[] }) {
       <input id="lastName" type="text" name="lastName" required autocomplete="family-name" value={v.lastName ?? ""} aria-invalid={invalid("lastName")} />
       <label for="email">Email</label>
       <input id="email" type="email" name="email" required autocomplete="email" value={v.email ?? ""} aria-invalid={invalid("email")} />
-      <label for="phone">Mobile phone (optional)</label>
+      <label for="phone">Phone (optional)</label>
       <input id="phone" type="tel" name="phone" autocomplete="tel" value={v.phone ?? ""} aria-invalid={invalid("phone")} />
+      <section class="card resume-card" aria-labelledby="resume-title">
+        <h2 id="resume-title">Your resume</h2>
+        <ResumeField kept={props.state?.resume ?? null} resumeLost={!!props.state?.resumeLost} invalid={missing.has("resume")} />
+      </section>
       {props.questions.length ? (
         <section class="quick" aria-labelledby="questions-title">
           <h2 id="questions-title">Questions from {props.company.name}</h2>
@@ -205,7 +206,7 @@ function ApplyFields(props: ApplyFormProps & { questions: FormQuestion[] }) {
           </ol>
         </section>
       ) : null}
-      <TransparencyBlock company={props.company} notices={candidateNotices(props.notices)} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={props.flow === "on_file"} />
+      <TransparencyBlock company={props.company} notices={candidateNotices(props.notices)} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={props.onFile} />
     </>
   );
 }
@@ -240,7 +241,7 @@ export function ApplyFormPage(props: ApplyFormProps) {
           {props.source ? <input type="hidden" name="src" value={props.source} /> : null}
           <ApplyFields {...props} questions={questions} />
           {/* This page showed the line before Send, so the application records it among the notices shown (`onFileShown`). */}
-          {props.flow === "on_file" ? <input type="hidden" name="onFileShown" value="yes" /> : null}
+          {props.onFile ? <input type="hidden" name="onFileShown" value="yes" /> : null}
           <button class="btn" type="submit">Send my application</button>
         </form>
       )}
@@ -416,14 +417,14 @@ function applyLinks(job: Job) {
 }
 
 /** Everything the form needs that does not change between showing it and showing it again. */
-function applyFormFor(container: Container, job: Job, flow: ApplyFlowView, source: string | null): Omit<ApplyFormProps, "formOpened"> {
+function applyFormFor(container: Container, job: Job, onFile: boolean, source: string | null): Omit<ApplyFormProps, "formOpened"> {
   return {
     company: { slug: job.company.slug, name: job.company.name, contact: contactLineFor(job.company.settings, container.env) },
     role: { id: job.role.id },
     packet: job.packet,
     notices: jobNotices(job.packet, job.company),
     privacyEmail: container.env.PRIVACY_EMAIL,
-    flow,
+    onFile,
     links: applyLinks(job),
     source,
   };
@@ -467,7 +468,7 @@ candidatePages.get("/careers/:slug/jobs/:roleId/apply", async (c) => {
   // Funnel measurement without identity: a random per-visit reference, no candidate data, no client script.
   void container.integrations.analytics.capture({ name: "application_started", subjectRef: randomToken(12), companyRef: refFor(job.company.id, container.integrations.analyticsSalt), at: new Date().toISOString(), properties: { source: "careers_page" } }).catch(() => undefined);
   const source = ApplySource.safeParse(c.req.query("src"));
-  return c.html(<ApplyFormPage {...applyFormFor(container, job, await applyFlowOf(container, job), source.success ? source.data : null)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} />);
+  return c.html(<ApplyFormPage {...applyFormFor(container, job, await pastItsLimit(container, job), source.success ? source.data : null)} formOpened={sealFormOpened(container.env.SESSION_SECRET, job.role.id, container.engine.clock())} />);
 });
 
 /**
@@ -544,7 +545,7 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
   const posted = postedApplyForm(body, job.packet.formQuestions);
   const admitted = admits(container, job, posted.formOpened);
   if (!admitted.ok) return c.notFound();
-  const form = applyFormFor(container, job, await applyFlowOf(container, job), posted.source);
+  const form = applyFormFor(container, job, await pastItsLimit(container, job), posted.source);
   // A form shown again keeps the moment it was first opened, so the closing date's grace still applies to it.
   const formOpened = posted.formOpened || sealFormOpened(container.env.SESSION_SECRET, role.id, container.engine.clock());
   // The versions recorded as shown are the server's own, computed from the same inputs as the render; a browser cannot claim a different set.
@@ -561,7 +562,7 @@ async function sendApplication(c: Context<Vars>, drawn: FormAgain): Promise<Resp
   // From here whatever fails before the application is stored brings this form back, with what was typed (`formPost`).
   drawn.again = (error) => again(error, [], 500);
   // Honeypot: a filled hidden field gets the receipt a person gets, and nothing is recorded.
-  if (posted.website) return toReceipt(c, job, values.email, form.flow === "on_file");
+  if (posted.website) return toReceipt(c, job, values.email, form.onFile);
   const parsed = ApplyRequest.safeParse({ firstName: values.firstName, lastName: values.lastName, email: values.email, phone: values.phone || undefined, answers: posted.answers, noticeVersionsShown, acknowledged });
   if (!parsed.success) {
     const missing = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")).filter(Boolean))];
@@ -650,9 +651,11 @@ export function applyFormProblem(missing: readonly string[]): string {
  * The receipt, in plain words: it never names a status link. Worked out from what was typed, so a known address reads as
  * a new one. On a job past its limit (`onFile`; `onFileBy`, the day they hear by) it says only what is true of them: on
  * file, and when they hear. Those words are DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts). With its
- * cookie gone there is no day to name, and nothing about who is asking: on such a job it promises no review.
+ * cookie gone there is no day to name, and nothing about who is asking: on such a job it promises no review, and points
+ * to the email, which says what is true of them.
  */
 function Receipt(props: { company: { slug: string; name: string }; role: { id: string }; packet: RolePacket; to: string | null; onFile: boolean; onFileBy: string | null }) {
+  const next = !props.onFile ? afterApplyingSteps(props.company.name) : props.onFileBy ? [onFileReceiptLine(props.company.name, props.onFileBy), "People make every decision."] : ["People make every decision.", "The email we sent you says what happens next."];
   return (
     <Layout title="We have your application">
       <p class="eyebrow"><a href={`/careers/${props.company.slug}/jobs/${props.role.id}`}>{props.packet.identity.title}</a></p>
@@ -662,21 +665,7 @@ function Receipt(props: { company: { slug: string; name: string }; role: { id: s
         <p>Keep that email. The link is how you check where things stand, withdraw, or ask about your information. There is no account or password.</p>
       </div>
       <h2>What happens next</h2>
-      <ol class="steps">
-        {props.onFile ? (
-          <>
-            {props.onFileBy ? <li>{onFileReceiptLine(props.company.name, props.onFileBy)}</li> : null}
-            <li>People make every decision.</li>
-            {props.onFileBy ? null : <li>You hear from us by email either way.</li>}
-          </>
-        ) : (
-          <>
-            <li>The hiring team at {props.company.name} reviews your application.</li>
-            <li>If you are shortlisted, we email you a link to a short AI interview: a written chat you do at a time that suits you.</li>
-            <li>The team decides. People on the hiring team make every decision.</li>
-          </>
-        )}
-      </ol>
+      <ol class="steps">{next.map((step) => <li>{step}</li>)}</ol>
       {/* The earlier-emails line is true for a first application and a repeat alike: a repeat's reminder goes at most once a day. */}
       <details class="more">
         <summary>No email?</summary>
@@ -697,6 +686,6 @@ candidatePages.get("/careers/:slug/jobs/:roleId/applied", async (c) => {
   const mine = sealed?.v === 1 && sealed.roleId === job.role.id ? sealed : null;
   c.header("Cache-Control", "no-store");
   const onFileBy = mine && typeof mine.by === "string" ? closeOutDayWords(mine.by, job.company.timezone) : null;
-  const onFile = mine ? !!onFileBy : (await applyFlowOf(container, job)) === "on_file";
+  const onFile = mine ? !!onFileBy : await pastItsLimit(container, job);
   return c.html(<Receipt company={job.company} role={job.role} packet={job.packet} to={mine && typeof mine.to === "string" ? mine.to : null} onFile={onFile} onFileBy={onFileBy} />);
 });

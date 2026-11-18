@@ -41,10 +41,22 @@ function footer(packet: RolePacket, company: Company): string {
 const KNOWN_ADDRESS_LINE = "This application was sent using your email address. If you did not send it, reply to this email and a person will look into it.";
 
 /**
+ * What happens after applying, in the same words on the job page, the receipt and the "application received" email: the
+ * team reviews, an AI interview comes by email only to someone the team shortlists, and people decide.
+ */
+export function afterApplyingSteps(companyName: string): string[] {
+  return [
+    `The hiring team at ${companyName} reviews your application.`,
+    "If you are shortlisted, we email you a link to a short AI interview: a written chat you do at a time that suits you.",
+    "The team decides. People on the hiring team make every decision.",
+  ];
+}
+
+/**
  * Application received: the one email every applicant gets on applying, with their status link and what happens next
- * (the same words as the receipt page). `onFileByDay`: the applicant is past the plan's candidates per job, and reads the
- * on-file wording with the day they hear by at the latest (DRAFT WORDING PENDING COUNSEL,
- * packages/core/src/candidate-lock.ts); never a word about a plan. It never carries an AI interview link.
+ * (`afterApplyingSteps`). `onFileByDay`: the applicant is past the plan's candidates per job, and reads the on-file
+ * wording with the day they hear by at the latest (DRAFT WORDING PENDING COUNSEL, packages/core/src/candidate-lock.ts);
+ * never a word about a plan. It never carries an AI interview link.
  */
 export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; onFileByDay?: string | null; knownAddress?: boolean }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
@@ -60,9 +72,7 @@ You can check where things stand any time, withdraw, or ask about your informati
     : `Thank you for applying for the ${title} position at ${company.name}. We have your application.${known}
 
 What happens next:
-1. The hiring team at ${company.name} reviews your application.
-2. If you are shortlisted, we email you a link to a short AI interview: a written chat you do at a time that suits you.
-3. The team decides. People on the hiring team make every decision.
+${afterApplyingSteps(company.name).map((step, i) => `${i + 1}. ${step}`).join("\n")}
 
 You can check where things stand at any time: ${statusUrl}`;
   return deliver(q, integrations, {
