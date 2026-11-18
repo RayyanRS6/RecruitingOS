@@ -211,8 +211,8 @@ ${FAIRNESS_RULES}`;
 /** Said with the conversation the scorecard reads (D-04 = C): the placeholders stand for details hidden on purpose. */
 const SCORING_VIEW_NOTE = "Details in square brackets ([name], [email], [phone], [street address], [zip code], [link]) were replaced on purpose. They are not evidence: never guess what they were.";
 
-/** What the model is asked for: the scorecard without `secondaryScore` (plan 0.9); the model never writes a number. */
-export const ScreenAssessModelOutput = ScreenAssessment.omit({ secondaryScore: true });
+/** What the model is asked for: the scorecard; the model never writes a number. */
+export const ScreenAssessModelOutput = ScreenAssessment;
 
 // Version 2 (plan 0.9): must-have findings with quotes, a "no" only on the candidate's words, and no number.
 // Version 3 (plan Wave E): recruiter call notes kept apart from the candidate's words, skipped questions unknown, and a

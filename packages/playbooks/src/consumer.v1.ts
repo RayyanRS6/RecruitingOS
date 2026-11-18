@@ -1,4 +1,4 @@
-import { Playbook, type Playbook as PlaybookT, type PlaybookInput } from "@ros/contracts";
+import { playbookOf, type Playbook, type PlaybookInput } from "./playbook";
 
 /**
  * Consumer, beauty, e-commerce, creative and marketing playbook, version 1: the launch wedge in the founder
@@ -283,4 +283,4 @@ const consumer: PlaybookInput = {
   ],
 };
 
-export const consumerPlaybook: PlaybookT = Playbook.parse(consumer);
+export const consumerPlaybook: Playbook = playbookOf(consumer);

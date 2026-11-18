@@ -1,4 +1,4 @@
-import { Playbook, type Playbook as PlaybookT, type PlaybookInput } from "@ros/contracts";
+import { playbookOf, type Playbook, type PlaybookInput } from "./playbook";
 
 /**
  * Dental vertical playbook, version 1. Authored as a starting point from ITS recruiting practice;
@@ -271,4 +271,4 @@ const dental: PlaybookInput = {
   ],
 };
 
-export const dentalPlaybook: PlaybookT = Playbook.parse(dental);
+export const dentalPlaybook: Playbook = playbookOf(dental);

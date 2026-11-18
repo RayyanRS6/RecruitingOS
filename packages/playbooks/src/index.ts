@@ -1,8 +1,9 @@
-import type { Playbook, PlaybookRole } from "@ros/contracts";
+import type { Playbook, PlaybookRole } from "./playbook";
 import { dentalPlaybook } from "./dental.v1";
 import { consumerPlaybook } from "./consumer.v1";
 
 export { dentalPlaybook, consumerPlaybook };
+export type { Playbook, PlaybookRole } from "./playbook";
 
 export const ALL_PLAYBOOKS: Playbook[] = [consumerPlaybook, dentalPlaybook];
 

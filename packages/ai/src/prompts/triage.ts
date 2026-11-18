@@ -101,10 +101,10 @@ ${FINDING_RULES_NAMING}
 ${FAIRNESS_RULES}`;
 
 /**
- * What the model is asked for: the assessment without `secondaryScore` (plan 0.9). The model never writes a number; any
- * match score is worked out later in code from the checked findings. The stored column stays, always empty.
+ * What the model is asked for: the assessment. The model never writes a number; any match score is worked out later in
+ * code from the checked findings.
  */
-export const TriageModelOutput = EvidenceAssessment.omit({ secondaryScore: true });
+export const TriageModelOutput = EvidenceAssessment;
 
 function packetBlock(p: RolePacket): string {
   const comp = p.compensation;
