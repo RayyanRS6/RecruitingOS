@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { devices, expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
-/** True when the run targets a deployed address (E2E_BASE_URL) rather than the local shell with fake providers. */
+/** True when the run targets a deployed address (E2E_BASE_URL) rather than the local shell with stand-in providers. */
 export const REMOTE_TARGET = !!process.env.E2E_BASE_URL?.trim();
 
 /**
@@ -13,8 +13,8 @@ export function skipWithoutFakeSignIn() {
 }
 
 /**
- * page.goto that tries once more when the app's own navigation cancelled it (net::ERR_ABORTED): right after a staff
- * sign-in the landing page may still send the person on while the dev server compiles the next page (seen on CI).
+ * page.goto that tries once more when the app's own navigation cancelled it (net::ERR_ABORTED): right after a sign-in
+ * the landing page may still send the person on while the dev server compiles the next page (seen on CI).
  */
 export async function gotoSettled(page: Page, path: string) {
   try {
@@ -29,7 +29,7 @@ export async function gotoSettled(page: Page, path: string) {
 /** WCAG 2.1 A and AA plus best-practice rules; every violation fails the test with its nodes listed. */
 export async function expectAccessible(page: Page, name: string) {
   // Let entrances finish first: axe measures colours as drawn, and a dialog still fading in reads as low contrast.
-  // Endless animations (loading placeholders, the Live dot) never finish, so they are left out. A list that arrives
+  // Endless animations (loading placeholders, the Open dot) never finish, so they are left out. A list that arrives
   // after a tab click starts its own entrances once its request returns, so wait for the network too, then again.
   const entrances = () => page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined))));
   await entrances();
@@ -40,28 +40,22 @@ export async function expectAccessible(page: Page, name: string) {
   if (results.violations.length) throw new Error(`accessibility violations on ${name}:\n${summary}`);
 }
 
-/**
- * The time zone of every company these specs create (the sign-up form's "Pacific time (Los Angeles)"), so the calendar
- * the screens count the company's days on.
- */
-export const COMPANY_ZONE = "America/Los_Angeles";
-
-/**
- * The company's calendar day `days` from today (YYYY-MM-DD; -1 is yesterday), whatever hour and zone the run is in. The
- * hire sheet, Home's "Close this job?", the interview's date field and the closing date count the company's days, and the
- * UTC date is the company's tomorrow from 00:00 to 08:00 UTC (07:00 in summer), so a day worked out on the UTC calendar
- * failed for a third of each day (the review of the live-test fixes, 12 November 2026). Whole calendar days, as the API's
- * addCalendarDays counts them: the day the clocks change is still one day.
- */
-export function companyDay(days: number, now: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: COMPANY_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
-  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-  return new Date(Date.UTC(part("year"), part("month") - 1, part("day") + days)).toISOString().slice(0, 10);
+/** The page itself never scrolls sideways on this viewport. */
+export async function noSidewaysScroll(page: Page, name: string) {
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
+  expect(scrollWidth, `${name} scrolls sideways on this viewport`).toBeLessThanOrEqual(innerWidth + 1);
 }
 
+/** What the page said: a toast, or a status line or an alert on the page, with these words. */
+export const said = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* Signing in, and a company                                                                                            */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
 /**
- * Microsoft sign-in through the fake consent page with the second factor unchecked. For an ITS staff address this ends on
- * the authenticator page under /api/v1/auth/mfa (22 September 2026), which is why it does not wait for an app URL.
+ * Microsoft sign-in through the fake consent page with the second factor unchecked. For a staff address this ends on
+ * the authenticator page under /api/v1/auth/mfa, which is why it does not wait for an app URL.
  */
 export async function signInWithoutSecondFactor(page: Page, input: { email: string; name: string }) {
   await page.goto("/login");
@@ -86,124 +80,66 @@ export async function signIn(page: Page, input: { email: string; name: string; p
   if (input.aal2 === false && (await mfa.isChecked())) await mfa.uncheck();
   await page.getByRole("button", { name: "Continue" }).click();
   await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
-  // The first page may still send the person on (staff go to the console): a page.goto made before that settles is aborted.
+  // The first page may still send the person on (an administrator goes to the admin dashboard): a page.goto made before that settles is aborted.
   await page.waitForLoadState("networkidle");
 }
 
-export async function createCompanyThroughTheForm(page: Page, name: string) {
-  await page.waitForURL("**/setup/company");
-  await expectAccessible(page, "company setup");
-  // someone who signed in with the wrong account can leave from here
-  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-  await page.getByLabel("Company name").fill(name);
-  await page.getByLabel("Your name").fill("Dana Whitfield");
+/** The platform administrator the e2e server bootstraps (BOOTSTRAP_ADMIN_EMAILS): signed in with Microsoft and a second factor. */
+export const ADMIN = { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true } as const;
+
+/** The administrator in a browser of their own, so nobody else's session is touched. */
+export async function signInAsAdmin(browser: Browser, options: Parameters<Browser["newContext"]>[0] = {}): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext(options);
+  const page = await context.newPage();
+  await signIn(page, ADMIN);
+  return { context, page };
+}
+
+/** The time zone of every company these specs create (the company form's Pacific time). */
+export const COMPANY_ZONE = "America/Los_Angeles";
+
+/** The company form as a new owner fills it in (the fields of apps/web/src/pages/CompanySetup.tsx), up to the button. */
+export async function fillTheCompanyForm(page: Page, company: string, owner = "Dana Whitfield") {
+  await page.getByLabel("Company name").fill(company);
+  await page.getByLabel("Your name").fill(owner);
   await page.getByLabel("What kind of business").selectOption("dental");
-  await page.getByLabel("How many employees").selectOption("20-49");
+  await page.getByLabel("How many employees").selectOption("1-19");
   await page.getByLabel("City").fill("Tustin");
   // State and size start empty, and the time zone starts from the browser's own (empty when it is not a US zone).
   await page.getByLabel("State").fill("CA");
   await page.getByLabel("Time zone").selectOption(COMPANY_ZONE);
-  await page.getByRole("button", { name: /Create|Continue|Save/ }).click();
+  await page.getByLabel("Website (optional)").fill("https://harborsmiles.example");
+}
+
+/**
+ * A new company, straight from the company form: with open sign-up the workspace opens at once and the owner lands on
+ * Home. A server that asks for approval (SIGNUP_MODE=approval) is access-approval.spec.ts's subject, so anything that
+ * needs a company this way is skipped there, with the reason on the report.
+ */
+export async function createCompanyThroughTheForm(page: Page, name: string, owner = "Dana Whitfield") {
+  test.skip(process.env.SIGNUP_MODE === "approval", "opens its company straight from the company form, which needs a server with open sign-up");
+  await page.waitForURL("**/setup/company");
+  await expect(page.getByRole("heading", { name: "Tell us about your company" })).toBeVisible({ timeout: 30_000 });
+  // someone who signed in with the wrong account can leave from here
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await fillTheCompanyForm(page, name, owner);
+  await page.getByRole("button", { name: "Create my hiring workspace" }).click();
   await page.waitForURL((u) => u.pathname === "/");
 }
 
-/**
- * ITS switches the one-visit flow on for a company (plan Wave E, founder decision B1). Since 20 October 2026 (R20-12)
- * nothing reads the setting: every applicant takes the same path, so this only writes it. Done through the admin API,
- * signed in as the e2e administrator in a browser context of its own, so the owner's session is untouched.
- */
-export async function useOneVisitFlow(browser: Browser, base: string, companyId: string) {
-  const staff = await browser.newContext();
-  try {
-    const admin = await staff.newPage();
-    await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    const r = await admin.request.post(`${base}/api/v1/admin/customers/${companyId}/apply-flow`, { data: { applyFlow: "one_visit", reason: "A pilot company for the one-visit flow." }, headers: { "x-admin-reason": "e2e: pilot company" } });
-    expect(r.ok(), await r.text()).toBeTruthy();
-  } finally {
-    await staff.close();
-  }
-}
-
-/**
- * ITS puts a company on another plan (founder decision F8): a new company is on Free, which has room for one job ever,
- * so a journey that publishes a role and then starts another needs more room. Through the admin API, as above, which
- * takes the plans the console offers.
- */
-export async function usePlan(browser: Browser, base: string, companyId: string, planKey: "basic" | "pro" | "ultra") {
-  const staff = await browser.newContext();
-  try {
-    const admin = await staff.newPage();
-    await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    const r = await admin.request.post(`${base}/api/v1/admin/customers/${companyId}/plan`, { data: { planKey, reason: "e2e: room for a second role" }, headers: { "x-admin-reason": "e2e: plan for the journey" } });
-    expect(r.ok(), await r.text()).toBeTruthy();
-  } finally {
-    await staff.close();
-  }
-}
-
-/** The heavy data setup goes through the API with the browser's own session cookie; the journey stays in the browser. */
-export async function seedRoleAndApplicant(request: APIRequestContext, base: string, first: string, last: string) {
-  const s = await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
-  const { roleId } = await (await request.post(`${base}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
-  expect((await request.post(`${base}/api/v1/roles/${roleId}/approve`, { data: { version: 1, note: "Looks right." } })).ok()).toBeTruthy();
-  const role = await (await request.get(`${base}/api/v1/roles/${roleId}`)).json() as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-  const company = await (await request.get(`${base}/api/v1/companies/current`)).json() as { slug: string };
-  const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> = {
-    firstName: first, lastName: last, email: `${first.toLowerCase()}.${last.toLowerCase()}+${Date.now().toString(36)}@example.com`, locationText: "Tustin, CA",
-    resume: { name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from(`${first} ${last}, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present`) },
-    noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01",
-    acknowledged: "yes",
-  };
-  for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
-  const applied = await request.post(`${base}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
-  expect(applied.status()).toBe(302);
-  // Since 20 Oct 2026 (R20-12) every applicant lands on the waiting room, which opens their own AI interview once it
-  // exists (the résumé read, and at least 40 to 90 seconds for every address alike, Q14): followed here as the page's script does. The status link travels
-  // only by email (Wave 0 item 0.1), and the applicant here does not start the interview, so they are under "No AI interview yet" (R20-7).
-  const location = applied.headers().location ?? "";
-  expect(location, "the apply form sends the applicant to the waiting room").toBe(`/careers/${company.slug}/jobs/${roleId}/applied`);
-  let conversationPath: string | null = null;
-  await expect.poll(async () => {
-    const to = (await request.get(`${base}${location}`, { maxRedirects: 0 })).headers().location ?? "";
-    conversationPath = /^\/c\/screen\/[A-Za-z0-9_-]+$/.test(to) ? to : null;
-    return conversationPath;
-  }, { timeout: 150_000, message: "the waiting room opening the AI interview" }).not.toBeNull();
-  const candidateEmail = multipart.email as string;
-  const statusPath = await statusPathFromEmail(request, base, candidateEmail);
-  return { roleId, slug: company.slug, statusPath, candidateEmail, conversationPath };
-}
-
-/**
- * The status page path from the acknowledgment email as the candidate received it, read from the development outbox
- * (`/dev/outbox`, the fake email adapter) once the worker has sent it. The apply form never returns the link itself,
- * and the owner's copy of the message shows `/c/status/[link]` instead of the candidate's token.
- */
-export async function statusPathFromEmail(request: APIRequestContext, base: string, email: string): Promise<string> {
-  let path = "";
-  await expect.poll(async () => {
-    const sent = (await (await request.get(`${base}/dev/outbox`)).json()) as Array<{ to: string; subject: string; text: string }>;
-    const ack = sent.find((m) => m.to.toLowerCase() === email.toLowerCase() && m.subject.startsWith("Thank you for applying"));
-    path = ack?.text.match(/\/c\/status\/[A-Za-z0-9_-]+/)?.[0] ?? "";
-    return path;
-  }, { timeout: 60_000, message: "the acknowledgment email with the status link" }).not.toBe("");
-  return path;
-}
-
 /* ------------------------------------------------------------------------------------------------------------------ */
-/* The whole flows (the owner, 6 November 2026: "please test it thoroughly so the complete process of making a job      */
-/* hiring and then the complete process of applying test both these flows"). Each email is read by its words, right     */
-/* after the press that sends it, from the development outbox.                                                          */
+/* Email, read from the development outbox by its words and its links                                                   */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
 /** One email as the fake adapter recorded it (packages/integrations/src/types.ts, OutboundEmail). */
-export type SentEmail = { to: string; from: string; subject: string; text: string; at: string; attachments?: Array<{ filename: string; contentType: string; contentBase64: string }> };
+export type SentEmail = { to: string; from: string; subject: string; text: string; at: string };
 type Words = string | RegExp;
 const matches = (value: string, w: Words) => (typeof w === "string" ? value.includes(w) : w.test(value));
 const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
- * What the fake email adapter sent, newest first. The server keeps the last 50 only (apps/api/src/app.ts), across every
- * spec that ran on it, so read it right after the press that sends, never at the end of a long journey.
+ * What the fake email adapter sent, newest first. The server keeps the last 50 only, across every spec that ran on it,
+ * so read it right after the press that sends, never at the end of a long journey.
  */
 export async function outbox(request: APIRequestContext, base: string): Promise<SentEmail[]> {
   const r = await request.get(`${base}/dev/outbox`);
@@ -217,8 +153,8 @@ export async function emailsTo(request: APIRequestContext, base: string, to: str
 }
 
 /**
- * Waits for the email to `to` whose subject matches (decision and closing messages leave after their 30-second Undo
- * window, so allow 90 seconds for those), then checks every one of `says` is in its text. Returns it.
+ * Waits for the email to `to` whose subject matches (a decision email leaves after its Undo window, so allow 90 seconds
+ * for one), then checks every one of `says` is in its text. Returns it.
  */
 export async function waitForEmail(request: APIRequestContext, base: string, input: { to: string; subject: Words; says?: Words[]; timeout?: number }): Promise<SentEmail> {
   let found: SentEmail | undefined;
@@ -240,16 +176,6 @@ export async function exactlyOneEmail(request: APIRequestContext, base: string, 
   return all[0];
 }
 
-/**
- * No email to `to` (with a subject that matches, when one is given) after waiting `ms`: long enough for the inline worker
- * to have sent anything the last press queued. A message held for its Undo window takes 30 seconds; pass more for those.
- */
-export async function expectNoEmail(request: APIRequestContext, base: string, input: { to: string; subject?: Words; ms?: number }) {
-  await new Promise((r) => setTimeout(r, input.ms ?? 5_000));
-  const all = await emailsTo(request, base, input.to, input.subject);
-  expect(all.map((m) => m.subject), `no email to ${input.to}${input.subject ? ` with the subject ${String(input.subject)}` : ""}`).toEqual([]);
-}
-
 /** The email's link that starts with `path` (e.g. "/c/status/"), as a path on this server. */
 export function linkIn(email: SentEmail, path: string): string {
   const m = email.text.match(new RegExp(`https?://[^\\s]+(${path.replace(/[/]/g, "\\/")}[^\\s]*)`));
@@ -257,212 +183,121 @@ export function linkIn(email: SentEmail, path: string): string {
   return m![1].replace(/[).,]+$/, "");
 }
 
-/** The administrator the e2e server bootstraps (BOOTSTRAP_ADMIN_EMAILS): Nadine at ITS, signed in with Microsoft and a second factor, in a browser of her own. */
-export const NADINE = { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true } as const;
-
-export async function signInAsNadine(browser: Browser, options: Parameters<Browser["newContext"]>[0] = {}): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext(options);
-  const page = await context.newPage();
-  await signIn(page, NADINE);
-  return { context, page };
+/** Every email to `to` that carries a link under `path` ("/c/status/", "/c/screen/"), newest first. Told apart by the link, never by the subject's words. */
+export async function emailsWithLink(request: APIRequestContext, base: string, to: string, path: string): Promise<SentEmail[]> {
+  return (await emailsTo(request, base, to)).filter((m) => m.text.includes(path));
 }
 
-/** The company form as a new owner fills it in (the fields of apps/web/src/pages/CompanySetup.tsx), up to the button. */
-export async function fillTheCompanyForm(page: Page, company: string, owner = "Sam Asker") {
-  await page.getByLabel("Company name").fill(company);
-  await page.getByLabel("Your name").fill(owner);
-  await page.getByLabel("What kind of business").selectOption("dental");
-  await page.getByLabel("How many employees").selectOption("1-19");
-  await page.getByLabel("City").fill("Tustin");
-  await page.getByLabel("State").fill("CA");
-  await page.getByLabel("Time zone").selectOption(COMPANY_ZONE);
-  await page.getByLabel("Website (optional)").fill("https://asker.example");
+/** Waits until `count` emails with a link under `path` have reached `to`, and returns the newest with its link as a path on this server. */
+export async function waitForLink(request: APIRequestContext, base: string, input: { to: string; path: string; count?: number; timeout?: number }): Promise<{ email: SentEmail; path: string }> {
+  let found: SentEmail[] = [];
+  await expect.poll(async () => {
+    found = await emailsWithLink(request, base, input.to, input.path);
+    return found.length;
+  }, { timeout: input.timeout ?? 60_000, intervals: [500, 1_000, 2_000], message: `an email to ${input.to} with a link to ${input.path}` }).toBeGreaterThanOrEqual(input.count ?? 1);
+  return { email: found[0], path: linkIn(found[0], input.path) };
+}
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* A published job, through the API                                                                                     */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+/**
+ * A job in one sentence that names every essential (title, place, work arrangement, type, schedule, pay, must-haves),
+ * so the stand-in assistant has little left to ask. Its two must-haves are the ones PERSONAS's resumes are read against.
+ */
+export const HYGIENIST_JOB = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
+
+type Card = { id: string; field: string; mode: "single" | "multi" | "free" | "pay"; prompt: string; options: Array<{ label: string; value: string }>; allowOwn: boolean };
+type Draft = { id: string; questions: Card[]; flags: Array<{ id: string; kept?: unknown }>; readiness: { mayDraft: boolean; draftBlocker: string | null } };
+
+/** What a card is answered with when it offers nothing to tick, by the fact it asks for. */
+const OWN_WORDS: Record<string, string> = {
+  title: "Registered Dental Hygienist",
+  location: "Tustin, CA",
+  remote_policy: "On site",
+  employment_type: "Full time",
+  schedule: "Monday to Friday, 8 to 5",
+  compensation_basis: "By the hour",
+  must_haves: "Active CA RDH license",
+  benefits: "Health and dental cover, paid time off.",
+};
+
+/**
+ * One card answered as the owner of HYGIENIST_JOB would: the pay as stated, the two must-haves in the sentence's own
+ * words (never one the assistant suggests, so the resumes are read against those two), on site, else the first answer
+ * offered or a few plain words. Deal-breakers are left alone.
+ */
+function cardAnswer(card: Card): Record<string, unknown> {
+  const skipped = { questionId: card.id, selected: [], own: [], skipped: true };
+  if (card.mode === "pay") return { questionId: card.id, selected: [], own: [], skipped: false, pay: { basis: "hourly", min: 45, max: 55 } };
+  if (card.field === "deal_breakers") return skipped;
+  if (card.field === "must_haves" && card.allowOwn) return { questionId: card.id, selected: [], own: ["active CA RDH license", "periodontal charting"], skipped: false };
+  const offered = card.options.find((o) => /on.?site/i.test(o.label)) ?? card.options[0];
+  if (offered && card.mode !== "free") return { questionId: card.id, selected: [offered.value], own: [], skipped: false };
+  const words = OWN_WORDS[card.field];
+  return words ? { questionId: card.id, selected: [], own: [words], skipped: false } : skipped;
 }
 
 /**
- * The job built the way an owner builds one, from Home: the "Who are you hiring?" box, the job builder's "Write the draft",
- * and "Ask for approval". `words` ends "Just draft it." so the stand-in writes the draft at once. Returns the job's id;
- * the page is left on the job's page.
+ * A published job through the API with the owner's own session, for a spec whose subject is not the job builder: the
+ * draft started from `words`, the assistant's cards answered until the job may be written, written, any flagged wording
+ * kept with a reason, and published. Returns its id, the company's address word and the job's public address.
  */
-export async function buildJobThroughTheBuilder(page: Page, words: string): Promise<string> {
-  await page.goto("/");
-  await page.getByRole("textbox", { name: "Who are you hiring?" }).fill(words);
-  await page.getByRole("button", { name: "Start drafting" }).click();
-  await expect(page).toHaveURL(/\/roles\/new\?session=[0-9a-f-]+$/, { timeout: 60_000 });
-  const write = page.getByRole("button", { name: "Write the draft" });
-  await expect(write).toBeVisible({ timeout: 60_000 });
-  await write.click();
-  await expect(page.getByRole("status").filter({ hasText: "The draft is written." })).toBeVisible({ timeout: 90_000 });
-  const ask = page.getByRole("button", { name: "Ask for approval" });
-  await expect(ask).not.toHaveAttribute("aria-disabled", "true", { timeout: 30_000 });
-  await ask.click();
-  await expect(page).toHaveURL(/\/roles\/[0-9a-f-]{36}$/, { timeout: 90_000 });
-  return new URL(page.url()).pathname.split("/").pop()!;
-}
-
-/**
- * A live job through the API with the owner's own session, for a spec whose subject is not the job: drafted from `words`
- * and approved. Returns its id, the company's slug and the job's public address.
- */
-export async function liveJobThroughTheApi(request: APIRequestContext, base: string, words = HYGIENIST_JOB): Promise<{ roleId: string; slug: string; jobUrl: string; title: string }> {
-  const s = (await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: words } })).json()) as { session: { id: string } };
-  const made = await request.post(`${base}/api/v1/intake/sessions/${s.session.id}/compile`);
-  expect(made.ok(), await made.text()).toBeTruthy();
-  const { roleId } = (await made.json()) as { roleId: string };
-  const approved = await request.post(`${base}/api/v1/roles/${roleId}/approve`, { data: { version: 1, note: "Looks right." } });
-  expect(approved.ok(), await approved.text()).toBeTruthy();
+export async function publishedJobThroughTheApi(request: APIRequestContext, base: string, words = HYGIENIST_JOB): Promise<{ roleId: string; slug: string; jobUrl: string; title: string }> {
+  const sessions = `${base}/api/v1/intake/sessions`;
+  const started = await request.post(sessions, { data: { initialMessage: words } });
+  expect(started.ok(), await started.text()).toBeTruthy();
+  let draft = ((await started.json()) as { session: Draft }).session;
+  for (let round = 0; round < 8 && !draft.readiness.mayDraft; round++) {
+    // with no card open, the owner says the rest in words
+    const turn = draft.questions.length
+      ? await request.post(`${sessions}/${draft.id}/answers`, { data: { answers: draft.questions.map(cardAnswer) } })
+      : await request.post(`${sessions}/${draft.id}/messages`, { data: { message: "It is on site in Tustin, CA, full time, Monday to Friday, 8 to 5. The pay is $45 to $55 an hour. Must-have: active CA RDH license." } });
+    expect(turn.ok(), await turn.text()).toBeTruthy();
+    draft = ((await turn.json()) as { session: Draft }).session;
+  }
+  expect(draft.readiness.mayDraft, `the job can be written (${draft.readiness.draftBlocker ?? "nothing is missing"})`).toBe(true);
+  const written = await request.post(`${sessions}/${draft.id}/draft`);
+  expect(written.ok(), await written.text()).toBeTruthy();
+  draft = ((await written.json()) as { session: Draft }).session;
+  for (const flag of draft.flags.filter((f) => !f.kept)) {
+    const kept = await request.post(`${sessions}/${draft.id}/flags/keep`, { data: { flagId: flag.id, reason: "The job needs it as written." } });
+    expect(kept.ok(), await kept.text()).toBeTruthy();
+  }
+  const published = await request.post(`${sessions}/${draft.id}/publish`);
+  expect(published.status(), await published.text()).toBe(201);
+  const { roleId } = (await published.json()) as { roleId: string };
   const { slug } = (await (await request.get(`${base}/api/v1/companies/current`)).json()) as { slug: string };
-  const role = (await (await request.get(`${base}/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { identity: { title: string } } } };
-  await expect.poll(async () => (await request.get(`${base}/careers/${slug}/jobs/${roleId}`)).status(), { timeout: 30_000, message: "the job's public page" }).toBe(200);
-  return { roleId, slug, jobUrl: `${base}/careers/${slug}/jobs/${roleId}`, title: role.currentPacket.packet.identity.title };
+  const { title } = (await (await request.get(`${base}/api/v1/roles/${roleId}`)).json()) as { title: string };
+  const jobUrl = `${base}/careers/${slug}/jobs/${roleId}`;
+  await expect.poll(async () => (await request.get(jobUrl)).status(), { timeout: 30_000, message: "the job's public page" }).toBe(200);
+  return { roleId, slug, jobUrl, title };
 }
 
-/**
- * An applicant through the API, for a spec whose subject is not the application: every eligibility question answered Yes,
- * then the waiting room followed until their AI interview exists, as seedRoleAndApplicant does. They do not take it.
- * Returns their status page path, from the email they got, and their application's id.
- */
-export async function applicantThroughTheApi(request: APIRequestContext, base: string, job: { roleId: string; slug: string }, who: Applicant): Promise<{ statusPath: string; applicationId: string }> {
-  const role = (await (await request.get(`${base}/api/v1/roles/${job.roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-  const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> = {
-    firstName: who.first, lastName: who.last, email: who.email, locationText: "Tustin, CA",
-    resume: { name: "resume.txt", mimeType: "text/plain", buffer: Buffer.from(resumeOf(who)) },
-    noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01",
-    acknowledged: "yes",
-  };
-  for (const rule of role.currentPacket.packet.requirements.eligibility) multipart[`elig_${rule.key}`] = "yes";
-  const applied = await request.post(`${base}/careers/${job.slug}/jobs/${job.roleId}/apply`, { multipart, maxRedirects: 0 });
-  expect(applied.status()).toBe(302);
-  const location = applied.headers().location ?? "";
-  await expect.poll(async () => /^\/c\/screen\/[A-Za-z0-9_-]+$/.test((await request.get(`${base}${location}`, { maxRedirects: 0 })).headers().location ?? ""), { timeout: 150_000, message: "the waiting room opening the AI interview" }).toBe(true);
-  const statusPath = await statusPathFromEmail(request, base, who.email);
-  const list = (await (await request.get(`${base}/api/v1/roles/${job.roleId}/applications`)).json()) as Array<{ id: string; candidate: { email: string | null } | null }>;
-  const applicationId = list.find((a) => a.candidate?.email?.toLowerCase() === who.email.toLowerCase())?.id;
-  expect(applicationId, `${who.first}'s application`).toBeTruthy();
-  return { statusPath, applicationId: applicationId! };
-}
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* The candidate's pages. They are the API's own (apps/api/src/pages), so every word they are found by is kept in this  */
+/* part: "Apply now" on the job page; on the form "First name", "Last name", "Email", the one file field, each question */
+/* as a group named by its words (or a field labelled by them), the acknowledgment "I have read the full notice above"  */
+/* and "Send my application"; the receipt "Thanks, we have your application"; and in the AI interview "Start", the box  */
+/* "Your reply" with "Send", the taps "Yes" and "No", "Send my answers" and "Thanks, your answers are sent".            */
+/* ------------------------------------------------------------------------------------------------------------------ */
 
-/** The job's approval card (RolePlan.tsx): "Approve this job" at the top of the job's page. */
-export const approvalCard = (page: Page, title: string | RegExp = "Approve this job") => page.locator(".card", { has: page.getByRole("heading", { name: title }) });
-
-/** Approve and publish on the job's page, the calm confirmation, and back to the job, which is then live. */
-export async function approveOnTheJobPage(page: Page) {
-  const card = approvalCard(page);
-  await expect(card).toBeVisible({ timeout: 30_000 });
-  const approve = card.getByRole("button", { name: "Approve and publish" });
-  await expect(approve).not.toHaveAttribute("aria-disabled", "true", { timeout: 30_000 });
-  await approve.click();
-  const done = page.getByRole("dialog", { name: "Your job is approved" });
-  await expect(done).toBeVisible({ timeout: 30_000 });
-  await done.getByRole("button", { name: "Go to your job" }).click();
-  await expect(done).toBeHidden({ timeout: 30_000 });
-}
-
-/** Declared interview hours, Monday to Friday 9 to 5, saved in Settings as a person does (optional since 6 November 2026). */
-export async function saveMyHours(page: Page) {
-  await page.goto("/setup#setup-availability");
-  await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Save availability" }).click();
-  await expect(page.getByRole("status").filter({ hasText: /Availability saved/ })).toBeVisible({ timeout: 30_000 });
-}
-
-/** Someone applying: their résumé's first line is their name, then their address, as a real résumé starts. */
+/** Someone applying: their resume's first line is their name, then how to reach them, as a real resume starts. */
 export type Applicant = { first: string; last: string; email: string; resume: string };
 
 export function resumeOf(who: Applicant): string {
   return `${who.first} ${who.last}\n${who.email}\n(714) 555-01${String(who.first.length).padStart(2, "0")}\nTustin, CA\n${who.resume}\n`;
 }
 
-/**
- * Applying through the job's own pages, in a browser of their own as candidates are: the job page (or the link someone
- * shared), Apply now, the résumé first and "Check your details" filled in from it, every question of the job answered
- * Yes (or its first choice) where the résumé chose nothing, the notice read and ticked, and Send my application. The page
- * is left on the waiting room; `waitForTheAiInterview` follows it to the AI interview. The browser says it is an ordinary
- * desktop Chrome, as a person's does: a headless one names itself "HeadlessChrome", which a tracked link rightly treats as
- * a link-preview fetcher (never counted, never given the source), so a walk through a shared link would prove nothing.
- */
-export async function applyThroughTheForm(browser: Browser, base: string, jobUrl: string, who: Applicant): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ baseURL: base, userAgent: devices["Desktop Chrome"].userAgent });
-  const cand = await context.newPage();
-  await cand.goto(jobUrl);
-  await expect(cand.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
-  // a board's or a place's tracked link lands on the form itself; the job's own address on the job page
-  if (!/\/apply$/.test(new URL(cand.url()).pathname)) await cand.getByRole("link", { name: "Apply now" }).last().click();
-  await cand.waitForURL(/\/careers\/[^/]+\/jobs\/[0-9a-f-]+\/apply$/, { timeout: 30_000 });
-  await expect(cand.getByRole("heading", { name: "Start with your resume" })).toBeVisible();
-  await cand.locator('input[name="resume"]').setInputFiles({ name: `${who.first.toLowerCase()}-${who.last.toLowerCase()}.txt`, mimeType: "text/plain", buffer: Buffer.from(resumeOf(who)) });
-  await expect(cand.getByRole("heading", { name: "Check your details" })).toBeVisible({ timeout: 60_000 });
-  await expect(cand.getByLabel("First name")).toHaveValue(who.first);
-  await expect(cand.getByLabel("Last name")).toHaveValue(who.last);
-  await expect(cand.getByLabel("Email")).toHaveValue(who.email);
-  const questions = cand.locator("section.quick");
-  for (const group of await questions.locator("li fieldset").all()) {
-    if (await group.locator("input:checked").count()) continue;
-    const yes = group.locator('input[type="radio"][value="yes"]');
-    if (await yes.count()) await yes.check();
-    else if (await group.locator('input[type="radio"]').count()) await group.locator('input[type="radio"]').first().check();
-    else await group.locator('input[type="checkbox"]').first().check();
-  }
-  for (const number of await questions.locator('input[type="number"]').all()) if (!(await number.inputValue())) await number.fill("5");
-  await cand.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
-  await cand.getByRole("button", { name: "Send my application" }).click();
-  return { context, page: cand };
-}
-
-/** The waiting room opens the AI interview by itself once the résumé is read (40 to 90 seconds for every address alike, Q14). */
-export async function waitForTheAiInterview(cand: Page) {
-  await cand.waitForURL(/\/c\/screen\/[A-Za-z0-9_-]+$/, { timeout: 150_000 });
-}
-
-/**
- * What someone says in the AI interview: `licence` answers a yes-or-no question about the license, `licenceWords` a question
- * about it in words; `story` a question about a time something happened, `work` everything else.
- */
+/** What someone says in the AI interview: `licence` answers a yes-or-no tap about the license, `licenceWords` a question about it in words; `story` a question about a time something happened, `work` everything else. */
 export type Says = { licence: "Yes" | "No"; licenceWords: string; work: string; story: string };
 
 /**
- * The AI interview on the candidate's own pages, from its introduction to Send: a tap where the page offers one, their
- * own words otherwise (the stand-in model answers each turn), then Review & send as it stands.
+ * Three hygienists the stand-in reads three ways against HYGIENIST_JOB's must-haves (an active CA RDH license and
+ * periodontal charting): everything shown, the license with the rest only partly shown, and no license in their own
+ * words.
  */
-export async function sendTheAiInterview(cand: Page, says: Says) {
-  await expect(cand.getByText("Your application is sent.")).toBeVisible({ timeout: 30_000 });
-  await cand.getByRole("button", { name: "Start" }).click();
-  await expect(cand.getByRole("heading", { level: 1, name: /^Your chat about the / })).toBeVisible({ timeout: 30_000 });
-  const chatEnd = cand.getByRole("button", { name: "Review and send" });
-  for (let i = 0; i < 30; i++) {
-    if (await chatEnd.isVisible()) break;
-    const asked = (await cand.locator("li.msg.assistant.now").textContent()) ?? "";
-    const aboutLicence = /licen[cs]e/i.test(asked);
-    if (await cand.getByRole("button", { name: "Yes", exact: true }).isVisible()) {
-      await cand.getByRole("button", { name: aboutLicence ? says.licence : "Yes", exact: true }).click();
-    } else if (await cand.getByLabel("From", { exact: true }).isVisible()) {
-      await cand.getByLabel("From", { exact: true }).fill("50");
-      await cand.getByLabel("To (optional)", { exact: true }).fill("54");
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else if (await cand.getByLabel("The earliest day you could start").isVisible()) {
-      await cand.getByLabel("The earliest day you could start").fill(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else if (await cand.getByRole("group", { name: "Tick every day you can work" }).isVisible()) {
-      await cand.getByLabel("Monday").check();
-      await cand.getByRole("button", { name: "Send", exact: true }).first().click();
-    } else {
-      await cand.getByLabel(/^Your reply/).fill(aboutLicence ? says.licenceWords : /nervous|patient|difficult|time when|a time/i.test(asked) ? says.story : says.work);
-      await cand.getByRole("button", { name: "Send", exact: true }).click();
-    }
-  }
-  await expect(cand.getByText("Your chat is complete.")).toBeVisible({ timeout: 30_000 });
-  await chatEnd.click();
-  await expect(cand.getByRole("heading", { level: 1, name: "Check what you're sending" })).toBeVisible({ timeout: 60_000 });
-  await cand.getByRole("button", { name: "Send my answers" }).click();
-  await expect(cand.getByRole("heading", { level: 1, name: "Thanks, your answers are sent" })).toBeVisible({ timeout: 60_000 });
-}
-
-/**
- * Three hygienists the stand-in reads three ways against a role whose must-haves are an active CA RDH license and
- * periodontal charting (FAKE_SAMPLE_RESUMES in packages/agents/src/fake-handlers.ts): everything shown, the license with the
- * rest only partly shown, and no license in their own words. Each tells the same story in the AI interview.
- */
-export const HYGIENIST_JOB = "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license, periodontal charting. Just draft it.";
 export const PERSONAS = {
   strong: {
     resume: "Registered Dental Hygienist at Harbor Dental 2019 - present\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix\nThorough, gentle clinical care to high standards\nPatient communication: explains findings plainly and builds trust\nKeeps to time without cutting corners\nShows up consistently and communicates early",
@@ -493,81 +328,134 @@ export const PERSONAS = {
   },
 } as const satisfies Record<string, { resume: string; says: Says }>;
 
-/** The candidate's panel on the job's Candidates page, opened from their row as an owner opens it. */
-export async function openThePanel(page: Page, roleId: string, name: string) {
-  await page.goto(`/roles/${roleId}/talent`);
-  await expect(page.getByRole("button", { name, exact: true })).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name, exact: true }).click();
-  const panel = page.getByRole("dialog", { name });
-  await expect(panel).toBeVisible({ timeout: 30_000 });
-  return panel;
+/** The application form on the page: the one with "Send my application". */
+export const applicationForm = (cand: Page) => cand.locator("form").filter({ has: cand.getByRole("button", { name: "Send my application" }) });
+
+/** One screening question answered by its own words: a tap on the answer where the question is a group of choices, else the field's value. */
+async function answerAQuestion(form: Locator, question: string, answer: string) {
+  const group = form.getByRole("group", { name: question });
+  if (await group.count()) return group.first().getByText(answer, { exact: true }).first().click();
+  const field = form.getByLabel(question);
+  if ((await field.evaluate((el) => el.tagName)) === "SELECT") await field.selectOption({ label: answer });
+  else await field.fill(answer);
 }
 
 /**
- * "Set a date and time" as a person fills it in, on the panel or the interview's sheet: the day (`daysAhead` from the
- * company's today, the calendar its date field reads), the time on the company's clock, and Book. Returns the day.
+ * The application form as a candidate fills it in, up to the Send button: who they are, the resume file, the job's
+ * screening questions (`answers`, by each question's own words; any question not named there gets Yes, its first
+ * choice, or 5), and the notice ticked. Nothing here is sent.
  */
-export async function setADateAndTime(form: Locator, input: { first: string; daysAhead?: number; time?: string; place?: "Video link" | "Address" | "By phone"; address?: string; clash?: boolean }) {
-  const day = companyDay(input.daysAhead ?? 3);
-  await form.getByLabel("Date", { exact: true }).fill(day);
-  await form.getByLabel(/^Time \(/).fill(input.time ?? "10:30");
-  if (input.place) await form.getByRole("radio", { name: input.place }).check();
-  if (input.address) await form.getByRole("textbox", { name: "Address" }).fill(input.address);
-  // the press books it: a new interview (POST /applications/:id/interviews) or this one (POST /interviews/:id/set-time)
-  const page = form.page();
-  const booked = page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/v1\/(applications\/[^/]+\/interviews|interviews\/[^/]+\/set-time)$/.test(new URL(r.url()).pathname), { timeout: 30_000 }).catch(() => null);
-  const errors: string[] = [];
-  const onConsole = (m: { type(): string; text(): string }) => { if (m.type() === "error") errors.push(m.text()); };
-  const onError = (e: Error) => errors.push(e.message);
-  page.on("console", onConsole);
-  page.on("pageerror", onError);
-  const button = form.getByRole("button", { name: new RegExp(`^(Book|Move)( and email ${input.first})?$`) });
-  await button.click();
-  const answer = await booked;
-  page.off("console", onConsole);
-  page.off("pageerror", onError);
-  if (!answer) {
-    // nothing went: say what the form and the page said, so a failure names its cause
-    const said = await page.getByRole("status").allTextContents();
-    const lines = await form.locator("p").allTextContents();
-    throw new Error(`Book sent nothing. Its aria-disabled is ${await button.getAttribute("aria-disabled")}; the form says: ${lines.join(" | ")}; the page says: ${said.join(" | ")}; script errors: ${errors.join(" | ") || "none"}`);
+export async function fillTheApplication(cand: Page, who: Applicant, answers: Record<string, string> = {}) {
+  const form = applicationForm(cand);
+  await form.getByLabel("First name").fill(who.first);
+  await form.getByLabel("Last name").fill(who.last);
+  await form.getByLabel("Email", { exact: true }).fill(who.email);
+  await form.locator('input[type="file"]').setInputFiles({ name: `${who.first.toLowerCase()}-${who.last.toLowerCase()}.txt`, mimeType: "text/plain", buffer: Buffer.from(resumeOf(who)) });
+  for (const [question, answer] of Object.entries(answers)) await answerAQuestion(form, question, answer);
+  for (const group of await form.locator("fieldset").filter({ has: cand.locator('input[type="radio"]') }).all()) {
+    if (await group.locator("input:checked").count()) continue;
+    const yes = group.locator('input[type="radio"][value="yes"]');
+    if (await yes.count()) await yes.first().check();
+    else await group.locator('input[type="radio"]').first().check();
   }
-  if (input.clash) expect(answer.status(), "an interviewer already booked then").toBe(409);
-  else expect(answer.status(), `Book: ${await answer.text()}`).toBeLessThan(400);
-  return day;
+  for (const number of await form.locator('input[type="number"]').all()) if (!(await number.inputValue())) await number.fill("5");
+  for (const select of await form.locator("select").all()) if (!(await select.inputValue())) await select.selectOption({ index: 1 });
+  await form.getByRole("checkbox", { name: /I have read the full notice above/ }).check();
 }
 
-/** The interview's sheet from the Interviews page: "Did it take place?" Yes, as the person who was there records it. */
-export async function recordTookPlace(page: Page, candidateName: string, round?: string | RegExp) {
-  await page.goto("/interviews");
-  const row = page.getByRole("row").filter({ hasText: candidateName }).filter(round ? { hasText: round } : {}).filter({ hasText: "Scheduled" });
-  await expect(row).toBeVisible({ timeout: 30_000 });
-  await row.getByRole("link", { name: "Open", exact: true }).click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByRole("heading", { name: "Did it take place?" })).toBeVisible({ timeout: 30_000 });
-  await sheet.getByRole("button", { name: "Yes", exact: true }).click();
-  await expect(page.getByRole("status").filter({ hasText: /Recorded/ })).toBeVisible({ timeout: 30_000 });
-  await expect(sheet.getByRole("heading", { name: "After the interview" })).toBeVisible({ timeout: 30_000 });
-  return sheet;
+/** Where a candidate lands after Send: the receipt's address. */
+const RECEIPT_ADDRESS = /\/careers\/[^/]+\/jobs\/[0-9a-f-]+\/applied$/;
+
+/** The receipt a candidate lands on after Send, by its words. */
+export async function expectTheReceipt(cand: Page) {
+  await cand.waitForURL(RECEIPT_ADDRESS, { timeout: 60_000 });
+  await expect(cand.getByRole("heading", { level: 1 })).toContainText("Thanks, we have your application");
 }
 
-/** The decision after an interview, on the candidate's panel: Finalist (or another), with what stood out. */
-export async function decideInPanel(panel: Locator, decision: "Finalist" | "Next round", note = "Calm, precise, asked good questions.") {
-  await expect(panel.getByRole("heading", { name: "How did the interview go?" })).toBeVisible({ timeout: 30_000 });
-  await panel.getByRole("button", { name: decision, exact: true }).click();
-  // "Next round" is recorded on the press and opens the next round's date and time; Finalist asks what stood out first
-  if (decision === "Next round") return;
-  await panel.getByLabel(/What stood out/).fill(note);
-  await panel.getByRole("button", { name: "Confirm finalist" }).click();
+/**
+ * Applying through the job's own pages, in a browser of their own as candidates are: the job page at `jobUrl` (an
+ * Apply link from a post carries `?src=`), Apply now, the form, Send, and the receipt's address. The browser says it
+ * is an ordinary desktop Chrome, as a person's does.
+ */
+export async function applyThroughTheForm(browser: Browser, base: string, jobUrl: string, who: Applicant, answers: Record<string, string> = {}): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({ baseURL: base, userAgent: devices["Desktop Chrome"].userAgent });
+  const cand = await context.newPage();
+  await cand.goto(jobUrl);
+  await expect(cand.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
+  await cand.getByRole("link", { name: "Apply now" }).last().click();
+  await cand.waitForURL(/\/careers\/[^/]+\/jobs\/[0-9a-f-]+\/apply(\?|$)/, { timeout: 30_000 });
+  await fillTheApplication(cand, who, answers);
+  await applicationForm(cand).getByRole("button", { name: "Send my application" }).click();
+  await cand.waitForURL(RECEIPT_ADDRESS, { timeout: 60_000 });
+  return { context, page: cand };
 }
 
-/** From the interview's sheet on Interviews to the candidate's panel through "Record the decision" (the sheet re-renders once the outcome is saved, so a press that lands mid-render is tried again). */
-export async function openTheDecision(page: Page, sheet: Locator, name: string): Promise<Locator> {
-  const decide = sheet.getByRole("link", { name: "Record the decision" });
-  await expect(async () => {
-    if (!/\/talent\?open=/.test(page.url())) await decide.click({ timeout: 5_000 });
-    await expect(page).toHaveURL(/\/talent\?open=/, { timeout: 3_000 });
-  }).toPass({ timeout: 30_000 });
+/** The candidate's own status page path, from the one email they get after applying. The link travels only by email. */
+export async function statusPathFromEmail(request: APIRequestContext, base: string, email: string): Promise<string> {
+  return (await waitForLink(request, base, { to: email, path: "/c/status/" })).path;
+}
+
+/**
+ * The AI interview on the candidate's own pages, from its first page to "Thanks, your answers are sent": Start, then
+ * each question as it comes (a tap where the page offers Yes and No, their own words otherwise; the stand-in asks the
+ * next), then their answers to check, and Send my answers. Nothing reaches the company before that press. `from`: a
+ * caller that pressed Start itself (to look at the chat first) carries on from the chat.
+ */
+export async function doTheAiInterview(cand: Page, says: Says, from: "the first page" | "the chat" = "the first page") {
+  if (from === "the first page") await cand.getByRole("button", { name: "Start", exact: true }).click();
+  const sendAll = cand.getByRole("button", { name: "Send my answers" });
+  const reply = cand.getByLabel(/^Your reply/);
+  const tap = cand.getByRole("button", { name: "Yes", exact: true });
+  const onward = cand.getByRole("button", { name: /^(Review and send|Check your answers)$/ }).or(cand.getByRole("link", { name: /^(Review and send|Check your answers)$/ })).first();
+  const messages = cand.locator("li.msg.assistant");
+  for (let turn = 0; turn < 40; turn++) {
+    // whichever comes next: a question to answer, the way on to their answers, or the answers with Send
+    await expect.poll(async () => (await sendAll.isVisible()) || (await reply.isVisible()) || (await tap.isVisible()) || (await onward.isVisible()), { timeout: 60_000, message: "the AI interview's next step" }).toBe(true);
+    if (await sendAll.isVisible()) break;
+    if (await onward.isVisible()) {
+      await onward.click();
+    } else {
+      // the question being asked is the assistant's newest message
+      const asked = (await messages.count()) ? ((await messages.last().textContent()) ?? "").trim() : "";
+      const aboutLicence = /licen[cs]e/i.test(asked);
+      if (await tap.isVisible()) await cand.getByRole("button", { name: aboutLicence ? says.licence : "Yes", exact: true }).click();
+      else {
+        await reply.fill(aboutLicence ? says.licenceWords : /nervous|patient|difficult|time when|a time/i.test(asked) ? says.story : says.work);
+        await reply.locator("xpath=ancestor::form").getByRole("button", { name: "Send", exact: true }).click();
+      }
+    }
+    await cand.waitForLoadState("load");
+  }
+  await expect(sendAll).toBeVisible();
+  await sendAll.click();
+  await expect(cand.getByRole("heading", { level: 1, name: "Thanks, your answers are sent" })).toBeVisible({ timeout: 60_000 });
+}
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* A job's Candidates list, as the team reads it                                                                        */
+/* ------------------------------------------------------------------------------------------------------------------ */
+
+/** The tabs over a job's candidates, each named with its count ("New 2"). */
+export const candidateTabs = (page: Page) => page.getByRole("tablist", { name: "Candidates by stage" });
+
+/** One person's row on the list (candidate-row is the page's own hook for tests). */
+export const candidateRow = (page: Page, name: string) => page.locator(".candidate-row").filter({ has: page.getByRole("button", { name, exact: true }) });
+
+/** The names on the list, top to bottom: the order the server ranks them in. */
+export async function namesInOrder(page: Page): Promise<string[]> {
+  return (await page.locator(".candidate-row .candidate-name").allTextContents()).map((n) => n.trim());
+}
+
+/** The number on a score badge inside `where` ("Resume match 91 out of 100", "AI interview 80 out of 100"); it waits until the score is worked out. */
+export async function scoreOn(where: Locator, label: "Resume match" | "AI interview", timeout = 180_000): Promise<number> {
+  const badge = where.getByText(new RegExp(`^${label} \\d+ out of 100$`)).first();
+  await expect(badge, `${label}: a number`).toBeAttached({ timeout });
+  return Number(((await badge.textContent()) ?? "").match(/(\d+) out of 100/)?.[1]);
+}
+
+/** The candidate's panel, opened from their row as someone on the team opens it. */
+export async function openThePanel(page: Page, name: string): Promise<Locator> {
+  await candidateRow(page, name).getByRole("button", { name, exact: true }).click();
   const panel = page.getByRole("dialog", { name });
   await expect(panel).toBeVisible({ timeout: 30_000 });
   return panel;

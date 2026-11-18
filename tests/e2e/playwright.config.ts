@@ -3,20 +3,20 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 /**
- * Browser journeys and accessibility checks (slice 5 step 10) against the Next.js shell on an in-memory database with
- * every provider faked: sign-in, calendar, email, AI. Nothing leaves the machine.
+ * Browser journeys and accessibility checks against the Next.js shell on an in-memory database with every provider a
+ * stand-in: sign-in, email, AI. Nothing leaves the machine.
  *
- * With E2E_BASE_URL set (docs/readiness/03 section 8) the same specs run against a deployed address, staging for
- * instance: no server is started here, nothing is assumed about the providers behind it, and every spec that needs
- * the fake sign-in page skips itself (tests/e2e/specs/helpers.ts, `skipWithoutFakeSignIn`). The public pages, the
- * browser-protection headers and the signed-out redirects are what a deployment proves.
+ * With E2E_BASE_URL set (docs/readiness/03 section 8) the same specs run against a deployed address: no server is
+ * started here, nothing is assumed about the providers behind it, and every spec that needs the fake sign-in page
+ * skips itself (tests/e2e/specs/helpers.ts, `skipWithoutFakeSignIn`). The public pages, the browser-protection headers
+ * and the signed-out redirects are what a deployment proves.
  */
 const repoRoot = (() => { let d = process.cwd(); for (let i = 0; i < 6; i++) { if (existsSync(join(d, "pnpm-workspace.yaml"))) return d; d = dirname(d); } return resolve(process.cwd(), "../.."); })();
 const port = Number(process.env.E2E_PORT ?? 3010);
 const remote = process.env.E2E_BASE_URL?.trim().replace(/\/+$/, "");
 if (remote && !/^https?:\/\//.test(remote)) throw new Error(`E2E_BASE_URL must be a full address such as https://staging.example.com, not "${remote}"`);
 const base = remote ?? `http://localhost:${port}`;
-/** The whole-flow specs (specs/flow-*.spec.ts): their own projects, so the journeys' runs leave them to the flows job. */
+/** The whole-flow specs (specs/flow-*.spec.ts): their own projects, so the shorter journeys' runs leave them to the flows job. */
 const FLOWS = /flow-[a-z-]+\.spec\.ts/;
 
 export default defineConfig({
@@ -33,12 +33,12 @@ export default defineConfig({
   use: { baseURL: base, trace: "retain-on-failure", screenshot: "only-on-failure", video: "off" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: [/candidate-phone\.spec\.ts/, FLOWS] },
-    // The candidate journey (apply with the acknowledgment, the screen, the schedule page) runs on the phone only: that is where candidates are (docs/spec/20 item 3).
+    // The candidate's journey (the job page, the form, the receipt, the status page, the AI interview) runs on the phone
+    // only: that is where candidates are. The route inventory runs on both.
     { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" }, testMatch: /routes\.spec\.ts|candidate-phone\.spec\.ts/ },
-    // The whole flows (the owner, 6 November 2026: "please test it thoroughly so the complete process of making a job
-    // hiring and then the complete process of applying test both these flows"). They are long, so on CI they run in a job
-    // of their own, in parts with a server each (.github/workflows/ci.yml, "flows"), which `verify` waits for.
-    // A press that finds nothing to press fails within a minute, not at the end of a ten-minute journey.
+    // The whole flows: making a job, applying, and the hire from the ranked list to the decision. They are long, so on
+    // CI they run in a job of their own, in parts with a server each (.github/workflows/ci.yml, "flows"), which `verify`
+    // waits for. A press that finds nothing to press fails within a minute, not at the end of a ten-minute journey.
     { name: "flows", use: { ...devices["Desktop Chrome"], actionTimeout: 60_000 }, testMatch: FLOWS },
     // The candidate's whole application again on a phone, where candidates are.
     { name: "flows-phone", use: { ...devices["iPhone 13"], browserName: "chromium", actionTimeout: 60_000 }, testMatch: /flow-candidate-apply-whole\.spec\.ts/ },
@@ -61,15 +61,13 @@ export default defineConfig({
       NODE_OPTIONS: "--max-old-space-size=6144",
       NODE_ENV: "development", PGLITE_DIR: "memory://", APP_BASE_URL: base,
       // E2E_EMAIL_PROVIDER=postmark (with no token) is email that never arrives: every send fails at once, and
-      // specs/flow-email-down.spec.ts walks what the owner sees then. Every other run uses the fake adapter.
-      AI_PROVIDER: "fake", EMAIL_PROVIDER: process.env.E2E_EMAIL_PROVIDER || "fake", SMS_PROVIDER: "fake", AUTH_PROVIDER: "fake", CALENDAR_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
-      SECRET_STORE: "memory", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
+      // specs/flow-email-down.spec.ts walks what the team sees then. Every other run uses the fake adapter.
+      AI_PROVIDER: "fake", EMAIL_PROVIDER: process.env.E2E_EMAIL_PROVIDER || "fake", AUTH_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
+      STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
       BOOTSTRAP_ADMIN_EMAILS: "admin-e2e@identifiedtalent.com",
-      // New companies are confirmed at sign-up so the journeys have public pages; company-check.spec.ts takes a
-      // confirmation back and gives it again through the admin console (founder decision B7).
-      COMPANY_CHECK: "auto",
-      // Sign-up is open for the journeys. access-approval.spec.ts runs on a server of its own, with SIGNUP_MODE=approval in
-      // the environment (the last end-to-end step of .github/workflows/ci.yml), and is skipped in any other run.
+      // Sign-up is open for the journeys, so a new company is live at once. access-approval.spec.ts runs on a server of
+      // its own, with SIGNUP_MODE=approval in the environment (the last end-to-end step of .github/workflows/ci.yml), and
+      // is skipped in any other run; a spec that opens its company straight from the form is skipped on that server.
       ...(process.env.SIGNUP_MODE ? { SIGNUP_MODE: process.env.SIGNUP_MODE } : {}),
       // Every person in these journeys asks for access from this one machine, a retry and a reused server included: the
       // request door's five an hour per address is for the public, and apps/api/src/access-approval.test.ts proves it.

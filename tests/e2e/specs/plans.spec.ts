@@ -1,70 +1,71 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, gotoSettled, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { expect, test } from "@playwright/test";
+import {
+  PERSONAS, applyThroughTheForm, candidateRow, createCompanyThroughTheForm, emailsTo, expectAccessible, gotoSettled, openThePanel, publishedJobThroughTheApi, said, signIn, signInAsAdmin,
+  skipWithoutFakeSignIn, type Applicant,
+} from "./helpers";
 
 /**
- * The plans of 5 November 2026 from end to end, in a real browser. A new company is on Free, whose job takes applications
- * without limit and shows the team the first five: the sixth is one locked card, with no name on the page or in what the page
- * reads. Upgrade asks ITS: the sheet compares the plans, charges nothing and opens nothing of the company's hiring. ITS sees
- * the request on the customer's row and changes the plan in the console, and the card opens. Everything is synthetic; every
- * provider is a fake.
+ * The plans from end to end, in a real browser. A new company is on Free, whose one job takes applications without
+ * limit and shows the team the first five: the sixth is one locked card, with no name on the page or in what the page
+ * reads, and the sixth applicant never reads a word about a plan. Upgrade asks ITS: the sheet compares the plans and
+ * charges nothing. The administrator sees the request on the dashboard and changes the plan, and the card opens. With
+ * its one job used, Free's job builder says so before anyone types. Everything is synthetic.
  */
 const run = Date.now().toString(36);
-const COMPANY = `Free Dental ${run}`;
 const FIRST_FIVE = ["Ana Alvarez", "Ben Brooks", "Cara Cole", "Dev Dutta", "Eve Ellis"];
 const SIXTH = "Fay Foster";
+const applicant = (name: string): Applicant => {
+  const [first, last] = name.split(" ");
+  return { first, last, email: `${first.toLowerCase()}.${last.toLowerCase()}+${run}@example.com`, resume: PERSONAS.possible.resume };
+};
 
-/** A job the public can apply to, through the API with the owner's own session, as seedRoleAndApplicant starts one. */
-async function publishedRole(request: APIRequestContext, base: string) {
-  const s = await (await request.post(`${base}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json() as { session: { id: string } };
-  const { roleId } = await (await request.post(`${base}/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string };
-  expect((await request.post(`${base}/api/v1/roles/${roleId}/approve`, { data: { version: 1, note: "Looks right." } })).ok()).toBeTruthy();
-  const role = await (await request.get(`${base}/api/v1/roles/${roleId}`)).json() as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-  return { roleId, rules: role.currentPacket.packet.requirements.eligibility };
-}
-
-test.describe("a Free company past its five candidates", () => {
+test.describe("a Free company past its plan", () => {
   skipWithoutFakeSignIn();
-  test("six applicants: five to read and one locked card; Upgrade asks ITS; ITS changes the plan; the card opens", async ({ page, browser, baseURL }) => {
-    test.setTimeout(300_000);
-    await signIn(page, { email: `dana+${run}@plans.test`, name: "Dana Whitfield", provider: "google" });
-    await createCompanyThroughTheForm(page, COMPANY);
-    const company = await (await page.request.get(`${baseURL}/api/v1/companies/current`)).json() as { slug: string; planKey: string };
-    expect(company.planKey).toBe("free");
 
-    // Six people apply, one after another: every one of them gets through; nothing on the careers page knows of a limit
-    const { roleId, rules } = await publishedRole(page.request, baseURL!);
+  test("six applicants: five to read and one locked card; Upgrade asks ITS; the administrator changes the plan; the card opens", async ({ page, browser, baseURL }) => {
+    test.setTimeout(600_000);
+    const base = baseURL!;
+    const company = `Free Dental ${run}`;
+    await signIn(page, { email: `dana+${run}@plans.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, company);
+    const current = (await (await page.request.get(`${base}/api/v1/companies/current`)).json()) as { plan: { key: string } };
+    expect(current.plan.key).toBe("free");
+    const job = await publishedJobThroughTheApi(page.request, base);
+
+    // Six people apply, one after another: every one of them gets through, and the sixth reads nothing about a plan
     for (const name of [...FIRST_FIVE, SIXTH]) {
-      const [firstName, lastName] = name.split(" ");
-      const multipart: Record<string, string> = { firstName, lastName, email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}+${run}@example.com`, noResume: "Five years as a registered dental hygienist in Irvine.", noticeVersionsShown: "ai_use@2026-09-01,privacy@2026-09-01", acknowledged: "yes" };
-      for (const rule of rules) multipart[`elig_${rule.key}`] = "yes";
-      const applied = await page.request.post(`${baseURL}/careers/${company.slug}/jobs/${roleId}/apply`, { multipart, maxRedirects: 0 });
-      expect(applied.status(), name).toBe(302);
+      const who = applicant(name);
+      const applied = await applyThroughTheForm(browser, base, job.jobUrl, who);
+      if (name === SIXTH) {
+        await expect(applied.page.getByRole("heading", { level: 1 })).toBeVisible();
+        await expect(applied.page.getByText(/\b(plan|upgrade|locked)\b/i)).toHaveCount(0);
+      }
+      await applied.context.close();
     }
+    await expect.poll(async () => (await emailsTo(page.request, base, applicant(SIXTH).email)).length, { timeout: 60_000, message: "the sixth applicant's receipt by email" }).toBeGreaterThan(0);
+    for (const m of await emailsTo(page.request, base, applicant(SIXTH).email)) expect(`${m.subject}\n${m.text}`).not.toMatch(/\b(plan|upgrade|locked)\b/i);
 
     // The team reads five, and one card says there is a sixth; the job's own tab counts everyone
-    await page.goto(`/roles/${roleId}/talent`);
+    await page.goto(`/roles/${job.roleId}/talent`);
     await expect(page.getByRole("navigation", { name: "Job sections" }).getByRole("link", { name: /^Candidates 6$/ })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("tablist", { name: "Stages" }).getByRole("tab", { name: /^All/ }).click();
-    await expect(page.locator(".talent-row")).toHaveCount(5, { timeout: 30_000 });
-    for (const name of FIRST_FIVE) await expect(page.getByRole("button", { name })).toBeVisible();
-    const card = page.locator(".locked-card");
+    await expect(page.locator(".candidate-row")).toHaveCount(5, { timeout: 30_000 });
+    for (const name of FIRST_FIVE) await expect(candidateRow(page, name)).toBeVisible();
+    const card = page.getByRole("list", { name: "Locked candidates" }).locator(".locked-card");
     await expect(card).toHaveCount(1);
     await expect(card.getByText("Locked", { exact: true })).toBeVisible();
     await expect(card.getByText(/Upgrade to view more candidates\./)).toBeVisible();
     // no name, on the page or in what the page reads
     await expect(page.getByText(SIXTH)).toHaveCount(0);
-    const read = await (await page.request.get(`${baseURL}/api/v1/roles/${roleId}/applications?counts=1`)).text();
-    expect(read).not.toContain("Foster");
+    expect(await (await page.request.get(`${base}/api/v1/roles/${job.roleId}/applications?tab=new`)).text()).not.toContain("Foster");
     await expectAccessible(page, "candidates with a locked card");
 
-    // Upgrade: the plans side by side, the next one up chosen; a plain line that nothing is charged; nothing about access
+    // Upgrade: the plans side by side, the next one up chosen; a plain line that nothing is charged
     await card.getByRole("button", { name: "Upgrade" }).click();
     const sheet = page.getByRole("dialog", { name: "Upgrade" });
-    await expect(sheet.getByText("Your plan")).toBeVisible({ timeout: 30_000 });
+    await expect(sheet.getByText("Your plan", { exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(sheet.getByRole("radio")).toHaveCount(3);
     await expect(sheet.getByRole("radio", { name: /^Basic/ })).toBeChecked();
     await expect(sheet.getByText("No card is charged. ITS will contact you, and nothing changes until then.")).toBeVisible();
-    await expect(sheet.getByText(/will see/)).toHaveCount(0);
     await sheet.getByRole("radio", { name: /^Pro/ }).check();
     await expectAccessible(page, "the upgrade sheet");
     await sheet.getByLabel("A note for ITS (optional)").fill("We hire more from next month.");
@@ -72,51 +73,63 @@ test.describe("a Free company past its five candidates", () => {
     await expect(sheet.getByText(/^Request sent on .+ No card is charged\. ITS will contact you, and nothing changes until then\./)).toBeVisible({ timeout: 30_000 });
     await sheet.getByRole("button", { name: "Done" }).click();
     await expect(sheet).toBeHidden();
-
-    // With the request sent, the day it went stands in the button's place: nothing more to press
+    // with the request sent, the day it went stands in the button's place: nothing more to press
     await expect(card.getByText(/^Request sent on /)).toBeVisible({ timeout: 30_000 });
     await expect(card.getByRole("button", { name: "Upgrade" })).toHaveCount(0);
 
-    // ITS: the customer's row says it asked and how many are locked; the plan's price and limits; a reason, then a second press
-    const staff = await browser.newContext();
-    const admin = await staff.newPage();
-    await signIn(admin, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    await gotoSettled(admin, "/admin/customers");
-    const row = admin.getByRole("row", { name: new RegExp(COMPANY) });
-    await expect(row.getByText("Asked to upgrade")).toBeVisible({ timeout: 30_000 });
-    await expect(row.getByText("1 locked")).toBeVisible();
-    await row.getByRole("button", { name: `Open ${COMPANY}` }).click();
-    const drawer = admin.getByRole("dialog", { name: COMPANY });
-    await drawer.getByRole("tab", { name: "Plan" }).click();
-    const pick = drawer.getByRole("combobox", { name: "Plan" });
+    // The administrator: "Asked to upgrade" leads to the company; a plan, a reason, then a second press
+    const admin = await signInAsAdmin(browser);
+    await gotoSettled(admin.page, "/admin");
+    const asked = admin.page.locator(".card", { has: admin.page.getByRole("heading", { name: "Asked to upgrade" }) }).getByRole("listitem").filter({ hasText: company });
+    await expect(asked).toContainText("We would like to move to the Pro plan.", { timeout: 30_000 });
+    await expect(asked).toContainText("We hire more from next month.");
+    await asked.getByRole("link", { name: `Open ${company}` }).click();
+    const drawer = admin.page.getByRole("dialog", { name: company });
+    await expect(drawer.getByText("Asked to upgrade", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await drawer.getByRole("button", { name: "Change plan" }).click();
+    const pick = drawer.getByLabel("Plan", { exact: true });
     await expect(pick).toHaveValue("free", { timeout: 30_000 });
     await pick.selectOption("pro");
-    await expect(drawer.getByText(/\$149 a month/)).toBeVisible();
     await drawer.getByLabel(/^Why/).fill("The customer asked for Pro.");
-    await expectAccessible(admin, "change plan in the console");
+    await expectAccessible(admin.page, "changing a plan on the admin dashboard");
     await drawer.getByRole("button", { name: "Change plan" }).click();
+    await expect(drawer.getByText(`Put ${company} on Pro?`)).toBeVisible();
     await drawer.getByRole("button", { name: "Yes, change it" }).click();
-    // A move up from Free starts the AI help's month: the one thing a change of plan does start again
-    await expect(admin.getByRole("status").filter({ hasText: /AI help starts a new month today; other allowances keep their dates\. 1 locked candidate opens now\./ })).toBeVisible({ timeout: 30_000 });
-    await staff.close();
+    await expect(said(admin.page, `${company} is on Pro now.`)).toBeVisible({ timeout: 30_000 });
+    await expect(said(admin.page, /1 locked applicant opens now\./)).toBeVisible();
+    await expect(drawer.getByText("Asked to upgrade", { exact: true })).toHaveCount(0, { timeout: 30_000 });
+    await admin.context.close();
 
     // The card opens: six to read, nobody locked, and the sixth has a name and a panel
-    await page.goto(`/roles/${roleId}/talent`);
-    await page.getByRole("tablist", { name: "Stages" }).getByRole("tab", { name: /^All/ }).click();
-    await expect(page.locator(".talent-row")).toHaveCount(6, { timeout: 30_000 });
+    await page.goto(`/roles/${job.roleId}/talent`);
+    await expect(page.locator(".candidate-row")).toHaveCount(6, { timeout: 30_000 });
     await expect(page.locator(".locked-card")).toHaveCount(0);
-    await page.getByRole("button", { name: SIXTH }).click();
-    const panel = page.getByRole("dialog", { name: SIXTH });
-    await expect(panel.getByRole("button", { name: /^Stage: / })).toBeVisible({ timeout: 30_000 });
+    const panel = await openThePanel(page, SIXTH);
+    await expect(panel.getByRole("heading", { name: "Resume match" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "the candidate who was locked");
+    await page.keyboard.press("Escape");
 
-    // ITS's change reached the team, and Settings says the new plan
-    await page.goto("/");
-    await page.getByText(/^Recent activity/).click();
-    await expect(page.getByText("Your plan is now Pro")).toBeVisible({ timeout: 30_000 });
-    await page.goto("/setup#setup-company");
-    await expect(page.locator("#setup-company").getByText("Pro", { exact: true })).toBeVisible({ timeout: 30_000 });
-    // That month is the AI help's own, so it says its own day
-    await expect(page.locator("#setup-company").getByText(/AI help this month: \d+% used, starts again \w+ \d+/)).toBeVisible();
+    // The change reached the team, and Settings says the new plan
+    await page.goto("/updates");
+    await expect(page.getByRole("list", { name: "Updates" }).getByRole("listitem").filter({ hasText: "Your plan is now Pro" })).toHaveCount(1, { timeout: 30_000 });
+    await page.goto("/setup#setup-plan");
+    await expect(page.locator("#setup-plan strong").first()).toHaveText("Pro", { timeout: 30_000 });
+  });
+
+  test("Free's one job is used: Home and the job builder say so before anyone types, with Upgrade", async ({ page, baseURL }) => {
+    test.setTimeout(240_000);
+    await signIn(page, { email: `owner+${run}@roomless.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, `Roomless Dental ${run}`);
+    await publishedJobThroughTheApi(page.request, baseURL!);
+    const room = page.locator(".alert").filter({ has: page.getByRole("button", { name: "Upgrade" }) });
+    for (const address of ["/", "/roles/new"]) {
+      await page.goto(address);
+      await expect(room, address).toContainText("Your Free plan includes one job. Upgrade to post more.", { timeout: 30_000 });
+      await expect(page.getByRole("textbox", { name: "Describe the job, or paste a job ad" })).toBeDisabled();
+    }
+    await expectAccessible(page, "the job builder with no room on Free");
+    // Upgrade asks ITS, in the one upgrade sheet, and charges nothing
+    await room.getByRole("button", { name: "Upgrade" }).click();
+    await expect(page.getByRole("dialog", { name: "Upgrade" }).getByText("No card is charged. ITS will contact you, and nothing changes until then.")).toBeVisible({ timeout: 30_000 });
   });
 });
