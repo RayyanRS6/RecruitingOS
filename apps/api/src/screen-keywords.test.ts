@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { PERSON_REPLY, WITHDRAW_CONFIRM_KEY } from "@ros/agents";
+import { REACH_A_PERSON_LINE } from "@ros/core";
 import { applications, candidates, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { PERSON_ON_THE_WEB, forTheWeb } from "./pages/web-wording";
 import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
@@ -130,5 +132,16 @@ describe("AI interview keywords: whole-message commands, a person chosen on the 
     expect((await form(`/c/screen/${token}/withdraw`, { confirm: "yes" })).status).toBe(302);
     expect((await container.db.select().from(events).where(and(eq(events.type, "application.withdrawn"), eq(events.subjectId, application.id))))).toHaveLength(1);
     expect((await form(`/c/screen/${"x".repeat(32)}/withdraw`, { confirm: "yes" })).status).toBe(404);
+  });
+});
+
+describe("a job's own lines on the AI interview's pages", () => {
+  it("shows the line a job written now stores as it is, and never a stored sentence that asks for a reply with a keyword or an email's own footer", () => {
+    expect(REACH_A_PERSON_LINE).toBe("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
+    expect(forTheWeb(REACH_A_PERSON_LINE)).toBe(REACH_A_PERSON_LINE);
+    // a job stored before: the keyword sentence goes, and where the page has its own way to a person it says that instead
+    expect(forTheWeb("Reply HUMAN at any time and a person from our team will follow up.")).toBe("");
+    expect(forTheWeb("We are glad you applied. Reply HUMAN at any time to reach a person.", PERSON_ON_THE_WEB)).toBe(`We are glad you applied. ${PERSON_ON_THE_WEB}`);
+    expect(forTheWeb("This message was sent by the hiring team at Keyword Dental with help from an AI recruiting assistant.")).toBe("");
   });
 });
