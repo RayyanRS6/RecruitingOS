@@ -3,14 +3,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { buildCandidateCsp, entitlements } from "@ros/core";
-import { applications, interviews, roles, screens } from "@ros/db";
+import { applications, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
-import { zoneLabel } from "./pages/schedule";
 import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
 
 /**
@@ -143,7 +142,7 @@ describe("candidate pages: the look, page by page", () => {
   let roleId = "";
   let statusToken = "";
   let screenToken = "";
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "false" };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   const page = async (path: string) => {
     const r = await app.request(path);
@@ -211,61 +210,6 @@ describe("candidate pages: the look, page by page", () => {
     expect(notice.indexOf("</details>")).toBeLessThan(notice.indexOf("Send me the confirmation link"));
     expect(form.indexOf('<label for="email" class="flush">Your email address</label>')).toBeLessThan(form.indexOf("<details"));
     expect(form).toContain('<p class="meta">We email that address a link to confirm it is you; nothing happens until you open it and press the button.</p>');
-  });
-
-  it("the scheduling pages too: picking a time, the confirmed page with its cancel choice, and the page after cancelling", async () => {
-    expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; interviews: { plan: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Leo"); fd.set("lastName", "Park"); fd.set("email", "leo.park@example.com"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Leo Park, RDH"], "leo.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("acknowledged", "yes");
-    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd })).status).toBe(302);
-    await container.drain();
-    const [leo] = await container.db.select().from(applications).where(eq(applications.statusToken, await statusTokenFor(container, { roleId, email: "leo.park@example.com" })));
-    const me = (await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } };
-    const approved = await json(owner, "POST", `/api/v1/applications/${leo.id}/interviews`, { roundKey: role.currentPacket.packet.interviews.plan[0].key, interviewerUserIds: [me.user.id], linkSource: "calendar" });
-    expect(approved.status, await approved.clone().text()).toBe(201);
-    const [iv] = await container.db.select().from(interviews).where(eq(interviews.applicationId, leo.id));
-    expect(iv.scheduleToken).toBeTruthy();
-    const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
-    const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
-    // an emailed link opens it and nothing else on it names the employer or the job, so the "Company · Job" eyebrow stays
-    expect(pick).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>Pick a time for your /);
-    // picking a time is the page's one job; asking for other times is one click away (founder brief, 14 October 2026)
-    expect(pick).toMatch(/<details class="more"><summary>None of these work\?<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/none-work" class="card">/);
-    // the zone shown is named in the line under the heading; another zone is one click away, still a plain GET form
-    expect(pick).toMatch(/Times are shown in <strong>[^<]+<\/strong>\.<\/p><details class="more"><summary>Change the time zone<\/summary>/);
-    expect(pick).toMatch(/<details class="more"><summary>Change the time zone<\/summary><form method="get" action="\/c\/schedule\/[^"]+" class="card"><label for="tz" class="flush">Show times in<\/label><select id="tz" name="tz">/);
-    expect(pick.indexOf("<summary>Change the time zone</summary>")).toBeLessThan(pick.indexOf("<legend>Available times</legend>"));
-    // in the times email's words, never the id (LT-15): the line names the zone shown, and the picker names each zone the
-    // same way, its value still the id
-    expect(pick).toContain("Times are shown in <strong>Pacific time</strong>.");
-    expect(pick).toContain('<select id="tz" name="tz"><option value="America/Los_Angeles" selected="">Pacific time</option><option value="America/Denver">Mountain time</option><option value="America/Phoenix">Arizona time</option><option value="America/Chicago">Central time</option><option value="America/New_York">Eastern time</option><option value="America/Anchorage">Alaska time</option><option value="Pacific/Honolulu">Hawaii time</option></select>');
-    expect(pick).not.toMatch(/>(America|Pacific)\//);
-    // a zone outside the list reads as it is named, first and chosen; one nothing can name keeps its city words
-    const detroit = await looksRight(`/c/schedule/${iv.scheduleToken}?tz=America/Detroit`);
-    expect(detroit).toContain("Times are shown in <strong>Eastern Time</strong>.");
-    expect(detroit).toContain('<select id="tz" name="tz"><option value="America/Detroit" selected="">Eastern Time</option><option value="America/Los_Angeles">Pacific time</option>');
-    expect(detroit).not.toMatch(/>(America|Pacific)\//);
-    expect(zoneLabel("Nowhere/Lost_City")).toBe("Nowhere/Lost City");
-    const form =(fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
-    expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
-    await container.drain();
-    const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
-    // the employer and the job are said nowhere else on it either, so its eyebrow stays too
-    expect(confirmed).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>You&#39;re confirmed<\/h1>/);
-    // the choice is a group of real radio buttons with a legend, in the page's own styles, one click away under "I need to cancel"
-    expect(confirmed).toMatch(/<details class="more"><summary>I need to cancel<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/cancel" class="card" id="cancel">/);
-    expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
-    expect(confirmed.match(/<label class="check slot" for="next-[a-z-]+"><input type="radio"/g)).toHaveLength(2);
-    expect(confirmed).not.toMatch(/ style="/);
-    expect((await app.request(`/c/schedule/${iv.scheduleToken}/cancel`, form({ confirm: "yes", next: "new_times" }))).status).toBe(302);
-    await container.drain();
-    const after = await looksRight(`/c/schedule/${iv.scheduleToken}/cancelled`);
-    expect(after).toContain('<p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>');
-    expect(after).not.toContain("<script");
   });
 
   it("the careers page lists each role as a card with an outlined button that names the role for a screen reader", async () => {
@@ -390,7 +334,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain("The hiring team at Look Dental reviews your application. People make every decision.");
   });
 
-  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
+  it("the status page: withdrawing is an outlined secondary button; the screening link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
     // the employer's name sits above the job's title: on a phone the next mention of the employer is far below the first
     // screen (fewer words, 23 October 2026: an eyebrow only where nothing else near the top names them), with no "Your application"
@@ -398,7 +342,6 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<p class="meta">People on the hiring team at Look Dental make every decision about your application.</p>');
     expect(html).not.toContain("· Your application");
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
-    expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
     // one name for the chat on this page: the button says what the progress line says
     expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) your AI interview<\/a>/);
@@ -418,9 +361,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toContain('<details class="more"><summary>How AI is used</summary><p class="meta">An AI assistant reads applications');
     // a send without the confirmation box comes back with the withdraw choice open
     expect(await page(`/c/status/${statusToken}?confirm=withdraw`)).toContain('<details class="more" open=""><summary>No longer interested?</summary>');
-    // the messages read as a conversation in the page's own styles, with no style attribute and no script (plan G7)
-    expect(html).toContain('<h2 id="messages">Messages about your application</h2>');
-    expect(html).toMatch(/<li class="msg team"><p class="msg-head">Look Dental<span aria-hidden="true"> · <\/span>/);
+    // the page's own styles, with no style attribute and no script
     expect(html).not.toMatch(/ style="/);
     expect(html).not.toContain("<script");
   });

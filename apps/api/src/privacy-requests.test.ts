@@ -9,6 +9,9 @@ import { createContainer, type Container } from "./container";
 import { runMaintenance } from "./maintenance";
 import { signInAdmin, statusTokenFor, testContainerOptions } from "./test-helpers";
 
+/** The subject of a run stored before in-person interviews were removed: the column still holds such rows. */
+const storedSubject = (type: string, id: string) => ({ type, id }) as unknown as (typeof workflowRuns.$inferInsert)["subject"];
+
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
  * correction, deletion, no more texts, or a person's review from their own status page; every request is recorded,
@@ -39,8 +42,7 @@ describe("candidate privacy requests", () => {
   let candidateId = "";
 
   beforeAll(async () => {
-    // Texting on: the text-message choices on the status page need an applicant who consented on the form.
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     owner = await signIn("owner@harbor.test");
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
@@ -54,7 +56,7 @@ describe("candidate privacy requests", () => {
     await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     const fd = new FormData();
-    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "yes"); fd.set("locationText", "Tustin, CA");
+    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("locationText", "Tustin, CA");
     fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix"], "maria.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
@@ -152,14 +154,6 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.corrected")))).length).toBe(1);
   });
 
-  it("stopping texts from the status page is applied at once and recorded", async () => {
-    expect((await form(`/c/status/${statusToken}/sms`, { pref: "off" })).status).toBe(302);
-    const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, candidateId));
-    expect(cand.preferences.smsOptOut).toBe(true);
-    const [req] = await container.db.select().from(dataRequests).where(and(eq(dataRequests.candidateId, candidateId), eq(dataRequests.kind, "sms_opt_out")));
-    expect(req.status).toBe("fulfilled");
-  });
-
   it("asking for a person's review is a privacy request like the others: ITS has it, with what they wrote", async () => {
     expect((await form(`/c/status/${statusToken}/privacy`, { kind: "human_review", details: "I think my resume was misread." })).status).toBe(302);
     const [req] = await container.db.select().from(dataRequests).where(and(eq(dataRequests.candidateId, candidateId), eq(dataRequests.kind, "human_review")));
@@ -215,7 +209,7 @@ describe("candidate privacy requests", () => {
     await container.db.update(workflowRuns).set({ state: { ...intakeRun.state, formUploadId, candidateName: "Maria Reyes", contact: "maria.reyes@example.com, (949) 555-0100" } }).where(eq(workflowRuns.id, intakeRun.id));
     await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "extract", seq: 99, status: "error", input: { wake: null }, output: { reading: { fullName: "Maria Reyes", phone: "(949) 555-0100", positions: ["Registered Dental Hygienist at Coastal Family Dentistry"], skills: ["Dentrix"] } }, error: "invalid JSON near 'Maria Reyes, RDH, Tustin'", finishedAt: new Date().toISOString() });
     const ivId = randomUUID();
-    const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: ivId }, status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
+    const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: storedSubject("interview", ivId), status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
     await container.db.insert(workflowSteps).values({ runId: stillGoing.id, companyId, stepKey: "offer", seq: 1, status: "ok", input: { wake: { kind: "event", key: `${ivId}:interview.reply`, payload: { message: "Maria here, call me on (949) 555-0100" } } }, output: { kind: "wait" }, finishedAt: new Date().toISOString() });
     const wfBefore = await workflowRunsAboutHer();
     const wfStepsOf = (ids: string[]) => container.db.select().from(workflowSteps).where(inArray(workflowSteps.runId, ids));
@@ -400,11 +394,10 @@ describe("candidate privacy requests", () => {
     expect((await app.request(`/c/status/${statusToken}`)).status).toBe(410);
     expect((await form(`/c/status/${statusToken}/privacy`, { kind: "access" })).status).toBe(410);
     expect((await form(`/c/status/${statusToken}/withdraw`, { confirm: "yes" })).status).toBe(410);
-    expect((await form(`/c/status/${statusToken}/sms`, { pref: "off" })).status).toBe(410);
     // a second applicant
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     const fd = new FormData();
-    fd.set("firstName", "Noor"); fd.set("lastName", "Haddad"); fd.set("email", "noor.haddad@example.com"); fd.set("phone", "(949) 555-0101"); fd.set("smsConsent", "yes"); fd.set("locationText", "Irvine, CA");
+    fd.set("firstName", "Noor"); fd.set("lastName", "Haddad"); fd.set("email", "noor.haddad@example.com"); fd.set("phone", "(949) 555-0101"); fd.set("locationText", "Irvine, CA");
     fd.set("resume", new File(["Noor Haddad, RDH"], "noor.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
@@ -420,11 +413,9 @@ describe("candidate privacy requests", () => {
     expect((await form(`/c/status/${token.slice(0, -2)}zz/privacy`, { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/privacy", { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/withdraw", { confirm: "yes" })).status).toBe(404);
-    expect((await form("/c/status/not-a-token/sms", { pref: "off" })).status).toBe(404);
     expect((await container.db.select().from(dr)).length).toBe(before);
     expect((await container.db.select().from(auditRecords)).length).toBe(auditsBefore);
-    // only the four kinds the page offers; a withdrawal or text choice through this form is refused without a record
-    expect((await form(`/c/status/${token}/privacy`, { kind: "sms_opt_out" })).status).toBe(302);
+    // only the four kinds the page offers; a withdrawal through this form is refused without a record
     expect((await form(`/c/status/${token}/privacy`, { kind: "withdrawal" })).status).toBe(302);
     expect((await container.db.select().from(dr)).length).toBe(before);
     // another company's ids in the form change nothing: everything comes from the token
@@ -460,16 +451,6 @@ describe("candidate privacy requests", () => {
     expect(redactString(`POST /c/status/${token}/privacy 302`)).toContain("/c/status/");
     expect(redactString(`GET /api/v1/auth/consume?token=${token}`)).not.toContain(token);
     expect(redactString("GET /api/v1/admin/data-requests/lookup/candidate?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
-    // text-message choice: opting out is idempotent, opting in is not offered while texting is off (switched off from here; the consent above was given while it was on)
-    container.env.SMS_ENABLED = false;
-    await form(`/c/status/${token}/sms`, { pref: "off" });
-    await form(`/c/status/${token}/sms`, { pref: "off" });
-    expect((await container.db.select().from(dr).where(and(eq(dr.applicationId, appRow0.id), eq(dr.kind, "sms_opt_out")))).length).toBe(1);
-    expect((await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.opted_out")))).filter((e) => e.subjectId === appRow0.candidateId).length).toBe(1);
-    expect((await form(`/c/status/${token}/sms`, { pref: "on" })).status).toBe(302);
-    const [afterOn] = await container.db.select().from(candidates).where(eq(candidates.id, appRow0.candidateId));
-    expect(afterOn.preferences.smsOptOut).toBe(true);
-    expect(await (await app.request(`/c/status/${token}`)).text()).not.toContain("Allow text messages");
     // a withdrawal needs the explicit confirmation (no inline script on the page); without it nothing changes
     const noConfirm = await form(`/c/status/${token}/withdraw`, {});
     expect(noConfirm.status).toBe(302);

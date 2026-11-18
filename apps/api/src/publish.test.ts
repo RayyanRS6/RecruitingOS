@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { RolePacket, TRIAL_ENDED_LINE, TRIAL_PLAN_KEY, type PacketFlag, type PublishBlocker, type PublishResult } from "@ros/contracts";
 import { addCalendarDays, companyToday, defaultClosingDate, entitlements } from "@ros/core";
-import { companies, events, rolePackets, roles, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { companies, events, intakeSessions, rolePackets, roles, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { signInAs } from "./test-helpers";
@@ -163,6 +163,31 @@ describe("publishing a job", () => {
     const role = await roleOf(passed);
     expect(role).toMatchObject({ status: "open", applicationsCloseOn: null, acceptingApplications: true });
     expect((await eventsOf(passed)).find((e) => e.type === "role.closing_date_set")?.payload).toMatchObject({ closesOn: null, previous: addCalendarDays(today, -3), defaulted: false });
+  });
+
+  it("gives the job the closing date chosen in the job builder, unless that day has passed", async () => {
+    const now = container.engine.clock();
+    const [company] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
+    const today = companyToday(now, company.timezone);
+    // The builder keeps the chosen date with the draft, as an event on it; the job made from the draft names the draft.
+    const fromBuilder = async (closesOn: string) => {
+      const roleId = await draftJob();
+      await withTenant(container.db, companyId, async (tx) => {
+        const actor = { kind: "user" as const, id: ownerId };
+        const [session] = await tx.insert(intakeSessions).values({ companyId, roleId, status: "compiled", createdBy: actor, createdByUserId: ownerId }).returning({ id: intakeSessions.id });
+        await tx.insert(events).values({ companyId, type: "role.closing_date_set", actor, subjectType: "intake_session", subjectId: session.id, payload: { closesOn, previous: null } });
+      });
+      return roleId;
+    };
+    const chosen = await fromBuilder(addCalendarDays(today, 14));
+    expect((await publish(owner, chosen)).status).toBe(200);
+    expect((await roleOf(chosen)).applicationsCloseOn).toBe(addCalendarDays(today, 14));
+    expect((await eventsOf(chosen)).find((e) => e.type === "role.closing_date_set")?.payload).toMatchObject({ closesOn: addCalendarDays(today, 14), previous: null, from: "job_builder" });
+
+    const stale = await fromBuilder(addCalendarDays(today, -2));
+    expect((await publish(owner, stale)).status).toBe(200);
+    expect((await roleOf(stale)).applicationsCloseOn).toBeNull();
+    expect((await eventsOf(stale)).some((e) => e.type === "role.closing_date_set")).toBe(false);
   });
 
   it("refuses when the plan has no room for the job, or the trial has ended, and leaves the job a draft", async () => {

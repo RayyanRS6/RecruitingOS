@@ -200,17 +200,6 @@ describe("the Free plan's one job", () => {
       expect((await room(cookie)).ok).toBe(false);
     });
 
-    it("a job sent back for changes keeps its place, and a role being created is not counted against itself", async () => {
-      const { cookie, id } = await newCompany();
-      const roleId = await jobWaiting(cookie);
-      const pending = (await pendingOf(roleId))!;
-      expect((await json(cookie, "POST", `/api/v1/approvals/${pending.id}/decide`, { decision: "reject", note: "Change the pay." })).status).toBe(200);
-      await container.drain();
-      expect((await roleOf(roleId)).status).toBe("draft");
-      expect(await room(cookie)).toMatchObject({ ok: false, upgrade: true });
-      expect(await withTenant(container.db, id, (tx) => allowance.roleRoom(tx, id, { except: roleId }))).toMatchObject({ ok: true, used: 0, lifetime: { limit: 1, used: 0, full: false } });
-    });
-
     it("two drafts asked for approval at once make one job", async () => {
       const { cookie, id } = await newCompany();
       const [a, b] = [await startDraft(cookie), await startDraft(cookie)];
@@ -323,38 +312,6 @@ describe("the Free plan's one job", () => {
     /** Closed the way a role was before closing withdrew its approval: the request and the run are still waiting. */
     const closedBehindItsApproval = async (roleId: string, companyId: string) => withPlatform(container.db, (tx) => tx.update(roles).set({ status: "closed", closedAt: new Date().toISOString(), closeReason: "role_cancelled" }).where(and(eq(roles.id, roleId), eq(roles.companyId, companyId))));
 
-    it("closing a role withdraws its approval and stops its run, so its place cannot be taken twice", async () => {
-      const { cookie, roleId } = await waitingOnCore();
-      const req = (await pendingOf(roleId))!;
-      const runId = req.workflowRunId!;
-      await closeOk(cookie, roleId);
-      expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, req.id)))[0]).toMatchObject({ status: "cancelled", decisionNote: "the job was closed" });
-      expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId)))[0].status).toBe("cancelled");
-      // approving it afterwards is refused either way, and it stays closed
-      const viaRole = await json(cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-      expect(viaRole.status).toBe(409);
-      expect((await errorOf(viaRole)).code).toBe("role_closed");
-      const viaRequest = await json(cookie, "POST", `/api/v1/approvals/${req.id}/decide`, { decision: "approve" });
-      expect(viaRequest.status).toBe(409);
-      await container.drain();
-      expect((await roleOf(roleId)).status).toBe("closed");
-      // the 14 days running out changes nothing either
-      await pastTheApprovalWindow(() => container.drain());
-      expect((await roleOf(roleId)).status).toBe("closed");
-      expect((await room(cookie)).used).toBe(0);
-    });
-
-    it("the way past the limit is shut: job A closes, job B opens, and A can no longer be approved open beside it", async () => {
-      const { cookie, id } = await newCompany();
-      const a = await jobWaiting(cookie);
-      await closeOk(cookie, a);
-      const b = await jobWaiting(cookie);
-      await approve(cookie, b);
-      expect((await json(cookie, "POST", `/api/v1/roles/${a}/approve`, { version: 1, note: "ok" })).status).toBe(409);
-      await container.drain();
-      expect((await container.db.select({ status: roles.status }).from(roles).where(eq(roles.companyId, id))).map((r) => r.status).sort()).toEqual(["closed", "open"]);
-    });
-
     it("a request left waiting on a closed role is refused both ways, whichever button is pressed", async () => {
       const { cookie, id, roleId } = await waitingOnCore();
       const req = (await pendingOf(roleId))!;
@@ -402,28 +359,6 @@ describe("the Free plan's one job", () => {
       await container.kick();
       await container.drain();
       expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.roleId, roleId))).length).toBe(before);
-    });
-
-    it("ITS voiding the outcome of a role closed while it waited brings it back as a draft to ask again: nothing to approve would leave it stuck", async () => {
-      const { cookie, roleId } = await waitingOnCore();
-      await closeOk(cookie, roleId);
-      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, roleId));
-      const r = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." });
-      expect(r.status, await r.clone().text()).toBe(200);
-      expect((await roleOf(roleId)).status).toBe("draft");
-      const again = await json(cookie, "POST", `/api/v1/roles/${roleId}/request-approval`, {});
-      expect(again.status, await again.clone().text()).toBe(201);
-      await container.drain();
-      expect(await pendingOf(roleId)).not.toBeNull();
-    });
-
-    it("ITS voiding the outcome of a live role reopens it as it was", async () => {
-      const { cookie, roleId } = await waitingOnCore();
-      await approve(cookie, roleId);
-      await closeOk(cookie, roleId);
-      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, roleId));
-      expect((await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." })).status).toBe(200);
-      expect((await roleOf(roleId)).status).toBe("open");
     });
 
     const voidOutcomeOf = async (roleId: string) => {

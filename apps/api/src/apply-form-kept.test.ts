@@ -46,7 +46,7 @@ describe("the apply form: who can see it, and what a re-shown form keeps", () =>
   const grantIn = (html: string) => html.match(/name="uploadGrant" value="([^"]*)"/)?.[1] ?? null;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000" } });
     app = createApp(container);
     owner = await signIn("owner@kept.test");
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Kept Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };

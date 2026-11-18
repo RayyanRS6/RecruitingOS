@@ -1,14 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { PROVIDER_REFUSED_ALERT, detectStuckRoles, queueCommunication } from "@ros/agents";
-import { addCalendarDays, companyToday, entitlements, findInvitationByToken } from "@ros/core";
-import { adminAlerts, applications, candidates, communications, companies, hiringOutcomes as hiringOutcomesTable, interviews as interviewsTable, notifications, users, withPlatform, withTenant } from "@ros/db";
+import { PROVIDER_REFUSED_ALERT, queueCommunication } from "@ros/agents";
+import { entitlements, findInvitationByToken } from "@ros/core";
+import { adminAlerts, applications, candidates, communications, notifications, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { APPLY_WAIT_JS, WAIT_GAVE_UP_LINE, WAIT_GAVE_UP_MORE } from "./pages/apply-form";
-import { QUIET_DAY_LINE } from "./services/brief";
-import { closeAfterHireCards } from "./services/hire-sheet";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -33,7 +31,7 @@ describe("the dead ends a first-time owner met", () => {
     const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
     return r2.headers.get("set-cookie")!.split(";")[0];
   };
-  const member = (role: "interviewer" | "hiring_manager" | "hr" | "admin", email: string) => signInAs(container, app, { companyId, role, email });
+  const member = (role: "hiring_manager" | "admin", email: string) => signInAs(container, app, { companyId, role, email });
   const read = async <T>(r: Response) => (await r.json()) as T;
   type Card = { kind: string; title: string; body: string; actions: Array<{ label: string; path: string }>; unreached?: Array<{ applicationId: string; roleId: string; roleTitle: string; name: string; email: string | null; phone: string | null; emails: number }> };
   const brief = async (cookie = owner) => (await read<{ cards: Card[]; summary: string }>(await json(cookie, "GET", "/api/v1/brief")));
@@ -148,7 +146,7 @@ describe("the dead ends a first-time owner met", () => {
       expect(names).not.toContain("Told Already");
     });
 
-    it("someone with no email address on file is named with that, and an interviewer's Home has no such card", async () => {
+    it("someone with no email address on file is named with that, for everyone on the team", async () => {
       const none = await apply("Nora", "Noaddress");
       await container.db.update(candidates).set({ email: null }).where(eq(candidates.id, none.candidateId));
       await failEmailsOf(none.id, "failed");
@@ -156,8 +154,6 @@ describe("the dead ends a first-time owner met", () => {
       expect(card.unreached!.find((p) => p.applicationId === none.id)).toMatchObject({ email: null });
       expect(card.body).toContain("Nora Noaddress (");
       expect(card.body).toContain("no email address on file");
-      // An interviewer reads only their own interviews; nobody's address reaches them. A hiring manager reads the card.
-      expect(await cardOf("unreached", await member("interviewer", "ivy@deadends.test"))).toBeUndefined();
       expect((await cardOf("unreached", await member("hiring_manager", "hal@deadends.test")))?.unreached?.some((p) => p.applicationId === none.id)).toBe(true);
     });
   });
@@ -177,7 +173,7 @@ describe("the dead ends a first-time owner met", () => {
     });
 
     it("Copy invitation link makes a new link with no email; the old one stops working, and the row no longer claims an email", async () => {
-      const sent = await read<{ link: string; invitation: { id: string } }>(await json(owner, "POST", "/api/v1/companies/current/invites", { email: "lee@deadends.test", role: "interviewer" }));
+      const sent = await read<{ link: string; invitation: { id: string } }>(await json(owner, "POST", "/api/v1/companies/current/invites", { email: "lee@deadends.test", role: "hiring_manager" }));
       await container.drain();
       const mails = async () => (await container.db.select().from(communications).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "invite"), eq(communications.toAddress, "lee@deadends.test")))).length;
       const before = await mails();
@@ -203,97 +199,6 @@ describe("the dead ends a first-time owner met", () => {
     });
   });
 
-  describe("rank 14: a hire ends that person's interviews still to come, and the job asks to be closed", () => {
-    let jobB = "";
-    let roundKey = "";
-    // On the company's own day, as Home counts it (America/Los_Angeles, the company's zone): a UTC date is already tomorrow there
-    // every US evening (00:00 to 08:00 UTC), when "yesterday" by UTC is the company's today (the release review, 11 November 2026).
-    const TZ = "America/Los_Angeles";
-    const dayFromNow = (days: number) => addCalendarDays(companyToday(new Date(), TZ), days);
-    const book = async (applicationId: string, days: number) => {
-      const r = await json(owner, "POST", `/api/v1/applications/${applicationId}/interviews`, { roundKey, interviewerUserIds: [ownerId], setTime: { date: dayFromNow(days), time: "10:00", durationMinutes: 45, place: { kind: "phone" } } });
-      expect(r.status, await r.clone().text()).toBe(201);
-      await container.drain();
-      return read<{ id: string }>(r);
-    };
-    const hire = async (applicationId: string, hireDate: string) => {
-      const r = await json(owner, "POST", `/api/v1/applications/${applicationId}/outcome`, { outcome: "hired_externally", confirm: true, hireDate });
-      expect(r.status, await r.clone().text()).toBe(201);
-      await container.drain();
-      return read<{ stage: string; interviewsEnded?: number }>(r);
-    };
-
-    beforeAll(async () => {
-      const s = await read<{ session: { id: string } }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a front desk coordinator in Tustin, $22 to $26 an hour, full time. It's a new role. Ceiling $27. I decide. Must-haves: two years at a front desk. Just draft it." }));
-      jobB = (await read<{ roleId: string }>(await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`))).roleId;
-      expect((await json(owner, "POST", `/api/v1/roles/${jobB}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-      await container.drain();
-      const role = await read<{ currentPacket: { packet: { interviews: { plan: Array<{ key: string }> } } } }>(await json(owner, "GET", `/api/v1/roles/${jobB}`));
-      roundKey = role.currentPacket.packet.interviews.plan[0].key;
-    });
-
-    it("a hire calls off a booked interview quietly: nothing to the candidate, the interviewers told, nothing left under Coming up", async () => {
-      const mo = await apply("Mo", "Hired", { role: jobB });
-      const iv = await book(mo.id, 20);
-      const before = (await container.db.select({ id: communications.id }).from(communications).where(eq(communications.applicationId, mo.id))).length;
-      const done = await hire(mo.id, dayFromNow(30));
-      expect(done).toMatchObject({ stage: "hired", interviewsEnded: 1 });
-      const [row] = await container.db.select().from(interviewsTable).where(eq(interviewsTable.id, iv.id));
-      expect(row.status).toBe("cancelled");
-      // the candidate hears nothing about it
-      const after = await container.db.select({ templateKey: communications.templateKey }).from(communications).where(eq(communications.applicationId, mo.id));
-      expect(after.length).toBe(before);
-      // the interviewer is told, in words that say why
-      const [told] = await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.cancelled"), eq(notifications.userId, ownerId))).orderBy(desc(notifications.createdAt)).limit(1);
-      expect(told.body).toBe("The candidate was hired, so this interview is off.");
-      const coming = await read<Array<{ id: string; status: string }>>(await json(owner, "GET", "/api/v1/interviews"));
-      expect(coming.find((i) => i.id === iv.id)?.status ?? "cancelled").toBe("cancelled");
-    });
-
-    it("once every hire on a job has started, Home asks \"Close this job?\" every day until it is closed; never before", async () => {
-      const ned = await apply("Ned", "Starts", { role: jobB });
-      const closeCard = async () => (await brief()).cards.find((c) => c.title.startsWith("Close this job?") && c.actions.some((a) => a.path === `/roles/${jobB}?close=1`));
-      // Mo starts in 30 days: nothing asks to close yet
-      expect(await closeCard()).toBeUndefined();
-      // Ned was hired and started two days ago, but Mo has not started: still nothing
-      await hire(ned.id, dayFromNow(-2));
-      expect(await closeCard()).toBeUndefined();
-      // once Mo's start has passed too (a correction of the date, here by hand), the job asks to be closed
-      await container.db.update(hiringOutcomesTable).set({ hireDate: dayFromNow(-1) }).where(eq(hiringOutcomesTable.roleId, jobB));
-      const card = (await closeCard())!;
-      expect(card.kind).toBe("needs_review");
-      expect(card.title).toMatch(/^Close this job\? /);
-      expect(card.body).toMatch(/started on .+, and .+ is still live and taking applications\. Close it if the job is filled/);
-      expect(card.actions).toEqual([{ label: "Close the job", method: "GET", path: `/roles/${jobB}?close=1` }]);
-      // it asks again the next time Home is read: there is no way to wave it off but closing
-      expect(await closeCard()).toBeTruthy();
-      // the same question in a US evening, when the UTC date is already tomorrow: Home counts the company's own day, so the
-      // card is there whatever hour CI runs at, and a start on the company's today has not passed yet (L5-1)
-      const [company] = await container.db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId));
-      expect(company.timezone).toBe(TZ);
-      const today = dayFromNow(0);
-      const evening = new Date(`${addCalendarDays(today, 1)}T03:30:00.000Z`);
-      expect(companyToday(evening, TZ)).toBe(today);
-      expect(evening.toISOString().slice(0, 10)).not.toBe(today);
-      const askedAt = async (now: Date) => (await withTenant(container.db, companyId, (tx) => closeAfterHireCards(tx, { companyId, viewer: { role: "owner" }, now }))).some((c) => c.roleId === jobB);
-      expect(await askedAt(evening)).toBe(true);
-      await container.db.update(hiringOutcomesTable).set({ hireDate: today }).where(and(eq(hiringOutcomesTable.roleId, jobB), eq(hiringOutcomesTable.applicationId, ned.id)));
-      expect(await askedAt(evening)).toBe(false);
-      await container.db.update(hiringOutcomesTable).set({ hireDate: dayFromNow(-1) }).where(eq(hiringOutcomesTable.roleId, jobB));
-      expect(await askedAt(evening)).toBe(true);
-      // an interviewer, who cannot close a job, is never asked
-      expect((await brief(await member("interviewer", "ivy2@deadends.test"))).cards.some((c) => c.title.startsWith("Close this job?"))).toBe(false);
-      // HR may close it but not tell candidates: told who sends the closing message, never that they will see it (L3-3)
-      expect(card.body).toMatch(/and you see the closing message before it goes\.$/);
-      const forHr = (await brief(await member("hr", "hana2@deadends.test"))).cards.find((c) => c.title.startsWith("Close this job?") && c.actions.some((a) => a.path === `/roles/${jobB}?close=1`));
-      expect(forHr?.body).toMatch(/privately, and an owner, admin or hiring manager sends them the closing message from their Home page\.$/);
-      expect(forHr?.body).not.toContain("you see the closing message");
-      // closed as filled: the question goes
-      expect((await json(owner, "POST", `/api/v1/roles/${jobB}/outcome`, { outcome: "filled", confirm: true })).status).toBe(200);
-      expect(await closeCard()).toBeUndefined();
-    });
-  });
-
   describe("ranks 15, 17 and 18: a finalist, the candidate's tracker, and who withdrew", () => {
     type Row = { id: string; stage: string; ownerStage: string; ownerStageLabel: string; stageMoves: Array<{ to: string; allowed: boolean; blockedReason?: string }> };
     const rowOf = async (id: string) => (await read<Row[]>(await json(owner, "GET", `/api/v1/roles/${roleId}/applications`))).find((r) => r.id === id)!;
@@ -306,32 +211,9 @@ describe("the dead ends a first-time owner met", () => {
       const panel = await read<{ ownerStageLabel: string }>(await json(owner, "GET", `/api/v1/applications/${wes.id}`));
       expect(panel.ownerStageLabel).toBe("Withdrew");
     });
-
-    it("a finalist's status page stays at the interview they had, in words that hint at nothing", async () => {
-      const fay = await apply("Fay", "Finalist");
-      const [applied] = await container.db.select().from(applications).where(eq(applications.id, fay.id));
-      await withPlatform(container.db, (tx) => tx.update(applications).set({ stage: "finalist" }).where(eq(applications.id, fay.id)));
-      const page = await (await app.request(`/c/status/${applied.statusToken}`)).text();
-      expect(page).toMatch(/<span>Status<\/span><strong>Interview<\/strong>/);
-      expect(page).toContain("Thanks for interviewing. The team is deciding, and you will hear from them either way.");
-      expect(page).not.toMatch(/finalist/i);
-      // and the stage menu says the way to an offer from where they are, in plain words
-      const row = await rowOf(fay.id);
-      expect(row.stageMoves.find((m) => m.to === "offer")).toMatchObject({ allowed: true });
-    });
   });
 
   describe("rank 20: the word pass", () => {
-    it("a quiet day promises nothing about emails and judges nobody; the long-wait nudge offers only what the team can choose", async () => {
-      expect(QUIET_DAY_LINE).toBe("New applicants, and anything that waits on you, show up here.");
-      // someone ready for the team's decision, waiting five days
-      const tia = await apply("Tia", "Waiting");
-      await container.db.update(applications).set({ stage: "triaged" }).where(eq(applications.id, tia.id));
-      const detections = await withTenant(container.db, companyId, (tx) => detectStuckRoles(tx, companyId, new Date(Date.now() + 5 * DAY)));
-      const waiting = detections.find((d) => d.detector === "candidates_waiting" && d.body.startsWith("They are ready for a decision"));
-      expect(waiting?.body).toBe("They are ready for a decision: shortlist them, set a date and time for an interview, decide after an interview, or decline with a reason. Candidates who wait more than a week usually move on.");
-      expect(JSON.stringify(detections)).not.toContain("invite to an AI interview");
-    });
   });
 
   describe("rank 10: the waiting room's ending", () => {

@@ -3,19 +3,18 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { SEND_MAX_ATTEMPTS, SPAM_ALERT_WINDOW_MS, sendQueuedCommunication, sweepStaleSending } from "@ros/agents";
 import { CreateCompany, FREE_PLAN_KEY, oneLine, typedName, visibleLength, type CustomerAccessAnswer, type CustomerAccessRequest, type SignupConfig } from "@ros/contracts";
-import { createApplicationLink, createInvitation, renderAlertEmail } from "@ros/core";
-import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, interviews, invitations, jobs, memberships, notifications, postings, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
+import { createInvitation, renderAlertEmail } from "@ros/core";
+import { adminAlerts, aiRuns, applications, auditRecords, candidates, communications, companies, emailSuppressions, entitlements, events, invitations, jobs, memberships, notifications, rolePackets, roles, sessions, users, withPlatform, workflowRuns, type Tx } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv, signupModeOf } from "./env";
 import { runHourlyChecks, runMaintenance } from "./maintenance";
 import { POLICIES } from "./middleware/rate-limit";
-import { resetPublicFeedCache } from "./pages/public-feeds";
+import { resetSitemapCache } from "./pages/sitemap";
 import { OPEN_REQUESTS_EMAILED, companyRequestDetails, decideAccess, sendAccessRequest } from "./services/access-requests";
 import { emailReallyLeft } from "./services/company-trust";
 import { createCompany, signupDoor } from "./services/companies";
-import { backfillPublishing } from "./services/publishing-backfill";
 import { signInAdmin, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
@@ -78,12 +77,11 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
     });
     return id;
   };
-  /** A person with an application and an interview on a role, straight into the tables, carrying a marker for a name. */
+  /** A person with an application on a role, straight into the tables, carrying a marker for a name. */
   const plantPerson = async (companyId: string, roleId: string, mark: string) => withPlatform(container.db, async (tx) => {
     const [person] = await tx.insert(candidates).values({ companyId, firstName: mark, lastName: mark, email: `${mark.toLowerCase()}@people.test`, firstSource: "direct" }).returning();
     const [application] = await tx.insert(applications).values({ companyId, roleId, candidateId: person.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomBytes(16).toString("hex") }).returning();
-    const [interview] = await tx.insert(interviews).values({ companyId, applicationId: application.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", timezone: "America/Los_Angeles" }).returning();
-    return { application: application.id, interview: interview.id };
+    return { application: application.id };
   });
   /** Someone on a company's team, active, straight into the tables: their account and their membership. */
   const addMember = async (companyId: string, email: string, role: string) => withPlatform(container.db, async (tx) => {
@@ -345,7 +343,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(email.text).toContain(`Open it: ${w.container.env.APP_BASE_URL}/`);
     expect(w.mailTo("sam@stranger.test").some((m) => m.subject.includes("ITS confirmed"))).toBe(false);
     // one workflow, and it is the daily check
-    expect((await w.runsOf(asker.id)).filter((r) => r.workflowKey === "stuck_role_detector")).toHaveLength(1);
     // recorded: accepted and confirmed, by the administrator, with the stock reason
     const audited = await w.container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, asker.id), inArray(auditRecords.action, ["company.access_accepted", "company.verified"])));
     expect(audited.map((a) => a.action).sort()).toEqual(["company.access_accepted", "company.verified"]);
@@ -448,7 +445,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.eventsOf(asker.id, "company.access_accepted")).toHaveLength(1);
     expect(await w.eventsOf(asker.id, "company.verified")).toHaveLength(1);
     expect(await w.noticesOf(asker.id)).toHaveLength(1);
-    expect((await w.runsOf(asker.id)).filter((r) => r.workflowKey === "stuck_role_detector")).toHaveLength(1);
     expect(w.mailTo("both@stranger.test").filter((m) => m.subject === "Your request was approved")).toHaveLength(1);
     // a later press changes nothing and says so; a Decline now is a 409
     expect(await w.read<CustomerAccessAnswer>(await w.decide(adminCookie, asker.id, "accept"))).toMatchObject({ changed: false, status: "active" });
@@ -899,7 +895,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     expect(await w.statusOf(company.id)).toBe("active");
     const me = await w.meOf(quinn);
     expect(me.activeCompanyId).toBe(company.id);
-    expect((await w.runsOf(company.id)).map((r) => r.workflowKey)).toContain("stuck_role_detector");
     expect(w.mail().sent.slice(before).map((m) => m.subject)).toEqual(["[company check] Quinn Dental is waiting for the ITS check"]);
     expect((await w.rowOf(company.id)).settings.verifiedAt).toBeUndefined();
     expect((await w.app.request(`/careers/${company.slug}`)).status).toBe(404);
@@ -919,11 +914,11 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const declined = await w.ask("invited.declined@stranger.test", "Invited Declined");
     await w.decide(adminCookie, declined.id, "decline");
     for (const person of [waiting, declined]) {
-      expect((await w.json(host.cookie, "POST", "/api/v1/companies/current/members/invite", { email: person.email, role: "interviewer" })).status).toBe(201);
+      expect((await w.json(host.cookie, "POST", "/api/v1/companies/current/members/invite", { email: person.email, role: "hiring_manager" })).status).toBe(201);
       const again = await w.google(person.email);
       const me = await w.meOf(again);
       expect(me.activeCompanyId).toBe(host.id);
-      expect(me.memberships).toEqual([expect.objectContaining({ companyId: host.id, role: "interviewer" })]);
+      expect(me.memberships).toEqual([expect.objectContaining({ companyId: host.id, role: "hiring_manager" })]);
       // their own request stands as it was, and they cannot send another
       expect(await w.statusOf(person.id)).toBe(person === waiting ? "requested" : "declined");
       expect((await w.json(again, "POST", "/api/v1/companies", w.form("One More"))).status).toBe(409);
@@ -980,7 +975,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const now = w.container.engine.clock();
     await runHourlyChecks(w.container.db, now, { workerInline: true });
     await runMaintenance(w.container.db, now, { workerInline: true, fullAiScrub: true });
-    await backfillPublishing(w.container);
     await w.container.drain();
     expect(w.mail().sent.slice(mails).filter((m) => [waiting.email, declined.email].includes(m.to))).toEqual([]);
     for (const { id } of [waiting, declined]) {
@@ -1180,7 +1174,7 @@ describe("the door's own bounds under SIGNUP_MODE=approval", () => {
 
 /**
  * Nothing public, under any value of COMPANY_CHECK. A request is never confirmed, not even by COMPANY_CHECK=auto, and every
- * public page and feed needs a confirmed company. Here each has a real open role and a logo-free careers page behind it, so
+ * public page needs a confirmed company. Here each has a real open role and a logo-free careers page behind it, so
  * only the confirmation stands between them and the public.
  */
 describe.each(["its", "auto"] as const)("a request or a declined company shows nothing publicly (COMPANY_CHECK=%s)", (check) => {
@@ -1195,7 +1189,7 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
     await w.container.close();
   });
 
-  it("no careers page, job page, apply form, feed entry, sitemap entry, tracked link or privacy-form mention; Accept is what opens them", async () => {
+  it("no careers page, job page, apply form, sitemap entry or privacy-form mention; Accept is what opens them", async () => {
     const source = await w.openDirect(`pat.public.${check}@listed-domain.test`, `Public Source ${check}`);
     const waiting = await w.ask(`public.waiting.${check}@stranger.test`, `Zqpublicwaitingname ${check}`);
     const declined = await w.ask(`public.declined.${check}@stranger.test`, `Zqpublicdeclinedname ${check}`);
@@ -1206,12 +1200,10 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
       expect(row.settings.verifiedAt).toBeUndefined();
       expect(await w.eventsOf(person.id, "company.verified")).toEqual([]);
       const roleId = await w.plantRole(source.roleId, person.id, `Zqpublicrole ${check}`);
-      const link = await withPlatform(w.container.db, (tx) => createApplicationLink(tx, { companyId: person.id, roleId, source: "referral", label: "A friend", actor: { kind: "system", id: "test" } }));
       for (const path of [`/careers/${person.slug}`, `/careers/${person.slug}/logo/x.png`, `/careers/${person.slug}/jobs/${roleId}`, `/careers/${person.slug}/jobs/${roleId}/apply`, `/careers/${person.slug}/jobs/${roleId}/applied`, `/careers/${person.slug}/jobs/${roleId}/apply/reuse`]) expect((await w.app.request(path)).status, path).toBe(404);
       expect((await w.app.request(`/careers/${person.slug}/jobs/${roleId}/apply`, { method: "POST", body: new FormData() })).status).toBe(404);
-      expect((await w.app.request(`/a/${link.token}`)).status).toBe(404);
-      resetPublicFeedCache(w.container);
-      for (const path of ["/feeds/jobs.xml", "/feeds/jobs.json", "/feeds/linkedin.xml", "/sitemap.xml"]) {
+      resetSitemapCache(w.container);
+      for (const path of ["/sitemap.xml"]) {
         const body = await (await w.app.request(path)).text();
         expect(body, path).not.toContain(roleId);
         expect(body, path).not.toMatch(/Zqpublic/i);
@@ -1235,13 +1227,13 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
     expect((await w.app.request(`/careers/${slug}`)).status).toBe(200);
     expect(await (await w.app.request(`/careers/${slug}`)).text()).toContain("Zqpublicrole");
     expect((await w.app.request(`/careers/${waiting.slug}`)).status).toBe(404);
-    // no reset here: the route rebuilds the feeds itself, as the verification route does
-    expect(await (await w.app.request("/feeds/jobs.json")).text()).toContain(slug);
+    // no reset here: the route rebuilds the sitemap itself, as the verification route does
+    expect(await (await w.app.request("/sitemap.xml")).text()).toContain(slug);
     // one notice under either value
     expect((await w.noticesOf(waiting.id)).map((n) => n.kind)).toEqual(["company.access_accepted"]);
     // the declined one stays dark
     expect((await w.app.request(`/careers/${declined.slug}`)).status).toBe(404);
-    expect(await (await w.app.request("/feeds/jobs.json")).text()).not.toContain(declined.slug);
+    expect(await (await w.app.request("/sitemap.xml")).text()).not.toContain(declined.slug);
   });
 
   it("the allow-list's door follows COMPANY_CHECK as ever", async () => {
@@ -1256,7 +1248,7 @@ describe.each(["its", "auto"] as const)("a request or a declined company shows n
 const NOT_A_TOKEN = "not-a-real-token";
 const NOBODY = "00000000-0000-4000-8000-000000000000";
 
-type Targets = { company: string; userId: string; slug: string; role: string; application: string; interview: string; session: string };
+type Targets = { company: string; userId: string; slug: string; role: string; application: string; session: string };
 
 /** What each parameter of each route is filled with, by the prefix it sits under. A new route with a new parameter joins here. */
 const FILL = (t: Targets): Array<[string, Record<string, string>]> => [
@@ -1265,21 +1257,17 @@ const FILL = (t: Targets): Array<[string, Record<string, string>]> => [
   ["/api/v1/companies/current/invitations", { id: NOBODY }],
   ["/api/v1/companies/current/members", { userId: t.userId }],
   ["/api/v1/intake/sessions", { id: t.session, revisionId: NOBODY }],
-  ["/api/v1/roles", { id: t.role, channel: "careers_page", kind: "missing_must_have", revisionId: NOBODY, version: "1", linkId: NOBODY }],
+  ["/api/v1/roles", { id: t.role, channel: "linkedin", revisionId: NOBODY, version: "1" }],
   ["/api/v1/applications", { id: t.application, communicationId: NOBODY, documentId: NOBODY, assessmentId: NOBODY }],
-  ["/api/v1/approvals", { id: NOBODY }],
   ["/api/v1/admin/platform-roles", { grantId: NOBODY }],
   ["/api/v1/admin/users", { userId: t.userId }],
   ["/api/v1/admin/customers", { id: t.company }],
   ["/api/v1/admin", { id: NOBODY }],
-  ["/api/v1/integrations", { id: NOBODY, provider: "google" }],
-  ["/api/v1/interviews", { id: t.interview }],
   ["/c/status", { token: NOT_A_TOKEN, id: NOBODY, roleId: t.role }],
   ["/c/screen", { token: NOT_A_TOKEN, key: "q1" }],
   ["/c/", { token: NOT_A_TOKEN }],
   ["/careers", { slug: t.slug, roleId: t.role, file: "x.png" }],
   ["/files", { token: NOT_A_TOKEN }],
-  ["/a/", { token: NOT_A_TOKEN }],
 ];
 
 /** A route with its parameters filled, or a failure that names it. */
@@ -1311,18 +1299,16 @@ const OUTSIDE_THE_WALL: Outside[] = [
   { routes: ["POST /api/v1/auth/session", "POST /api/v1/auth/magic-link", "POST /api/v1/auth/magic-link/consume"], allow: [400], why: "A sign-in with nothing to prove it." },
   { routes: ["GET /api/v1/auth/invite", "POST /api/v1/auth/invite/email", "POST /api/v1/auth/invite/forget"], allow: [200], why: "The invitation page: with no token, it says so." },
   // Development only: each answers 404 in production or with a real provider.
-  { routes: ["GET /api/v1/auth/fake/authorize", "POST /api/v1/auth/fake/authorize", "GET /api/v1/integrations/calendar/fake/authorize", "POST /api/v1/integrations/calendar/fake/authorize"], allow: [200, 302], why: "The fake identity and calendar providers' own pages." },
+  { routes: ["GET /api/v1/auth/fake/authorize", "POST /api/v1/auth/fake/authorize"], allow: [200, 302], why: "The fake identity provider's own pages." },
   // Their refusal, as a page.
   { routes: ["GET /api/v1/roles/:id/preview", "GET /api/v1/roles/:id/preview/page", "GET /api/v1/intake/sessions/:id/preview", "GET /api/v1/intake/sessions/:id/preview/page"], allow: [403], why: "A browser tab gets the preview's own plain page for the same refusal." },
-  { routes: ["GET /api/v1/integrations/calendar/:provider/callback"], allow: [302], why: "It connects a calendar only for a tenant: with none, back to Settings with `incomplete`." },
   // What anyone can read, whoever is asking.
   { routes: /^(GET|POST) \/careers\//, allow: [404], why: "Their own company and the other are unconfirmed, so these answer as if neither existed." },
-  { routes: /^(GET|POST) \/c\/(schedule|status|screen|confirm-answers)\//, allow: [404], why: "A candidate's own pages behind a token, and nobody here holds one." },
-  { routes: ["GET /a/:token"], allow: [404], why: "A tracked link: no such token." },
+  { routes: /^(GET|POST) \/c\/(status|screen|confirm-answers)\//, allow: [404], why: "A candidate's own pages behind a token, and nobody here holds one." },
   { routes: ["GET /files/get/:token"], allow: [403], why: "A grant for one object: this is none." },
   { routes: ["GET /c/link-request", "POST /c/link-request", "GET /c/privacy-request", "POST /c/privacy-request"], allow: [200, 400], why: "A candidate's forms: empty, they ask again." },
   { routes: ["GET /c/privacy-request/verify/:token", "POST /c/privacy-request/verify"], allow: [410], why: "The confirmation link of a privacy request: this is none." },
-  { routes: ["GET /privacy", "GET /healthz", "GET /sitemap.xml", "GET /robots.txt", "GET /feeds/jobs.xml", "GET /feeds/jobs.json", "GET /feeds/linkedin.xml"], allow: [200], why: "Public, for everyone: read for the markers, and the feeds hold none." },
+  { routes: ["GET /privacy", "GET /healthz", "GET /sitemap.xml", "GET /robots.txt"], allow: [200], why: "Public, for everyone: read for the markers, and the sitemap holds none." },
   { routes: ["POST /api/csp-report"], allow: [204], why: "A browser's report: it reads nothing." },
   // Machines, by their own secrets, and the session is not read.
   { routes: /^POST \/webhooks\//, allow: [200, 400, 401, 403], why: "Providers' webhooks; an empty delivery changes nothing." },
@@ -1436,7 +1422,7 @@ const MARKS = Object.values(MARK);
 /**
  * The wall, proved by the routes themselves: a waiting and a declined person, every route Hono knows, requireTenant or not,
  * with the real ids of their own company and of another one. Their own company and the other one each hold a role, a
- * candidate and an interview carrying a marker, so an answer that read any of them would be seen.
+ * candidate carrying a marker, so an answer that read any of them would be seen.
  */
 describe("a waiting and a declined person reach nothing, by any route", () => {
   let w: World;
@@ -1456,17 +1442,17 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     other = await w.openDirect(MARK.otherOwner, MARK.otherName);
     const otherRole = await w.plantRole(other.roleId, other.id, MARK.otherRole);
     const otherPerson = await w.plantPerson(other.id, otherRole, MARK.otherPerson);
-    otherTargets = { company: other.id, userId: (await w.meOf(other.cookie)).user.id, slug: other.slug, role: otherRole, application: otherPerson.application, interview: otherPerson.interview, session: other.session };
+    otherTargets = { company: other.id, userId: (await w.meOf(other.cookie)).user.id, slug: other.slug, role: otherRole, application: otherPerson.application, session: other.session };
     const prepare = async (email: string, name: string, site: string, roleMark: string, personMark: string) => {
       const asker = await w.ask(email, name, { website: `https://${site}.example`, ownerName: "Sam Asker" });
       const role = await w.plantRole(other.roleId, asker.id, roleMark);
       const person = await w.plantPerson(asker.id, role, personMark);
-      return { asker, targets: { company: asker.id, userId: (await w.meOf(asker.cookie)).user.id, slug: asker.slug, role, application: person.application, interview: person.interview, session: NOBODY } };
+      return { asker, targets: { company: asker.id, userId: (await w.meOf(asker.cookie)).user.id, slug: asker.slug, role, application: person.application, session: NOBODY } };
     };
     ({ asker: waiting, targets: waitingTargets } = await prepare(MARK.waitingEmail, MARK.waitingName, MARK.waitingSite, MARK.waitingRole, MARK.waitingPerson));
     ({ asker: declined, targets: declinedTargets } = await prepare(MARK.declinedEmail, MARK.declinedName, MARK.declinedSite, MARK.declinedRole, MARK.declinedPerson));
     expect((await w.decide(adminCookie, declined.id, "decline")).status).toBe(200);
-    // A company that had access and used it (6 November 2026): confirmed, with a live job, a candidate, an interview and a
+    // A company that had access and used it (6 November 2026): confirmed, with a live job, a candidate and a
     // teammate. Before its access is taken away its owner and teammate really do read the markers, so the sweep below
     // would see a single one of them leak.
     removed = await w.openDirect(MARK.removedEmail, MARK.removedName);
@@ -1474,7 +1460,7 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     const removedRole = await w.plantRole(removed.roleId, removed.id, MARK.removedRole);
     const removedPerson = await w.plantPerson(removed.id, removedRole, MARK.removedPerson);
     await w.addMember(removed.id, MARK.removedMemberEmail, "hiring_manager");
-    removedTargets = { company: removed.id, userId: (await w.meOf(removed.cookie)).user.id, slug: removed.slug, role: removedRole, application: removedPerson.application, interview: removedPerson.interview, session: removed.session };
+    removedTargets = { company: removed.id, userId: (await w.meOf(removed.cookie)).user.id, slug: removed.slug, role: removedRole, application: removedPerson.application, session: removed.session };
     expect(await (await w.json(removed.cookie, "GET", `/api/v1/applications/${removedPerson.application}`)).text()).toContain(MARK.removedPerson);
     const teammate = await w.google(MARK.removedMemberEmail);
     expect(await (await w.json(teammate, "GET", "/api/v1/roles")).text()).toContain(MARK.removedRole);
@@ -1489,7 +1475,7 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
   it("a route the sweep cannot fill fails and names itself", () => {
     expect(() => fillRoute("/api/v1/something-new/:widgetId", FILL(otherTargets))).toThrow(/cannot fill :widgetId of \/api\/v1\/something-new\/:widgetId/);
     expect(() => fillRoute("/api/v1/roles/:id/brand-new/:widgetId", FILL(otherTargets))).toThrow(/:widgetId of \/api\/v1\/roles\/:id\/brand-new\/:widgetId/);
-    expect(fillRoute("/api/v1/roles/:id/postings/:channel/package", FILL(otherTargets))).toBe(`/api/v1/roles/${otherTargets.role}/postings/careers_page/package`);
+    expect(fillRoute("/api/v1/applications/:id/documents/:documentId/file", FILL(otherTargets))).toBe(`/api/v1/applications/${otherTargets.application}/documents/${NOBODY}/file`);
   });
 
   it("an answer the sweep does not know fails and names itself: a marker, a server error, a limit, or anything but the wall", () => {
@@ -1565,35 +1551,6 @@ describe("a waiting and a declined person reach nothing, by any route", () => {
     }
   }, 400_000);
 
-  it("setting a date and time, with a real time and a real body: someone waiting or declined meets the wall, and the candidate's new pages answer as if the token did not exist", async () => {
-    // all of them are in the sweep above, by the route table: this is the same wall with a body that would book
-    expect(everyRoute(w.app).map((r) => `${r.method} ${r.route}`)).toEqual(expect.arrayContaining(["POST /api/v1/applications/:id/interviews", "POST /api/v1/interviews/:id/set-time", "POST /c/schedule/:token/timezone", "POST /c/schedule/:token/accommodation"]));
-    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
-    for (const [person, targets] of [[waiting, waitingTargets], [declined, declinedTargets]] as const) {
-      const cookie = await w.google(person.email);
-      const before = await snapshot(w, [person.id, other.id]);
-      for (const t of [targets, otherTargets]) {
-        for (const [path, body] of [[`/api/v1/applications/${t.application}/interviews`, { roundKey: "r1", interviewerUserIds: [t.userId], setTime }], [`/api/v1/interviews/${t.interview}/set-time`, setTime]] as const) {
-          const r = await w.json(cookie, "POST", path, body);
-          expect(r.status, path).toBe(403);
-          expect(await w.code(r), path).toBe("no_company");
-        }
-      }
-      for (const page of ["timezone", "accommodation"]) expect((await w.json(cookie, "POST", `/c/schedule/${NOT_A_TOKEN}/${page}`, {})).status, page).toBe(404);
-      await w.container.drain();
-      expect(await snapshot(w, [person.id, other.id])).toEqual(before);
-    }
-  }, 120_000);
-
-  it("the sweep would see a reader that forgot to filter on active: a membership read at any status, a route with no filling", async () => {
-    const leaky = createApp(w.container);
-    leaky.get("/api/v1/leak-check", async (c) => c.json(await w.container.db.select({ name: companies.name }).from(memberships).innerJoin(companies, eq(companies.id, memberships.companyId)).where(eq(memberships.userId, c.get("session")?.user.id ?? ""))));
-    leaky.get("/api/v1/leak-check/:widgetId", (c) => c.json({}));
-    const caught = await sweep(w, leaky, { email: MARK.waitingEmail, name: MARK.waitingName }, waitingTargets, MARKS, (route) => route === "/api/v1/leak-check");
-    expect(caught.problems).toEqual([`GET /api/v1/leak-check holds ${MARK.waitingName}`]);
-    await expect(sweep(w, leaky, { email: MARK.waitingEmail, name: MARK.waitingName }, waitingTargets, MARKS, (route) => route.startsWith("/api/v1/leak-check/"))).rejects.toThrow(/cannot fill :widgetId of \/api\/v1\/leak-check\/:widgetId/);
-  });
-
   it("the routes a signed-in person reaches without a tenant give them only themselves", async () => {
     for (const [person, id] of [[waiting, waiting.id], [declined, declined.id]] as const) {
       const cookie = await w.google(person.email);
@@ -1641,7 +1598,7 @@ describe("the same sweep under COMPANY_CHECK=auto", () => {
       const asker = await w.ask(MARK.waitingEmail, MARK.waitingName, { website: `https://${MARK.waitingSite}.example` });
       const role = await w.plantRole(source.roleId, asker.id, MARK.waitingRole);
       const person = await w.plantPerson(asker.id, role, MARK.waitingPerson);
-      const targets = { company: asker.id, userId: (await w.meOf(asker.cookie)).user.id, slug: asker.slug, role, application: person.application, interview: person.interview, session: NOBODY };
+      const targets = { company: asker.id, userId: (await w.meOf(asker.cookie)).user.id, slug: asker.slug, role, application: person.application, session: NOBODY };
       const before = await snapshot(w, [asker.id]);
       const done = await sweep(w, w.app, { email: MARK.waitingEmail, name: MARK.waitingName }, targets, MARKS);
       expect([...new Set(done.problems)]).toEqual([]);
@@ -1686,7 +1643,7 @@ describe("taking an accepted company's access away", () => {
   it("everyone on it is out at once, in one press: memberships, sessions, invitations and the public side; one email to the owner, and they read the declined screen", async () => {
     // an invitation still open when the access goes
     const co = await inUse("pat.remove@listed-domain.test", "Remove Dental", "mel.mate@stranger.test", async (c) => {
-      const invited = await w.json(c.cookie, "POST", "/api/v1/companies/current/invites", { email: "ivy.invited@stranger.test", role: "interviewer" });
+      const invited = await w.json(c.cookie, "POST", "/api/v1/companies/current/invites", { email: "ivy.invited@stranger.test", role: "hiring_manager" });
       expect(invited.status, await invited.clone().text()).toBe(201);
     });
     expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
@@ -1763,31 +1720,6 @@ describe("taking an accepted company's access away", () => {
     expect(history.map((h) => h.description).sort()).toEqual(["ITS gave your company its access back.", "ITS took your company's access away: nobody on it could sign in to it, and its careers page and job pages were offline."]);
   });
 
-  /**
-   * The release review (11 November 2026, L3-9): taking access away closes every job-board listing that was up, as taking the
-   * confirmation back does, but its notice reached nobody, so nobody took one down. After Accept the job was live again while
-   * the listing stayed closed here, and Home said "Take it down from your own account" about a job the team wants up.
-   */
-  it("Accept puts back the job-board listings taking access away closed: the job is live again and Home asks nobody to take it down", async () => {
-    const co = await inUse("pat.boards@listed-domain.test", "Boards Dental", "bo.mate@stranger.test");
-    const indeed = async () => (await w.container.db.select().from(postings).where(and(eq(postings.roleId, co.roleId), eq(postings.channel, "indeed"))))[0];
-    const url = "https://www.indeed.com/viewjob?jk=boards123";
-    const before = await indeed();
-    if (before) await w.container.db.update(postings).set({ status: "posted_manually", externalUrl: url, closureRequired: false, closedAt: null }).where(eq(postings.id, before.id));
-    else await withPlatform(w.container.db, (tx) => tx.insert(postings).values({ companyId: co.id, roleId: co.roleId, channel: "indeed", status: "posted_manually", externalUrl: url }));
-    expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
-    // taken away: closed and named for taking down, as when the confirmation is taken back
-    expect(await indeed()).toMatchObject({ status: "closed", closureRequired: true, closureConfirmedAt: null });
-    expect((await w.decide(adminCookie, co.id, "accept")).status).toBe(200);
-    await w.container.drain();
-    // given back: up as it was, at the same address, with nothing to take down
-    expect(await indeed()).toMatchObject({ status: "posted_manually", externalUrl: url, closureRequired: false, closedAt: null });
-    const owner = await w.google("pat.boards@listed-domain.test");
-    const home = await w.read<{ cards: Array<{ title: string; body: string }> }>(await w.json(owner, "GET", "/api/v1/brief"));
-    expect(home.cards.filter((c) => c.title.startsWith("Still posted on") || /Take (it|the posting) down/.test(c.body))).toEqual([]);
-    expect((await w.app.request(`/careers/${co.slug}`)).status).toBe(200);
-  });
-
   it("a second press changes nothing; a request, a declined company and one with nobody active are told calmly, and nothing moves", async () => {
     const co = await inUse("pat.twice@listed-domain.test", "Twice Removed", "tom.mate@stranger.test");
     expect((await w.decide(adminCookie, co.id, "remove")).status).toBe(200);
@@ -1846,9 +1778,9 @@ describe("taking an accepted company's access away", () => {
   it("someone also on another company simply loses this one: their session there stays open, and they land in it", async () => {
     const keep = await w.openDirect("pat.keep@listed-domain.test", "Keep Dental");
     const gone = await inUse("pat.gone@listed-domain.test", "Gone Dental", "both.companies@stranger.test");
-    await w.addMember(keep.id, "both.companies@stranger.test", "interviewer");
+    await w.addMember(keep.id, "both.companies@stranger.test", "hiring_manager");
     // the other company's owner is on this one's team too
-    await w.addMember(gone.id, "pat.keep@listed-domain.test", "interviewer");
+    await w.addMember(gone.id, "pat.keep@listed-domain.test", "hiring_manager");
     // their session working in the other company
     const there = await w.google("both.companies@stranger.test");
     expect((await w.json(there, "POST", "/api/v1/auth/switch", { companyId: keep.id })).status).toBe(200);

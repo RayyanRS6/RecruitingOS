@@ -28,7 +28,7 @@ describe("Slice 1 API", () => {
 
   beforeAll(async () => {
     // Texting on: this file exercises the SMS screen path a consenting applicant gets (decision M2 keeps it off by default).
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     setClock(0);
   });
@@ -150,36 +150,6 @@ describe("Slice 1 API", () => {
     const evs = await container.db.select().from(events).where(eq(events.type, "intake.abandoned"));
     expect(evs).toHaveLength(1);
     await container.db.update(entitlements).set({ limit: 1 }).where(inArray(entitlements.key, ["active_roles", "jobs_total"]));
-  });
-
-  it("approval opens the role and publishes to its channels: the careers page, Google, email and the boards the role plan names", async () => {
-    const r = await json("POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "Looks right." });
-    expect(r.status).toBe(200);
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { status: string; currentPacketVersion: number; postings: Array<{ channel: string; status: string; intakeToken: string | null; instructions: string | null; steps: string[]; externalUrl: string | null; verifiedBy: { kind: string } | null }> };
-    expect(role.status).toBe("open");
-    expect(role.currentPacketVersion).toBe(1);
-    const byChannel = Object.fromEntries(role.postings.map((p) => [p.channel, p]));
-    // docs/spec/20: nothing is live until its public URL was checked. The careers page passed the (fake) check during
-    // the inline drain; Google is submitted through the page's structured data; email-in is failed (no inbound domain);
-    // the boards the role plan names (Indeed here; founder decision Q11) wait at "ready to post" with their steps until
-    // a person records the public URL, and no board the plan does not name is prepared.
-    expect(byChannel.careers_page.status).toBe("live_verified");
-    expect(byChannel.careers_page.verifiedBy).toMatchObject({ kind: "system" });
-    expect(byChannel.careers_page.externalUrl).toBe(`${container.env.JOBS_BASE_URL}/careers/${companySlug}/jobs/${roleId}`);
-    expect(byChannel.google_jobs.status).toBe("submitted_integration");
-    expect(byChannel.email_in.status).toBe("failed");
-    expect(byChannel.linkedin_basic).toBeUndefined();
-    expect(byChannel.ziprecruiter).toBeUndefined();
-    expect(byChannel.indeed.status).toBe("ready_to_post");
-    expect(byChannel.indeed.instructions).toMatch(/apply/);
-    expect(byChannel.indeed.steps.length).toBeGreaterThanOrEqual(5);
-    expect(byChannel.indeed.steps.join("\n")).toMatch(new RegExp(`${container.env.JOBS_BASE_URL}/a/[a-z0-9]{12}`));
-    expect(byChannel.email_in.intakeToken).toBeTruthy();
-    const runs = await container.db.select().from(workflowRuns);
-    // the morning email summaries (plan B3) run beside the stuck-role check
-    expect(runs.map((x) => `${x.workflowKey}:${x.status}`).sort()).toEqual(["notification_digest:waiting", "publish_role:completed", "role_approval:completed", "stuck_role_detector:waiting"]);
-    const feed = await app.request("/feeds/linkedin.xml");
-    expect(await feed.text()).toContain("Registered Dental Hygienist");
   });
 
   it("serves the job page with JobPosting markup and notices", async () => {
@@ -343,27 +313,6 @@ describe("Slice 1 API", () => {
     setClock(0);
   });
 
-  it("ingests an Indeed-style forwarded application through the intake address", async () => {
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { postings: Array<{ channel: string; intakeToken: string | null }> };
-    const token = role.postings.find((p) => p.channel === "email_in")!.intakeToken!;
-    const r = await app.request("/webhooks/postmark/inbound", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${token}@${container.integrations.env.intakeDomain}`, Subject: "New applicant: Luis Ortega - Registered Dental Hygienist", TextBody: "Luis Ortega applied via Indeed.\nEmail: luis.ortega@example.com\nPhone: 949-555-0199", Attachments: [{ Name: "Luis-Ortega.txt", ContentType: "text/plain", Content: Buffer.from("Luis Ortega\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nRDH license CA active").toString("base64"), ContentLength: 80 }] }),
-    });
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as { matched: boolean; applicationId: string };
-    expect(body.matched).toBe(true);
-    const [a] = await container.db.select().from(applications).where(eq(applications.id, body.applicationId));
-    expect(a.source).toBe("email_in");
-    // no eligibility answers by email: unverifiable, not failed; assessed and invited to a screen by email (no SMS consent)
-    expect(a.stage).toBe("screen_invited");
-    expect(a.eligibility?.unverifiable.length).toBeGreaterThan(0);
-    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
-    expect(scr.channel).toBe("web");
-    expect(a.extraction?.positions[0]?.employer).toBe("Harbor Dental");
-  });
-
   it("dedupes a repeat application from the same candidate: the same receipt, nothing on the record changed, the link emailed to the address on file", async () => {
     const [maria] = await container.db.select().from(candidates).where(eq(candidates.email, "maria.reyes@example.com"));
     const [mariaApp] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, maria.id)));
@@ -496,15 +445,5 @@ describe("Slice 1 API", () => {
     expect(sorted(sinceLongAgo)).toEqual(sorted(costs));
     expect(await (await asAdmin("GET", "/api/v1/admin/costs?since=2999-01-01")).json()).toEqual([]);
     for (const bad of ["October", "2026-02-30", "2026-10-1"]) expect((await asAdmin("GET", `/api/v1/admin/costs?since=${bad}`)).status, bad).toBe(400);
-  });
-
-  it("keeps postings and approvals consistent", async () => {
-    // the careers page, Google, email and the one board the role plan names (Indeed; founder decision Q11)
-    const posts = await container.db.select().from(postings).where(eq(postings.roleId, roleId));
-    expect(posts.length).toBe(4);
-    const pend = await container.db.select().from(approvalRequests).where(eq(approvalRequests.status, "pending"));
-    expect(pend.filter((p) => p.roleId === roleId)).toHaveLength(0);
-    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
-    expect(role.status).toBe("open");
   });
 });

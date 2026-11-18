@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
 import { adminAlerts, applications, auditRecords, candidates, communications, emailSuppressions, events, jobs, notifications, users, webhookReceipts } from "@ros/db";
-import { fakePostmarkEvent, type FakeEmailAdapter, type FakeSmsAdapter } from "@ros/integrations";
+import { fakePostmarkEvent, type FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { signInAdmin } from "./test-helpers";
 
 /**
  * Item 5 of the founder's instruction of 18 September 2026: bounce and spam-complaint webhooks with authentication and
- * duplicate protection; suppression that every send consults; administrator alerts; a text fallback for candidates who
- * agreed to texts; soft-bounce retries; release by an administrator with a reason; every outcome an event.
+ * duplicate protection; suppression that every send consults; administrator alerts; soft-bounce retries; release by an
+ * administrator with a reason; every outcome an event.
  */
 describe("email failure handling", () => {
   let container: Container;
@@ -28,7 +28,6 @@ describe("email failure handling", () => {
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "email test" }, body: body ? JSON.stringify(body) : undefined });
   const webhook = (payload: unknown, auth: Record<string, string> = { authorization: `Basic ${Buffer.from(`postmark:${SECRET}`).toString("base64")}` }) => app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(payload) });
   const fake = () => container.integrations.email as FakeEmailAdapter;
-  const sms = () => container.integrations.sms as FakeSmsAdapter;
 
   let owner = "";
   let admin = "";
@@ -40,7 +39,7 @@ describe("email failure handling", () => {
   let ackMessageId = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET, SMS_ENABLED: "true" } }); // texting on: the fallback text after an email failure needs a consenting applicant
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
     app = createApp(container);
     setClock(0);
     owner = await signIn("owner@harbor.test");
@@ -55,7 +54,7 @@ describe("email failure handling", () => {
     await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     const fd = new FormData();
-    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "yes"); fd.set("locationText", "Tustin, CA");
+    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("locationText", "Tustin, CA");
     fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present"], "maria.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
@@ -101,7 +100,7 @@ describe("email failure handling", () => {
     setClock(0);
   });
 
-  it("a hard bounce suppresses the address, tells the owner, and texts the candidate a link to their status page", async () => {
+  it("a hard bounce suppresses the address and tells the owner to call the candidate", async () => {
     const [retry] = await container.db.select().from(communications).where(and(eq(communications.toAddress, "maria.reyes@example.com"), eq(communications.retryAttempt, 1)));
     const r = await webhook(fakePostmarkEvent({ providerMessageId: retry.providerMessageId!, email: "maria.reyes@example.com", type: "HardBounce", id: 1002 }));
     expect(((await r.json()) as { action: string }).action).toBe("suppressed");
@@ -109,11 +108,9 @@ describe("email failure handling", () => {
     expect(sup.active).toBe(true);
     expect(sup.reason).toBe("hard_bounce");
     const note = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "candidate.unreachable")))).pop()!;
-    expect(note.body).toMatch(/texted them a link|goes out when contact hours open/);
+    expect(note.body).toMatch(/^Their address bounced \(.+\)\. Please call them\.$/);
     // it opens that candidate, never the whole list (6 November 2026)
     expect(note.action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${applicationId}` });
-    const text = sms().sent.find((m) => m.to === "+19495550100" && /could not reach you by email/.test(m.body));
-    if (/texted them/.test(note.body)) expect(text).toBeTruthy();
     expect((await container.db.select().from(events).where(eq(events.type, "message.suppressed"))).length).toBeGreaterThanOrEqual(1);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "suppression.added"))).length).toBeGreaterThanOrEqual(1);
   });

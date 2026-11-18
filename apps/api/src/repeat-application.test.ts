@@ -1,23 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, candidates, communications, documents, events, jobs, notifications, postings, roles, users, withTenant } from "@ros/db";
+import { applications, candidates, communications, documents, events, jobs, roles, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { RECEIPT_COOKIE, maskEmail } from "./pages/candidate";
 import { LINK_REQUEST_JOB_KIND, createApplication } from "./services/applications";
-import { noThanksRequested } from "./services/replies";
 import { pastTheWaitingRoom, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave 0 items 0.1 and 0.11, over HTTP. A repeat application looks exactly like a new one and changes nothing on the
  * person the company already has; the status link only ever travels by email to the address on file; "Lost your
- * link?" answers the same whether or not an address is known; an emailed repeat changes nothing either; only an open
- * role that takes applications admits one. And the talent-pool opt-out works, from a "no thanks" reply and from the
- * status page.
+ * link?" answers the same whether or not an address is known; only an open role that takes applications admits one.
  */
-describe("repeat applications, lost links and the talent-pool opt-out", () => {
+describe("repeat applications and lost links", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
@@ -27,7 +24,7 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
   let otherRoleId = "";
   let eligibility: string[] = [];
   let otherEligibility: string[] = [];
-  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", SMS_ENABLED: "true", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.link_request": 4 }) };
+  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.link_request": 4 }) };
   const signIn = async (email: string) => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
     const { devLink } = (await r1.json()) as { devLink: string };
@@ -42,7 +39,6 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
   // the nonce and the form's sealed opening time (plan D7) change with every render, whoever applies
   const stable = (html: string) => html.replace(/nonce="[^"]*"/g, "").replace(/name="formOpened" value="[^"]*"/g, "");
   const form = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(fields).toString() });
-  const inbound = (payload: Record<string, unknown>) => app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
 
   const openRole = async (message: string) => {
     const s = (await (await json("POST", "/api/v1/intake/sessions", { initialMessage: message })).json()) as { session: { id: string } };
@@ -233,22 +229,6 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     expect(notices[0].text).toContain(`https://jobs.example.test/c/status/${other.statusToken}`);
   });
 
-  it("an emailed repeat changes nothing either, and the address on file hears about it", async () => {
-    const [emailIn] = await container.db.select().from(postings).where(and(eq(postings.roleId, roleId), eq(postings.channel, "email_in")));
-    const maria = await person("maria.reyes@example.com");
-    const mariaApp = await applicationOf(maria.id);
-    const repeatsBefore = (await container.db.select().from(communications).where(and(eq(communications.applicationId, mariaApp.id), eq(communications.templateKey, "status_link_repeat")))).length;
-    const r = await inbound({ From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${emailIn.intakeToken}@${container.integrations.env.intakeDomain}`, Subject: "New applicant: Maria Reyes - Registered Dental Hygienist", TextBody: "Maria Reyes applied via Indeed.\nEmail: maria.reyes@example.com\nPhone: 702-555-0123", Attachments: [{ Name: "other.txt", ContentType: "text/plain", Content: Buffer.from("Somebody else's résumé").toString("base64"), ContentLength: 24 }] });
-    expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ ok: true, matched: true, applicationId: mariaApp.id, duplicate: true });
-    await container.drain();
-    expect(await person("maria.reyes@example.com")).toEqual(maria);
-    expect(await applicationOf(maria.id)).toEqual(mariaApp);
-    expect((await container.db.select().from(documents).where(eq(documents.applicationId, mariaApp.id))).length).toBe(1);
-    // already told today by the form test above: the daily limit holds across both ways in
-    expect((await container.db.select().from(communications).where(and(eq(communications.applicationId, mariaApp.id), eq(communications.templateKey, "status_link_repeat")))).length).toBe(repeatsBefore);
-  });
-
   it("only an open role that is taking applications admits an application, the same rule as the form (email held while paused is replayed later)", async () => {
     const input = { companyId, roleId, source: "email_in", firstName: "Held", lastName: "Person", email: "held.person@example.com", phone: null, smsConsent: false, consentSource: "email_in", noticeVersionsShown: [], eligibilityAnswers: {}, noResumeAnswers: { summary: "Hygienist." } };
     const actor = { kind: "system" as const, id: "email_in" };
@@ -310,99 +290,5 @@ describe("repeat applications, lost links and the talent-pool opt-out", () => {
     for (let i = 0; i < 5; i++) statuses.push((await form("/c/link-request", { email: `someone${i}@example.com` }, ip)).status);
     expect(statuses.slice(0, 4)).toEqual([303, 303, 303, 303]);
     expect(statuses[4]).toBe(429);
-  });
-
-  it("\"no thanks\" as a reply keeps the person out of the talent pool, confirmed once; a longer sentence is just a message", () => {
-    expect(noThanksRequested("No thanks")).toBe(true);
-    expect(noThanksRequested("no, thank you.\n\nI found another job.")).toBe(true);
-    expect(noThanksRequested("  NO THANKS!  ")).toBe(true);
-    expect(noThanksRequested("No thanks, but I am still interested in this role")).toBe(false);
-    expect(noThanksRequested("Thanks!")).toBe(false);
-  });
-
-  it("a \"no thanks\" reply to the decline and the status-page button each opt the person out of future roles, once, with one confirmation", async () => {
-    // by reply: before any decline, "no thanks" turns down a step more likely than future roles, so it goes to the team as it is
-    await applyTo({ id: roleId, eligibility }, { firstName: "Noor", lastName: "Haddad", email: "noor.haddad@example.com" });
-    const noor = await person("noor.haddad@example.com");
-    const noorApp = await applicationOf(noor.id);
-    const to = `reply-${noorApp.replyToken}@${container.integrations.env.intakeDomain}`;
-    const early = await inbound({ From: "noor.haddad@example.com", To: to, Subject: "Re: Next step", TextBody: "No thanks", MessageID: "msg-noor-0" });
-    expect(await early.json()).toMatchObject({ matched: true, reply: true, humanRequested: false, talentPoolOptOut: false });
-    await container.drain();
-    expect((await person("noor.haddad@example.com")).preferences.talentPoolOptOut).toBeUndefined();
-    const [ownerUser] = await container.db.select().from(users).where(eq(users.email, "owner@repeat.test"));
-    const told = await container.db.select().from(notifications).where(and(eq(notifications.userId, ownerUser.id), eq(notifications.kind, "message.received")));
-    expect(told.some((n) => n.body.includes("\"No thanks\". This may mean they do not want to go ahead with this step. Nothing was changed"))).toBe(true);
-    // the decline email (sent when a person sends the decision message) makes the offer; a "no thanks" to it is the opt-out
-    expect((await json("POST", `/api/v1/applications/${noorApp.id}/actions`, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
-    expect((await json("POST", `/api/v1/applications/${noorApp.id}/actions`, { action: "send_decision" })).status).toBe(200);
-    await container.drain();
-    const decline = outbox().find((m) => m.to === "noor.haddad@example.com" && m.subject === "Your application to Repeat Dental")!;
-    expect(decline.text).toContain("reply \"no thanks\"");
-    const declined = await applicationOf(noor.id);
-    await container.db.update(candidates).set({ inTalentPool: true }).where(eq(candidates.id, noor.id));
-    const sentBefore = outbox().length;
-    const r = await inbound({ From: "noor.haddad@example.com", To: to, Subject: "Re: Your application to Repeat Dental", TextBody: "No thanks\n\nI took another job.", MessageID: "msg-noor-1" });
-    expect(await r.json()).toMatchObject({ matched: true, reply: true, humanRequested: false, talentPoolOptOut: true });
-    await container.drain();
-    const optedOut = await person("noor.haddad@example.com");
-    expect(optedOut.preferences.talentPoolOptOut).toBe(true);
-    expect(optedOut.inTalentPool).toBe(false);
-    expect((await applicationOf(noor.id)).stage).toBe(declined.stage);
-    const revoked = (await container.db.select().from(events).where(and(eq(events.type, "consent.revoked"), eq(events.subjectId, noor.id))))[0];
-    expect(revoked.payload).toMatchObject({ purpose: "talent_pool", source: "email_reply" });
-    const confirmations = () => outbox().slice(sentBefore).filter((m) => m.to === "noor.haddad@example.com" && /will not be contacted about future roles/.test(m.subject));
-    expect(confirmations()).toHaveLength(1);
-    expect(confirmations()[0].text).toContain("This does not change an application you have open right now");
-    // the way back it names is real: the status page and its button
-    expect(confirmations()[0].text).toContain(`https://jobs.example.test/c/status/${noorApp.statusToken}`);
-    expect(confirmations()[0].text).not.toMatch(/reply to this email and a person will help/);
-    // saying it again changes and sends nothing more
-    await inbound({ From: "noor.haddad@example.com", To: to, Subject: "Re: Your application", TextBody: "no thank you", MessageID: "msg-noor-2" });
-    await container.drain();
-    expect(confirmations()).toHaveLength(1);
-    // the status page says so, offers no opt-out button, and offers the way back
-    const noorStatus = decodeEntities(await (await app.request(`/c/status/${noorApp.statusToken}`)).text());
-    expect(noorStatus).toContain("you asked us not to keep your details for future roles");
-    expect(noorStatus).not.toContain("Don't keep me for future roles");
-    expect(noorStatus).toContain("Keep me for future roles again");
-
-    // by the button on the status page
-    await applyTo({ id: roleId, eligibility }, { firstName: "Tess", lastName: "Ward", email: "tess.ward@example.com" });
-    const tess = await person("tess.ward@example.com");
-    const tessApp = await applicationOf(tess.id);
-    const before = decodeEntities(await (await app.request(`/c/status/${tessApp.statusToken}`)).text());
-    expect(before).toContain("Don't keep me for future roles");
-    expect(before).toContain(`action="/c/status/${tessApp.statusToken}/talent-pool"`);
-    const pressed = await form(`/c/status/${tessApp.statusToken}/talent-pool`, {});
-    expect(pressed.status).toBe(302);
-    // back at the choice itself, which says it was saved (the decision and closing messages link there too, Q30)
-    expect(pressed.headers.get("location")).toBe(`/c/status/${tessApp.statusToken}?pool=out#future-roles`);
-    await container.drain();
-    expect((await person("tess.ward@example.com")).preferences.talentPoolOptOut).toBe(true);
-    expect((await container.db.select().from(events).where(and(eq(events.type, "consent.revoked"), eq(events.subjectId, tess.id))))[0].payload).toMatchObject({ purpose: "talent_pool", source: "status_page" });
-    expect((await form(`/c/status/${tessApp.statusToken}/talent-pool`, {})).status).toBe(302);
-    await container.drain();
-    expect(outbox().filter((m) => m.to === "tess.ward@example.com" && /will not be contacted about future roles/.test(m.subject))).toHaveLength(1);
-    // the application itself is untouched, and a forged link is a 404
-    expect((await applicationOf(tess.id)).stage).not.toBe("withdrawn");
-    expect((await form(`/c/status/${tessApp.statusToken.slice(0, -2)}zz/talent-pool`, {})).status).toBe(404);
-
-    // a decline after the opt-out does not offer the talent pool again: it says the choice stands
-    expect((await json("POST", `/api/v1/applications/${tessApp.id}/actions`, { action: "reject", reason: "not_a_match_experience" })).status).toBe(200);
-    expect((await json("POST", `/api/v1/applications/${tessApp.id}/actions`, { action: "send_decision" })).status).toBe(200);
-    await container.drain();
-    const tessDecline = outbox().find((m) => m.to === "tess.ward@example.com" && m.subject === "Your application to Repeat Dental")!;
-    expect(tessDecline.text).toContain("As you asked, we will not keep your details for future roles.");
-    expect(tessDecline.text).not.toContain("no thanks");
-
-    // and the way back: one click takes the choice back, recorded, with nothing sent
-    const sentBeforeBack = outbox().length;
-    expect((await form(`/c/status/${tessApp.statusToken}/talent-pool`, { pref: "in" })).status).toBe(302);
-    await container.drain();
-    expect((await person("tess.ward@example.com")).preferences.talentPoolOptOut).toBe(false);
-    expect((await container.db.select().from(events).where(and(eq(events.type, "consent.granted"), eq(events.subjectId, tess.id))))[0].payload).toMatchObject({ purpose: "talent_pool", source: "status_page" });
-    expect(outbox().slice(sentBeforeBack).filter((m) => m.to === "tess.ward@example.com")).toHaveLength(0);
-    expect(decodeEntities(await (await app.request(`/c/status/${tessApp.statusToken}`)).text())).toContain("Don't keep me for future roles");
   });
 });

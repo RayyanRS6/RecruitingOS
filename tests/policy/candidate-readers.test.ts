@@ -32,53 +32,34 @@ const READS_A_PERSON = /\b(?:from|leftJoin|innerJoin|rightJoin|fullJoin)\(candid
 const CANDIDATE_READERS: Record<string, number> = {
   // Behind the path guard (middleware/candidate-lock.ts): only ever reached with an application the reader may read.
   "apps/api/src/services/application-actions.ts": 1,
-  "apps/api/src/services/interview-create.ts": 1,
-  "apps/api/src/services/interview-cancel.ts": 1,
-  "apps/api/src/services/interviewer-view.ts": 2,
-  "apps/api/src/services/messages.ts": 1,
   "apps/api/src/services/screens.ts": 1,
   // Lists and body ids, each filtered in its query: `visibleTo` or `notLocked` beside the read of applications that names the people.
-  "apps/api/src/routes/compare.ts": 1,
-  "apps/api/src/routes/interviews.ts": 4,
   "apps/api/src/routes/roles.ts": 2,
   "apps/api/src/services/brief.ts": 8,
   // Home's "emails to candidates did not arrive": `notLocked` in the query that names them.
   "apps/api/src/services/email-health.ts": 1,
-  // The backups (`notLocked`), and the name of the person hired on the backups card and on "Close this job?" (never someone locked).
-  "apps/api/src/services/hire-sheet.ts": 3,
-  "apps/api/src/services/new-times.ts": 2,
   "apps/api/src/services/pool.ts": 1,
-  "apps/api/src/services/role-report.ts": 2,
   // The console and privacy requests: ITS is not the paying customer (Rule 3, item 6).
   "apps/api/src/routes/privacy-requests.ts": 3,
-  "packages/core/src/privacy-requests.ts": 6,
-  // A candidate's own pages behind their own token, and their own replies, texts and opt-outs: they read themselves.
-  "apps/api/src/pages/application-record.tsx": 6,
+  "packages/core/src/privacy-requests.ts": 5,
+  // A candidate's own pages behind their own token: they read themselves.
+  "apps/api/src/pages/application-record.tsx": 3,
   "apps/api/src/pages/candidate-shared.tsx": 1,
   "apps/api/src/pages/privacy-request.tsx": 1,
-  "apps/api/src/pages/schedule.tsx": 1,
   "apps/api/src/services/applications.ts": 6,
   "apps/api/src/services/apply-conversation.ts": 1,
   "apps/api/src/services/email-subscriptions.ts": 1,
   "apps/api/src/services/profile-facts.ts": 4,
-  "apps/api/src/services/replies.ts": 3,
-  "apps/api/src/services/talent-pool.ts": 3,
-  "apps/api/src/webhooks/twilio.ts": 1,
   // Its consent check reads them to write to them; the notice that an email did not arrive names them through `notify`'s `about`.
   "packages/agents/src/outbox.ts": 2,
   // What a test does for itself.
   "apps/api/src/test-helpers.ts": 1,
   // Workflows and the daily job: they read a person to write to them. What they say to the team goes through `notify`'s `about`, or names only `notLocked` people.
-  "packages/agents/src/decision-messages.ts": 5,
-  "packages/agents/src/email-failures.ts": 3,
-  "packages/agents/src/orchestrator.ts": 3,
+  "packages/agents/src/decision-messages.ts": 1,
+  "packages/agents/src/email-failures.ts": 1,
   "packages/agents/src/screening.ts": 1,
-  "packages/core/src/interview-followups.ts": 1,
   "packages/workflows/src/definitions/application-intake.ts": 1,
-  "packages/workflows/src/definitions/new-times.ts": 1,
-  "packages/workflows/src/definitions/schedule-interview.ts": 1,
   "packages/workflows/src/definitions/screen.ts": 1,
-  "packages/workflows/src/new-times-reopen.ts": 2,
 };
 
 /** Where the parenthesis opened at `open` closes: strings and templates skipped, a template's `${...}` read as code, so a template inside one is too. */
@@ -137,10 +118,6 @@ const ABOUT_THE_TEAM: ReadonlySet<string> = new Set([
   "member.left",
   // `who` is the team member who switched applications on or off.
   "applications.reopened",
-  // `who` is who may decide the job's approval.
-  "approval.requested",
-  // A count, and the word "who" in a sentence about everyone.
-  "volume.high",
 ]);
 
 /** A call's `kind`, the first one when it is worked out in code: what the allow list above goes by. */

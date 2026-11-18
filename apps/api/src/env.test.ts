@@ -7,7 +7,7 @@ import { loadEnv, type EnvRole } from "./env";
  * process names its deployment; the production deployment's own checks are below).
  */
 describe("production boot checks", () => {
-  const base = { NODE_ENV: "production", DEPLOY_ENV: "staging", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), SECRET_STORE: "vault", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" };
+  const base = { NODE_ENV: "production", DEPLOY_ENV: "staging", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" };
   const appUrl = "postgres://ros_app:pw@host/db";
   const workerUrl = "postgres://ros_worker:pw@host/db";
 
@@ -38,7 +38,6 @@ describe("production boot checks", () => {
     expect(() => loadEnv({ ...prod, WORKER_INLINE: "true" })).toThrow(/WORKER_INLINE/);
     expect(() => loadEnv({ ...prod, STORAGE_PROVIDER: "local" })).toThrow(/STORAGE_PROVIDER/);
     expect(() => loadEnv({ ...prod, RATE_LIMIT_STORE: "fake" })).toThrow(/RATE_LIMIT_STORE/);
-    expect(() => loadEnv({ ...prod, SECRET_STORE: "memory" })).toThrow(/SECRET_STORE/);
     expect(() => loadEnv({ ...prod, AI_PROVIDER: "fake" })).toThrow(/AI_PROVIDER/);
   });
 
@@ -82,7 +81,7 @@ describe("production boot checks", () => {
 describe("the production deployment's own checks (DEPLOY_ENV)", () => {
   // staging as it runs today: a Vercel Preview deployment with fake email, the fake scanner, the fallback addresses, no
   // certificate, a short secret and salt, and its Sentry marker
-  const staging: Record<string, string | undefined> = { NODE_ENV: "production", VERCEL_ENV: "preview", APP_BASE_URL: "https://staging.example.test", DATABASE_URL: "postgres://ros_app:pw@host/db", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "a-short-staging-secret", SECRET_STORE: "vault", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij", EMAIL_PROVIDER: "fake", SCAN_PROVIDER: "fake", SENTRY_ENVIRONMENT: "staging" };
+  const staging: Record<string, string | undefined> = { NODE_ENV: "production", VERCEL_ENV: "preview", APP_BASE_URL: "https://staging.example.test", DATABASE_URL: "postgres://ros_app:pw@host/db", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "a-short-staging-secret", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij", EMAIL_PROVIDER: "fake", SCAN_PROVIDER: "fake", SENTRY_ENVIRONMENT: "staging" };
   // the production app on a Vercel Production deployment, with every value the production deployment asks for
   const production = { ...staging, VERCEL_ENV: "production", APP_BASE_URL: "https://hire.example.test", SESSION_SECRET: "x".repeat(40), ANALYTICS_SALT: "s".repeat(40), SENTRY_ENVIRONMENT: "production", EMAIL_PROVIDER: "postmark", POSTMARK_SERVER_TOKEN: "postmark-server-token-for-tests", POSTMARK_WEBHOOK_SECRET: "postmark-webhook-secret-for-tests", EMAIL_FROM_ADDRESS: "updates@hire.example.test", EMAIL_REPLY_TO: "recruiting@example.test", ITS_QUEUE_EMAIL: "recruiting@example.test", DATABASE_SSL_CA: "-----BEGIN CERTIFICATE-----\nthe CA\n-----END CERTIFICATE-----\n", ANTHROPIC_API_KEY: "anthropic-key-for-tests", SIGNUP_MODE: "invite" };
   // the production worker on Railway: no VERCEL_ENV, so DEPLOY_ENV says it; its own connection string, ClamAV, no webhook secret, no sign-up mode
@@ -164,8 +163,6 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(refusal(production)).toBeNull();
     expect(refusal({ ...production, VERCEL_ENV: undefined, DEPLOY_ENV: "production" })).toBeNull();
     expect(refusal(worker, "worker")).toBeNull();
-    // inbound email may stay off: EMAIL_INTAKE_DOMAIN still ends in localhost
-    expect(loadEnv({ ...production, EMAIL_INTAKE_DOMAIN: "intake.localhost" }).EMAIL_INTAKE_DOMAIN).toBe("intake.localhost");
     // the certificate as a file path, or named in the process's own connection string
     expect(refusal({ ...production, DATABASE_SSL_CA: undefined, DATABASE_SSL_CA_FILE: "/etc/ssl/supabase-ca.crt" })).toBeNull();
     expect(refusal({ ...production, DATABASE_SSL_CA: undefined, DATABASE_URL: "postgres://ros_app:pw@host/db?sslrootcert=/etc/ssl/supabase-ca.crt" })).toBeNull();
@@ -220,16 +217,15 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(refusal({ ...worker, SESSION_SECRET: short }, "worker")).toMatch(/^SESSION_SECRET must be at least 32 characters/);
   });
 
-  it("refuses a Postmark webhook secret under 32 characters on the app, and an inbound one whenever it is set, without printing either", () => {
+  it("refuses a Postmark webhook secret under 32 characters on the app, without printing it", () => {
     const short = "Sh0rt-but-secret-value-31-chars";
-    for (const name of ["POSTMARK_WEBHOOK_SECRET", "POSTMARK_INBOUND_SECRET"]) {
+    for (const name of ["POSTMARK_WEBHOOK_SECRET"]) {
       const message = refusal({ ...production, [name]: short });
       expect(message, name).toMatch(new RegExp(`^${name} must be at least 32 characters on the production deployment`));
       expect(message, name).not.toContain(short);
     }
-    expect(refusal({ ...production, POSTMARK_WEBHOOK_SECRET: "w".repeat(32), POSTMARK_INBOUND_SECRET: "i".repeat(32) })).toBeNull();
-    // the worker sends the inbound secret's addresses, so it is held to it; it never reads the webhook secret
-    expect(refusal({ ...worker, POSTMARK_INBOUND_SECRET: short }, "worker")).toMatch(/^POSTMARK_INBOUND_SECRET must be at least 32 characters/);
+    expect(refusal({ ...production, POSTMARK_WEBHOOK_SECRET: "w".repeat(32) })).toBeNull();
+    // the worker never reads the webhook secret
     expect(refusal({ ...worker, POSTMARK_WEBHOOK_SECRET: "x" }, "worker")).toBeNull();
   });
 

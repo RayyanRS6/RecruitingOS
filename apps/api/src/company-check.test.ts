@@ -8,7 +8,7 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { COMPANY_CHECK_WAIT_REASON } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { resetPublicFeedCache } from "./pages/public-feeds";
+import { resetSitemapCache } from "./pages/sitemap";
 import { createApplication } from "./services/applications";
 import { signInAdmin, signInAs, useTrial } from "./test-helpers";
 
@@ -42,7 +42,7 @@ describe("the ITS company check and getting started", () => {
   const verify = (cookie: string, body: Record<string, unknown>) => json(cookie, "POST", `/api/v1/admin/customers/${companyId}/verification`, body);
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@check.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
@@ -89,8 +89,8 @@ describe("the ITS company check and getting started", () => {
     for (const path of [`/careers/${slug}`, `/careers/${slug}/jobs/${roleId}`, `/careers/${slug}/jobs/${roleId}/apply`, `/careers/${slug}/jobs/${roleId}/applied`]) expect((await page(path)).status, path).toBe(404);
     expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: new FormData() })).status).toBe(404);
     // no feed and no sitemap names it, and a tracked link leads nowhere
-    resetPublicFeedCache(container);
-    for (const path of ["/feeds/jobs.xml", "/feeds/jobs.json", "/feeds/linkedin.xml", "/sitemap.xml"]) expect(await (await page(path)).text(), path).not.toContain(roleId);
+    resetSitemapCache(container);
+    expect(await (await page("/sitemap.xml")).text()).not.toContain(roleId);
     const link = await withTenant(container.db, companyId, (tx) => createApplicationLink(tx, { companyId, roleId, source: "referral", label: "A friend", actor: { kind: "system", id: "test" } }));
     expect((await page(`/a/${link.token}`)).status).toBe(404);
     // a role nobody can see yet is not "a role with no applicants": no advice to post it elsewhere
@@ -184,7 +184,7 @@ describe("the ITS company check and getting started", () => {
     const job = await page(`/careers/${slug}/jobs/${roleId}`);
     expect(job.status).toBe(200);
     expect(await job.text()).toContain("application/ld+json");
-    expect(await (await page("/feeds/jobs.xml")).text()).toContain(roleId);
+    expect(await (await page("/sitemap.xml")).text()).toContain(roleId);
     // recorded with the reason, shown to the customer in their own words, and the team told
     const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.verified")));
     expect(audited).toHaveLength(1);
@@ -223,7 +223,7 @@ describe("the ITS company check and getting started", () => {
     const r = await verify(admin, { verified: false, reason: "The website does not match the company.", confirm: true });
     expect(await r.json()).toMatchObject({ ok: true, verified: false, changed: true });
     for (const path of [`/careers/${slug}`, `/careers/${slug}/jobs/${roleId}`]) expect((await page(path)).status, path).toBe(404);
-    expect(await (await page("/feeds/jobs.xml")).text()).not.toContain(roleId);
+    expect(await (await page("/sitemap.xml")).text()).not.toContain(roleId);
     const app0 = (await container.db.select().from(applications).where(eq(applications.id, applicationId)))[0];
     const again = await withTenant(container.db, companyId, (tx) => queueCommunication(tx, container.integrations, { channel: "email", companyId, candidateId: app0.candidateId, applicationId, to: "hana.held@example.com", from: "x <updates@test.localhost>", subject: "After", text: "Hi", templateKey: "freeform", idempotencyKey: `after:${uuidv7()}`, actor: { kind: "system", id: "check_test" } }));
     expect(again).toMatchObject({ status: "pending", reason: "held until ITS confirms the company" });
@@ -298,7 +298,7 @@ describe("the company check, the boards and Colorado's closing date", () => {
   const roleRow = async () => (await container.db.select().from(roles).where(eq(roles.id, roleId)))[0];
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     setClock(0);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@colorado.test" }) });

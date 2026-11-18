@@ -257,7 +257,7 @@ describe("the apply form: résumé first, check your details, questions from the
   const intakeOf = async (applicationId: string) => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.idempotencyKey, `application_intake:${applicationId}`)))[0];
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "false", APP_BASE_URL: "http://localhost:3000" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000" } });
     // Every write is held to the bucket's types, as staging holds it: a note saved under another type fails here too.
     (container.integrations.storage as MemoryStorageAdapter).allowTypes(RESUME_BUCKET_TYPES);
     // The reading's jobs are registered by container.ts itself, in every process (the web process and the worker).

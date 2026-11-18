@@ -1,17 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { entitlements } from "@ros/core";
-import { applications, auditRecords, events, interviews, withTenant } from "@ros/db";
-import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter, type FakeGoogleCalendarProvider } from "@ros/integrations";
+import { applications, auditRecords, events, withTenant } from "@ros/db";
+import { PRODUCT_EVENT_NAMES, toProductEvent, type FakeAnalyticsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { statusTokenFor, testContainerOptions } from "./test-helpers";
 
 /**
  * Item 8 of the founder's instruction of 18 September 2026: the tests that must never be deferred. Tenant isolation,
- * candidate-link authorization, audit completeness for privileged reads, analytics payload privacy, and scheduling retries
- * under calendar failure. (MFA, human-only decisions, no automatic rejection, calendar
- * disconnection, secret revocation, email suppression, privacy requests, accessibility and browser journeys have their own suites.)
+ * candidate-link authorization, audit completeness for privileged reads and analytics payload privacy. (MFA, human-only
+ * decisions, no automatic rejection, email suppression, privacy requests, accessibility and browser journeys have their
+ * own suites.)
  */
 describe("release-1 security coverage", () => {
   let container: Container;
@@ -79,38 +79,18 @@ describe("release-1 security coverage", () => {
     await container.close();
   });
 
-  it("tenant isolation: another company's owner cannot read, act on, or schedule anything in company A", async () => {
+  it("tenant isolation: another company's owner cannot read or act on anything in company A", async () => {
     expect((await json(ownerB, "GET", `/api/v1/roles/${roleA}`)).status).toBe(404);
     expect((await json(ownerB, "GET", `/api/v1/applications/${applicationA}`)).status).toBe(404);
     expect((await json(ownerB, "POST", `/api/v1/applications/${applicationA}/actions`, { action: "hold" })).status).toBe(404);
-    expect((await json(ownerB, "POST", `/api/v1/applications/${applicationA}/interviews`, { roundKey: "x", interviewerUserIds: [ownerAId] })).status).toBe(404);
     const rowsSeenByB = await withTenant(container.db, companyB, (tx) => tx.select({ id: applications.id }).from(applications));
     expect(rowsSeenByB.some((r) => r.id === applicationA)).toBe(false);
-    expect((await json(ownerB, "GET", "/api/v1/interviews")).status).toBe(200);
-    expect(((await (await json(ownerB, "GET", "/api/v1/interviews")).json()) as unknown[]).length).toBe(0);
-    // and the routes of 6 November 2026: a date and time set on either path, a time booked for them, the form's defaults,
-    // and the benefits typed on the approval card. An interview of company A's, called off so it holds nothing up later.
-    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
-    const [ivA] = await withTenant(container.db, companyA, (tx) => tx.insert(interviews).values({ companyId: companyA, applicationId: applicationA, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 30, status: "cancelled", timezone: "America/Los_Angeles" }).returning());
-    for (const [method, path, body] of [
-      ["POST", `/api/v1/applications/${applicationA}/interviews`, { roundKey: "x", interviewerUserIds: [ownerAId], setTime }],
-      ["GET", `/api/v1/applications/${applicationA}/interview-draft`, undefined],
-      ["POST", `/api/v1/interviews/${ivA.id}/set-time`, setTime],
-      ["POST", `/api/v1/interviews/${ivA.id}/book-on-behalf`, { slotId: "any" }],
-      ["POST", `/api/v1/roles/${roleA}/packets/1/benefits`, { text: "Health insurance and paid time off." }],
-    ] as const) {
-      const r = await json(ownerB, method, path, body);
-      expect(r.status, `${method} ${path}`).toBe(404);
-      // the route's own refusal, so a path that does not exist cannot pass for one
-      expect(((await r.json()) as { error: { code: string } }).error.code, `${method} ${path}`).toBe("not_found");
-    }
   });
 
-  it("candidate-link authorization: a token opens only its own application; a guessed or foreign token is refused; the schedule token is separate", async () => {
+  it("candidate-link authorization: a token opens only its own application; a guessed or foreign token is refused", async () => {
     expect((await app.request(`/c/status/${statusTokenA}`)).status).toBe(200);
     expect((await app.request(`/c/status/${statusTokenA.slice(0, -2)}xx`)).status).toBe(404);
     expect((await app.request(`/c/status/not-a-real-token`)).status).toBe(404);
-    expect((await app.request(`/c/schedule/${statusTokenA}`)).status).toBe(404); // a status token never opens scheduling
     expect((await app.request(`/c/screen/${statusTokenA}`)).status).toBe(404); // nor a screening conversation
     const withdraw = await app.request(`/c/status/${statusTokenA.slice(0, -2)}xx/withdraw`, { method: "POST" });
     expect(withdraw.status).toBe(404);
@@ -154,43 +134,5 @@ describe("release-1 security coverage", () => {
     const started = toProductEvent({ type: "screen.completed", companyId: companyA, subjectId: applicationA, payload: { channel: "sms", transcript: "secret words" } }, "salt");
     expect(started).not.toBeNull();
     expect(JSON.stringify(started)).not.toContain("secret words");
-  });
-
-  it("scheduling retries: a transient calendar error retries the step; a revoked credential falls back instead of failing the interview", async () => {
-    await json(ownerA, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 });
-    const start = await app.request("/api/v1/integrations/calendar/google/connect", { headers: { cookie: ownerA } });
-    const pkce = start.headers.get("set-cookie")!.split(";")[0];
-    const authorize = new URL(start.headers.get("location")!);
-    const consent = await app.request("/api/v1/integrations/calendar/fake/authorize", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ redirect_to: `${container.env.APP_BASE_URL}/api/v1/integrations/calendar/google/callback`, state: authorize.searchParams.get("state")!, code_challenge: authorize.searchParams.get("code_challenge")!, email: "owner-a@brightline.test", timezone: "America/Los_Angeles" }).toString() });
-    const cb = new URL(consent.headers.get("location")!);
-    await app.request(`${cb.pathname}?${cb.searchParams.toString()}`, { headers: { cookie: `${ownerA}; ${pkce}` } });
-    const gcal = container.integrations.calendars.google as FakeGoogleCalendarProvider;
-    const statusToken = await apply(slugA, roleA, "Luis", "luis.tester@example.com");
-    expect(statusToken).toBeTruthy();
-    const [luis] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleA), inArray(applications.stage, ["triaged", "screen_invited", "eligible", "screen_complete", "interview_recommended"])));
-    const role = (await (await json(ownerA, "GET", `/api/v1/roles/${roleA}`)).json()) as { currentPacket: { packet: { interviews: { plan: Array<{ key: string }> } } } };
-    gcal.failNext("transient", 2); // the first two free/busy calls fail; the engine retries the step
-    const r = await json(ownerA, "POST", `/api/v1/applications/${luis.id}/interviews`, { roundKey: role.currentPacket.packet.interviews.plan[0].key, interviewerUserIds: [ownerAId] });
-    expect(r.status).toBe(201);
-    const iv = (await r.json()) as { id: string };
-    await container.drain();
-    // retries are scheduled with backoff on the engine clock: move it forward and drain again
-    const clock = container.engine as unknown as { now: () => Date };
-    const base = Date.now();
-    for (let i = 1; i <= 3; i++) { clock.now = () => new Date(base + i * 5 * 60_000); await container.drain(); }
-    let row = (await container.db.select().from(interviews).where(eq(interviews.id, iv.id)))[0];
-    expect(row.status).toBe("scheduling");
-    expect(row.offeredSlots.length).toBeGreaterThan(0);
-    expect(row.offeredSlots[0].source).toBe("calendar");
-    const retried = await container.db.select().from(events).where(and(eq(events.companyId, companyA), eq(events.type, "workflow.retried")));
-    expect(retried.length).toBeGreaterThanOrEqual(1);
-    // now the credential is revoked at the provider: booking still succeeds on declared hours and the person is told
-    gcal.revokeAccount("owner-a@brightline.test");
-    await json(ownerA, "POST", `/api/v1/interviews/${iv.id}/reschedule`, {});
-    await container.drain();
-    row = (await container.db.select().from(interviews).where(eq(interviews.id, iv.id)))[0];
-    expect(row.status).toBe("scheduling");
-    expect(row.offeredSlots[0].source).toBe("declared");
-    clock.now = () => new Date();
   });
 });

@@ -40,7 +40,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
 
   beforeAll(async () => {
     // Texting on for the scenario: step 5 consents to texts and step 10b sends a person's new link by SMS (decision M2 keeps texting off by default).
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     setClock(0);
     await signIn();

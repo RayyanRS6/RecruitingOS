@@ -7,7 +7,7 @@ import { createContainer, type Container } from "./container";
 import { descriptionBlocks, descriptionExcerpt } from "./pages/description";
 import { NO_RESUME_QUESTIONS, noResumeAnswersFrom } from "./pages/apply-form";
 import { expectAtAGlance, initials } from "./pages/job-page";
-import { resetPublicFeedCache } from "./pages/public-feeds";
+import { resetSitemapCache } from "./pages/sitemap";
 import { oneVisitMinutes } from "./services/job-preview";
 import { jobUrls } from "./services/job-urls";
 import { useOneVisitApplyFlow } from "./test-helpers";
@@ -119,7 +119,7 @@ describe("the job page and the careers page (plan D10)", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@jobpage.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
@@ -294,7 +294,7 @@ describe("the job page and the careers page (plan D10)", () => {
   it("a closing date: the structured data and the feeds end on it; once it passes a newcomer finds the form closed, while someone part-way through may still send theirs for a while", async () => {
     const closesOn = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
-    resetPublicFeedCache(container);
+    resetSitemapCache(container);
     expect(jsonLdOf(await page(`/careers/${slug}/jobs/${roleId}`)).validThrough).toBe(closesOn);
     const feed = (await (await app.request("/feeds/jobs.json")).json()) as { jobs: Array<{ referenceNumber: string; validThrough?: string }> };
     expect(feed.jobs.find((j) => j.referenceNumber === roleId)?.validThrough).toBe(closesOn);
@@ -326,7 +326,7 @@ describe("the job page and the careers page (plan D10)", () => {
       expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length).toBeGreaterThan(0);
     } finally {
       await container.db.update(roles).set({ acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, applicationsCloseOn: null }).where(eq(roles.id, roleId));
-      resetPublicFeedCache(container);
+      resetSitemapCache(container);
     }
   });
 

@@ -1,17 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { entitlements } from "@ros/core";
-import { applications, candidates, interviewParticipants, interviews, randomToken, withTenant } from "@ros/db";
+import { applications, candidates, randomToken, withTenant } from "@ros/db";
 import { eq } from "drizzle-orm";
 import { createApp } from "./app";
 import { lastActivityOf } from "./routes/roles";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
 
-/**
- * The roles list for an interviewer (Wave DS; plan backlog item 01): an interviewer holds role.read but not
- * application.read, so GET /roles names only the roles they interview for, the same rule as their interviews list, and
- * carries no applicant counts or waiting decisions. Everyone else still gets every role with its counts.
- */
+/** The Jobs list: every job of the company with its counts, and when anything last happened on each. */
 describe("the roles list", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
@@ -19,8 +14,6 @@ describe("the roles list", () => {
   let companyId = "";
   let theirs = "";
   let other = "";
-  let ivan = "";
-  let nina = "";
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   type Listed = { id: string; title: string; counts: Record<string, number>; countsHidden?: boolean; needsYou: number };
   const list = async (cookie: string) => {
@@ -32,7 +25,6 @@ describe("the roles list", () => {
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: message })).json()) as { session: { id: string } };
     return ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
   };
-  const userId = async (cookie: string) => ((await (await json(cookie, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
@@ -44,36 +36,19 @@ describe("the roles list", () => {
     await entitlements.applyPlan(container.db, companyId, "growth");
     theirs = await compileRole("I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.");
     other = await compileRole("I need a front office coordinator in Irvine, $22 to $26 an hour, full time. It's growth. Ceiling $28. I decide. Must-haves: Dentrix scheduling. Just draft it.");
-    ivan = await signInAs(container, app, { companyId, role: "interviewer", email: "ivan@roleslist.test" });
-    nina = await signInAs(container, app, { companyId, role: "interviewer", email: "nina@roleslist.test" });
-    const ivanId = await userId(ivan);
-    const ownerId = await userId(owner);
-    // one applicant on the hygienist role with an interview Ivan sits on; one applicant on the other role with none
+    // one applicant on each role
     await withTenant(container.db, companyId, async (tx) => {
       const [pat] = await tx.insert(candidates).values({ companyId, firstName: "Pat", lastName: "Lee", email: "pat@candidate.test", firstSource: "direct" }).returning();
       const [sam] = await tx.insert(candidates).values({ companyId, firstName: "Sam", lastName: "Ruiz", email: "sam@candidate.test", firstSource: "direct" }).returning();
-      const [app1] = await tx.insert(applications).values({ companyId, roleId: theirs, candidateId: pat.id, packetVersion: 1, source: "direct", stage: "interview_scheduled", statusToken: randomToken(16) }).returning();
-      await tx.insert(applications).values({ companyId, roleId: other, candidateId: sam.id, packetVersion: 1, source: "direct", stage: "interview_recommended", statusToken: randomToken(16) });
-      const [iv] = await tx.insert(interviews).values({ companyId, applicationId: app1.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "scheduling", timezone: "America/Los_Angeles", createdBy: { kind: "user", id: ownerId } }).returning();
-      await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: ivanId, role: "interviewer", status: "invited" });
+      await tx.insert(applications).values({ companyId, roleId: theirs, candidateId: pat.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomToken(16) });
+      await tx.insert(applications).values({ companyId, roleId: other, candidateId: sam.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomToken(16) });
     });
   });
   afterAll(async () => {
     await container.close();
   });
 
-  it("gives an interviewer only the roles they interview for, with no applicant counts and nothing waiting on them", async () => {
-    const seen = await list(ivan);
-    expect(seen.map((r) => r.id)).toEqual([theirs]);
-    expect(seen[0]).toMatchObject({ counts: { total: 0 }, countsHidden: true, needsYou: 0 });
-    expect(Object.keys(seen[0].counts)).toEqual(["total"]);
-  });
-
-  it("gives an interviewer who is on no interview an empty list", async () => {
-    expect(await list(nina)).toEqual([]);
-  });
-
-  it("still gives the owner every role with its counts", async () => {
+  it("gives the owner every role with its counts", async () => {
     const seen = await list(owner);
     expect(seen.map((r) => r.id).sort()).toEqual([theirs, other].sort());
     for (const r of seen) {
@@ -92,9 +67,6 @@ describe("the roles list", () => {
     const newest = await withTenant(container.db, companyId, (tx) => tx.select({ createdAt: applications.createdAt }).from(applications).where(eq(applications.roleId, other)));
     const row = seen.find((r) => r.id === other)!;
     expect(Date.parse(row.lastActivityAt)).toBeGreaterThanOrEqual(Date.parse(newest[0].createdAt));
-    // an interviewer gets the time too, from the role's own dates
-    const theirsSeen = (await (await json(ivan, "GET", "/api/v1/roles")).json()) as Array<{ lastActivityAt: string }>;
-    expect(theirsSeen[0].lastActivityAt).toMatch(/Z$/);
   });
 
   it("reads the latest of a role's dates and its newest application", () => {

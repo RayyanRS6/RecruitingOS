@@ -124,7 +124,7 @@ describe("the application record (status page) after sending", () => {
     withTenant(container.db, companyId, async (tx) => (await tx.insert(screens).values({ companyId, applicationId: a.id, channel: "web", status: s.status, token: `scr${Math.random().toString(36).slice(2, 14)}`, answers: s.answers ?? {}, progress: s.progress ?? progressOf(), transcript: s.transcript ?? [], completedAt: s.completedAt ?? null, startedAt: at(-600), assessmentId: s.assessmentId ?? null, createdAt: s.createdAt ?? at(30) }).returning())[0]);
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@record.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;

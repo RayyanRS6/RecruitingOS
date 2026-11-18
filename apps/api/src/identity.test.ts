@@ -153,7 +153,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
 
   it("production refuses the fake issuer and demands the managed service", async () => {
     const { loadEnv } = await import("./env");
-    const base = { NODE_ENV: "production", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), SECRET_STORE: "vault", AI_PROVIDER: "anthropic", DATABASE_URL: "postgres://x", WORKER_INLINE: "false" };
+    const base = { NODE_ENV: "production", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), AI_PROVIDER: "anthropic", DATABASE_URL: "postgres://x", WORKER_INLINE: "false" };
     expect(() => loadEnv({ ...base, AUTH_PROVIDER: "fake" })).toThrow(/AUTH_PROVIDER/);
     expect(() => loadEnv({ ...base, AUTH_PROVIDER: "supabase" })).toThrow(/SUPABASE_URL/);
     // the public address must be an https origin, and the analytics salt must not be the development one

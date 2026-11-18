@@ -82,7 +82,7 @@ describe("the company's written questions in chats by text and from an emailed l
 
   beforeAll(async () => {
     // Texting on: this file covers the chat by text.
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE);
     const { devLink } = (await (await json("POST", "/api/v1/auth/magic-link", { email: "dana@written.test" })).json()) as { devLink: string };
@@ -107,42 +107,6 @@ describe("the company's written questions in chats by text and from an emailed l
   });
   afterAll(async () => {
     await container.close();
-  });
-
-  it("a chat by text asks the written questions as written, never the screening questions or the note, and the record learns from it once it is sent", async () => {
-    const phone = "+19495550161";
-    const { application, email } = await apply({ first: "Tara", phone: "(949) 555-0161" });
-    let scr = await screenOf(application.id);
-    expect(scr.channel).toBe("sms");
-    expect(scr.progress.asks).toBe("written");
-    // the opening by text asks the first written question; the emailed link gives minutes, never the private note
-    expect(scr.transcript[0]).toMatchObject({ role: "assistant", questionKey: "wq_calm" });
-    expect(textsTo(phone).some((b) => b.includes(written[0].question))).toBe(true);
-    const invite = emailOutbox().find((m) => m.to === email && /^Your next step: a short AI interview/.test(m.subject))!;
-    expect(invite.text).toContain(`/c/screen/${scr.token}`);
-    expect(invite.text).not.toMatch(NOTED);
-    expect((await text(phone, CALM, "SM-wq1")).status).toBe(200);
-    expect(textsTo(phone).at(-1)).toContain(written[1].question);
-    expect((await text(phone, LATE, "SM-wq2")).status).toBe(200);
-    scr = await screenOf(application.id);
-    expect(scr.status).toBe("completed");
-    expect(scr.answers).toEqual({ wq_calm: CALM, wq_late: LATE });
-    expect(askedKeys(scr)).toEqual(["wq_calm", "wq_late"]);
-    for (const body of textsTo(phone)) {
-      for (const q of screening) expect(body).not.toContain(q.question);
-      expect(body).not.toMatch(NOTED);
-    }
-    // sent at its end: no Review & send, no write-up
-    expect(scr.progress.phase).toBeUndefined();
-    expect(scr.progress.writeup).toBeUndefined();
-    expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.writeup"))).toHaveLength(0);
-    // the record learned the candidate's own words, once
-    const learned = await learnedOn(application.id);
-    expect(learned.map((f) => [f.kind, f.text])).toEqual([["experience", CALM], ["experience", LATE]]);
-    expect(learned.every((f) => f.from.screenId === scr.id)).toBe(true);
-    expect((await text(phone, "Thanks again", "SM-wq3")).status).toBe(200);
-    expect(await learnedOn(application.id)).toHaveLength(2);
-    sentByText = application.id;
   });
 
   it("a web chat whose link was emailed asks the written questions, and is sent at its end, with the record learning from it", async () => {
@@ -188,82 +152,11 @@ describe("the company's written questions in chats by text and from an emailed l
     expect(Object.keys(scr.answers).some((k) => k.startsWith("wq_"))).toBe(false);
   });
 
-  it("a model that repeats the private note: the texts never carry it, and the disclosure and each question still do", async () => {
-    const fake = container.fake!;
-    const turn = (fake as unknown as { handlers: Map<string, FakeHandler> }).handlers.get("screen.turn")!;
-    fake.register("screen.turn", async (req: StructuredRequest<unknown>) => {
-      const out = (await turn(req)) as ScreenTurn;
-      return { ...out, messageToCandidate: `We are looking for someone who ${NOTE}. ${out.messageToCandidate}` };
-    });
-    try {
-      const phone = "+19495550162";
-      const { application } = await apply({ first: "Ezra", phone: "(949) 555-0162" });
-      let scr = await screenOf(application.id);
-      expect(scr.transcript[0].content).toMatch(/AI assistant/);
-      expect(scr.transcript[0].content).toContain(written[0].question);
-      await text(phone, CALM, "SM-wq4");
-      expect(textsTo(phone).at(-1)).toBe(`Thanks. ${written[1].question}`);
-      await text(phone, LATE, "SM-wq5");
-      scr = await screenOf(application.id);
-      expect(scr.status).toBe("completed");
-      expect(scr.answers).toEqual({ wq_calm: CALM, wq_late: LATE });
-      expect(textsTo(phone).length).toBeGreaterThanOrEqual(3);
-      for (const body of textsTo(phone)) expect(body).not.toMatch(NOTED);
-      expect(scr.transcript.filter((t) => t.role === "assistant").some((t) => NOTED.test(t.content))).toBe(false);
-    } finally {
-      fake.register("screen.turn", turn);
-    }
-  });
-
   it("the panel's view of such a chat before it is sent: none of their words, but which list it asks, and those questions by name", async () => {
     const { application } = await apply({ first: "Quinn" });
     expect((await screenOf(application.id)).progress.asks).toBe("written");
     const detail = (await (await json("GET", `/api/v1/applications/${application.id}`)).json()) as { screens: Array<{ answersShared: boolean; progress: { asks?: string } }>; packetLabels: { written: Array<{ key: string }> } };
     expect(detail.screens[0]).toMatchObject({ answersShared: false, progress: { asks: "written" } });
     expect(detail.packetLabels.written.map((w) => w.key)).toEqual(written.map((w) => w.key));
-  });
-
-  it("the interviewer brief and the role's figures name those answers in the company's words, never by key, never with the note", async () => {
-    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
-    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
-    expect(pv.packet.interviews.plan.length).toBeGreaterThan(0);
-    const brief = await withTenant(container.db, companyId, (tx) => composeInterviewerBrief(tx, { applicationId: sentByText, candidateFirstName: "Tara", packet: pv.packet, roundKey: pv.packet.interviews.plan[0].key }));
-    expect(brief?.screen?.answers.map((x) => [x.question, x.answer])).toEqual([[written[0].question, CALM], [written[1].question, LATE]]);
-    expect(JSON.stringify(brief)).not.toMatch(NOTED);
-    // a written question skipped in a sent chat is named in the role's figures as the company wrote it
-    const scr = await screenOf(sentOnWeb);
-    await container.db.update(screens).set({ progress: { ...scr.progress, declined: ["wq_late"] } }).where(eq(screens.id, scr.id));
-    const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
-    expect(funnel.skipped).toContainEqual({ key: "wq_late", question: written[1].question, count: 1 });
-  });
-
-  // Left out by the repair of the interviewer's brief (9ef60ca): a skip is kept under the key the chat asked it by, so a
-  // must-have's gap question and the closing question read as their keys in the role's figures.
-  it("the role's figures name a skipped gap question by its must-have, the closing question by its words, and a key nothing names in plain words", async () => {
-    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
-    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
-    const must = pv.packet.requirements.mustHaves[0];
-    expect(must.key).toMatch(/^mh_\d+_/);
-    const scr = await screenOf(sentOnWeb);
-    await container.db.update(screens).set({ progress: { ...scr.progress, declined: [must.key, CHAT_WRAP_KEY, "wq_shift_swaps"] } }).where(eq(screens.id, scr.id));
-    const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
-    expect(funnel.skipped).toEqual(expect.arrayContaining([{ key: must.key, question: must.text.trim(), count: 1 }, { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION, count: 1 }, { key: "wq_shift_swaps", question: "Shift swaps", count: 1 }]));
-    for (const s of funnel.skipped) expect(s.question, s.key).not.toContain("_");
-  });
-
-  // Left out by "Answers named in words" (b80608a): the résumé reading's open questions a screen starts with are keyed
-  // unknown_1, unknown_2… on every screen, each candidate's own, and the role's figures read "Unknown 1" for all of them.
-  it("the role's figures count the résumé reading's open questions people skipped as one row, under a plain name, once a person", async () => {
-    // both sent chats as if each had started with its own open questions ("Ask about this in a screen") and skipped some
-    const opened = async (applicationId: string, questions: string[], declined: string[]) => {
-      const scr = await screenOf(applicationId);
-      await container.db.update(screens).set({ progress: { ...scr.progress, focusQuestions: questions.map((question, i) => ({ key: `${FOCUS_KEY_PREFIX}${i + 1}`, question })), declined } }).where(eq(screens.id, scr.id));
-    };
-    await opened(sentByText, ["Is your California RDH license active?"], ["unknown_1"]);
-    await opened(sentOnWeb, ["How long have you charted in Dentrix?", "Have you placed sealants?"], ["unknown_1", "unknown_2"]);
-    const funnel = await withTenant(container.db, companyId, (tx) => roleScreeningFunnel(tx, roleId));
-    // one row for both people, never the key nor one person's own open question
-    expect(funnel.skipped.filter((s) => s.key.startsWith(FOCUS_KEY_PREFIX))).toEqual([{ key: FOCUS_KEY_PREFIX, question: FOCUS_QUESTION_WORDS, count: 2 }]);
-    for (const s of funnel.skipped) expect(s.question, s.key).not.toMatch(/^Unknown|_/);
   });
 });

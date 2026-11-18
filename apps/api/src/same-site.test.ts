@@ -124,7 +124,7 @@ describe("cross-site changes to the API", () => {
   });
 
   it("webhooks are outside /api and keep their own checks", async () => {
-    const r = await app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", origin: EVIL }, body: "{}" });
+    const r = await app.request("/webhooks/postmark/events", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", origin: EVIL }, body: "{}" });
     expect(await r.text()).not.toContain("cross_site");
   });
 });

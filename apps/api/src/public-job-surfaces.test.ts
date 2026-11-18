@@ -1,28 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
-import { candidateNotices, createApplicationLink, disableApplicationLink, findPostingLink, noticesFor, sealPayload } from "@ros/core";
-import { applicationLinks, applications, candidates, communications, companies, events, inboundEmails, interviews, notifications, postings, randomToken, rolePackets, roles, screens, users, withTenant } from "@ros/db";
-import { jobValidThrough, type FakeEmailAdapter } from "@ros/integrations";
+import { candidateNotices, noticesFor } from "@ros/core";
+import { applications, candidates, companies, events, rolePackets, roles, screens } from "@ros/db";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { PUBLIC_FEED_CACHE_MS, resetPublicFeedCache, robotsTxt } from "./pages/public-feeds";
+import { jobValidThrough } from "./pages/job-structured-data";
+import { SITEMAP_CACHE_MS, resetSitemapCache, robotsTxt } from "./pages/sitemap";
 import { ASKED_OF_EVERYONE, questionHelp, withPlainQuestionHelp } from "./pages/question-help";
 import { jobUrls } from "./services/job-urls";
-import { pastTheWaitingRoom, statusTokenFor, useLaterApplyFlow, useOneVisitApplyFlow, usePlan } from "./test-helpers";
+import { pastTheWaitingRoom, statusTokenFor, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
- * The candidate-facing job surfaces (docs/spec/20 section 2 items 1 to 8, 19 and 20; docs/readiness/20 section D):
- * tracked links and the source they leave on an application without ever leaving the token anywhere a candidate could
- * see it; the apply form's transparency block and affirmative acknowledgment; texting off means no consent box and no
- * promise of texts; the recording notice never shown; paused roles and the accepting switch keeping the page up and the
- * form closed, with email-in applications held for the owner; the sitemap, robots and feeds; and the JobPosting data.
+ * The candidate-facing job surfaces (docs/spec/20 section 2; docs/readiness/20 section D): the apply form's
+ * transparency block and affirmative acknowledgment; no consent box and no promise of texts; the recording notice
+ * never shown; the sitemap and robots; and the JobPosting data.
  */
-describe("public job surfaces: tracked links, the apply form, feeds and structured data", () => {
+describe("public job surfaces: the apply form, the sitemap and structured data", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
-  let ownerActor: Actor;
   let companyId = "";
   let slug = "";
   let roleId = "";
@@ -38,7 +35,6 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const jsonLdOf = (html: string) => JSON.parse(html.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/)![1]) as Record<string, unknown>;
   const setCookieOf = (r: Response) => r.headers.get("set-cookie") ?? "";
-  const cookieValue = (r: Response) => setCookieOf(r).match(/ros_src=([^;]+)/)?.[1] ?? "";
 
   const signIn = async (a: ReturnType<typeof createApp>, email: string) => {
     const r1 = await a.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
@@ -73,12 +69,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
   const apply = (fd: FormData, headers: Record<string, string> = {}, a = app, path = `/careers/${slug}/jobs/${roleId}/apply`) => a.request(path, { method: "POST", body: fd, headers });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     setClock(0);
     owner = await signIn(app, "owner@ledger.test");
-    const [user] = await container.db.select().from(users).where(eq(users.email, "owner@ledger.test"));
-    ownerActor = { kind: "user", id: user.id, name: "Owner Olivia" };
     const seeded = await seedRole(container, app, owner, "Ledger Dental");
     companyId = seeded.companyId;
     slug = seeded.slug;
@@ -111,16 +105,15 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(packet.requirements.eligibility[0].rationale).toBe("The owner stated the work model in the packet.");
   });
 
-  it("candidateNotices leaves the recording notice and the SMS consent text out of what a page renders and records", () => {
+  it("candidateNotices leaves the recording notice out of what a page renders and records", () => {
     const all = noticesFor(["US-CA"]);
-    expect(all.map((n) => n.key)).toEqual(expect.arrayContaining(["recording", "sms_consent", "ai_use", "privacy", "pay_transparency"]));
+    expect(all.map((n) => n.key)).toEqual(expect.arrayContaining(["recording", "ai_use", "privacy", "pay_transparency"]));
     const shown = candidateNotices(all).map((n) => n.key);
     expect(shown).not.toContain("recording");
-    expect(shown).not.toContain("sms_consent");
     expect(shown).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
   });
 
-  it("the apply form shows the transparency block and the privacy link, never the recording notice, and with texting off no SMS checkbox; the job page promises an online conversation only", async () => {
+  it("the apply form shows the transparency block and the privacy link, never the recording notice, and no SMS checkbox; the job page promises an online conversation only", async () => {
     const page = await app.request(`/careers/${slug}/jobs/${roleId}/apply`);
     expect(page.status).toBe(200);
     const html = decodeEntities(await page.text());
@@ -269,7 +262,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(Date.parse(a.answers.acknowledgment!.at)).toBe(BASE);
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, a.candidateId));
     expect(cand.consent.application_terms).toMatchObject({ granted: true, acknowledged: true, source: "careers_page_apply", ip: "203.0.113.7" });
-    // texting is off: the posted consent is ignored, nothing recorded, no event, and the acknowledgment email promises an online conversation only
+    // there is no texting: the posted consent is ignored, nothing recorded, no event, and the acknowledgment email promises an online conversation only
     expect(cand.consent.sms).toBeUndefined();
     expect(await eventsOf("consent.granted")).toHaveLength(0);
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
@@ -289,130 +282,6 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(screen).toContain("artificial intelligence");
   });
 
-  it("with texting on, the SMS checkbox is on the form and the consent is recorded; the AI interview is on the web all the same (R20-6)", async () => {
-    const c2 = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", SMS_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "true" } });
-    try {
-      const a2 = createApp(c2);
-      const cookie = await signIn(a2, "owner@texting.test");
-      const seeded = await seedRole(c2, a2, cookie, "Texting Dental");
-      // the AI interview that comes with the application is always on the web, whatever ITS's old switch says (R20-6, R20-12)
-      const sameVisit = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
-      expect(sameVisit).toContain("including a short AI interview with Texting Dental's AI assistant");
-      expect(sameVisit).not.toContain("by text");
-      await useLaterApplyFlow(c2, seeded.companyId);
-      const form = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`)).text());
-      const box = form.match(/<input type="checkbox" name="smsConsent"[^>]*>/)?.[0];
-      expect(box).toBeTruthy();
-      expect(box).not.toContain("checked");
-      expect(form).toContain("Yes, you may send me text messages about this application");
-      expect(form.match(/name="noticeVersionsShown" value="([^"]*)"/)![1]).toContain("sms_consent@2026-09-01");
-      expect(form).not.toContain("may be recorded");
-      const job = decodeEntities(await (await a2.request(`/careers/${seeded.slug}/jobs/${seeded.roleId}`)).text());
-      expect(job).toContain("including a short AI interview with Texting Dental's AI assistant");
-      expect(job).not.toContain("by text");
-      const r = await apply(applyForm({ smsConsent: "yes", phone: "(949) 555-0100" }, seeded.eligibility), {}, a2, `/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
-      expect(r.status).toBe(302);
-      expect(r.headers.get("location")).toBe(`/careers/${seeded.slug}/jobs/${seeded.roleId}/applied`);
-      await c2.drain();
-      const [a] = await c2.db.select().from(applications).where(eq(applications.roleId, seeded.roleId));
-      const [cand] = await c2.db.select().from(candidates).where(eq(candidates.id, a.candidateId));
-      expect(cand.consent.sms).toMatchObject({ granted: true, source: "careers_page_apply" });
-      expect(a.answers.noticeVersionsShown).toContain("sms_consent@2026-09-01");
-      expect(await c2.db.select().from(events).where(eq(events.type, "consent.granted"))).toHaveLength(1);
-      const ack = (c2.integrations.email as FakeEmailAdapter).sent.find((m) => m.to === "ana.lopez@example.com" && /^Thank you for applying: your next step/.test(m.subject))!;
-      expect(ack.text).toContain("Start your AI interview: https://jobs.example.test/c/screen/");
-      expect(ack.text).not.toMatch(/looks like a fit|by text/);
-      // she agreed to texts, and still no text: the automatic AI interview is on the web only
-      expect((c2.integrations.sms as unknown as { sent: unknown[] }).sent).toHaveLength(0);
-      const [scr] = await c2.db.select().from(screens).where(eq(screens.applicationId, a.id));
-      expect(scr.channel).toBe("web");
-      const status = decodeEntities(await (await a2.request(`/c/status/${await statusTokenFor(c2, { roleId: seeded.roleId, email: "ana.lopez@example.com" })}`)).text());
-      expect(status).toContain("Text messages:");
-      expect(status).toContain("on");
-    } finally {
-      await c2.close();
-    }
-  });
-
-  let linkToken = "";
-  let linkId = "";
-
-  it("a tracked link counts the visit, seals the source into a cookie and opens the job page (a board's link opens the form); the application records the source, the detail and the link, the token appears nowhere, and the cookie is cleared", async () => {
-    const link = await withTenant(container.db, companyId, (tx) => createApplicationLink(tx, { companyId, roleId, source: "referral", sourceDetail: "Dr. Patel", label: "Referral: Dr. Patel", actor: ownerActor, now: container.engine.clock() }));
-    linkToken = link.token;
-    linkId = link.id;
-    const urls = jobUrls(container.env, { slug, roleId });
-    const visit = await app.request(`/a/${link.token}`);
-    expect(visit.status).toBe(302);
-    // a shared link opens the job page first (plan D8)
-    expect(visit.headers.get("location")).toBe(urls.job);
-    const cookie = setCookieOf(visit);
-    expect(cookie).toMatch(/^ros_src=v1\./);
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).toContain("Max-Age=2592000");
-    expect(cookie).toContain("Path=/");
-    expect(cookie).not.toContain(link.token);
-    const sealed = cookieValue(visit);
-    expect(Buffer.from(sealed.split(".")[2] ?? "", "base64url").toString("utf8")).not.toContain(link.token);
-    const [after] = await container.db.select().from(applicationLinks).where(eq(applicationLinks.id, link.id));
-    expect(after.visits).toBe(1);
-    expect(after.lastVisitedAt).toBeTruthy();
-    // the form, posted with the cookie
-    const before = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length;
-    const r = await apply(applyForm({ firstName: "Ben", lastName: "Osei", email: "ben.osei@example.com" }), { cookie: `ros_src=${sealed}` });
-    expect(r.status).toBe(302);
-    expect(setCookieOf(r)).toMatch(/ros_src=;.*Max-Age=0/);
-    await container.drain();
-    const rows = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    expect(rows).toHaveLength(before + 1);
-    const a = rows.find((x) => x.linkId === link.id)!;
-    expect(a).toMatchObject({ source: "referral", sourceDetail: "Dr. Patel", linkId: link.id });
-    const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, a.candidateId));
-    expect(cand.firstSource).toBe("referral");
-    const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
-    expect(comms.length).toBeGreaterThan(0);
-    for (const record of [a, cand, ...comms]) expect(JSON.stringify(record)).not.toContain(link.token);
-    const status = await app.request(`/c/status/${a.statusToken}`);
-    expect(status.status).toBe(200);
-    expect(await status.text()).not.toContain(link.token);
-    const ack = emails().find((m) => m.to === "ben.osei@example.com" && /^Thank you for applying/.test(m.subject))!;
-    expect(`${ack.subject}\n${ack.text}`).not.toContain(link.token);
-    expect((await eventsOf("application.received")).find((e) => e.subjectId === a.id)?.payload).toMatchObject({ source: "referral", linkId: link.id });
-    // a board's own link works the same way and names the board
-    const indeed = (await container.db.select().from(postings).where(and(eq(postings.roleId, roleId), eq(postings.channel, "indeed"))))[0];
-    const board = (await findPostingLink(container.db, indeed.id))!;
-    const boardVisit = await app.request(`/a/${board.token}`);
-    expect(boardVisit.status).toBe(302);
-    expect(boardVisit.headers.get("location")).toBe(urls.apply);
-    const r2 = await apply(applyForm({ firstName: "Cara", lastName: "Diaz", email: "cara.diaz@example.com" }), { cookie: `ros_src=${cookieValue(boardVisit)}` });
-    expect(r2.status).toBe(302);
-    const cara = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).find((x) => x.linkId === board.id)!;
-    expect(cara).toMatchObject({ source: "indeed", sourceDetail: null });
-  });
-
-  it("an unknown, malformed or disabled token answers a plain 404 and counts nothing; a cookie sealed for another role falls back to the careers page", async () => {
-    for (const bad of ["zzzzzzzzzzzz", "nope", `${linkToken}x`, "../a/b"]) {
-      const r = await app.request(`/a/${bad}`);
-      expect(r.status, bad).toBe(404);
-      expect(await r.text()).toContain("This link is not active");
-      expect(setCookieOf(r)).not.toContain("ros_src");
-    }
-    const disabled = await withTenant(container.db, companyId, (tx) => disableApplicationLink(tx, { linkId, companyId, actor: ownerActor, now: container.engine.clock() }));
-    expect(disabled?.disabledAt).toBeTruthy();
-    const r = await app.request(`/a/${linkToken}`);
-    expect(r.status).toBe(404);
-    expect((await container.db.select().from(applicationLinks).where(eq(applicationLinks.id, linkId)))[0].visits).toBe(1);
-    // a cookie that names another role is ignored: the application is a plain careers-page one
-    const foreign = sealPayload("application-source", { v: 1, linkId, source: "referral", sourceDetail: "Dr. Patel", roleId: "00000000-0000-0000-0000-000000000000", exp: container.engine.clock().getTime() + 60_000 }, container.env.SESSION_SECRET);
-    const applied = await apply(applyForm({ firstName: "Dee", lastName: "Fox", email: "dee.fox@example.com" }), { cookie: `ros_src=${foreign}` });
-    expect(applied.status).toBe(302);
-    const [cand] = await container.db.select().from(candidates).where(and(eq(candidates.companyId, companyId), eq(candidates.email, "dee.fox@example.com")));
-    expect(cand.firstSource).toBe("careers_page");
-    const [dee] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
-    expect(dee).toMatchObject({ source: "careers_page", sourceDetail: null, linkId: null });
-  });
-
   it("without JavaScript a resume over 4 MB is refused with a plain message instead of a platform error", async () => {
     const big = new File([new Uint8Array(4 * 1024 * 1024 + 1).fill(97)], "big.txt", { type: "text/plain" });
     const fd = applyForm({ firstName: "Eve", lastName: "Long", email: "eve.long@example.com", noResume: null });
@@ -424,124 +293,10 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(html).toContain('value="Eve"');
   });
 
-  it("once an interview is booked the status page says what to prepare, from the round's purpose", async () => {
-    const [a] = await container.db.select().from(applications).where(eq(applications.statusToken, anaStatusToken));
-    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, a.packetVersion)));
-    const round = pv.packet.interviews.plan[0];
-    const startsAt = new Date(BASE + 3 * 86_400_000).toISOString();
-    await container.db.insert(interviews).values({ companyId, applicationId: a.id, roundKey: round.key, title: round.title, format: round.format, durationMinutes: round.durationMinutes, status: "scheduled", startsAt, endsAt: new Date(BASE + 3 * 86_400_000 + round.durationMinutes * 60_000).toISOString(), scheduleToken: randomToken(24), timezone: "America/Los_Angeles", createdBy: ownerActor });
-    const html = decodeEntities(await (await app.request(`/c/status/${anaStatusToken}`)).text());
-    expect(html).toContain(`Your interview: ${round.title}`);
-    expect(html).toContain("What to prepare:");
-    expect(html).toContain(round.purpose);
-    expect(html).toContain("Details, calendar file, reschedule or cancel");
-  });
-
-  it("the accepting switch and a pause keep the job page up and say so, close the form, send tracked links to the job page, and hold an email-in application for the owner", async () => {
-    const urls = jobUrls(container.env, { slug, roleId });
-    const emailIn = (await container.db.select().from(postings).where(and(eq(postings.roleId, roleId), eq(postings.channel, "email_in"))))[0];
-    const indeed = (await container.db.select().from(postings).where(and(eq(postings.roleId, roleId), eq(postings.channel, "indeed"))))[0];
-    const board = (await findPostingLink(container.db, indeed.id))!;
-    const inbound = (name: string, resumeText?: string) => app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${emailIn.intakeToken}@${container.integrations.env.intakeDomain}`, Subject: `New applicant: ${name}`, TextBody: `${name} applied via Indeed.\nEmail: ${name.toLowerCase().replace(" ", ".")}@example.com`, Attachments: resumeText ? [{ Name: "resume.txt", ContentType: "text/plain", Content: Buffer.from(resumeText).toString("base64"), ContentLength: resumeText.length }] : [] }) });
-    const closedChecks = async (label: string) => {
-      const page = await app.request(urls.job.replace("https://jobs.example.test", ""));
-      expect(page.status, label).toBe(200);
-      const html = decodeEntities(await page.text());
-      expect(html, label).toContain("This position is not taking new applications right now.");
-      // the button's own words, not the bare phrase: the candidate CSS inlined on every page names Apply now in a comment
-      expect(html, label).not.toContain(">Apply now<");
-      expect(html, label).toContain('"@type":"JobPosting"');
-      expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).status, label).toBe(404);
-      expect((await apply(applyForm({ firstName: "Gus", lastName: "Hale", email: `gus.${label}@example.com` }))).status, label).toBe(404);
-      expect((await app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ filename: "a.txt", size: 10, type: "text/plain" }) })).status, label).toBe(404);
-      const visit = await app.request(`/a/${board.token}`);
-      expect(visit.status, label).toBe(302);
-      expect(visit.headers.get("location"), label).toBe(urls.job);
-      // the careers index keeps listing a role whose switch is off (with the plain note); a paused role is not listed there, as before
-      const careers = await (await app.request(`/careers/${slug}`)).text();
-      if (label === "switch") {
-        expect(careers).toContain("View details");
-        expect(careers).toContain("Not taking new applications right now.");
-      } else {
-        expect(careers).toContain("No open positions right now.");
-      }
-      // email-in: held, the owner told, nothing created; the second email carries a résumé, which is parked with the row
-      const before = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length;
-      const notesBefore = (await container.db.select().from(notifications).where(eq(notifications.kind, "application.email_held"))).length;
-      const r = await inbound(`Held ${label}`, label === "paused" ? "Held Paused, registered dental hygienist since 2018, active CA RDH license." : undefined);
-      expect(r.status, label).toBe(200);
-      expect(await r.json()).toMatchObject({ ok: true, matched: true, held: true });
-      const held = (await container.db.select().from(inboundEmails).where(eq(inboundEmails.status, "held"))).filter((m) => m.subject === `New applicant: Held ${label}`);
-      expect(held, label).toHaveLength(1);
-      expect(held[0].companyId, label).toBe(companyId);
-      expect(held[0].applicationId, label).toBeNull();
-      if (label === "paused") {
-        expect(held[0].rawStorageKey, label).toMatch(new RegExp(`^inbound/${companyId}/`));
-        expect(await container.integrations.storage.head(held[0].rawStorageKey!), label).toMatchObject({ contentType: "text/plain" });
-        expect(held[0].parsed, label).toMatchObject({ fromName: "Indeed", resume: { filename: "resume.txt", contentType: "text/plain" } });
-      } else {
-        expect(held[0].rawStorageKey, label).toBeNull();
-      }
-      expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length, label).toBe(before);
-      const notes = await container.db.select().from(notifications).where(eq(notifications.kind, "application.email_held"));
-      if (label === "switch") {
-        expect(notes.length, label).toBe(notesBefore + 1);
-        expect(notes.at(-1)!.title).toBe("An application arrived by email while applications are closed");
-        expect(notes.at(-1)!.body).toContain("It is held, not rejected.");
-        expect(notes.at(-1)!.body).toContain("added to the role's applications on its own");
-      } else {
-        // a second email while the first notice is still unread updates that notice with the count instead of adding another
-        expect(notes.length, label).toBe(notesBefore);
-        expect(notes.at(-1)!.title).toBe("2 applications arrived by email while applications are closed");
-        expect(notes.at(-1)!.body).toContain("2 people emailed applications");
-        expect(notes.at(-1)!.body).toContain("the role is paused");
-      }
-      expect(notes.at(-1)!.readAt).toBeNull();
-      expect(notes.at(-1)!.body).not.toContain("@example.com");
-      expect(notes.at(-1)!.body).not.toContain("send it again");
-    };
-    await setAccepting(false);
-    await closedChecks("switch");
-    await setAccepting(true);
-    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/pause`, {})).status).toBe(200);
-    expect((await roleRow()).status).toBe("paused");
-    await closedChecks("paused");
-    const fromEmailBefore = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).filter((x) => x.source === "email_in").length;
-    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/resume`, {})).status).toBe(200);
-    await container.drain();
-    const open = decodeEntities(await (await app.request(urls.job.replace("https://jobs.example.test", ""))).text());
-    expect(open).toContain(">Apply now<");
-    expect(open).not.toContain("not taking new applications");
-    // resuming replayed the two held emails: both are applications now, nobody had to send anything again, the parked
-    // résumé travelled with its application and left storage, and the team's notice says what happened
-    const replayed = (await container.db.select().from(inboundEmails).where(eq(inboundEmails.companyId, companyId))).filter((m) => m.subject?.startsWith("New applicant: Held "));
-    expect(replayed.map((m) => m.status)).toEqual(["matched", "matched"]);
-    expect(replayed.every((m) => !!m.applicationId && m.rawStorageKey === null)).toBe(true);
-    expect(await container.integrations.storage.list("inbound/")).toEqual([]);
-    const fromEmail = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).filter((x) => x.source === "email_in");
-    expect(fromEmail.length).toBe(fromEmailBefore + 2);
-    const withResume = fromEmail.find((x) => x.id === replayed.find((m) => m.subject === "New applicant: Held paused")!.applicationId)!;
-    expect(withResume.resumeDocumentId).toBeTruthy();
-    expect((await container.db.select().from(candidates).where(eq(candidates.id, withResume.candidateId)))[0].email).toBe("held.paused@example.com");
-    expect((await container.db.select().from(inboundEmails).where(eq(inboundEmails.status, "held"))).length).toBe(0);
-    const told = (await container.db.select().from(notifications).where(eq(notifications.kind, "application.email_held"))).at(-1)!;
-    expect(told.title).toMatch(/^2 held email applications were added to /);
-    expect(told.body).toContain("have been added to the role's applications");
-    expect(told.body).not.toContain("@example.com");
-    // a fresh email now becomes an application straight away
-    const r = await inbound("Hana Ito");
-    expect(await r.json()).toMatchObject({ ok: true, matched: true });
-    expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).filter((x) => x.source === "email_in").length).toBe(fromEmailBefore + 3);
-  });
-
-  it("the sitemap, robots and both feeds list only open roles that accept applications, escape text, carry the publisher and canonical URLs, and are rebuilt every five minutes", async () => {
+  it("the sitemap lists only open roles that accept applications and is rebuilt every five minutes; robots keeps every crawler out except on the production deployment", async () => {
     await container.db.update(companies).set({ name: "Ledger & Sons <Dental>" }).where(eq(companies.id, companyId));
-    resetPublicFeedCache(container);
+    resetSitemapCache(container);
     const urls = jobUrls(container.env, { slug, roleId });
-    const role = await roleRow();
-    const datePosted = (role.openedAt ?? role.createdAt).slice(0, 10);
-    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
-    const loc = pv.packet.identity.locations[0]!;
     // sitemap
     const sitemap = await app.request("/sitemap.xml");
     expect(sitemap.status).toBe(200);
@@ -554,7 +309,6 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(sitemapXml).toContain(`<loc>${urls.job}</loc>`);
     expect(sitemapXml).toMatch(/<lastmod>\d{4}-\d{2}-\d{2}T[^<]+<\/lastmod>/);
     expect(sitemapXml).not.toContain("/apply");
-    expect(sitemapXml).not.toContain("/a/");
     // robots: anything but the production deployment (staging, a person's machine, this test) keeps every crawler out
     // and names no sitemap (GAP3-3)
     const robots = await (await app.request("/robots.txt")).text();
@@ -563,70 +317,28 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     // the production deployment lets crawlers read the careers and job pages only, and names the sitemap on the job host
     const production = await (await createApp({ ...container, env: { ...container.env, DEPLOY_ENV: "production" } }).request("/robots.txt")).text();
     expect(production).toContain("Allow: /careers/");
-    for (const d of ["/c/", "/api/", "/a/", "/files/", "/dev/", "/webhooks/"]) expect(production).toContain(`Disallow: ${d}`);
+    for (const d of ["/c/", "/api/", "/files/", "/dev/", "/webhooks/"]) expect(production).toContain(`Disallow: ${d}`);
     expect(production).not.toContain("Disallow: /\n");
     expect(production).toContain("Sitemap: https://jobs.example.test/sitemap.xml");
-    // the common job-board XML
-    const xmlRes = await app.request("/feeds/jobs.xml");
-    expect(xmlRes.headers.get("content-type")).toContain("application/xml");
-    const xml = await xmlRes.text();
-    expect(xml).toContain("<publisherurl><![CDATA[https://jobs.example.test]]></publisherurl>");
-    expect(xml).toContain(`<publisher><![CDATA[${container.env.PRODUCT_NAME}]]></publisher>`);
-    expect(xml.match(/<job>/g)).toHaveLength(1);
-    expect(xml).toContain("<company><![CDATA[Ledger & Sons <Dental>]]></company>");
-    expect(xml).toContain(`<url><![CDATA[${urls.job}]]></url>`);
-    expect(xml).toContain(`<applyurl><![CDATA[${urls.apply}]]></applyurl>`);
-    expect(xml).toContain(`<referencenumber><![CDATA[${roleId}]]></referencenumber>`);
-    expect(xml).toContain(`<date><![CDATA[${datePosted}]]></date>`);
-    // an open role with no closing date carries no invented end date (Wave 0 item 0.8)
-    expect(xml).not.toContain("<expirationdate>");
-    expect(xml).toContain("<jobtype><![CDATA[full-time]]></jobtype>");
-    expect(xml).toContain(`<title><![CDATA[${pv.packet.identity.title}]]></title>`);
-    expect(xml).toContain(`<city><![CDATA[${loc.city ?? ""}]]></city>`);
-    expect(xml).toContain(`<state><![CDATA[${loc.region ?? ""}]]></state>`);
-    expect(xml).toContain(`<country><![CDATA[${loc.country ?? "US"}]]></country>`);
-    expect(xml).toContain("<category><![CDATA[dental]]></category>");
-    expect(xml).toMatch(/<salary><!\[CDATA\[USD 45-55 per hour\]\]><\/salary>/);
-    expect(xml.replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "")).not.toContain("<Dental>"); // nothing unescaped outside CDATA
-    // the same as JSON
-    const jsonRes = await app.request("/feeds/jobs.json");
-    expect(jsonRes.headers.get("content-type")).toContain("application/json");
-    const feed = (await jsonRes.json()) as { publisher: string; publisherUrl: string; lastBuildDate: string; jobs: Array<Record<string, unknown>> };
-    expect(feed.publisherUrl).toBe("https://jobs.example.test");
-    expect(feed.jobs).toHaveLength(1);
-    expect(feed.jobs[0]).toMatchObject({ referenceNumber: roleId, title: pv.packet.identity.title, url: urls.job, applyUrl: urls.apply, company: "Ledger & Sons <Dental>", hiringOrganization: { name: "Ledger & Sons <Dental>" }, city: loc.city ?? null, state: loc.region ?? null, country: loc.country ?? "US", datePosted, employmentType: "FULL_TIME", jobType: "full-time", category: "dental", remote: false });
-    expect(feed.jobs[0]).not.toHaveProperty("validThrough");
-    expect(feed.jobs[0].salary).toMatchObject({ minValue: 45, maxValue: 55, currency: "USD", unitText: "HOUR" });
-    expect(JSON.stringify(feed)).not.toMatch(/ana\.lopez|ben\.osei|ros_src/);
-    // LinkedIn keeps working, with the publisher URL and each job's canonical page
-    const linkedin = await (await app.request("/feeds/linkedin.xml")).text();
-    expect(linkedin).toContain("<publisherUrl><![CDATA[https://jobs.example.test]]></publisherUrl>");
-    expect(linkedin).toContain(`<applyUrl><![CDATA[${urls.job}]]></applyUrl>`);
-    expect(linkedin).toContain(`<partnerJobId><![CDATA[${roleId}]]></partnerJobId>`);
-    expect(linkedin).toContain("<company><![CDATA[Ledger & Sons <Dental>]]></company>");
     // the cache: a change shows up after five minutes, not before
     await setAccepting(false);
-    expect((await (await app.request("/feeds/jobs.xml")).text()).match(/<job>/g)).toHaveLength(1);
     expect((await (await app.request("/sitemap.xml")).text()).match(/<url>/g)).toHaveLength(2);
-    setClock(PUBLIC_FEED_CACHE_MS + 1000);
-    expect((await (await app.request("/feeds/jobs.xml")).text()).match(/<job>/g)).toBeNull();
-    expect(((await (await app.request("/feeds/jobs.json")).json()) as { jobs: unknown[] }).jobs).toHaveLength(0);
+    setClock(SITEMAP_CACHE_MS + 1000);
     expect((await (await app.request("/sitemap.xml")).text()).match(/<url>/g)).toBeNull();
-    expect((await (await app.request("/feeds/linkedin.xml")).text()).match(/<job>/g)).toBeNull();
     await setAccepting(true);
-    resetPublicFeedCache(container);
-    expect((await (await app.request("/feeds/jobs.xml")).text()).match(/<job>/g)).toHaveLength(1);
+    resetSitemapCache(container);
+    expect((await (await app.request("/sitemap.xml")).text()).match(/<url>/g)).toHaveLength(2);
     setClock(0);
     await container.db.update(companies).set({ name: "Ledger Dental" }).where(eq(companies.id, companyId));
-    resetPublicFeedCache(container);
+    resetSitemapCache(container);
   });
 
-  it("pay is shown wherever a pay transparency law covers the job, even if the packet says not to, on the job page, the form, the structured data and the feeds", async () => {
+  it("pay is shown wherever a pay transparency law covers the job, even if the packet says not to, on the job page, the form and the structured data", async () => {
     const role = await roleRow();
     const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
     const hidden = { ...pv.packet, compensation: { ...pv.packet.compensation, discloseRange: false } };
     await container.db.update(rolePackets).set({ packet: hidden }).where(eq(rolePackets.id, pv.id));
-    resetPublicFeedCache(container);
+    resetSitemapCache(container);
     try {
       // Irvine, CA: the pay transparency notice applies and says the range is "shown above", so it is
       const page = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}`)).text());
@@ -635,13 +347,12 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
       expect(jsonLdOf(page).baseSalary).toMatchObject({ currency: "USD", value: { minValue: 45, maxValue: 55, unitText: "HOUR" } });
       const form = decodeEntities(await (await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).text());
       expect(form.slice(0, form.indexOf("<form"))).toMatch(/<span class="fact-text">\$45–\$55 an hour<\/span>/);
-      expect(await (await app.request("/feeds/jobs.xml")).text()).toMatch(/<salary><!\[CDATA\[USD 45-55 per hour\]\]><\/salary>/);
       // and the owner's role page says the same, with the reason, instead of "not shown"
       const roleView = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { payShown: boolean; payRequiredByLaw: boolean; packet: { compensation: { discloseRange: boolean } } } };
       expect(roleView.currentPacket).toMatchObject({ payShown: true, payRequiredByLaw: true, packet: { compensation: { discloseRange: false } } });
     } finally {
       await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
-      resetPublicFeedCache(container);
+      resetSitemapCache(container);
     }
   });
 
@@ -681,8 +392,7 @@ describe("public job surfaces: tracked links, the apply form, feeds and structur
     expect(closed.validThrough).toBe(new Date(closedRole.closedAt ?? closedRole.updatedAt).toISOString().slice(0, 10));
     expect(closed.employmentType).toBe("FULL_TIME");
     expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`)).status).toBe(404);
-    resetPublicFeedCache(container);
-    expect((await (await app.request("/feeds/jobs.xml")).text()).match(/<job>/g)).toBeNull();
+    resetSitemapCache(container);
     expect((await (await app.request("/sitemap.xml")).text()).match(/<url>/g)).toBeNull();
     setClock(0);
   });

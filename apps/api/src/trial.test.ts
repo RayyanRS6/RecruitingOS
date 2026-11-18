@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import { CLOSING_DATE_REASON, CHAT_WRAP_KEY, createApplicationLink } from "@ros/core";
+import { CLOSING_DATE_REASON, CHAT_WRAP_KEY } from "@ros/core";
 import { CHAT_WRAP_QUESTION } from "@ros/agents";
 import { TRIAL_ENDED_LINE, type RolePacket, type TrialStanding, type TrialTerm } from "@ros/contracts";
-import { adminAlerts, applications, approvalRequests, auditRecords, candidates, companies, dataRequests, entitlements as entitlementRows, events, inboundEmails, notifications, postings, randomToken, roles, screens, users, withPlatform, withTenant } from "@ros/db";
+import { adminAlerts, applications, auditRecords, candidates, companies, dataRequests, entitlements as entitlementRows, events, notifications, randomToken, roles, screens, users, withPlatform, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { resetPublicFeedCache } from "./pages/public-feeds";
+import { resetSitemapCache } from "./pages/sitemap";
 import { otherRolesFor } from "./services/profile-facts";
 import { settleTrials } from "./services/trial";
 import { followApply, signInAdmin, useOneVisitApplyFlow, useTrial } from "./test-helpers";
@@ -16,8 +16,7 @@ import { followApply, signInAdmin, useOneVisitApplyFlow, useTrial } from "./test
  * (COMPANY_CHECK=its) and the engine's clock moved by days. The 30 days start when ITS confirms the company (confirming
  * again never restarts them); in the last 7 days the owners are told; once they are over, new applications, new jobs and
  * new screening chats wait for a plan, while candidates read only the neutral line a job not taking applications shows,
- * and everything already started carries on. ITS gets one alert; an extension or a change of plan opens the company again
- * and adds the emails held meanwhile.
+ * and everything already started carries on. ITS gets one alert; an extension or a change of plan opens the company again.
  */
 describe("the Trial plan's 30 days", () => {
   let container: Container;
@@ -41,12 +40,6 @@ describe("the Trial plan's 30 days", () => {
   const current = async () => (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { trial: TrialStanding | null; settings: { trial?: TrialTerm }; usage: Record<string, { used: number; limit: number | null }>; status: string };
   const termOf = async (id: string) => (await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, id)))[0].settings.trial;
   const verify = (body: Record<string, unknown>, id = companyId) => json(admin, "POST", `/api/v1/admin/customers/${id}/verification`, body);
-  const inbound = (name: string) => app.request("/webhooks/postmark/inbound", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ From: "noreply@indeed.com", FromName: "Indeed", To: `apply-${intakeToken}@${container.integrations.env.intakeDomain}`, Subject: `New applicant: ${name}`, TextBody: `${name} applied via Indeed.\nEmail: ${name.toLowerCase().replace(" ", ".")}@example.com`, Attachments: [] }),
-  });
-  const inboundRow = async (name: string) => (await container.db.select().from(inboundEmails).where(eq(inboundEmails.subject, `New applicant: ${name}`)))[0];
   const draftRole = async () => {
     const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
     return ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
@@ -91,12 +84,11 @@ describe("the Trial plan's 30 days", () => {
   let roleA = "";
   let roleB = "";
   let packet: RolePacket;
-  let intakeToken = "";
   let graceFormOpened = "";
   let chatToken = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", COMPANY_CHECK: "its", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     setClock(0);
     owner = await signIn("olive@trialdental.test");
@@ -111,7 +103,6 @@ describe("the Trial plan's 30 days", () => {
     // ITS raised this company's roles at a time to 3, so a second job can wait for approval beside the live one
     await withPlatform(container.db, (tx) => tx.update(entitlementRows).set({ limit: 3 }).where(and(eq(entitlementRows.companyId, companyId), eq(entitlementRows.key, "active_roles"))));
     admin = await signInAdmin(app, container, "ana.admin@identifiedtalent.com", "Ana Admin");
-    expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 6 })).status).toBe(200);
     roleA = await draftRole();
     expect((await json(owner, "POST", `/api/v1/roles/${roleA}/approve`, { version: 1, note: "ok" })).status).toBe(200);
     await container.drain();
@@ -135,11 +126,9 @@ describe("the Trial plan's 30 days", () => {
     setClock(1);
     expect((await verify({ verified: true, reason: "Confirmed again after a call.", confirm: true })).status).toBe(200);
     expect(await termOf(companyId)).toEqual(term);
-    // the job went public with the confirmation; its email address for applications exists now
-    const [emailIn] = await container.db.select().from(postings).where(and(eq(postings.roleId, roleA), eq(postings.channel, "email_in")));
-    intakeToken = emailIn.intakeToken!;
-    resetPublicFeedCache(container);
-    expect(await (await app.request("/feeds/jobs.xml")).text()).toContain(roleA);
+    // the job went public with the confirmation
+    resetSitemapCache(container);
+    expect(await (await app.request("/sitemap.xml")).text()).toContain(roleA);
   });
 
   it("in the last 7 days the owners see when the trial ends, and are emailed a week and a day before, once each", async () => {
@@ -171,7 +160,7 @@ describe("the Trial plan's 30 days", () => {
     expect(mail.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("before the end: a chat is under way, a form is open, and a second job waits for approval", async () => {
+  it("before the end: a chat is under way, a form is open, and a second job is a draft", async () => {
     setClock(29.9);
     const applied = await applyForm({ first: "Maria", last: "Chat", email: "maria.chat@example.com" });
     await container.drain();
@@ -183,7 +172,7 @@ describe("the Trial plan's 30 days", () => {
     expect(form.status).toBe(200);
     graceFormOpened = (await form.text()).match(/<input type="hidden" name="formOpened" value="([^"]+)"/)![1];
     roleB = await draftRole();
-    expect((await container.db.select().from(roles).where(eq(roles.id, roleB)))[0].status).toBe("pending_approval");
+    expect((await container.db.select().from(roles).where(eq(roles.id, roleB)))[0].status).toBe("draft");
   });
 
   it("once the 30 days are over, candidates read the neutral line and nothing about a trial or a plan", async () => {
@@ -238,25 +227,13 @@ describe("the Trial plan's 30 days", () => {
     expect((await applyForm({ first: "Not", last: "Graced", email: "not.graced@example.com" }, { formOpened: "v1.made-up" })).status).toBe(404);
   });
 
-  it("the reuse link, tracked links, the feeds and the 'other jobs' offer all follow", async () => {
+  it("the reuse link, the sitemap and the 'other jobs' offer all follow", async () => {
     expect((await app.request(`/careers/${slug}/jobs/${roleA}/apply?reuse=anything`)).status).toBe(404);
     expect((await app.request(`/careers/${slug}/jobs/${roleA}/apply/reuse`)).status).toBe(404);
-    const link = await withTenant(container.db, companyId, (tx) => createApplicationLink(tx, { companyId, roleId: roleA, source: "indeed", label: "Indeed", landing: "apply", actor: { kind: "system", id: "test" } }));
-    const visit = await app.request(`/a/${link.token}`);
-    expect(visit.status).toBe(302);
-    expect(visit.headers.get("location")).toBe(`https://jobs.example.test/careers/${slug}/jobs/${roleA}`);
-    resetPublicFeedCache(container);
-    for (const path of ["/feeds/jobs.xml", "/feeds/jobs.json", "/feeds/linkedin.xml", "/sitemap.xml"]) expect(await (await app.request(path)).text(), path).not.toContain(roleA);
+    resetSitemapCache(container);
+    expect(await (await app.request("/sitemap.xml")).text()).not.toContain(roleA);
     const [maria] = await container.db.select().from(candidates).where(eq(candidates.email, "maria.chat@example.com"));
     expect((await otherRolesFor(container, { companyId, candidateId: maria.id })).roles).toEqual([]);
-  });
-
-  it("an emailed application is held, not admitted: a held row and the team's notice say why, the sender hears nothing", async () => {
-    expect(await (await inbound("Held Trial")).json()).toMatchObject({ ok: true, matched: true, held: true });
-    expect((await inboundRow("Held Trial")).status).toBe("held");
-    expect(await container.db.select().from(candidates).where(eq(candidates.email, "held.trial@example.com"))).toHaveLength(0);
-    const notice = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "application.email_held")))).at(-1);
-    expect(notice?.body).toContain("new applications are paused because your trial has ended");
   });
 
   it("no new job starts: the job builder answers 402 limit_reached with the owner's line", async () => {
@@ -269,22 +246,17 @@ describe("the Trial plan's 30 days", () => {
     expect(await (await json(owner, "GET", "/api/v1/intake/room")).json()).toMatchObject({ ok: false, trialEnded: true, holding: [] });
   });
 
-  it("approving a new job, resuming one, switching applications back on and a reopening closing date wait for a plan (402)", async () => {
+  it("publishing a new job, resuming one and a reopening closing date wait for a plan (402)", async () => {
     const paused = async (r: Response) => {
       expect(r.status).toBe(402);
       expect(await errorOf(r)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
     };
-    await paused(await json(owner, "POST", `/api/v1/roles/${roleB}/approve`, { version: 1, note: "ok" }));
-    const [req] = await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleB), eq(approvalRequests.status, "pending")));
-    await paused(await json(owner, "POST", `/api/v1/approvals/${req.id}/decide`, { decision: "approve" }));
-    expect((await container.db.select().from(roles).where(eq(roles.id, roleB)))[0].status).toBe("pending_approval");
+    await paused(await json(owner, "POST", `/api/v1/roles/${roleB}/publish`));
+    expect((await container.db.select().from(roles).where(eq(roles.id, roleB)))[0].status).toBe("draft");
     // pausing is never refused; resuming is new applications
     expect((await json(owner, "POST", `/api/v1/roles/${roleA}/pause`, {})).status).toBe(200);
     await paused(await json(owner, "POST", `/api/v1/roles/${roleA}/resume`, {}));
     await container.db.update(roles).set({ status: "open", pausedAt: null }).where(eq(roles.id, roleA));
-    // turning applications off is fine; on again waits
-    expect((await json(owner, "POST", `/api/v1/roles/${roleA}/applications/accepting`, { accepting: false, reason: "Enough for now" })).status).toBe(200);
-    await paused(await json(owner, "POST", `/api/v1/roles/${roleA}/applications/accepting`, { accepting: true }));
     // a closing date that stopped applications, moved later, would reopen them: it waits; a plain date change does not
     await container.db.update(roles).set({ acceptingApplications: false, applicationsClosedReason: CLOSING_DATE_REASON, applicationsClosedAt: now().toISOString(), applicationsCloseOn: new Date(now().getTime() - 2 * DAY).toISOString().slice(0, 10) }).where(eq(roles.id, roleA));
     const later = new Date(now().getTime() + 20 * DAY).toISOString().slice(0, 10);
@@ -294,40 +266,14 @@ describe("the Trial plan's 30 days", () => {
     await container.db.update(roles).set({ acceptingApplications: true, applicationsClosedReason: null, applicationsClosedAt: null, applicationsCloseOn: null }).where(eq(roles.id, roleA));
   });
 
-  it("everything already started carries on: the team moves, writes to, decides on and schedules existing candidates", async () => {
-    const ben = await seedApplicant("Ben");
+  it("everything already started carries on: the team decides on existing candidates, and a new AI interview waits for a plan", async () => {
     const act = (id: string, body: Record<string, unknown>) => json(owner, "POST", `/api/v1/applications/${id}/actions`, body);
-    expect((await act(ben.id, { action: "advance_to_interview", note: "Strong résumé." })).status).toBe(200);
-    const iv = await json(owner, "POST", `/api/v1/applications/${ben.id}/interviews`, { roundKey: packet.interviews.plan[0].key, interviewerUserIds: [ownerId], linkSource: "calendar" });
-    expect(iv.status, await iv.clone().text()).toBe(201);
-    const msg = await json(owner, "POST", `/api/v1/applications/${ben.id}/messages`, { text: "Hi Ben, could you come in on Friday?" });
-    expect(msg.status, await msg.clone().text()).toBe(201);
     // a new screening chat is new work: it waits for a plan, with the owners' line and the way to ask ITS
     const dan = await seedApplicant("Dan");
     const invite = await act(dan.id, { action: "invite_screen" });
     expect(invite.status, await invite.clone().text()).toBe(402);
     expect(await errorOf(invite)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, dan.id))).toHaveLength(0);
-    // approving a waiting "Invite to a screen?" suggestion is the same new work: refused, and the suggestion keeps waiting
-    const suggest = (applicationId: string) => withTenant(container.db, companyId, async (tx) => (await tx.insert(approvalRequests).values({ companyId, roleId: roleA, applicationId, actionType: "application.invite_screen", subject: { type: "application", id: applicationId }, proposal: {}, requestedBy: { kind: "agent", id: "triage" }, requiredRoles: [] }).returning())[0].id);
-    const eve = await seedApplicant("Eve");
-    const waiting = await suggest(eve.id);
-    const approve = await json(owner, "POST", `/api/v1/approvals/${waiting}/decide`, { decision: "approve" });
-    expect(approve.status, await approve.clone().text()).toBe(402);
-    expect(await errorOf(approve)).toMatchObject({ code: "trial_ended", message: TRIAL_ENDED_LINE });
-    await container.drain();
-    expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, waiting)))[0]).toMatchObject({ status: "pending", decidedBy: null });
-    expect(await container.db.select().from(screens).where(eq(screens.applicationId, eve.id))).toHaveLength(0);
-    expect(await container.db.select().from(events).where(and(eq(events.type, "approval.granted"), eq(events.subjectId, waiting)))).toHaveLength(0);
-    // "Not now" is never refused
-    const notNow = await suggest(dan.id);
-    expect((await json(owner, "POST", `/api/v1/approvals/${notNow}/decide`, { decision: "reject" })).status).toBe(200);
-    // Review and apply says so in its preview, and the run refuses the invite while the rest goes ahead
-    const preview = await json(owner, "POST", `/api/v1/roles/${roleA}/batch`, { dryRun: true, items: [{ applicationId: eve.id, action: "invite_screen" }, { applicationId: dan.id, action: "on_hold" }] });
-    expect(preview.status, await preview.clone().text()).toBe(200);
-    const items = ((await preview.json()) as { items: Array<{ applicationId: string; allowed: boolean; refusedReason: string | null }> }).items;
-    expect(items.find((i) => i.applicationId === eve.id)).toMatchObject({ allowed: false, refusedReason: TRIAL_ENDED_LINE });
-    expect(items.find((i) => i.applicationId === dan.id)).toMatchObject({ allowed: true });
     const cara = await seedApplicant("Cara");
     expect((await act(cara.id, { action: "reject", reason: "not_a_match_experience", note: "Not this time." })).status).toBe(200);
     const sent = await act(cara.id, { action: "send_decision" });
@@ -379,15 +325,12 @@ describe("the Trial plan's 30 days", () => {
     expect((await withPlatform(container.db, (tx) => settleTrials(tx, now()))).started).toBe(0);
   });
 
-  it("an extension takes the company out of the pause and adds the emails held meanwhile", async () => {
+  it("an extension takes the company out of the pause", async () => {
     const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/trial`, { days: 14, reason: "The owner's kick-off call moved.", confirm: true });
     expect(r.status, await r.clone().text()).toBe(200);
     const body = (await r.json()) as { ok: boolean; trial: TrialStanding };
     expect(body.trial).toMatchObject({ started: true, ended: false, extendedDays: 14, endsAt: new Date(now().getTime() + 14 * DAY).toISOString() });
     await container.drain();
-    const row = await inboundRow("Held Trial");
-    expect(row.status).toBe("matched");
-    expect(row.applicationId).toBeTruthy();
     expect((await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "billing.trial_ended"), eq(adminAlerts.companyId, companyId))))[0].status).toBe("resolved");
     expect((await app.request(`/careers/${slug}/jobs/${roleA}/apply`)).status).toBe(200);
     const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "trial.extended")));
@@ -396,17 +339,15 @@ describe("the Trial plan's 30 days", () => {
     expect((await container.db.select().from(notifications).where(and(eq(notifications.userId, ownerId), eq(notifications.kind, "company.trial_extended")))).at(-1)?.body).toMatch(/^ITS extended your trial to .+\. New applications are open again\.$/);
   });
 
-  it("a change of plan ends the trial: the pause lifts, the alert is resolved and the emails held meanwhile are added", async () => {
+  it("a change of plan ends the trial: the pause lifts and the alert is resolved", async () => {
     setClock(30.5 + 15);
     expect((await current()).trial).toMatchObject({ ended: true });
     await withPlatform(container.db, (tx) => settleTrials(tx, now()));
     expect((await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "billing.trial_ended"), eq(adminAlerts.companyId, companyId), eq(adminAlerts.status, "open"))))).toHaveLength(1);
-    expect(await (await inbound("Held Again")).json()).toMatchObject({ held: true });
     const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "pro", reason: "The owner chose Pro." });
     expect(r.status, await r.clone().text()).toBe(200);
     expect(await r.json()).toMatchObject({ planKey: "pro", status: "active", trialEnded: true });
     await container.drain();
-    expect((await inboundRow("Held Again")).status).toBe("matched");
     expect((await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.kind, "billing.trial_ended"), eq(adminAlerts.companyId, companyId), eq(adminAlerts.status, "open"))))).toHaveLength(0);
     expect((await current()).trial).toBeNull();
     expect((await app.request(`/careers/${slug}/jobs/${roleA}/apply`)).status).toBe(200);

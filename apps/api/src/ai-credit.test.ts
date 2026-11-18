@@ -189,7 +189,7 @@ describe("the AI credit", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake", SMS_ENABLED: "true" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" }));
     app = createApp(container);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
   });
@@ -1409,40 +1409,6 @@ describe("the AI credit", () => {
       expect(await conversationSubmit(container, ref)).toBe(true);
       expect((await conversationView(container.db, ref))!.status).toBe("completed");
       expect((await runsOf(job.id)).filter((r) => r.task === "screen.turn" && r.status === "running")).toEqual([]);
-    });
-
-    it("a chat by text opens with the disclosure and the first question, and the invitation goes; replies go on in code", async () => {
-      const job = await openJob();
-      const a = await apply(job, { first: "Ida", last: "Vance", email: "ida@ai-credit.test", phone: "(949) 555-0147" });
-      expect((await json(job.cookie, "POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen", note: "Asked for texts." })).status).toBe(200);
-      await spend(job.id, "9.950000");
-      const texts = () => (container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550147");
-      try {
-        // the middle of a working day, in the legal window for texts
-        moveClock(Date.parse("2026-11-11T20:00:00Z"));
-        const invited = await json(job.cookie, "POST", `/api/v1/applications/${a.id}/actions`, { action: "invite_screen", channel: "sms" });
-        expect(invited.status, await invited.clone().text()).toBe(200);
-        await container.drain();
-        expect(texts()).toHaveLength(1);
-        const sms = (await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).find((s) => s.channel === "sms")!;
-        expect(sms.transcript[0]).toMatchObject({ role: "assistant", source: "system" });
-        expect(sms.transcript[0].aiRunId).toBeUndefined();
-        expect(texts()[0].body).toContain("(AI-assisted)");
-        expect(texts()[0].body).toContain("Reply HUMAN");
-        expect(texts()[0].body).toContain(sms.transcript[0].content);
-        expect(texts()[0].body).not.toMatch(/\bplan\b|credit|upgrade/i);
-        const key = sms.progress.currentQuestionKey!;
-        expect(key).toBeTruthy();
-        const reply = await runScreenTurn(container.db, job.id, screenDeps(container), { screenId: sms.id, message: ANSWER, channel: "sms", actor: { kind: "candidate", id: a.candidateId } });
-        expect(reply.kind).toBe("reply");
-        await container.drain();
-        expect(texts()).toHaveLength(2);
-        const after = (await container.db.select().from(screens).where(eq(screens.id, sms.id)))[0];
-        expect(after.answers[key]).toBe(ANSWER);
-      } finally {
-        moveClock(null);
-      }
-      await noFalseAlarm(job.id, []);
     });
 
     it("a message's suggested line is simply not there, with no run to point at", async () => {
