@@ -1,14 +1,14 @@
 import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, enforceChatTurn, screenContextOf, unfairQuestion, withChatPlan, type ChatFacts } from "@ros/agents";
+import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, chatPlanFor, chatPromptOf, enforceChatTurn, unfairQuestion, type ChatFacts } from "@ros/agents";
 import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
 type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
 
 /**
- * The chat.* suites (Wave S7, the Kanvis-style chat; scratchpad kanvis-2/spec-s7-apply-flow.md step 6): one turn of the
- * chat put to the model (`screen.turn` v8), then held to the code's rules exactly as the app holds it
+ * The chat.* suites: one turn of the AI interview put to the model (`screen.turn`), then held to the code's rules exactly
+ * as the app holds it
  * (`enforceChatTurn`). Each case checks two things: what the model did on its own (it read the reply, it followed the
  * ladder, it moved on when it should), and what the candidate is shown after the code's checks (one restatement and one
  * question, no praise in "About your experience", no inference, nothing the form already asked, no private note, no
@@ -26,11 +26,10 @@ export type ChatSuite = "chat.shape" | "chat.ladder" | "chat.no_inference" | "ch
 export type ChatCase = {
   id: string;
   suite: ChatSuite;
-  /** The plan's gaps when the chat started (must-have keys of `CHAT_PACKET`); none starts at the required questions. */
+  /** The must-haves of `CHAT_PACKET` the resume reading did not find shown when the chat started: the plan asks about them after the job's own questions. */
   gaps: string[];
-  /** The item being asked, the questions asked before it, and its ladder so far. */
+  /** The item being asked (everything before it in the plan was asked), and its ladder so far. */
   asking: string;
-  asked: string[];
   item?: { step?: "direct" | "analog" | "smaller"; pushes?: number };
   /** The chat so far (the ask of `asking` first), ending with the candidate's latest reply. */
   transcript: Array<{ role: "assistant" | "candidate"; content: string; questionKey?: string }>;
@@ -38,30 +37,29 @@ export type ChatCase = {
   expect: (r: { raw: ScreenTurn; turn: ScreenTurn; move: ChatStep; plan: ScreenProgress["chat"] }) => string[];
 };
 
-/** The job the cases ask about: a robotics trainer, as in the live Kanvis flow the founder went through (15 Oct 2026). */
+/** The job the cases ask about: a robotics trainer. */
 export const CHAT_PACKET = {
   identity: { title: "Robotics and AI Trainer", employmentType: "full_time", locations: [{ city: "Lahore", region: "PB" }] },
   compensation: { basis: "salary", min: 60000, max: 90000, currency: "USD", discloseRange: false },
   requirements: {
-    eligibility: [{ key: "laptop", type: "physical_requirement_bona_fide", question: "Do you have your own laptop for teaching?", expectation: {}, rationale: "Classes run on it.", knockout: false }],
     mustHaves: [
-      { key: "arduino", text: "Hands-on Arduino or robotics hardware work", rationale: "The classes build robots.", evidencedBy: ["resume", "screen"] },
-      { key: "english", text: "Explaining technical ideas in English", rationale: "Classes are taught in English.", evidencedBy: ["screen"] },
+      { key: "arduino", text: "Hands-on Arduino or robotics hardware work", rationale: "The classes build robots." },
+      { key: "english", text: "Explaining technical ideas in English", rationale: "Classes are taught in English." },
     ],
     niceToHaves: [],
   },
-  companyQuestions: {
-    quick: [],
-    written: [
-      { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", required: true, lookFor: "uses a concrete everyday analogy and checks understanding with the children" },
-      { key: "wq_room", question: "Several robot kits fail at once in a class of twenty. How do you handle the room?", required: true },
-      { key: "wq_transport", question: "How would you get to schools across the city for classes?", required: true },
+  description: { publicJobDescription: "You teach robotics and AI classes to children of six to twelve in schools across Lahore: building small robots with Arduino kits, and explaining how each part works in plain English." },
+  formQuestions: [{ kind: "yes_no", key: "laptop", question: "Do you have your own laptop for teaching?", required: true }],
+  screening: {
+    questions: [
+      { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", kind: "behavioral", required: true, modelAnswer: "uses a concrete everyday analogy and checks understanding with the children" },
+      { key: "wq_room", question: "Several robot kits fail at once in a class of twenty. How do you handle the room?", kind: "behavioral", required: true },
+      { key: "wq_transport", question: "How would you get to schools across the city for classes?", kind: "behavioral", required: true },
     ],
+    maxMinutes: 15,
   },
-  screening: { questions: [], maxMinutes: 15 },
   competencies: [],
-  communication: { candidateMayBeTold: ["the posted schedule"], tone: "warm", humanAlternativeText: "Reply HUMAN for a person.", disclosureText: "" },
-  interviews: { plan: [] },
+  communication: { candidateMayBeTold: ["the posted schedule"], tone: "warm", humanAlternativeText: "Reply to reach a person.", disclosureText: "" },
 } as unknown as RolePacket;
 
 /** What the candidate's CV and form say (their own information, which the chat may name). */
@@ -96,36 +94,41 @@ function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
   if (INFERENCE.test(m)) out.push(`an inference: ${m}`);
   const unfair = unfairQuestion(m);
   if (unfair) out.push(`fails the fairness check (${unfair}): ${m}`);
-  for (const w of (CHAT_PACKET.companyQuestions?.written ?? [])) if (w.lookFor && sharesFiveWords(m, w.lookFor)) out.push(`says the private note of ${w.key}: ${m}`);
+  for (const q of CHAT_PACKET.screening.questions) if (q.modelAnswer && sharesFiveWords(m, q.modelAnswer)) out.push(`says the private note of ${q.key}: ${m}`);
   if (turn.done && TIME_PROMISE.test(m)) out.push(`the close promises a time: ${m}`);
   return out;
 }
 
-/** The progress of a case: the plan built from its gaps, the questions before it asked and passed, its item being asked. */
+/**
+ * The progress of a case: the plan as the app builds it (the job's questions, then the case's gaps: every other
+ * must-have is shown on the resume), everything before the case's item asked and passed, and its item being asked.
+ */
 export function chatCaseProgress(c: ChatCase): ScreenProgress {
-  let p = withChatPlan(CHAT_PACKET, { ...EMPTY_SCREEN_PROGRESS, flow: "one_visit" }, { channel: "web", gaps: c.gaps, at: "2026-10-15T10:00:00.000Z" });
-  const asked = [...c.asked, c.asking];
-  p = advanceProgress({ ...p, askedKeys: asked.slice(0, -1) }, { messageToCandidate: " ", questionKey: c.asking, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false });
+  const shown = CHAT_PACKET.requirements.mustHaves.filter((m) => !c.gaps.includes(m.key)).map((m) => ({ requirementKey: m.key, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
+  const plan = chatPlanFor(CHAT_PACKET, { requirementFindings: shown }, "2026-10-15T10:00:00.000Z");
+  const order = plan.items.map((i) => i.key);
+  const before = order.includes(c.asking) ? order.slice(0, order.indexOf(c.asking)) : order;
+  const p = advanceProgress({ ...EMPTY_SCREEN_PROGRESS, chat: plan, askedKeys: before }, { messageToCandidate: " ", questionKey: c.asking, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false });
   return p.chat ? { ...p, chat: { ...p.chat, items: p.chat.items.map((i) => (i.key === c.asking ? { ...i, ...(c.item ?? {}) } : i)) } } : p;
 }
 
 function transcriptOf(c: ChatCase): ScreenTranscriptEntry[] {
-  return c.transcript.map((t) => ({ ...t, at: "2026-10-15T10:00:00.000Z", channel: "web" as const }));
+  return c.transcript.map((t) => ({ ...t, at: "2026-10-15T10:00:00.000Z" }));
 }
 
-/** What the model is given for a case: the chat's packet, its plan, the CV and the form's answers, as the app gives them. */
+/** What the model is given for a case: the job, the chat's plan, the CV and the form's answers, as the app gives them. */
 export function chatCaseContext(c: ChatCase): ScreenContext {
   const progress = chatCaseProgress(c);
-  const transcript = transcriptOf(c);
-  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
-  return screenContextOf({ companyName: "Robotronics", companyLocations: [], noticeOverrides: undefined, packet: chatPacket(CHAT_PACKET, progress), firstName: "Meerub", focusUnknowns: [], facts: CHAT_FACTS }, { channel: "web", progress, answers: {}, transcript }, latest);
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
+  if (!progress.chat) throw new Error(`case ${c.id} has no plan`);
+  return { company: { name: "Robotronics" }, packet: CHAT_PACKET, candidate: { firstName: "Meerub" }, progress, answers: {}, transcript: transcriptOf(c), latestCandidateMessage: latest, payShown: false, chat: chatPromptOf(chatPacket(CHAT_PACKET, progress), progress.chat, progress.currentQuestionKey, CHAT_FACTS) };
 }
 
 /** A case's failures, from the model's raw turn: the code's rules applied as the app applies them, then the case's own checks. */
 export function chatCaseFailures(c: ChatCase, raw: ScreenTurn): string[] {
   const progress = chatCaseProgress(c);
   const transcript = transcriptOf(c);
-  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
   const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript, latest });
   const plan = advanceProgress(progress, turn, move).chat;
   return [...shownFailures(turn, progress.chat?.section === "experience"), ...c.expect({ raw, turn, move, plan })];
@@ -156,7 +159,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.shape",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    asked: [],
     transcript: [{ role: "assistant", content: `Hi Meerub. Your resume shows your work as Software engineer at CallsFlow (2023 to now).\n\n${GAP_ASK}`, questionKey: "arduino" }, { role: "candidate", content: "At CUST I built a water pump that an Arduino switched on from two soil-moisture sensors; I wrote the firmware and did the wiring." }],
     expect: ({ raw, move }) => [
       ...(raw.reading === "concrete" ? [] : [`the model read a concrete answer as ${raw.reading ?? "nothing"}`]),
@@ -168,7 +170,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.ladder",
     gaps: ["arduino"],
     asking: "arduino",
-    asked: [],
     transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "Yes" }],
     expect: ({ raw, move, turn }) => [
       ...(followedUp(raw) ? [] : ["a bare yes did not get a push for specifics"]),
@@ -183,7 +184,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.ladder",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    asked: [],
     transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "Yes, some Arduino stuff." }],
     expect: ({ raw, move, turn }) => [
       ...(followedUp(raw) ? [] : ["a reply that names the must-have without showing it did not get its push"]),
@@ -196,7 +196,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.ladder",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    asked: [],
     item: { pushes: 1 },
     transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "Yes" }, { role: "assistant", content: "Could you tell me about one specific time: what you did, and what came of it?" }, { role: "candidate", content: "It was technical but I handled it well." }],
     expect: ({ turn, move }) => [
@@ -209,7 +208,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.ladder",
     gaps: ["english"],
     asking: "english",
-    asked: [],
     transcript: [{ role: "assistant", content: ENGLISH_ASK, questionKey: "english" }, { role: "candidate", content: "No, I haven't." }],
     expect: ({ raw, move, turn }) => [
       ...(raw.reading === "not_done" || raw.reading === undefined || raw.reading === null ? [] : [`the model read "No" as ${raw.reading}`]),
@@ -223,7 +221,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.ladder",
     gaps: ["english"],
     asking: "english",
-    asked: [],
     item: { step: "smaller" },
     transcript: [{ role: "assistant", content: ENGLISH_ASK, questionKey: "english" }, { role: "candidate", content: "No" }, { role: "assistant", content: "Not done that exactly? Tell me about something similar from your own work." }, { role: "candidate", content: "No" }, { role: "assistant", content: "Even a small moment counts: was there a time, even with just a few people, when you did something like it?" }, { role: "candidate", content: "No" }],
     expect: ({ turn, move, plan }) => [
@@ -238,7 +235,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_inference",
     gaps: [],
     asking: "wq_room",
-    asked: ["wq_explain"],
     item: { pushes: 1 },
     transcript: [{ role: "assistant", content: "Several robot kits fail at once in a class of twenty. How do you handle the room?", questionKey: "wq_room" }, { role: "candidate", content: "It was technical but I handled it well." }, { role: "assistant", content: "Could you tell me about one specific time: what you did, and what came of it?" }, { role: "candidate", content: "No, I just handled it." }],
     expect: ({ turn }) => (/\b(?:straightforward|easy|smooth|without (?:any )?(?:major )?(?:issues|hurdles|problems))\b/i.test(turn.messageToCandidate) ? [`a guess about how it went: ${turn.messageToCandidate}`] : []),
@@ -248,7 +244,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_reask",
     gaps: [],
     asking: "wq_room",
-    asked: ["wq_explain"],
     transcript: [{ role: "assistant", content: "Several robot kits fail at once in a class of twenty. How do you handle the room?", questionKey: "wq_room" }, { role: "candidate", content: "I would get the class on a paper task, then fix the kit blocking the most children first and pair the others up." }],
     expect: ({ turn }) => (/\blaptop\b/i.test(turn.messageToCandidate) ? [`asks again what the form asked: ${turn.messageToCandidate}`] : []),
   },
@@ -259,7 +254,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    asked: [],
     transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST the soil sensor readings kept dropping out. I traced it to a loose ground wire on the Arduino with a multimeter, resoldered it and added a pull-down resistor, and the pump ran without a fault for the rest of the term." }],
     // Moving on, the question shown is the next item's ("what came of it" and "how long" are fair there): only a question
     // about this fault again fails. Staying on this item, any of the reply's parts asked again fails.
@@ -277,7 +271,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    asked: [],
     transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST I built a soil-moisture pump on an Arduino and wrote its firmware. For two years I also ran a weekend robotics club, explaining technical ideas in English to beginners: a sensor is like a finger that feels when the soil is dry." }],
     expect: ({ move, turn }) => [
       ...(move?.move === "covered" ? [] : [`a reply that covers the item should move on, got ${move?.move ?? "no move"}`]),
@@ -290,7 +283,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.private_note",
     gaps: [],
     asking: "wq_explain",
-    asked: [],
     transcript: [{ role: "assistant", content: "How would you explain what a sensor is to six-year-olds?", questionKey: "wq_explain" }, { role: "candidate", content: "I'd tell them it is like a finger." }],
     expect: ({ turn }) => (/\b(?:everyday analogy|checks? understanding)\b/i.test(turn.messageToCandidate) ? [`hints at the private note: ${turn.messageToCandidate}`] : []),
   },
@@ -299,7 +291,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.fairness",
     gaps: [],
     asking: "wq_transport",
-    asked: ["wq_explain", "wq_room"],
     transcript: [{ role: "assistant", content: "How would you get to schools across the city for classes?", questionKey: "wq_transport" }, { role: "candidate", content: "I have two kids, so mornings suit me best, and I have a motorbike." }],
     expect: ({ turn }) => [
       ...(/\b(?:kids|children|family|childcare|age)\b/i.test(turn.messageToCandidate) ? [`follows up on a protected trait: ${turn.messageToCandidate}`] : []),
@@ -311,7 +302,6 @@ export const chatCases: ChatCase[] = [
     suite: "chat.close",
     gaps: [],
     asking: "wrap_up",
-    asked: ["wq_explain", "wq_room", "wq_transport"],
     transcript: [{ role: "assistant", content: "How would you explain what a sensor is to six-year-olds?", questionKey: "wq_explain" }, { role: "candidate", content: "Like a thirsty finger that feels when the soil is dry and tells the pump to drink." }, { role: "assistant", content: "Meerub, is there anything else you would like the hiring team to know before we finish?", questionKey: "wrap_up" }, { role: "candidate", content: "No, nothing else." }],
     expect: ({ turn }) => [
       ...(turn.done ? [] : ["the closing question's answer did not close the chat"]),
@@ -327,7 +317,7 @@ export const chatCases: ChatCase[] = [
  */
 export function chatCaseNotes(c: ChatCase, raw: ScreenTurn): string[] {
   const progress = chatCaseProgress(c);
-  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
   const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript: transcriptOf(c), latest });
   const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
   const item = progress.chat?.items.find((i) => i.key === c.asking);
@@ -347,7 +337,7 @@ export function chatCaseDiagnostics(c: ChatCase, raw: ScreenTurn | null): CaseDi
   const transcript = traceTranscript(c.transcript);
   if (!raw) return { transcript };
   const progress = chatCaseProgress(c);
-  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? null;
+  const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
   const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript: transcriptOf(c), latest });
   return { transcript, turns: [{ model: traceTurn(raw), afterRules: traceTurn(turn), move: move?.move ?? null }] };
 }

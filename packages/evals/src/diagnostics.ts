@@ -26,8 +26,6 @@ export type CaseDiagnostics = {
    * `importance` and `indicators` too, as the résumé reading is shown them (no questions: the reading is asked none).
    */
   role?: { questions: Array<{ key: string; kind: string; skill?: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; evaluatedIn?: string; importance?: string; indicators?: string[] }> };
-  /** The write-up as the model wrote it, or why the call gave nothing usable. */
-  writeup?: TraceOutput;
 };
 
 /** How much of one message or one text the record keeps: enough to read what was said, never a whole document. */

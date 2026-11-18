@@ -294,8 +294,8 @@ export function chatOpening(input: { firstName: string; cv: string[]; question: 
   return `Hi ${first}. ${said}\n\n${input.question}`;
 }
 
-/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, the CV and the form. */
-function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, facts: ChatFacts): ChatPromptContext {
+/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, the CV and the form. `packet`: the chat's own (`chatPacket`). */
+export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, facts: ChatFacts): ChatPromptContext {
   const qs = new Map(packet.screening.questions.map((q) => [q.key, q]));
   return {
     section: plan.section,

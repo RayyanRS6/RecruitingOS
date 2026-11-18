@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
 import {
   INTAKE_COMPILE_MAX_TOKENS, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, credentialMustHaves, enforceTurnRules, finalizePacket, hasPlaceholder, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type ScoringIdentity,
@@ -11,7 +11,6 @@ import { createDb, migrate } from "@ros/db";
 import { runChatSuite } from "./chat-suite";
 import { clipText, traceOutcome, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intake-run";
-import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
 import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
@@ -519,19 +518,6 @@ async function main() {
       return r.ok ? r.output : `${r.reason}: ${clipText(r.error)}`;
     }, runs);
     Object.assign(results, chat);
-  }
-
-  // The answers written up for Review & send (Wave S7, slice S7-D). "model:" failures measure what the model wrote;
-  // "kept:" failures mean the app's own checks let something through, and must stay at zero.
-  if (runs("screen.writeup")) {
-    const out: (typeof results)[string]["cases"] = [];
-    for (const c of writeupCases) {
-      const r = await runPrompt(q, rt, screenWriteupPrompt, writeupContextOf(c), { companyId: null, inputRef: { eval: c.id } });
-      const f = writeupCaseFailures(c, r.ok ? r.output : null);
-      // Wave S9: a failing case keeps what the model wrote and what Review & send would show, with why (synthetic data)
-      out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: writeupCaseNotes(c, r.ok ? r.output : null, r.ok ? null : `${r.reason}: ${r.error}`), diagnostics: { transcript: traceTranscript(c.transcript), writeup: traceOutcome(r) } } : {}) });
-    }
-    results["screen.writeup"] = { cases: out, passRate: out.filter((x) => x.pass).length / Math.max(1, out.length) };
   }
 
   const thresholds = JSON.parse(readFileSync(join(here, "..", "thresholds.json"), "utf8")) as Record<string, { minPassRate: number }>;

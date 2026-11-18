@@ -5,7 +5,7 @@ import { registerFakeHandlers } from "@ros/agents";
 import { CHAT_FACTS, chatCaseContext, chatCaseFailures, chatCaseNotes, chatCases, runChatSuite, sharesFiveWords } from "./chat-suite";
 
 /**
- * The chat.* suites (Wave S7) on the local stand-in model: every case passes, so the harness is sound; the real model
+ * The chat.* suites on the local stand-in model: every case passes, so the harness is sound; the real model
  * runs them from the runner. And the checks themselves catch what they are for: a turn that breaks a rule fails.
  */
 describe("chat.* suites", () => {
@@ -19,14 +19,18 @@ describe("chat.* suites", () => {
 
   it("gives the model the plan, the CV and the form's answers, as the app does", () => {
     const ctx = chatCaseContext(chatCases[0]);
-    expect(ctx.chat?.formAnswers).toEqual(CHAT_FACTS.formAnswers);
-    expect(ctx.chat?.cv).toEqual(CHAT_FACTS.cv);
-    expect(ctx.chat?.current).toBe("arduino");
+    expect(ctx.chat.formAnswers).toEqual(CHAT_FACTS.formAnswers);
+    expect(ctx.chat.cv).toEqual(CHAT_FACTS.cv);
+    expect(ctx.chat.current).toBe("arduino");
+    // the plan as the app builds it: the job's own questions, already asked here, then the must-haves the resume does not show
+    expect(ctx.chat.items.map((i) => [i.key, i.kind, i.state])).toEqual([["wq_explain", "question", "covered"], ["wq_room", "question", "covered"], ["wq_transport", "question", "covered"], ["arduino", "gap", "asking"], ["english", "gap", "open"]]);
     const system = screenTurnPrompt.system(ctx).map((b) => b.text).join("\n");
     expect(system).toContain("Chat plan (JSON):");
     expect(system).toContain("<form_answers>\nForm answers (already given; never ask them again):\nDo you have your own laptop for teaching? Yes.\n</form_answers>");
-    expect(screenTurnPrompt.version).toBe(8);
-    // version 8 (22 Oct 2026 try-out): never asks for what the candidate already said, above all in their last reply
+    expect(screenTurnPrompt.version).toBe(9);
+    // the job description is the chat's context, as data
+    expect(system).toContain("<job_description>\nYou teach robotics and AI classes");
+    // never asks for what the candidate already said, above all in their last reply
     expect(system).toContain("Never ask for anything the candidate already said in this chat, above all in their last reply.");
     // doubt is only about what was already said: a must-have not plainly shown keeps its push, and an item already
     // answered in full gets a short check, never its own question again
@@ -53,9 +57,9 @@ describe("chat.* suites", () => {
     expect(chatCaseFailures(bareYes, { ...base, reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: false }, messageToCandidate: "Could you tell me about one specific time: what you did, and what came of it?" })).toEqual([]);
     // a failing case says what the model did and what the code made of it (Wave S9)
     const notes = chatCaseNotes(bareYes, { ...base, questionKey: "english", reading: "concrete", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, messageToCandidate: "Noted." });
-    expect(notes[0]).toBe("item: arduino (gap, step direct, pushes 0); prompt screen.turn v8");
+    expect(notes[0]).toBe("item: arduino (gap, step direct, pushes 0); prompt screen.turn v9");
     expect(notes.some((n) => n.startsWith("model: {") && n.includes('"answer":"Yes"'))).toBe(true);
-    expect(notes.at(-1)).toBe("turn: move=covered questionKey=wq_explain recorded=arduino: Yes done=false | How would you explain what a sensor is to six-year-olds?");
+    expect(notes.at(-1)).toBe("turn: move=covered questionKey=wrap_up recorded=arduino: Yes done=false | Is there anything else you would like the hiring team to know before we finish?");
     const analog = chatCases.find((c) => c.id === "no_gets_the_analog")!;
     expect(chatCaseFailures(analog, { ...base, questionKey: "wq_explain", reading: "concrete", messageToCandidate: "Fine." })).toContain("the model moved on instead of asking for something similar");
     const close = chatCases.find((c) => c.id === "close_names_one_thing")!;
@@ -123,7 +127,7 @@ describe("chat.* suites", () => {
     expect(bareYes?.diagnostics?.turns).toEqual([
       {
         model: { questionKey: "english", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete", message: "Noted." },
-        afterRules: expect.objectContaining({ questionKey: "wq_explain", answerRecorded: expect.objectContaining({ questionKey: "arduino", answer: "Yes" }), message: "How would you explain what a sensor is to six-year-olds?" }),
+        afterRules: expect.objectContaining({ questionKey: "wrap_up", answerRecorded: expect.objectContaining({ questionKey: "arduino", answer: "Yes" }), message: "Is there anything else you would like the hiring team to know before we finish?" }),
         move: "covered",
       },
     ]);

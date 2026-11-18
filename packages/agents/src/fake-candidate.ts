@@ -142,7 +142,8 @@ function parseTurn(req: StructuredRequest<unknown>) {
   const pay = sys.match(/Posted pay: (hourly|salary) (\d+(?:\.\d+)?) to (\d+(?:\.\d+)?) ([A-Z]{3})/);
   const items = plan.items ?? [];
   const wrap = plan.wrapUp ?? { key: "wrap_up", question: "" };
-  return { items, wrap, questions: [...items.map((i) => ({ key: i.key, question: i.question })), wrap], progress, name: sys.match(/Candidate first name: ([^.]+)\./)?.[1] ?? "there", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null };
+  const mustHaves = [...(sys.match(/^Must-haves: (.*)$/m)?.[1] ?? "").matchAll(/\[([^\]]+)\] ([^|]+)/g)].map((m) => ({ key: m[1], text: m[2].trim() }));
+  return { items, wrap, mustHaves, questions: [...items.map((i) => ({ key: i.key, question: i.question })), wrap], progress, name: sys.match(/Candidate first name: ([^.]+)\./)?.[1] ?? "there", pay: pay ? { basis: pay[1], min: Number(pay[2]), max: Number(pay[3]) } : null };
 }
 
 /** The candidate's own words, verbatim, to quote back: their first sentence, at most twelve words. */
@@ -185,12 +186,26 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   }
   const item = s.items.find((i) => i.key === current);
   if (!item) return { ...base, questionKey: next?.key ?? null, done: !next, messageToCandidate: "Noted." };
+  // The sentence of theirs that already speaks to a must-have the chat asks about next (every word of five letters or
+  // more in it, by its first four letters), or null: moving on to it asks one short check on what they said, never the
+  // item's own question again.
+  const saidAlready = (key: string | undefined): string | null => {
+    const text = s.items.find((i) => i.key === key)?.kind === "gap" ? s.mustHaves.find((m) => m.key === key)?.text : undefined;
+    const stems = (text?.toLowerCase().match(/[a-z]{5,}/g) ?? []).map((w) => w.slice(0, 4));
+    if (!stems.length) return null;
+    return theirs.flatMap((x) => x.split(/(?<=[.!?])\s+/)).find((x) => {
+      const own = new Set((x.toLowerCase().match(/[a-z]{4,}/g) ?? []).map((w) => w.slice(0, 4)));
+      return stems.every((w) => own.has(w)) && redactProtected(x) === x;
+    }) ?? null;
+  };
   const moveOn = (reading: "concrete" | "vague" | "not_done"): ScreenTurn => {
     // Their words about this item since it was asked, verbatim and in order; a keyword command is not an answer.
     const at = user.lastIndexOf(item.question);
     const replies = [...(at >= 0 ? user.slice(at) : user).matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x && !/^(?:human|person|a person|a human|agent|representative|withdraw(?: my application)?|confirm)[.!]?$/i.test(x)).join(" ");
     const recorded = reading === "not_done" && item.kind === "gap" ? null : { questionKey: item.key, answer: redactProtected(replies || said), complete: reading === "concrete" };
-    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: reading === "not_done" ? "Understood, thanks for saying so." : `You said "${quoteOf(said)}".` };
+    const already = reading === "concrete" ? saidAlready(next?.key) : null;
+    const message = reading === "not_done" ? "Understood, thanks for saying so." : already ? `You also said "${quoteOf(already)}".\n\nIs there one thing you would add about that?` : `You said "${quoteOf(said)}".`;
+    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: message };
   };
   if (item.ladder && said.length < 60 && /^(no|nope|not really|never|i haven'?t|i have not)\b/i.test(said) && !/\bbut\b/i.test(said)) {
     if (item.step === "direct") return { ...base, reading: "not_done", followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };

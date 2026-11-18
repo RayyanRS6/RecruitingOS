@@ -42,11 +42,11 @@ describe("the fairness run's summary", () => {
 
   // Wave S9: a failing screening case's full record stays in the file; the page says where it is and does not print it
   it("points to the full record of a failing screening case, and leaves it out of the page", () => {
-    const failing = { ...run(), suites: ["screen.writeup"], results: { "screen.writeup": { passRate: 0, cases: [{ id: "skipped_question", pass: false, failures: ["model: wq_patients says something they did not write"], notes: ["prompt: screen.writeup v2"], diagnostics: { transcript: [{ role: "candidate", text: "About eight." }], writeup: { output: { answers: [] } } } }] } } };
-    const text = summarize(failing, { "screen.writeup": { minPassRate: 1 } });
+    const failing = { ...run(), suites: ["chat.shape"], results: { "chat.shape": { passRate: 0, cases: [{ id: "restates_then_asks", pass: false, failures: ["more than one question: What did you build? And when?"], notes: ["prompt: screen.turn v9"], diagnostics: { transcript: [{ role: "candidate", text: "About eight." }] } }] } } };
+    const text = summarize(failing, { "chat.shape": { minPassRate: 1 } });
     // the second review of the live-test fixes (#22): every check the screen,chat choice runs has its plain name
-    expect(text).toContain("- **Answers written up for Review & send**, case `skipped_question`: model: wq_patients says something they did not write");
-    expect(text).toContain("  - prompt: screen.writeup v2");
+    expect(text).toContain("- **One restatement, one question**, case `restates_then_asks`: more than one question: What did you build? And when?");
+    expect(text).toContain("  - prompt: screen.turn v9");
     expect(text).toContain("under `diagnostics`");
     expect(text).not.toContain("About eight.");
     expect(summarize(run({ bias: false }), { "triage.bias_pairs": { minPassRate: 1 } })).not.toContain("diagnostics");
@@ -101,7 +101,7 @@ describe("the fairness run's summary", () => {
       suites: ["screen", "chat"],
       efforts: { standard: "high", fast: "low" },
       results: {
-        "screen.writeup": { passRate: 1, cases: [{ id: "skipped_question", pass: true, failures: [] }] },
+        "screen.assess": { passRate: 1, cases: [{ id: "plain_no", pass: true, failures: [] }] },
         "chat.shape": { passRate: 1, cases: [{ id: "concrete_answer", pass: true, failures: [] }] },
       },
     };

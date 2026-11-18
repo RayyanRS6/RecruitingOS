@@ -86,8 +86,5 @@
   "chat.close": {
     "minPassRate": 1
   },
-  "screen.writeup": {
-    "minPassRate": 1
-  },
   "_note": "Thresholds gate prompt promotion (docs/11). The fake provider validates the harness; real thresholds are measured with AI_PROVIDER=anthropic."
 }
