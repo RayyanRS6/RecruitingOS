@@ -23,6 +23,7 @@ The admin dashboard's **Privacy requests** records every step. The deadlines and
    - **Access**: Fulfil sends the person a copy of what they gave (their form answers, their resume, the messages sent to them, their AI interview) as a file attached to the completion email. It holds nothing about other candidates, and not the AI's own notes.
    - **Correction**: name the field and the corrected value. The change is recorded with who made it and why.
    - **Deletion**: the dashboard anonymizes, and never before a lawyer's decision is recorded on the request and the administrator confirms. It removes the person's words from every table that holds them and deletes the resume file; a hire and the findings of a reading stay, as codes with no words. Audit records are never deleted. No lawyer is engaged, so **a real deletion request cannot be finished today** ([DECISIONS.md](../DECISIONS.md), PQ-15): tell the owner on the day it comes in, because the 45 days are running.
+   - **A review by a person**, or **a withdrawal** recorded as a request: do what was asked outside the dashboard, then close the request with the outcome in plain words.
 5. **Close.** Fulfil or Decline writes the outcome and emails the person what was done, what was kept and why, in plain words.
 
 ## Someone who asked for access to the product
