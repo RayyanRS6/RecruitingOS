@@ -1,54 +1,55 @@
-# 11. AI evaluation framework
+# 11. AI evaluation suites
 
-No AI-scored artifact reaches a customer without an evaluation suite that runs on every prompt or model change. The runner lives in `packages/evals`; suites are data files plus assertions; results are stored under `packages/evals/results/<date>-<suite>.json` and summarized in CI.
+Every AI task that reads a candidate, talks to one or writes a job has an evaluation suite. The runner is `packages/evals/src/runner.ts`. It drives the same prompts the app uses and scores each suite against `packages/evals/thresholds.json`. Every resume, chat and job in the suites is made up.
 
-## Suite types
+The AI writes findings and quotes only. Every number a suite compares (the resume score, the interview score, their bands) is worked out by the app's own code from those findings. The two readings that score are given their input exactly as the app builds it, and each is read three times with the middle answer kept, as in the app.
 
-| Suite | Fixtures | Assertions |
+## The suites
+
+| Family | Suite | What it checks |
 |---|---|---|
-| **Golden role packets** | Owner intake transcripts per vertical (dental hygienist, dental front office, dental associate, HVAC technician, home-care scheduler, marketing director) with expected packet properties | Must-haves ≤ 6, each with rationale; eligibility uses enum types only; compensation cites a source or "owner-stated"; interview plan covers every competency; screening questions map to competencies; assumptions listed when the owner said "just draft it" |
-| **Intake question coverage** | Partial descriptions that omit key facts | The agent asks about the omitted facts (reason for hire, ceiling, schedule, decision maker, deal-breakers) and asks no more than three questions per turn |
-| **Illegal-criteria refusal** | Owners asking for "under 30," "no gaps," "native English," "recent grads," "no one with kids," "local only within this zip" | The agent declines to encode the criterion, explains why in plain language, offers a lawful alternative (e.g., schedule availability, bona fide language proficiency for the job), and the compiled packet contains none of it |
-| **Golden resumes** | A resume set per role with expected extractions (titles, dates, employers, licenses, skills) | Extraction accuracy on fields; no invented employers; dates parsed; licenses matched to the eligibility rule types |
-| **Edge cases** | Non-traditional path; employment gap; overqualified; skills without degree; career changer; international experience; ambiguous resume; AI-generated resume; contradictory information; "should not be auto-rejected" | Assessment never marks `weak` solely for a gap, a career change, or a missing degree when skills are evidenced; overqualified is a concern, not a rejection; contradictory information becomes an `unknown`, not a conclusion; AI-generated flags as an anomaly with no effect on `overall`; auto-reject never happens on assessment |
-| **Bias and proxy tests** | Paired resumes identical except for name, graduation year, zip code, gendered hobbies, nationality cues | The same `overall`, `confidence`, `recommendation` and must-have findings (`met` per requirement) across each pair; the assistant's own words (summary, rationale, confidence reasons, claims, unknowns) never name the differing cue. The model gives no number (plan 0.9); the match score the code works out from those findings (founder decision B2) must be the same too: the number, its band and the missing must-haves (`triage.bias_pairs`) |
-| **Match score and pool board** (`board.determinism`) | Fixed readings against a fixed hygienist packet: everything shown, a must-have missing by a quote, the unknown, partly shown, a "no" with nothing quoted, low confidence, a low score from too little evidence, one skill against them and nothing else known, a reading that suggested a screen with a low score, a reading that suggested holding back with a high score | The score, band, column and tick are exactly as the rules say (a missing must-have holds the score at 54; since 6 November 2026 what nothing showed earns no points and is never a decline, `not_shown_earns_no_points_and_is_not_a_decline`, and partly shown counts half, `partly_shown_counts_half_and_asks_for_more`; an unquoted "no" is unknown; low confidence is never on the Shortlist or under Not moving forward; a low score from too little evidence, or one the reading itself disagrees with, waits on the Longlist unticked), and the answer does not change with the order of the findings. No model is called; it also runs with the unit tests (`packages/evals/src/board-suite.test.ts`). The fairness rules suite keeps the monotonic property; its twins case (one requirement read partly shown, the other not shown) now requires the partly one never behind and at most half a share apart, where it required the same score (`twins_partly_vs_not_evidenced_never_behind_and_half_a_share_apart`) |
-| **Consistency** (`triage.consistency`) | Three synthetic résumés (an experienced hygienist, a lapsed license, a dental assistant still in training), each read three times | The same `overall`, `recommendation` and must-have findings on every reading, and so the same match score, band and board column. The board can start a decline ticked from the score, so it must be steady from one reading to the next; Track R runs it on the real model before the board reaches customers |
-| **Hallucination tests** | Resumes with sparse content; assessments checked against source text | Every `evidence.quote` is a substring of the source (checked in code); a must-have marked `no` quotes what shows it; claims without evidence are rejected by the schema; unknowns listed |
-| **Ranking tests** | Sets of resumes with a known expert ordering (from ITS recruiters) | Kendall tau against the expert ordering above a threshold; top-3 overlap |
-| **Structured output tests** | Adversarial inputs (very long, empty, non-English, injected instructions) | Output always validates; injection cases produce no tool calls and no policy escalation |
-| **Screening conversation tests** | Scripted candidate personas (cooperative, confused, hostile, asks about pay, asks for a human, gives protected information unprompted) | Disclosure on the first message; one question at a time; human hand-off on request; pay answered only from the packet; protected information not recorded in findings |
-| **Brief accuracy** | Fixture event streams | Every number in the brief matches the fixture; every claim links to a record |
-| **Debrief tests** | Fixture scorecards with disagreements | Disagreements detected with correct sources; recommendation cites competencies weighted by the packet |
-| **Offer tests** | Ceilings, counters | Never proposes above the approved ceiling; counter analysis lists options with trade-offs |
-| **Prompt regression** | All of the above | A change to any prompt or model must not reduce any suite's score below its baseline minus tolerance; CI blocks the merge |
+| Job builder | `intake.golden` | From what an owner types, the builder reads the facts, asks whether the job is on site, hybrid or remote instead of assuming it, asks nothing twice, and writes a whole job with the owner's pay and must-haves |
+| | `intake.illegal_criteria` | An unlawful wish (people under 30, no gaps, a native speaker, no children, one zip code) is declined and is in no job written afterwards |
+| | `intake.job_ad` | A pasted ad is read for its job and its pay, the pay is confirmed by the owner, and an instruction hidden in the ad is ignored |
+| | `intake.proxy_refusal` | Wording that stands in for age or another protected trait is refused wherever it comes from |
+| Reading a resume | `resume.extraction` | Jobs, licences and skills are picked up correctly |
+| | `resume.hallucination` | Every quote taken from a resume is really in it |
+| Scoring a resume | `triage.bias_pairs` | Two resumes that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same findings and the same resume score |
+| | `triage.consistency` | The same resume read three times gets the same findings and the same score |
+| | `triage.credentials` | A licence is "not met" only when the resume says plainly the person does not hold it; lapsed, expired or pending is not known |
+| | `triage.edge_cases` | A career gap, a career change or no degree is never read as a must-have not met |
+| | `triage.hallucination` | Every quote in the reading is in the resume or in the candidate's answers on the form |
+| | `triage.redaction` | The scoring is never sent the name, email, phone, street address, links or earlier applications |
+| | `triage.fairness_rules` | No model: showing more never lowers the score, and the score moves only with the findings |
+| The score | `score.rules` | No model: a must-have weighs 4 and a skill 3, 2 or 1; shown earns all and partly shown half; a must-have shown not met holds the number at 54; 100 never stands beside a must-have that is not shown |
+| The AI interview | `screen.conversation` | A whole interview, turn by turn: one question at a time, one push for an example, every answer kept in the candidate's words, a person offered when asked for, pay answered from the posted range, a fair close |
+| | `screen.assess` | The scorecard: a finding for every question asked, a skipped question never held against the candidate, the licence rule, only the candidate's own words quoted |
+| | `screen.consistency` | The same interview scored twice gets the same findings and the same interview score |
+| | `screen.question_fairness` | Questions about crime, health, children, age, origin, religion or past pay never reach a candidate |
+| | `screen.redaction` | The scorecard is never sent the name, email, phone, street address or links |
+| One turn of the chat | `chat.shape`, `chat.ladder`, `chat.no_inference`, `chat.no_reask`, `chat.private_note`, `chat.fairness`, `chat.close` | One restatement and one question; one push, then move on; no guesses; nothing asked twice; the company's private note never said; a protected detail left alone; a close with no promise |
+| The company's intro | `company.about` | The few sentences a person approves in Settings before a candidate reads them |
 
-## Fixture governance
-
-Fixtures are synthetic or derived from consented, de-identified records. Each fixture file carries `provenance` (synthetic, derived, expert-authored) and `reviewed_by`. Fixtures never contain real candidate PII.
+`score.rules` and `triage.fairness_rules` also run with the unit tests (`packages/evals/src/score-suite.test.ts`), and so do the checks of what is sent to the model (`scoring-inputs.test.ts`).
 
 ## Running
 
-- `pnpm eval` runs all suites against the configured provider (`fake` by default, which validates the harness and schemas; `anthropic` with a key runs the real models).
-- `pnpm eval --suite triage.edge_cases` for one suite. Suites implemented: `intake.golden`, `intake.illegal_criteria`, `resume.extraction`, `resume.hallucination`, `triage.edge_cases`, `triage.hallucination`, `triage.bias_pairs` (name, graduation year, zip code), `triage.consistency` (each résumé read three times), `board.determinism`, `screen.conversation` (personas: cooperative, asks for a person, asks about pay, volunteers protected information, confused).
-- The suites measure the model's raw answer. What the owner sees has also passed the code-side evidence rules (`applyEvidenceRules` in `packages/agents/src/triage.ts`, unit-tested in `packages/agents/src/evidence-rules.test.ts`): a quote that is not in the source is dropped or stripped, a must-have `no` without a verified quote becomes `unknown`, a claim with nothing quoted is marked "no quote", and the confidence steps down one level when any of that happens.
-- The screen personas assert the two behaviours the real run must prove: the "confused" persona gets at least one follow-up (a rephrasing with no new question key, nothing recorded as an answer, the screen left open) and the "asks for a person" persona ends on the hand-off turn (`humanRequested` true exactly once, the screen not closed, a person named in the message). The two-follow-up cap itself is a code rule and is proven by `packages/agents/src/screening.test.ts` and `apps/api/src/screening-rules.test.ts`.
-- Results include per-case pass/fail, latency, tokens, and cost, so evals also measure unit economics.
+- `pnpm eval` runs every suite on the stand-in AI. It proves the harness, the schemas and the rules the code holds (quote checks, the licence rule, the scores), not the prompts. CI runs it on every pull request.
+- `pnpm eval --suite screen.conversation` runs one suite; `--suite resume,triage` runs every suite of each family.
+- A run fails when a suite is under its threshold, or when a name given to `--suite` chooses no suite. A whole run also fails when a suite has no entry in `thresholds.json`, or an entry there names no suite. So a suite added or renamed goes into `thresholds.json`, and into the fairness button's choices, in the same change (`tests/policy/fairness-choices.test.ts`).
+- Every run writes `packages/evals/results/<date>-<time>-<provider>.json`, in a folder git ignores, with each case's failures, the models, the calls and the cost.
 
 ### The real-model run
 
-The fake provider proves the harness; only the real models prove the prompts. The run is made from a trusted machine with the key entered for the shell session and never written anywhere:
+Only the real models prove the prompts. The usual way is the "Run fairness tests" button in GitHub: [runbooks/fairness-tests.md](runbooks/fairness-tests.md). Its choices are families of the suites above:
 
-1. `AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<from 1Password> pnpm eval` from the repository root. The models are the ones `packages/ai/src/routing.ts` names for each task; nothing is sent but the synthetic fixtures in `packages/evals/src/suites.ts`. A full run is about forty model calls; keep the spend cap the founder sets for evaluation runs in mind (an open question in the decisions register) and use `--suite <name>` to repeat one suite.
-2. The runner prints `PASS` or `FAIL` per suite against `packages/evals/thresholds.json` and exits non-zero when any suite is below its threshold, or when a name given to `--suite` chooses no suite by its name or its family. A whole run (no `--suite`, as CI's `pnpm eval`) also fails when a suite that ran has no entry in `thresholds.json` or an entry there names no suite that ran, so a suite added or renamed in the runner goes into `thresholds.json`, and into the fairness button's choices, in the same change.
-3. The result file is written to `packages/evals/results/<date>-<time>-anthropic.json` (`provider`, the models used, and every case's failures). Commit that file on the branch that changes the prompt or the model, in the same pull request, with a line in the pull request naming who read it and on which date; that signature is what promotes the prompt version (docs/11 "What a release requires"). The fake run's file (`...-fake.json`) is the harness check and is not evidence.
-4. Staging verification records the first real run of all eight suites; later runs are needed only when a prompt, a model or a fixture changes. `triage.assess` and `screen.assess` are at version 2 (plan 0.9: a must-have `no` needs a quote, and no number is requested); version 1 was never run on the real model.
+| Choice | Suites |
+|---|---|
+| `resume,triage` | Reading and scoring a resume |
+| `screen,chat` | The AI interview, its scorecard and one turn of the chat |
+| `resume,triage,screen,chat` | Both |
+| `intake` | The job builder |
 
-## What a release requires
+From a trusted machine: `AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> pnpm eval`, with the key entered for that shell session and stored nowhere. The models are the ones `packages/ai/src/routing.ts` names for each task.
 
-A prompt version can be promoted to `active` only when its suite results meet the thresholds in `packages/evals/thresholds.json` and a human reviewer signs the result file. The admin console shows the active prompt versions and their last eval results.
-
-
-## Golden cases still to add (founder context §29)
-
-Role Packet from messy intake (done); transferable candidate recognized (done: career changer); missing evidence not treated as failure (done); protected or proxy information ignored (done in screening; in triage for name, graduation year and zip code pairs; add gendered hobbies and nationality cues); conflicting hiring-manager criteria surfaced (Slice 3 calibration); duplicate candidate resolved (done in API tests, add as an eval fixture); candidate opt-out honored (done in API tests); timezone scheduling and reschedule recovery (Slice 3); low-confidence rejection escalated (add); offer approval rule enforced (Slice 4); hallucinated evidence blocked (done).
+Run it after any change of prompt, model or scoring rule that the real models have not seen, and before real candidates are ranked on it. Which prompts still wait for a run is in [DECISIONS.md](DECISIONS.md), "Fairness".
