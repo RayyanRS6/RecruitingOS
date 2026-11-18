@@ -116,7 +116,7 @@ describe("a new version of a job", () => {
   it("is refused on a closed job, in plain words", async () => {
     const roleId = await job("closed");
     const refused = await save(dana(), roleId, packet()).then(() => null, (e: unknown) => e);
-    expect(refused).toMatchObject({ status: 409, code: "role_closed", message: "This role is closed, so it is not changed any more. Start a new role to hire again." });
+    expect(refused).toMatchObject({ status: 409, code: "role_closed", message: "This job is closed, so it is not changed any more. Start a new job to hire again." });
     expect((await versionsOf(roleId)).map((v) => v.version)).toEqual([1]);
   });
 

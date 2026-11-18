@@ -16,7 +16,6 @@ import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
 import { roleRoutes } from "./routes/roles";
 import { applicationRoutes, candidateRoleRoutes } from "./routes/candidates";
-import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { adminRoutes } from "./routes/admin";
 import { notificationRoutes } from "./routes/notifications";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
@@ -77,8 +76,8 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.use("/api/v1/auth/consume", candidateCsp);
   app.use("/api/v1/auth/invite", candidateCsp);
   app.use("/api/v1/auth/invite/*", candidateCsp);
-  // The authenticated job-page preview (plan D1, pages/preview.tsx) is a candidate page drawn for the team: same policy, same nonce.
-  for (const p of ["/api/v1/roles/:id/preview", "/api/v1/roles/:id/preview/page", "/api/v1/intake/sessions/:id/preview", "/api/v1/intake/sessions/:id/preview/page"]) app.use(p, candidateCsp);
+  // The team's preview of a job page (pages/preview.tsx) is a candidate page drawn for the team: same policy, same nonce.
+  for (const p of ["/api/v1/roles/:id/preview/page", "/api/v1/intake/sessions/:id/preview/page"]) app.use(p, candidateCsp);
   // Browsers post policy violations here (both report formats). Paths and origins only; never a token or a query string.
   app.post("/api/csp-report", rateLimit(POLICIES.cspReport), async (c) => {
     let body: unknown = null;
@@ -128,14 +127,10 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/companies", companySettingsRoutes);
   app.route("/api/v1/plans", planRoutes);
   app.route("/api/v1/intake", intakeRoutes);
-  // Before the data routes: a browser tab asking for the preview gets the page, the app's own requests the data.
   app.route("/api/v1/intake", draftPreviewPages);
-  app.route("/api/v1/intake", draftPacketRoutes);
-  // The role preview page first, before the role routes' scope guard: a browser tab gets the preview's own plain page for
-  // every refusal (the page applies the same scope rules itself); the app's own requests go on to the data routes.
+  // The job preview page first, before the job routes' scope guard: every refusal is the preview's own plain page.
   app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", roleRoutes);
-  app.route("/api/v1/roles", rolePacketRoutes);
   app.route("/api/v1/roles", candidateRoleRoutes);
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/admin", adminRoutes);

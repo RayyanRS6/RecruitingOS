@@ -1,12 +1,11 @@
 import { desc, eq } from "drizzle-orm";
-import { RolePacket as RolePacketSchema, appPaths, type Actor, type PacketFlag, type RolePacket } from "@ros/contracts";
-import { payChanged } from "@ros/agents";
+import { ROLE_ACTION_BLOCKED, RolePacket as RolePacketSchema, appPaths, type Actor, type PacketFlag, type RolePacket } from "@ros/contracts";
 import { emit, guardPacket, notify, openFlagsMessage, unresolvedFlags } from "@ros/core";
 import { companies, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
-import { refuseCompanyQuestions } from "./packet-fields";
+import { refuseFormQuestions } from "./packet-fields";
 
 /**
  * Versions of a job record. Every edit is a new version; nothing is overwritten.
@@ -17,10 +16,7 @@ import { refuseCompanyQuestions } from "./packet-fields";
  * - a closed job: refused (409 `role_closed`), whichever route the edit came by.
  */
 
-/** The plain refusal every route that writes a new version gives for a closed role. */
-export const CLOSED_ROLE_MESSAGE = "This role is closed, so it is not changed any more. Start a new role to hire again.";
-
-/** A role that runs: open, or paused (an edit made during a pause takes effect like one made while it is open). */
+/** A job that runs: open, or paused (an edit made during a pause takes effect like one made while it is open). */
 const RUNNING: readonly string[] = ["open", "paused"];
 export type RoleRow = typeof roles.$inferSelect;
 export type PacketRow = typeof rolePackets.$inferSelect;
@@ -28,16 +24,16 @@ export type PacketRow = typeof rolePackets.$inferSelect;
 /** What a save did: `live` on an open or paused job, `saved` on a draft that is not published yet. */
 export type NewVersionOutcome = "live" | "saved";
 
-/** The version the role runs on: the current one when it has been opened, otherwise the newest. */
+/** The version the job runs on: the current one when it has been opened, otherwise the newest. */
 export function currentVersionOf(role: Pick<RoleRow, "currentPacketVersion">, versions: PacketRow[]): PacketRow | null {
   const newest = versions.slice().sort((a, b) => b.version - a.version);
   return newest.find((p) => p.version === (role.currentPacketVersion ?? newest[0]?.version)) ?? newest[0] ?? null;
 }
 
 /**
- * The packet guard on every saved version (plan C1, packages/core/src/packet-guard.ts): jurisdictions and notices, pay on
- * the ad, the ceiling, the disclosure lines, six must-haves, nothing the owner was told could not be used, and flags for
- * wording that stands in for a protected trait. What the earlier version recorded as declined, and who kept which flag,
+ * The fairness guard on every saved version (packages/core/src/packet-guard.ts): jurisdictions and notices, pay on the
+ * ad, the disclosure lines, six must-haves, nothing the owner was told could not be used, and flags for wording that
+ * stands in for a protected trait. What the earlier version recorded as declined, and who kept which flag,
  * carries over; a flag kept in this edit is stamped with the editor and recorded as an event.
  *
  * Who set the pay is the server's record, never the client's: whatever the incoming packet says about it is ignored. A
@@ -51,16 +47,15 @@ export async function guardPacketVersion(tx: Tx, input: { companyId: string; act
   delete incoming.provenance.payConfirmedBy;
   delete incoming.provenance.payOrigin;
   const before = input.previous?.packet ?? null;
-  if (!before || payChanged(before, incoming)) {
+  if (!before || before.compensation.basis !== incoming.compensation.basis || before.compensation.min !== incoming.compensation.min || before.compensation.max !== incoming.compensation.max) {
     incoming.provenance.payConfirmedBy = { by: input.actor, at: input.now ?? new Date().toISOString(), via: "edited" };
     incoming.provenance.payOrigin = "edited";
   } else {
     if (before.provenance.payConfirmedBy) incoming.provenance.payConfirmedBy = before.provenance.payConfirmedBy;
     if (before.provenance.payOrigin) incoming.provenance.payOrigin = before.provenance.payOrigin;
   }
-  // The questions every applicant answers (Wave S7): one that asks about a protected characteristic is refused, whichever
-  // route the version came by (the questions card, the full-packet editor), never saved with a flag to keep.
-  refuseCompanyQuestions(incoming.companyQuestions);
+  // A form question that asks about a protected characteristic is refused, never saved with a flag to keep.
+  refuseFormQuestions(incoming.formQuestions);
   const guarded = guardPacket(incoming, { companyName: company?.name ?? "", companyLocations: company?.locations ?? [], declined: before?.provenance.declinedCriteria ?? [], previousFlags, actor: input.actor });
   const newlyKept = guarded.flags.filter((f) => f.kept && !previousFlags.some((p) => p.id === f.id && p.kept?.reason === f.kept?.reason));
   return { packet: RolePacketSchema.parse(guarded.packet), newlyKept, changes: guarded.changes };
@@ -69,11 +64,10 @@ export async function guardPacketVersion(tx: Tx, input: { companyId: string; act
 export async function createPacketVersion(
   tx: Tx,
   container: Container,
-  input: { tenant: Tenant; actor: Actor; role: RoleRow; packet: RolePacket; changeSummary: string; source?: "human_edit" | "playbook" | "import" | "agent_revision" },
+  input: { tenant: Tenant; actor: Actor; role: RoleRow; packet: RolePacket; changeSummary: string },
 ): Promise<{ version: PacketRow; outcome: NewVersionOutcome; guardChanges: string[]; paused?: true }> {
   const { tenant: t, actor, role } = input;
-  // A closed role is never changed again, whichever route the edit came by (row 64).
-  if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
+  if (role.status === "closed") throw new HttpError(409, "role_closed", ROLE_ACTION_BLOCKED.closed);
   const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
   const next = (versions[0]?.version ?? 0) + 1;
   const running = RUNNING.includes(role.status);
@@ -83,7 +77,7 @@ export async function createPacketVersion(
   if (running && open.length) throw new HttpError(422, "packet_flags", openFlagsMessage(open.length), { flags: open });
   const [pv] = await tx
     .insert(rolePackets)
-    .values({ companyId: t.companyId, roleId: role.id, version: next, packet, status: running ? "approved" : "proposed", source: input.source ?? "human_edit", changeSummary: input.changeSummary, createdBy: actor, approvedBy: running ? t.userId : null, approvedAt: running ? now : null })
+    .values({ companyId: t.companyId, roleId: role.id, version: next, packet, status: running ? "approved" : "proposed", source: "human_edit", changeSummary: input.changeSummary, createdBy: actor, approvedBy: running ? t.userId : null, approvedAt: running ? now : null })
     .returning();
   await emit(tx, { type: "role_packet.edited", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { roleId: role.id, version: next, changeSummary: input.changeSummary, takesEffect: running ? "now" : "with_the_role", openFlags: open.length } });
   for (const f of newlyKept) await emit(tx, { type: "packet.flag_kept", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { flagId: f.id, rule: f.rule, reason: f.kept?.reason ?? null } });

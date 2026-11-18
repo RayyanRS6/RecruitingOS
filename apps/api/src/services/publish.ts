@@ -60,25 +60,44 @@ export async function recordBlockers(tx: Tx, input: { role: Pick<RoleRow, "compa
 
 const NO_ROOM = "Your plan has no room for another job.";
 
+/** What the plan holds against publishing: the trial ended, or no room for another job. `roleId`: a job that already holds its own place. */
+export async function planBlockersFor(tx: Tx, companyId: string, opts: { roleId?: string; now: Date }): Promise<PublishBlocker[]> {
+  const room = await planRoom(tx, companyId, { newRoleId: opts.roleId, now: opts.now });
+  return room.ok ? [] : [{ code: room.trialEnded ? "trial_ended" : "plan", message: room.message ?? NO_ROOM }];
+}
+
 /**
  * Whether "Publish job" works now for a draft job, with every plain reason when it does not, in the order the publish
  * refuses: the plan (the trial ended, or no room for another job), then the job record (`recordBlockers`). The job
  * holds its own place on the plan, so it is not counted against itself.
  */
 export async function publishCheckFor(tx: Tx, input: { role: Pick<RoleRow, "id" | "companyId" | "applicationsCloseOn">; packet: CheckedPacket; now: Date }): Promise<PublishCheck> {
-  const room = await planRoom(tx, input.role.companyId, { newRoleId: input.role.id, now: input.now });
-  const plan: PublishBlocker[] = room.ok ? [] : [{ code: room.trialEnded ? "trial_ended" : "plan", message: room.message ?? NO_ROOM }];
-  const blockers = [...plan, ...(await recordBlockers(tx, input)).blockers];
+  const blockers = [...(await planBlockersFor(tx, input.role.companyId, { roleId: input.role.id, now: input.now })), ...(await recordBlockers(tx, input)).blockers];
   return { allowed: blockers.length === 0, blockers };
 }
 
-/** The date chosen in the job builder: kept with the draft as a `role.closing_date_set` event on it, newest last. */
-async function builderClosingDate(tx: Tx, roleId: string): Promise<string | null> {
-  const [session] = await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(eq(intakeSessions.roleId, roleId)).orderBy(desc(intakeSessions.createdAt)).limit(1);
-  if (!session) return null;
-  const [last] = await tx.select({ payload: events.payload }).from(events).where(and(eq(events.subjectType, "intake_session"), eq(events.subjectId, session.id), eq(events.type, "role.closing_date_set"))).orderBy(desc(events.id)).limit(1);
+/** The closing date chosen in the job builder: kept with the draft as a `role.closing_date_set` event on it, the newest standing. */
+export async function draftClosingDate(tx: Tx, sessionId: string): Promise<string | null> {
+  const [last] = await tx.select({ payload: events.payload }).from(events).where(and(eq(events.subjectType, "intake_session"), eq(events.subjectId, sessionId), eq(events.type, "role.closing_date_set"))).orderBy(desc(events.id)).limit(1);
   const chosen = (last?.payload as { closesOn?: unknown } | undefined)?.closesOn;
   return typeof chosen === "string" ? chosen.slice(0, 10) : null;
+}
+
+/**
+ * What a draft in the job builder needs from the company, the plan and the calendar before it can be published: the
+ * legal check of the written job (null until it is written) with one blocker for each missing item, the plan's blockers,
+ * and the closing date chosen for it. A draft that already became a job, or was set aside, holds no place to check.
+ */
+export async function draftChecks(tx: Tx, input: { companyId: string; sessionId: string; active: boolean; draft: Pick<CheckedPacket, "identity" | "compensation"> | null; now: Date }): Promise<{ legalCheck: LegalCheck | null; legalBlockers: PublishBlocker[]; planBlockers: PublishBlocker[]; closesOn: string | null }> {
+  const closesOn = await draftClosingDate(tx, input.sessionId);
+  const legalCheck = input.draft ? await legalCheckFor(tx, { role: { companyId: input.companyId, applicationsCloseOn: closesOn }, packet: input.draft, now: input.now }) : null;
+  return { legalCheck, legalBlockers: (legalCheck?.missing ?? []).map(legalBlocker), planBlockers: input.active ? await planBlockersFor(tx, input.companyId, { now: input.now }) : [], closesOn };
+}
+
+/** The date chosen in the job builder for the draft a job was made from. */
+async function builderClosingDate(tx: Tx, roleId: string): Promise<string | null> {
+  const [session] = await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(eq(intakeSessions.roleId, roleId)).orderBy(desc(intakeSessions.createdAt)).limit(1);
+  return session ? draftClosingDate(tx, session.id) : null;
 }
 
 /**

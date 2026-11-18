@@ -599,7 +599,14 @@ function asAnswered(written: DraftRolePacket, facts: IntakeFacts): DraftRolePack
  * the model would read as kept by the person asking, so a pasted ad could switch the fairness check off) and written
  * afresh by the guard; a person's earlier keeps carry over through `previousFlags`.
  */
-export function finalizeDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: { sessionId: string; aiRunId: string; state: IntakeServerState; actor?: Actor; previousFlags?: DraftRolePacket["provenance"]["flags"] }): DraftRolePacket {
+export function finalizeDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: FinishInput): DraftRolePacket {
+  return finishDraft(raw, ctx, prov).draft;
+}
+
+type FinishInput = { sessionId: string; aiRunId: string; state: IntakeServerState; actor?: Actor; previousFlags?: DraftRolePacket["provenance"]["flags"] };
+
+/** `finalizeDraft`, with what the guard itself changed, in plain words (`changes`). */
+function finishDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: FinishInput): { draft: DraftRolePacket; changes: string[] } {
   const packet: DraftRolePacket = structuredClone(raw);
   delete packet.provenance.flags;
   const facts = normalizeFacts(ctx.facts);
@@ -617,7 +624,7 @@ export function finalizeDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: { 
   packet.provenance.intakeSessionId = prov.sessionId;
   packet.provenance.aiRunIds = [...new Set([...(packet.provenance.aiRunIds ?? []), ...(prov.aiRunId ? [prov.aiRunId] : [])])];
   const guarded = guardPacket(packet, { companyName: ctx.company.name, companyLocations: ctx.company.locations, declined: facts.declinedCriteria, previousFlags: prov.previousFlags ?? [], actor: prov.actor, now: new Date().toISOString() });
-  return DraftRolePacketSchema.parse(guarded.packet);
+  return { draft: DraftRolePacketSchema.parse(guarded.packet), changes: guarded.changes };
 }
 
 /**
@@ -653,10 +660,10 @@ export function finalizePacket(raw: DraftRolePacket, ctx: IntakeContext, prov: {
  * Saves a person's edit of the written job, with the draft's row locked so two edits never overwrite each other. `edit`
  * turns the job as it stands into the job as edited (the one editor's rules; it may refuse by throwing). Pay or a
  * benefits line changed here is the person's own: the pay counts as set by them, and the answers follow, so nothing
- * puts the earlier figures back. The edit passes the fairness guard, which lists any wording to change or keep, and is
- * counted, since writing the job again would replace it.
+ * puts the earlier figures back. The edit passes the fairness guard, which lists any wording to change or keep
+ * (`guardChanges`: what it fixed by rule), and is counted, since writing the job again would replace it.
  */
-export async function saveDraftEdit<T>(db: Db, input: { companyId: string; sessionId: string; actor: Actor; edit: (draft: DraftRolePacket) => { packet: DraftRolePacket; result: T } }): Promise<{ draft: DraftRolePacket; result: T }> {
+export async function saveDraftEdit(db: Db, input: { companyId: string; sessionId: string; actor: Actor; edit: (draft: DraftRolePacket) => DraftRolePacket }): Promise<{ draft: DraftRolePacket; guardChanges: string[] }> {
   return withTenant(db, input.companyId, async (q) => {
     const loaded = await loadIntakeInputs(q, input.companyId, input.sessionId);
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
@@ -667,7 +674,7 @@ export async function saveDraftEdit<T>(db: Db, input: { companyId: string; sessi
     const edited = input.edit(current);
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    const pay = edited.packet.compensation;
+    const pay = edited.compensation;
     if (pay && (pay.basis !== current.compensation?.basis || pay.min !== current.compensation?.min || pay.max !== current.compensation?.max)) {
       facts.compensationBasis = pay.basis;
       facts.compensationMin = pay.min;
@@ -679,11 +686,11 @@ export async function saveDraftEdit<T>(db: Db, input: { companyId: string; sessi
       if (pay?.benefitsSummary) facts.benefits = pay.benefitsSummary;
       else delete facts.benefits;
     }
-    const draft = finalizeDraft(edited.packet, contextFrom({ ...loaded, session, state }, facts), { sessionId: session.id, aiRunId: state.draft?.aiRunId ?? "", state, actor: input.actor, previousFlags: current.provenance.flags ?? [] });
+    const { draft, changes } = finishDraft(edited, contextFrom({ ...loaded, session, state }, facts), { sessionId: session.id, aiRunId: state.draft?.aiRunId ?? "", state, actor: input.actor, previousFlags: current.provenance.flags ?? [] });
     if (state.draft) state.draft = { ...state.draft, payKey: payKey(state), edits: state.draft.edits + 1 };
     await q.update(intakeSessions).set({ draftPacket: draft, facts, serverState: state }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "role_packet.edited", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { draft: true, flags: unresolvedFlags(draft).length } });
-    return { draft, result: edited.result };
+    return { draft, guardChanges: changes };
   });
 }
 

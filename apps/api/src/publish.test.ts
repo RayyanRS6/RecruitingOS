@@ -61,8 +61,8 @@ describe("publishing a job", () => {
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Harbor Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
     ownerId = ((await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
-    // No limit of jobs: the cases about the plan set their own.
-    await entitlements.applyPlan(container.db, companyId, "growth");
+    // Room for every job these cases make: the cases about the plan set their own.
+    await entitlements.applyPlan(container.db, companyId, "ultra");
   });
   afterAll(async () => {
     await container.close();
@@ -109,7 +109,7 @@ describe("publishing a job", () => {
     expect(r.status).toBe(409);
     const refusal = (await r.json()) as Refusal;
     expect(refusal.error.code).toBe("not_ready");
-    expect(refusal.error.details?.blockers).toEqual([{ code: "open_flags", message: "One phrase in this role needs a decision first: edit it out, or keep it and say why." }]);
+    expect(refusal.error.details?.blockers).toEqual([{ code: "open_flags", message: "One phrase in this job needs a decision first: edit it out, or keep it and say why." }]);
     expect(await roleOf(open)).toMatchObject({ status: "draft", currentPacketVersion: null, openedAt: null });
     expect((await versionsOf(open))[0]).toMatchObject({ status: "proposed", approvedBy: null });
 
