@@ -13,7 +13,7 @@ type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
  * ladder, it moved on when it should), and what the candidate is shown after the code's checks (one restatement and one
  * question, no praise in "About your experience", no inference, nothing the form already asked, no private note, no
  * protected trait, a close that promises no time). Pure: `runChatSuite` takes a function that runs the prompt, so the
- * runner (packages/evals/src/runner.ts, wired by the integrator) passes the real model and the unit test the fake one.
+ * runner (runner.ts) passes the configured model and the unit test the stand-in.
  *
  * Suites: chat.shape (one restatement, one question), chat.ladder (one push, the analog, the smaller version, then not
  * known, and the push a thin must-have reply still gets), chat.no_inference, chat.no_reask (the form's answers, what the
@@ -82,6 +82,8 @@ export function sharesFiveWords(a: string, b: string): boolean {
 const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|well done|good job)\b/i;
 const INFERENCE = /\b(?:it sounds like|it seems|it looks like|clearly|obviously|you must have|straightforward for you|easy for you|no major (?:issues|hurdles))\b/i;
 const TIME_PROMISE = /\b(?:within|in a few|in \d+|few days|next week|soon|shortly|by (?:monday|tuesday|wednesday|thursday|friday))\b/i;
+/** Whether a message says when the candidate will hear. The chat's close never does. */
+export const promisesATime = (message: string): boolean => TIME_PROMISE.test(message);
 
 /** The checks every case gets on what the candidate is shown. */
 function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
@@ -95,7 +97,7 @@ function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
   const unfair = unfairQuestion(m);
   if (unfair) out.push(`fails the fairness check (${unfair}): ${m}`);
   for (const q of CHAT_PACKET.screening.questions) if (q.modelAnswer && sharesFiveWords(m, q.modelAnswer)) out.push(`says the private note of ${q.key}: ${m}`);
-  if (turn.done && TIME_PROMISE.test(m)) out.push(`the close promises a time: ${m}`);
+  if (turn.done && promisesATime(m)) out.push(`the close promises a time: ${m}`);
   return out;
 }
 
@@ -132,6 +134,17 @@ export function chatCaseFailures(c: ChatCase, raw: ScreenTurn): string[] {
   const { turn, move } = enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript, latest });
   const plan = advanceProgress(progress, turn, move).chat;
   return [...shownFailures(turn, progress.chat?.section === "experience"), ...c.expect({ raw, turn, move, plan })];
+}
+
+/**
+ * What a candidate is shown when the model's follow-up asks something no employer may ask: the code's rules never let
+ * it through (`enforceChatTurn`). Scripted, with no model call.
+ */
+export function shownAfterAnUnfairFollowUp(): string {
+  const c: ChatCase = { id: "unfair_follow_up", suite: "chat.fairness", gaps: [], asking: "wq_room", transcript: [{ role: "assistant", content: "Several robot kits fail at once in a class of twenty. How do you handle the room?", questionKey: "wq_room" }, { role: "candidate", content: "I would get the class on a paper task and fix the kits one at a time." }], expect: () => [] };
+  const progress = chatCaseProgress(c);
+  const raw: ScreenTurn = { messageToCandidate: "Thanks. Have you ever been convicted of a crime?", questionKey: null, answerRecorded: null, followUpReason: "scripted", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+  return enforceChatTurn(raw, chatPacket(CHAT_PACKET, progress), progress, {}, { transcript: transcriptOf(c), latest: c.transcript.at(-1)?.content ?? "" }).turn.messageToCandidate;
 }
 
 const GAP_ASK = "This is one of the things the job needs: Hands-on Arduino or robotics hardware work. What can you tell me about it from your own work?";
@@ -178,8 +191,8 @@ export const chatCases: ChatCase[] = [
     ],
   },
   {
-    // screen.turn v8: doubt about whether something was already said never skips a must-have's push; a reply that names
-    // the must-have without showing it still gets one
+    // doubt about whether something was already said never skips a must-have's push; a reply that names the must-have
+    // without showing it still gets one
     id: "thin_must_have_still_pushed",
     suite: "chat.ladder",
     gaps: ["arduino", "english"],
@@ -248,8 +261,8 @@ export const chatCases: ChatCase[] = [
     expect: ({ turn }) => (/\blaptop\b/i.test(turn.messageToCandidate) ? [`asks again what the form asked: ${turn.messageToCandidate}`] : []),
   },
   {
-    // The 22 Oct 2026 staging try-out (screen.turn v8): the candidate described the fault, how they found it and the fix,
-    // and the next message asked "How did you find the cause, and what did you do to fix it?"
+    // The candidate describes the fault, how they found it and the fix: the next message must not ask "How did you find
+    // the cause, and what did you do to fix it?"
     id: "just_said_not_asked_again",
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
@@ -264,9 +277,8 @@ export const chatCases: ChatCase[] = [
     ],
   },
   {
-    // The try-out's first repeat: "about five years as a backend engineer", then "How long have you worked in software
-    // engineering overall?". Here the reply to arduino already gives the next item (two years explaining technical ideas
-    // in English to beginners, with the sensor example): moving on to it, the question shown never asks it again.
+    // The reply to arduino already gives the next item (two years explaining technical ideas in English to beginners,
+    // with the sensor example): moving on to it, the question shown never asks it again.
     id: "earlier_reply_not_asked_again",
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
@@ -312,8 +324,8 @@ export const chatCases: ChatCase[] = [
 ];
 
 /**
- * What a failing case needs to be diagnosed (Wave S9; synthetic data, kept with the results): the plan's item, the chat,
- * the model's own turn, and the turn after the code's rules with the step it took.
+ * What a failing case needs to be diagnosed (synthetic data, kept with the results): the plan's item, the chat, the
+ * model's own turn, and the turn after the code's rules with the step it took.
  */
 export function chatCaseNotes(c: ChatCase, raw: ScreenTurn): string[] {
   const progress = chatCaseProgress(c);
@@ -330,8 +342,8 @@ export function chatCaseNotes(c: ChatCase, raw: ScreenTurn): string[] {
 }
 
 /**
- * The full record of a failing case for the result file (Wave S9, diagnostics.ts; synthetic data): the chat, and the
- * model's turn as it returned it and after the code's rules, with the step the plan took. `raw` null: the call failed.
+ * The full record of a failing case for the result file (diagnostics.ts; synthetic data): the chat, and the model's turn
+ * as it returned it and after the code's rules, with the step the plan took. `raw` null: the call failed.
  */
 export function chatCaseDiagnostics(c: ChatCase, raw: ScreenTurn | null): CaseDiagnostics {
   const transcript = traceTranscript(c.transcript);

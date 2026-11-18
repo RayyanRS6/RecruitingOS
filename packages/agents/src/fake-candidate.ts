@@ -62,8 +62,7 @@ function plainPhrase(s: string): string {
 export function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAssessment {
   const sys = req.system.map((b) => b.text).join("\n");
   const user = req.messages[0]?.content ?? "";
-  const resume = user.match(/<resume>\n?([\s\S]*?)\n?<\/resume>/)?.[1] ?? "";
-  const text = /no resume text available/.test(resume) ? "" : resume;
+  const text = user.match(/<resume>\n?([\s\S]*?)\n?<\/resume>/)?.[1] ?? "";
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const formLines = (user.match(/one per line\):\n([\s\S]*?)\n<\/application>/)?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   const mustHaves = parseBracketList(sys.match(/Must-haves: ([^\n]+)/)?.[1]);
@@ -101,7 +100,7 @@ export function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAsses
       return { requirementKey: m.key, met: no ? ("no" as const) : ("yes" as const), evidence: { source: "application" as const, quote: answered } };
     }
     unknowns.push({ question: `Can you tell me about your ${plainPhrase(what)}?`, whyItMatters: "It is a must-have for this job and the resume does not show it." });
-    if (text.trim()) concerns.push({ claim: `No evidence of ${plainPhrase(what)} in the resume`, evidence: { source: "resume" } });
+    concerns.push({ claim: `No evidence of ${plainPhrase(what)} in the resume`, evidence: { source: "resume" } });
     return { requirementKey: m.key, met: "unknown" as const };
   });
   const competencyFindings: EvidenceAssessment["competencyFindings"] = competencies.map((c) => {
@@ -111,9 +110,7 @@ export function fakeTriageAssess(req: StructuredRequest<unknown>): EvidenceAsses
   });
   const yes = requirementFindings.filter((r) => r.met === "yes").length;
   const partial = requirementFindings.filter((r) => r.met === "partially").length;
-  const summary = !text.trim() && !formLines.length
-    ? "There was no resume text to read, so nothing can be said from it yet."
-    : `${yes} of ${mustHaves.length} must-haves shown${partial ? `, ${partial} partly` : ""}; ${competencyFindings.filter((c) => c.finding === "evidenced").length} of ${competencies.length} skills shown.`;
+  const summary = `${yes} of ${mustHaves.length} must-haves shown${partial ? `, ${partial} partly` : ""}; ${competencyFindings.filter((c) => c.finding === "evidenced").length} of ${competencies.length} skills shown.`;
   return { summary, strengths, concerns, unknowns, competencyFindings, requirementFindings };
 }
 

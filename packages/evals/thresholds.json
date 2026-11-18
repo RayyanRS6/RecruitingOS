@@ -35,19 +35,13 @@
   "triage.credentials": {
     "minPassRate": 1
   },
-  "triage.interview_skills": {
-    "minPassRate": 1
-  },
-  "triage.kept_in": {
-    "minPassRate": 1
-  },
   "triage.fairness_rules": {
     "minPassRate": 1
   },
   "screen.redaction": {
     "minPassRate": 1
   },
-  "board.determinism": {
+  "score.rules": {
     "minPassRate": 1
   },
   "screen.conversation": {

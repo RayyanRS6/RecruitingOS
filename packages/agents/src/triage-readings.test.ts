@@ -299,7 +299,7 @@ describe("a credential the candidate's own words show is not held", () => {
 
 
   it("never takes a field name of the form as a quote: only the answers, as the sentences the reading was given", () => {
-    const input = { resumeText: null, packet: { formQuestions: [{ kind: "yes_no", key: "rdh_license", question: "Do you hold an active CA RDH license?", required: true }, { kind: "choice", key: "shift", question: "Which shift do you prefer?", options: ["Mornings", "Evenings"], required: true }] } as never, formAnswers: { rdh_license: "yes", shift: "Mornings" } };
+    const input = { resumeText: RESUME, packet: { formQuestions: [{ kind: "yes_no", key: "rdh_license", question: "Do you hold an active CA RDH license?", required: true }, { kind: "choice", key: "shift", question: "Which shift do you prefer?", options: ["Mornings", "Evenings"], required: true }] } as never, formAnswers: { rdh_license: "yes", shift: "Mornings" } };
     const sources = assessmentSources(input);
     expect(sources.application).not.toContain("rdh_license");
     expect(sources.application).toContain("Do you hold an active CA RDH license? Yes.");

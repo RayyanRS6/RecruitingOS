@@ -10,7 +10,8 @@ export type TriageInput = {
   /** The job version the reading is made against. Only what the CV score counts is read from it: its must-haves and its skills. */
   packet: RolePacket;
   extraction: ResumeExtraction | null;
-  resumeText: string | null;
+  /** The CV's own text: an application whose file has none is never read. */
+  resumeText: string;
   /**
    * The candidate's answers on the application form as plain sentences, one per line, the question then their answer
    * ("Do you hold an active CA RDH license? Yes."): every answered question of the form, never a field name.
@@ -91,7 +92,7 @@ export const triageAssessPrompt: PromptDef<TriageInput, EvidenceAssessment> = {
     {
       role: "user",
       content: [
-        input.resumeText ? `<resume>\n${triageDataText(input.resumeText.slice(0, 40_000))}\n</resume>` : "<resume>(no resume text available)</resume>",
+        `<resume>\n${triageDataText(input.resumeText.slice(0, 40_000))}\n</resume>`,
         input.extraction ? `<extraction>\n${triageDataText(JSON.stringify({ positions: input.extraction.positions, licenses: input.extraction.licenses, certifications: input.extraction.certifications, skills: input.extraction.skills, yearsOfExperienceEstimate: input.extraction.yearsOfExperienceEstimate }))}\n</extraction>` : "",
         `<application>\n${answersBlock(input)}\n</application>`,
         "Read this application against the job's requirements.",

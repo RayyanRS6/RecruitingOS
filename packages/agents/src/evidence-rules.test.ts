@@ -188,7 +188,7 @@ describe("what the AI sees when it scores", () => {
 
   it("shows every answer on the form as a plain sentence, which counts as the candidate's own words", () => {
     const packet = { ...PACKET, formQuestions: [...FORM, { kind: "choice" as const, key: "shift", question: "Which shift do you prefer?", options: ["Mornings", "Evenings"], required: true }, { kind: "number" as const, key: "years", question: "How many years have you worked as a hygienist?", unit: "years", required: true }] };
-    const input = { packet: packet as never, extraction: null, resumeText: null, formAnswers: { el_license: "yes", el_schedule: "no", shift: "Evenings", years: "6" }, identity: {} };
+    const input = { packet: packet as never, extraction: null, resumeText: RESUME, formAnswers: { el_license: "yes", el_schedule: "no", shift: "Evenings", years: "6" }, identity: {} };
     const { promptInput, view } = scoringInput(input);
     // the yes/no answers, and the choice and the number too
     expect(promptInput.answerSentences.slice(0, 2)).toEqual(["Do you hold an active CA RDH license? Yes.", "Can you work the posted schedule? No."]);

@@ -46,7 +46,8 @@ export type AssessInput = {
    */
   packet: RolePacket;
   extraction: ResumeExtraction | null;
-  resumeText: string | null;
+  /** The CV's own text. An application whose file has no readable text is never read. */
+  resumeText: string;
   /** The application form's answers by question key (`formAnswersOf` in @ros/core): every one reaches the reading. */
   formAnswers: Record<string, unknown>;
   identity: ScoringIdentity;
@@ -81,7 +82,7 @@ export function scoringInput(input: Pick<AssessInput, "packet" | "extraction" | 
   const promptInput: TriageInput = {
     packet: input.packet,
     extraction: input.extraction ? view.deep(input.extraction) : null,
-    resumeText: input.resumeText === null ? null : view.text(input.resumeText),
+    resumeText: view.text(input.resumeText),
     // the questions are the company's words; the answers go through the scoring view
     answerSentences: formAnswerLines(input.packet, view.deep(input.formAnswers)),
   };
@@ -106,7 +107,7 @@ export const TRIAGE_READINGS = 3;
  * RDH license? Yes.") is the candidate's own words, and a field name is never found.
  */
 export function assessmentSources(input: Pick<AssessInput, "resumeText" | "formAnswers" | "packet">): Partial<Record<EvidenceSource, string>> {
-  return { resume: input.resumeText ?? "", application: formAnswerLines(input.packet, input.formAnswers).join("\n") };
+  return { resume: input.resumeText, application: formAnswerLines(input.packet, input.formAnswers).join("\n") };
 }
 
 /**
@@ -119,7 +120,7 @@ export function assessmentSources(input: Pick<AssessInput, "resumeText" | "formA
 export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
   const { promptInput, view } = scoringInput(input);
   // The record says which view the reading used and how many details it hid: counts only, never the values.
-  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText?.length ?? 0, hasExtraction: !!input.extraction, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
+  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText.length, hasExtraction: !!input.extraction, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
   const meta = (reading: number): RunMeta => ({ companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { ...inputRef, reading } });
   const runs = await runPromptsDetached(db, ai, triageAssessPrompt, promptInput, Array.from({ length: TRIAGE_READINGS }, (_, i) => meta(i + 1)));
   // A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries, rather than
