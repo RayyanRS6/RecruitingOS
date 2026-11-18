@@ -132,10 +132,9 @@ export const ChatItemState = z.enum(["open", "asking", "covered", "unknown", "sk
 export type ChatItemState = z.infer<typeof ChatItemState>;
 
 /**
- * One thing the chat must close. `question`: one of the job's interview questions (key = the question's key); only
- * these count toward "N of M required", and only when `required`. `gap`: a must-have the CV reading did not find shown
- * (key = the must-have's key), asked along the ladder `direct` → `analog` ("something similar from your own work") →
- * `smaller` ("even a small moment?"), with at most one push for specifics.
+ * One thing the chat must close. `question`: one of the job's interview questions (key = the question's key). `gap`: a
+ * must-have the CV reading did not find shown (key = the must-have's key), asked along the ladder `direct` → `analog`
+ * ("something similar from your own work") → `smaller` ("even a small moment?"), with at most one push for specifics.
  */
 export const ChatItem = z.object({
   key: z.string().min(1).max(100),
@@ -158,8 +157,11 @@ export const ChatPlan = z.object({
 });
 export type ChatPlan = z.infer<typeof ChatPlan>;
 
-/** What the chat's header shows: "2 of 4 required · Required questions"; never the questions in advance. */
-export type ChatCounter = { done: number; required: number; section: ChatSection; label: string };
+/**
+ * The one line above the chat: "Question 2 of 6" while a question is asked, "All 6 questions done" at the closing
+ * question; never the questions in advance. `done`: the questions closed so far, of the `total` the chat asks.
+ */
+export type ChatCounter = { done: number; total: number; label: string };
 
 /**
  * The chat's closing question ("Wrapping up"): asked after every item, in code's words, and never an item of the plan

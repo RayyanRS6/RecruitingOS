@@ -90,7 +90,7 @@ export const ScreenProgress = z.object({
   scoreWaitsForCredit: z.string().optional(),
   /** A person's "Send a reminder" about an interview already started: it stays open at least until then. */
   keptOpenUntil: z.string().optional(),
-  /** The chat's sections and what each item stands at (the header's "2 of 4 required"). */
+  /** The chat's sections and what each item stands at (the line above the chat, "Question 2 of 6"). */
   chat: ChatPlan.optional(),
   /** The CV's lines and the form's answers as sentences: the only details of the application the chat may name. */
   typedFacts: z.object({ cv: z.array(z.string().max(500)).max(20), formAnswers: z.array(z.string().max(500)).max(20) }).optional(),
