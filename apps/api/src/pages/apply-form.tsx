@@ -1,7 +1,7 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
-import { ApplyRequest, ApplySource, MAX_RESUME_BYTES, inspectResumeFile, trialStanding, type DraftRolePacket, type FormAnswers, type FormQuestion, type RolePacket } from "@ros/contracts";
+import { ApplyRequest, ApplySource, MAX_RESUME_BYTES, applyLinkFor, inspectResumeFile, trialStanding, type DraftRolePacket, type FormAnswers, type FormQuestion, type RolePacket } from "@ros/contracts";
 import { afterApplyingSteps } from "@ros/agents";
 import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, candidateNotices, closeOutDayWords, closeOutDueAt, emit, onFileFormLine, onFileReceiptLine, openPayload, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
@@ -410,10 +410,13 @@ export const NO_SCRIPT_MAX_RESUME_BYTES = 4 * 1024 * 1024;
 /** How long a directly uploaded file waits for its application before it is removed. */
 const UNSENT_UPLOAD_KEEP_MS = 24 * 3600_000;
 
-/** The addresses the form uses, all under the job's own. */
-function applyLinks(job: Job) {
+/**
+ * The addresses the form uses, all under the job's own. The way back to the job page keeps where the candidate came
+ * from (`source`), so someone who goes back and presses Apply again is still counted to that source.
+ */
+function applyLinks(job: Job, source: string | null) {
   const base = `/careers/${job.company.slug}/jobs/${job.role.id}`;
-  return { job: base, uploadIntent: `${base}/upload-intent`, apply: `${base}/apply` };
+  return { job: source ? applyLinkFor(base, source) : base, uploadIntent: `${base}/upload-intent`, apply: `${base}/apply` };
 }
 
 /** Everything the form needs that does not change between showing it and showing it again. */
@@ -425,7 +428,7 @@ function applyFormFor(container: Container, job: Job, onFile: boolean, source: s
     notices: jobNotices(job.packet, job.company),
     privacyEmail: container.env.PRIVACY_EMAIL,
     onFile,
-    links: applyLinks(job),
+    links: applyLinks(job, source),
     source,
   };
 }

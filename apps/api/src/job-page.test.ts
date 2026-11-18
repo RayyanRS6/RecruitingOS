@@ -162,15 +162,28 @@ describe("the job page and the careers page", () => {
     expect(form).not.toMatch(/AI interview|AI assistant|Read my resume|No resume\?|saved details/);
   });
 
-  it("carries where a candidate came from (?src=) from the job page on to the form, and drops anything that is not a plain word", async () => {
-    const fromPost = await page(`/careers/${slug}/jobs/${roleId}?src=linkedin`);
-    expect(fromPost.match(new RegExp(`href="/careers/${slug}/jobs/${roleId}/apply\\?src=linkedin"`, "g"))).toHaveLength(2);
-    expect(await page(`/careers/${slug}/jobs/${roleId}/apply?src=linkedin`)).toContain('<input type="hidden" name="src" value="linkedin"');
-    const odd = await page(`/careers/${slug}/jobs/${roleId}?src=${encodeURIComponent("<x y>")}`);
+  it("carries where a candidate came from (?src=) from the job page on to the form and back again, and drops anything that is not a plain word", async () => {
+    const job = `/careers/${slug}/jobs/${roleId}`;
+    const fromPost = await page(`${job}?src=linkedin`);
+    expect(fromPost.match(new RegExp(`href="${job}/apply\\?src=linkedin"`, "g"))).toHaveLength(2);
+    const form = await page(`${job}/apply?src=linkedin`);
+    expect(form).toContain('<input type="hidden" name="src" value="linkedin"');
+    // "Back to the job" keeps it, so pressing Apply there again is still counted to LinkedIn
+    expect(form).toContain(`<p class="back"><a href="${job}?src=linkedin">`);
+    // and so does a form that comes back with something to fix
+    const sentBack = await apply(applicationForm({ firstName: "", src: "indeed" }));
+    expect(sentBack.status).toBe(400);
+    const again = await sentBack.text();
+    expect(again).toContain(`<p class="back"><a href="${job}?src=indeed">`);
+    expect(again).toContain('<input type="hidden" name="src" value="indeed"');
+    const odd = await page(`${job}?src=${encodeURIComponent("<x y>")}`);
     expect(odd).not.toContain("src=");
-    expect(await page(`/careers/${slug}/jobs/${roleId}/apply?src=${encodeURIComponent("<x y>")}`)).not.toContain('name="src"');
-    // with no source the links are the plain ones
-    expect((await page(`/careers/${slug}/jobs/${roleId}`)).match(new RegExp(`href="/careers/${slug}/jobs/${roleId}/apply"`, "g"))).toHaveLength(2);
+    const oddForm = await page(`${job}/apply?src=${encodeURIComponent("<x y>")}`);
+    expect(oddForm).not.toContain('name="src"');
+    expect(oddForm).toContain(`<p class="back"><a href="${job}">`);
+    // with no source the links are the plain ones, both ways
+    expect((await page(job)).match(new RegExp(`href="${job}/apply"`, "g"))).toHaveLength(2);
+    expect(await page(`${job}/apply`)).toContain(`<p class="back"><a href="${job}">`);
   });
 
   it("shows the text about the company only once a person approved it, with the website; a draft waiting in Settings never shows", async () => {
