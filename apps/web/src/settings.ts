@@ -2,7 +2,6 @@ import { MEMBERSHIP_ROLE_LABEL, type CompanyView, type LeftCompany, type Locatio
 import { shortDay } from "./dates";
 import { placeWords } from "./jobs";
 import { trialPlanLine } from "./trial";
-import { requestSentWords } from "./upgrade";
 
 /**
  * Settings, one page with four sections (Company, Team, Plan, Email updates): the parts that need no browser, kept out
@@ -145,16 +144,11 @@ export const CONFIRM_FIRST_LINE = "Making someone an admin or an owner needs a r
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * The Plan section's lines: the plan's name, where a trial stands, one usage line (each limit in the server's words),
- * and the day an open upgrade request was sent.
+ * The Plan section's lines: the plan's name, where a trial stands, and one usage line (each limit in the server's
+ * words). The day an open upgrade request was sent stands in place of the Upgrade button (components/Upgrade.tsx).
  */
-export function planLines(plan: Pick<PlanView, "name" | "usage" | "trial" | "upgradeRequestedAt">, timeZone?: string | null): { name: string; trial: string | null; usage: string; requested: string | null } {
-  return {
-    name: plan.name,
-    trial: trialPlanLine(plan.trial, timeZone),
-    usage: plan.usage.map((u) => u.words).join(" · "),
-    requested: plan.upgradeRequestedAt ? requestSentWords(plan.upgradeRequestedAt) : null,
-  };
+export function planLines(plan: Pick<PlanView, "name" | "usage" | "trial">, timeZone?: string | null): { name: string; trial: string | null; usage: string } {
+  return { name: plan.name, trial: trialPlanLine(plan.trial, timeZone), usage: plan.usage.map((u) => u.words).join(" · ") };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

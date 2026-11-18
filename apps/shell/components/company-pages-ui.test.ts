@@ -327,7 +327,7 @@ describe("Settings", () => {
   it("shows the plan with what is used in the server's words, and Upgrade or the day it was asked for", () => {
     const section = (html: string) => html.slice(html.indexOf('id="setup-plan"'), html.indexOf('id="setup-notifications"'));
     const html = section(draw("owner"));
-    expect(text(html)).toContain("Plan Upgrade Basic 1 of 3 jobs AI help: 40% used");
+    expect(text(html)).toContain("Plan Upgrade Basic 1 of 3 jobs · AI help: 40% used");
     expect(html).not.toMatch(/\$\d/);
     const asked = section(draw("owner", { company: company({ plan: { ...company().plan, upgradeRequestedAt: "2026-11-18T12:00:00.000Z" } }) }));
     expect(text(asked)).toContain("Request sent on November 18, 2026");

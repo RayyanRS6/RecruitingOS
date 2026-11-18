@@ -141,7 +141,7 @@ describe("Team", () => {
 });
 
 describe("Plan", () => {
-  const plan = (over: Partial<PlanView> = {}): Pick<PlanView, "name" | "usage" | "trial" | "upgradeRequestedAt"> => ({
+  const plan = (over: Partial<PlanView> = {}): Pick<PlanView, "name" | "usage" | "trial"> => ({
     name: "Basic",
     usage: [
       { key: "jobs_total" as never, label: "Jobs", used: 1, limit: 3, unit: "count", resetsAt: null, words: "1 of 3 jobs" },
@@ -149,21 +149,19 @@ describe("Plan", () => {
       { key: "ai_credit" as never, label: "AI help", used: 40, limit: 100, unit: "percent", resetsAt: "2026-12-05T00:00:00.000Z", words: "AI help: 40% used" },
     ],
     trial: null,
-    upgradeRequestedAt: null,
     ...over,
   });
 
   it("shows the plan's name and one usage line, each limit in the server's words, AI help never in money", () => {
     const lines = planLines(plan());
-    expect(lines).toEqual({ name: "Basic", trial: null, usage: "1 of 3 jobs · 2 of 3 people · AI help: 40% used", requested: null });
+    expect(lines).toEqual({ name: "Basic", trial: null, usage: "1 of 3 jobs · 2 of 3 people · AI help: 40% used" });
     expect(lines.usage).not.toMatch(/\$/);
   });
 
-  it("says where a trial stands on the company's calendar, and the day an upgrade was asked for", () => {
+  it("says where a trial stands on the company's calendar", () => {
     const trial = { started: true, startedAt: "2026-11-01T19:00:00.000Z", endsAt: "2026-12-01T07:59:00.000Z", daysLeft: 12, endingSoon: false, ended: false, extendedDays: 0 };
     expect(planLines(plan({ name: "Trial", trial }), "America/Los_Angeles").trial).toBe("Trial until November 30");
     expect(planLines(plan({ name: "Trial", trial: { ...trial, ended: true } }), "America/Los_Angeles").trial).toBe("Trial ended on November 30");
-    expect(planLines(plan({ upgradeRequestedAt: "2026-11-18T20:00:00.000Z" })).requested).toMatch(/^Request sent on November 1[89], 2026$/);
   });
 });
 
