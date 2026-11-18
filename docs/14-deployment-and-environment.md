@@ -137,13 +137,6 @@ Defaults are the local development values. In the Required column, "prod" means 
 | `PRODUCT_NAME` | | `Recruiting OS` | Internal product name in owner- and staff-facing system mail |
 | `MESSAGE_UNDO_SECONDS` | | `30` (tests `0`) | How long a decision email a person sends to a candidate waits before it leaves, so they can take it back; 0 to 120, 0 sends at once |
 
-### Pay lookup
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `BLS_API_KEY` | | | OEWS v2 (higher limits) |
-| `COMP_BLS_ENABLED` | | `true` | `false` skips the live wage lookup (tests, offline work) |
-
 ### Files and scanning
 
 | Variable | Required | Default | Purpose |
