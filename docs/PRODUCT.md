@@ -64,6 +64,8 @@ Nobody changes their own membership, and the last owner stays. The platform admi
 
 **D14 Under the product** (OWNER for plans): plans, limits, AI credit and locked applicants; sign-in, sessions and the staff second factor; privacy requests; audit records and events; the workflow engine; the email outbox; file storage and scanning; the UI kit; every required candidate notice.
 
+**D15 Candidates write to the company** (the team, 19 November 2026). A company runs its own hiring, so candidates write to the company, not to the platform. The company details form asks for the "Email candidates can write to"; it starts from the person's sign-in address. The company's job pages and candidate emails name it, and a candidate's reply to any email lands there. Settings, Company, "Candidates write to" changes it. The platform's own inbox answers only for a company that has no contact of its own.
+
 ## Never cut (legal)
 
 The AI-use notice, the privacy notice, pay transparency, the accommodation lines, "people make every hiring decision", the acknowledgment tick (never pre-ticked, enforced on the server), the disclosure line and the way to reach a person on automatic emails, the Colorado line in decision emails, "your replies go to the company only when you press Send", the wording a locked applicant reads, and every block marked DRAFT WORDING PENDING COUNSEL. The texts are in `packages/core/src/compliance.ts` and `packages/core/src/candidate-lock.ts`.

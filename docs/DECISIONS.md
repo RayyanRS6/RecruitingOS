@@ -45,7 +45,7 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 - **PL-8.** A change of plan opens people oldest first on each job, up to the new limit, each with one event and one audit line.
 - **PL-9, PL-13.** The server is the wall: a locked application answers 402 `candidate_locked` before any handler, and lists and counts leave locked people out in the query. On screen a locked person is one card ("Locked", when they applied, "Upgrade to view more candidates."), never a name, initials, a score, a stage or a source.
 - **PL-10.** The AI credit is the one meter. Every model call takes a hold first and is refused when it would pass the limit. Free's credit never starts again, and a move down to Free gives no second $10. A candidate is never stuck, cut off or told. The company's owner gets one notice at 80% and one when it is used up, and reads the credit as words or a percentage, never dollars; the platform administrator sees dollars.
-- **PL-11.** No payment system. Upgrade sends a request to the platform administrator, who changes the plan: "No card is charged", and nothing changes until then.
+- **PL-11.** No payment system. Upgrade sends a request to the platform administrator, who changes the plan: "No card is charged", and nothing changes until then. The button's words are the server's: "Upgrade", or "Talk to ITS" on the top plan, and no button for someone who may not ask.
 
 ## AI models
 
@@ -86,7 +86,7 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 
 ## Email
 
-- **A12** (14 Sep 2026). Candidate email is sent from the product's own sending domain through Postmark, not from a customer's mailbox.
+- **A12** (14 Sep 2026). Candidate email is sent from the product's own sending domain through Postmark, not from a customer's mailbox. A reply goes to the company's own contact address ([PRODUCT.md](PRODUCT.md), D15).
 - **Open** (4 Nov 2026). Email was not live on production: Postmark's account approval was pending and the sending domain was not verified. It waits for the product's new name and its domain, which the owner is choosing.
 - (5 Nov 2026; **PQ-18**, not answered by the owner.) Email must be live before any real candidate applies: "we received your application" and the status link both depend on it.
 - **AP-5** (6 Nov 2026). Until then nothing depends on email: a failed email never stops a company's request, an Accept or a Decline, and a screen says an email was sent only when it really left.

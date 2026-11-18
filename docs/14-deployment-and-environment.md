@@ -100,7 +100,7 @@ The setup scripts pass a few values of their own to the database tools (`ROS_PRO
 | `POSTMARK_WEBHOOK_SECRET` | The password Postmark's webhook sends; made up with `scripts/new-secret.ps1` | unset | **must** (production), 32 characters or more | unset: only the app answers webhooks |
 | `EMAIL_FROM_DOMAIN` | The sending domain | `mail.localhost` | the sending domain | the same |
 | `EMAIL_FROM_ADDRESS` | The one sending address; the display name is the hiring company's team | `updates@<EMAIL_FROM_DOMAIN>` | **must** (production): set by hand | the same |
-| `EMAIL_REPLY_TO` | The mailbox candidate replies land in; a person reads it. Also the contact printed on job pages for a company that set none of its own | `ITS_QUEUE_EMAIL` | **must** (production): a real mailbox | the same |
+| `EMAIL_REPLY_TO` | The platform's own reply mailbox, which a person reads. It answers only for a company that has no contact address of its own: it is then the contact printed on that company's job pages and where its candidates' replies land. Also the contact a person asking for access is given | `ITS_QUEUE_EMAIL` | **must** (production): a real mailbox | the same |
 | `ITS_QUEUE_EMAIL` | The platform's own mailbox: each request for access and each change of administrators | a `.localhost` address | **must** (production): a real mailbox | the same |
 | `PRIVACY_EMAIL` | The privacy mailbox shown to candidates | the address in `env.ts` | the privacy mailbox | unset: the worker does not read it |
 | `PRODUCT_NAME` | The product's name in mail to teams and staff, and in authenticator apps | `Recruiting OS` | the name | the same |
