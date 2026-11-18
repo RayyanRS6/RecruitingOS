@@ -37,7 +37,7 @@ const plain = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").
 const text = (html: string) => plain(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 const me = (role: MembershipRole) => ({ user: { id: "u1", email: "owner@bright.test", name: "Sam Sample", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
 const room: PlanRoom = { ok: true, limit: 3, used: 1, holding: [], message: null, ask: null };
-const draft =(over: Partial<IntakeSessionSummary> = {}): IntakeSessionSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range"], ...over });
+const draft = (over: Partial<IntakeSessionSummary> = {}): IntakeSessionSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range"], ...over });
 
 function client(role: MembershipRole, seed: Array<[unknown[], unknown]> = []): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Number.POSITIVE_INFINITY } } });
