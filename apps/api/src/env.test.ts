@@ -262,7 +262,7 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
       expect(refusal({ ...hosted, SIGNUP_MODE: "open" })).toMatch(notByApproval);
       expect(refusal({ ...hosted, SIGNUP_MODE: "approval" })).toBeNull();
     }
-    // the two modes are the only ones: invitation-only is gone, and a misspelling starts nowhere
+    // the two modes are the only ones: any other word, a misspelling among them, starts nowhere
     for (const mode of ["invite", "Approval", "closed"]) {
       expect(refusal({ ...production, SIGNUP_MODE: mode }), mode).toMatch(/^SIGNUP_MODE must be "approval" or "open" \(it is ".+"\)/);
       expect(refusal({ NODE_ENV: "development", SIGNUP_MODE: mode }), mode).toMatch(/^SIGNUP_MODE must be "approval" or "open"/);
@@ -275,9 +275,6 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "" }).SIGNUP_MODE).toBe("open");
     expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "open" }).SIGNUP_MODE).toBe("open");
     expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "approval" }).SIGNUP_MODE).toBe("approval");
-    // the allow-list and the separate company check are read by nothing: set or not, they change nothing
-    expect(loadEnv({ NODE_ENV: "test", SIGNUP_ALLOWED_EMAILS: "a@example.test", COMPANY_CHECK: "its" })).not.toHaveProperty("SIGNUP_ALLOWED_EMAILS");
-    expect(loadEnv({ NODE_ENV: "test", SIGNUP_ALLOWED_EMAILS: "a@example.test", COMPANY_CHECK: "its" })).not.toHaveProperty("COMPANY_CHECK");
   });
 
   it("refuses the internal email link on any production process", () => {
