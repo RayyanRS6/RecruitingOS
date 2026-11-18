@@ -69,16 +69,13 @@ test.describe("a Free company past its five candidates", () => {
     await expectAccessible(page, "the upgrade sheet");
     await sheet.getByLabel("A note for ITS (optional)").fill("We hire more from next month.");
     await sheet.getByRole("button", { name: "Ask ITS to upgrade" }).click();
-    await expect(sheet.getByText(/^ITS will respond by .+No card is charged, and nothing changes until then\./)).toBeVisible({ timeout: 30_000 });
+    await expect(sheet.getByText(/^Request sent on .+ No card is charged\. ITS will contact you, and nothing changes until then\./)).toBeVisible({ timeout: 30_000 });
     await sheet.getByRole("button", { name: "Done" }).click();
     await expect(sheet).toBeHidden();
 
-    // Asking again says softly that ITS has it, and offers nothing more to press
-    await card.getByRole("button", { name: "Upgrade" }).click();
-    await expect(sheet.getByText("ITS has your request.")).toBeVisible({ timeout: 30_000 });
-    await expect(sheet.getByRole("button", { name: "Ask ITS to upgrade" })).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expect(sheet).toBeHidden();
+    // With the request sent, the day it went stands in the button's place: nothing more to press
+    await expect(card.getByText(/^Request sent on /)).toBeVisible({ timeout: 30_000 });
+    await expect(card.getByRole("button", { name: "Upgrade" })).toHaveCount(0);
 
     // ITS: the customer's row says it asked and how many are locked; the plan's price and limits; a reason, then a second press
     const staff = await browser.newContext();
@@ -113,13 +110,10 @@ test.describe("a Free company past its five candidates", () => {
     await expect(panel.getByRole("button", { name: /^Stage: / })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "the candidate who was locked");
 
-    // ITS's answer reached the team: it closed their request, and Settings says the new plan
+    // ITS's change reached the team, and Settings says the new plan
     await page.goto("/");
-    const requests = page.getByRole("list", { name: "Your recruiter requests" });
-    await expect(requests.getByText("Your plan", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(requests.getByText("Your company is on the Pro plan now.")).toBeVisible();
     await page.getByText(/^Recent activity/).click();
-    await expect(page.getByText("Your plan is now Pro")).toBeVisible();
+    await expect(page.getByText("Your plan is now Pro")).toBeVisible({ timeout: 30_000 });
     await page.goto("/setup#setup-company");
     await expect(page.locator("#setup-company").getByText("Pro", { exact: true })).toBeVisible({ timeout: 30_000 });
     // That month is the AI help's own, so it says its own day

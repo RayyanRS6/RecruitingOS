@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
-import { approvalCard, createCompanyThroughTheForm, emailsTo, expectAccessible, outbox, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { approvalCard, createCompanyThroughTheForm, emailsTo, expectAccessible, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /** The open set of question cards: the first answer on each (a radio, a checkbox or a team chip), Next, and Send on the last. */
 async function answerEveryCard(card: Locator) {
@@ -16,7 +16,7 @@ async function answerEveryCard(card: Locator) {
  * process of making a job hiring"): Start a hire, the owner's own words, the assistant's question cards answered one at a
  * time, Write the draft, Ask for approval, the job's page with Approve at the top of its card, the calm confirmation that
  * says where it is going, Live on the job, on the Jobs list and on Home, and the public job page with the pay. Nothing here
- * emails a candidate, and on the Free plan nothing asks ITS to post it on a board.
+ * emails a candidate, and nothing about the job goes to ITS.
  */
 const run = Date.now().toString(36);
 
@@ -116,9 +116,7 @@ test.describe("making a job", () => {
     await expect(page.getByRole("link", { name: "Apply now" }).last()).toBeVisible();
     await expectAccessible(page, "the public job page");
 
-    // nobody but the team heard of it, and on Free nothing asked ITS to post it on a board
-    const sent = await outbox(page.request, base);
-    expect(sent.filter((m) => m.subject.startsWith("[post_job]") && m.text.includes(company)).map((m) => m.subject)).toEqual([]);
+    // nobody but the team heard of it: nothing about the job went to ITS
     expect((await emailsTo(page.request, base, "recruiters@its.localhost")).filter((m) => m.text.includes(company)).map((m) => m.subject)).toEqual([]);
   });
 });

@@ -86,7 +86,7 @@ export async function signIn(page: Page, input: { email: string; name: string; p
   if (input.aal2 === false && (await mfa.isChecked())) await mfa.uncheck();
   await page.getByRole("button", { name: "Continue" }).click();
   await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
-  // The first page may still send the person on (staff go to the queue): a page.goto made before that settles is aborted.
+  // The first page may still send the person on (staff go to the console): a page.goto made before that settles is aborted.
   await page.waitForLoadState("networkidle");
 }
 

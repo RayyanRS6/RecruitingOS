@@ -55,17 +55,6 @@ test.describe("the match score and the skills editor", () => {
       await expect(maria.getByText(/^Nothing to score yet/).first()).toBeVisible();
     }
     await expectAccessible(page, "the candidate panel with the match card");
-    // "Something wrong?" asks first, saying what an ITS recruiter would see and for how long; Cancel sends nothing
-    const flag = maria.getByRole("button", { name: "Something wrong with this assessment?" }).first();
-    if (await flag.count()) {
-      await flag.click();
-      await page.getByRole("menuitem", { name: "Overrated this candidate" }).click();
-      const confirm = page.getByRole("dialog", { name: "Ask an ITS recruiter to check this AI review?" });
-      await expect(confirm.getByText(/Once they pick it up they see this candidate and the role they applied for/)).toBeVisible();
-      await expectAccessible(page, "the flag's confirmation");
-      await confirm.getByRole("button", { name: "Cancel" }).click();
-      await expect(confirm).toHaveCount(0);
-    }
     await page.keyboard.press("Escape");
     await expect(maria).toHaveCount(0);
 

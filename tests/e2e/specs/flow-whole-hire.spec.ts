@@ -20,7 +20,7 @@ import {
  * flows job in .github/workflows/ci.yml); in any other run it is skipped, with the reason on the report.
  */
 const run = Date.now().toString(36);
-const ITS_QUEUE = "recruiters@its.localhost";
+const ITS_INBOX = "recruiters@its.localhost";
 /** Longer than one 30-second look of the waiting screen. */
 const A_LOOK = 45_000;
 /** A decision or closing message waits out its 30-second Undo window before it leaves. */
@@ -50,7 +50,7 @@ test.describe("the whole hire", () => {
     await expect(page.getByRole("heading", { name: "Your request has been sent" })).toBeVisible({ timeout: 30_000 });
     await waitForEmail(page.request, base, { to: owner.email, subject: "Your request has been sent", says: [`Your request for ${company} has been sent.`, "Please wait for approval. ITS reviews each company, usually within one business day, and we will email you when it is decided."] });
     await exactlyOneEmail(page.request, base, { to: owner.email, subject: "Your request has been sent" });
-    await waitForEmail(page.request, base, { to: ITS_QUEUE, subject: `[access request] ${company} is asking for access`, says: ["Someone is asking for access.", `Company: ${company}`, `Person: ${owner.email} (${owner.name})`, "Only the email address is proved; the rest is what they typed.", "Accept or decline it in the admin console, on the Overview:"] });
+    await waitForEmail(page.request, base, { to: ITS_INBOX, subject: `[access request] ${company} is asking for access`, says: ["Someone is asking for access.", `Company: ${company}`, `Person: ${owner.email} (${owner.name})`, "Only the email address is proved; the rest is what they typed.", "Accept or decline it in the admin console, on the Overview:"] });
 
     const nadine = await signInAsNadine(browser);
     await gotoSettled(nadine.page, "/admin");

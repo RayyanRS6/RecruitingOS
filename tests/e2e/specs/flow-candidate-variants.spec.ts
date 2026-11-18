@@ -127,11 +127,11 @@ test.describe("the other ways an application goes", () => {
     await page.goto("/updates");
     await expect(page.getByRole("listitem").filter({ hasText: "Pia Lund sent their application without the AI interview" })).toHaveCount(1, { timeout: 30_000 });
 
-    // a person instead: the page and the email say a person will be in touch
+    // a person instead: the page and the email say the hiring team has been told
     await person.getByRole("link", { name: "I'd rather talk to a person" }).click();
     await person.getByRole("button", { name: "Have a person contact me" }).click();
-    await expect(person.getByRole("heading", { name: "A person will be in touch" })).toBeVisible({ timeout: 30_000 });
-    await waitForEmail(page.request, base, { to: people.person.email, subject: `A person will contact you about ${job.title}`, says: ["A person working with the hiring team will contact you"] });
+    await expect(person.getByRole("heading", { name: "The hiring team has been told" })).toBeVisible({ timeout: 30_000 });
+    await waitForEmail(page.request, base, { to: people.person.email, subject: `You asked to talk to a person about ${job.title}`, says: [`The hiring team at ${job.company} has been told.`] });
 
     // later: the link by email, never on the page
     await later.getByRole("button", { name: "Do this later" }).click();

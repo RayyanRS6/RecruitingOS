@@ -51,7 +51,7 @@ test.describe("route inventory", () => {
   });
 
   test("signed out, every private route sends the person to sign in", async ({ page }) => {
-    for (const path of ["/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
+    for (const path of ["/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/admin"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/login/);
     }
@@ -65,7 +65,7 @@ test.describe("route inventory", () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test("an owner sees every company route; recruiter and admin routes send them home", async ({ page, baseURL }) => {
+  test("an owner sees every company route; the admin routes send them home", async ({ page, baseURL }) => {
     skipWithoutFakeSignIn();
     test.setTimeout(300_000); // eight routes with accessibility scans, then the candidate pages: long on a loaded runner
     await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
@@ -129,8 +129,6 @@ test.describe("route inventory", () => {
     await expect(page).toHaveURL(new RegExp(`/roles/${seeded.roleId}/talent`));
     await page.goto("/people");
     await expect(page).toHaveURL(/\/talent$/, { timeout: 30_000 });
-    await page.goto("/recruiter/queue");
-    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
     await page.goto("/login");
@@ -146,13 +144,9 @@ test.describe("route inventory", () => {
     await noHorizontalOverflow(page, "status page");
   });
 
-  test("a seeded platform administrator reaches the queue and the console; both pass accessibility", async ({ page }) => {
+  test("a seeded platform administrator reaches the console, and every section passes accessibility", async ({ page }) => {
     skipWithoutFakeSignIn();
     await signIn(page, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    await gotoSettled(page, "/recruiter/queue");
-    await expect(page.getByRole("heading", { name: "Recruiter queue" })).toBeVisible({ timeout: 30_000 });
-    await expectAccessible(page, "recruiter queue");
-    await noHorizontalOverflow(page, "recruiter queue");
     // The console (Wave S6): /admin lands on Overview; the rail lists the five sections under Console and marks the one
     // open; each section's parts are tabs. Every section and part passes axe and never scrolls sideways, the page or a table.
     await gotoSettled(page, "/admin");
@@ -195,6 +189,6 @@ test.describe("route inventory", () => {
     await gotoSettled(page, "/admin/system?view=calendar");
     await expect(page.getByRole("tab", { name: /^Business calendar\b/ })).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
     await page.goto("/setup");
-    await expect(page).toHaveURL(/recruiter\/queue/); // no company: owner routes are not for staff
+    await expect(page).toHaveURL(/\/admin$/); // no company: owner routes are not for staff
   });
 });

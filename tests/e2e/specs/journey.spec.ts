@@ -61,11 +61,9 @@ test.describe("owner and candidate journey", () => {
     await page.goto(`/careers/${seeded.slug}/jobs/${seeded.roleId}/apply`);
     await expectAccessible(page, "apply form");
 
-    // the owner declares availability in Settings (its Notifications tab); the recruiter-access card is on its Security
-    // tab with nothing to end
+    // the owner's own sessions are on Settings' Security tab; availability is declared on its Notifications tab
     await page.goto("/setup?tab=security");
-    await expect(page.getByRole("heading", { name: "ITS recruiter access" })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("No recruiter has access right now.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your sessions" })).toBeVisible({ timeout: 30_000 });
     await expectAccessible(page, "settings, security");
     await page.getByRole("tab", { name: "Notifications" }).click();
     await expect(page.getByRole("heading", { name: "My availability for interviews" })).toBeVisible();
@@ -139,7 +137,7 @@ test.describe("owner and candidate journey", () => {
 
 test.describe("staff sign-in policy in the browser", () => {
   skipWithoutFakeSignIn();
-  test("Google is refused for staff with plain guidance; Microsoft without a second factor continues on the authenticator page; with it, staff land on the queue", async ({ page }) => {
+  test("Google is refused for staff with plain guidance; Microsoft without a second factor continues on the authenticator page; with it, staff are signed in", async ({ page }) => {
     await signIn(page, { email: `nadine+${run}@identifiedtalent.com`, name: "Nadine", provider: "google" });
     await expect(page.getByRole("alert").filter({ hasText: /Microsoft 365/ })).toBeVisible();
     await expectAccessible(page, "login error");

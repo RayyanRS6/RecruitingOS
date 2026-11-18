@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { PERSONAS, applyThroughTheForm, createCompanyThroughTheForm, emailsTo, expectAccessible, liveJobThroughTheApi, outbox, signIn, skipWithoutFakeSignIn, waitForTheAiInterview, type Applicant } from "./helpers";
+import { PERSONAS, applyThroughTheForm, createCompanyThroughTheForm, emailsTo, expectAccessible, liveJobThroughTheApi, signIn, skipWithoutFakeSignIn, waitForTheAiInterview, type Applicant } from "./helpers";
 
 /**
- * Sharing a live job and posting it on a board from the company's own account, on the Free plan (the team posts; ITS posts
- * only on plans with ITS time), in a real browser. A place gets a tracked link of its own; someone applies through it, the
+ * Sharing a live job and posting it on a board from the company's own account, in a real browser. A place gets a tracked
+ * link of its own; someone applies through it, the
  * visit is counted and the applicant's row says where they came from. Home's "One step" card leads to the board's steps;
  * the public address of the posting is recorded and checked. Closing the job leaves the board still showing it, so Home
- * says "Still posted on Indeed" until it is ticked off. Nothing here emails ITS on Free.
+ * says "Still posted on Indeed" until it is ticked off. Nothing here emails ITS.
  */
 const run = Date.now().toString(36);
 
@@ -104,8 +104,7 @@ test.describe("sharing a job and posting it on a board", () => {
     await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/ })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("heading", { name: "Still posted on Indeed" })).toHaveCount(0);
 
-    // on Free nothing went to the ITS queue about this job
-    expect((await outbox(page.request, base)).filter((m) => m.subject.startsWith("[post_job]") && m.subject.includes(company))).toEqual([]);
+    // nothing went to ITS about this job
     expect((await emailsTo(page.request, base, "recruiters@its.localhost")).filter((m) => m.text.includes(company))).toEqual([]);
   });
 });

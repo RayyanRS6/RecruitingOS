@@ -133,14 +133,6 @@ test.describe("the pool board", () => {
     await expect(cleoCard.getByText(/^(High|Medium|Low) confidence$/)).toHaveCount(0);
     await expectAccessible(page, "the pool board");
 
-    // "Have a recruiter check this" opens the request filled in; nothing is sent until Send
-    await page.getByRole("button", { name: "Have a recruiter check this" }).click();
-    const ask = page.getByRole("dialog", { name: "Bring in a recruiter" });
-    await expect(ask.getByRole("button", { name: "Review these candidates", pressed: true })).toBeVisible();
-    await expect(ask.getByLabel("Anything specific?")).toHaveValue(/check how the board sorted/);
-    await page.keyboard.press("Escape");
-    await expect(ask).toHaveCount(0);
-
     // Ask about this pool: one click, an answer from the checked findings, the people as chips, what it looked at
     await page.getByRole("button", { name: "Ask about this pool" }).click();
     const panel = page.getByRole("dialog", { name: "Ask about this pool" });
