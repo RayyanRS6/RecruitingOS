@@ -24,14 +24,14 @@ describe("the fairness button's choices", () => {
   it("are read from the workflow", () => {
     expect(choices).toContain("resume,triage");
     expect(choices.length).toBeGreaterThan(1);
-    expect(suites).toContain("packet.revise");
+    expect(suites).toContain("intake.golden");
   });
 
   it("name only suites, or families of suites, that the runner has", () => {
     for (const choice of choices) expect(unmatchedSuites(choice.split(","), suites), choice).toEqual([]);
-    // the finding's case: change by chat renamed in the runner, and so in thresholds.json, but not in the choice
-    const renamed = suites.map((suite) => (suite === "packet.revise" ? "packet.change" : suite));
-    expect(unmatchedSuites("intake,packet.revise".split(","), renamed)).toEqual(["packet.revise"]);
+    // the finding's case: a suite renamed in the runner, and so in thresholds.json, but not in the choice
+    const renamed = suites.map((suite) => suite.replace(/^intake\./, "builder."));
+    expect(unmatchedSuites("resume,intake".split(","), renamed)).toEqual(["intake"]);
   });
 
   it("run only checks that the run's page names in plain words", () => {

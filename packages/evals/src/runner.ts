@@ -1,9 +1,9 @@
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, packetRevisePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
+import { FakeProvider, companyAboutPrompt, createRuntime, intakeCompilePrompt, resumeExtractPrompt, runPrompt, screenAssessPrompt, screenTurnPrompt, screenWriteupPrompt, triageAssessPrompt, type AiRuntime, type ScreenContext } from "@ros/ai";
 import {
-  INTAKE_COMPILE_MAX_TOKENS, REVISABLE_FOR_DRAFT, REVISABLE_FOR_ROLE, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, credentialMustHaves, editableView, enforceTurnRules, finalizePacket, hasPlaceholder, mergeRevision, readingsOutcome, redactProtected, registerFakeHandlers,
+  INTAKE_COMPILE_MAX_TOKENS, SCORING_VIEW_VERSION, TRIAGE_READINGS, advanceProgress, assessmentSources, credentialMustHaves, enforceTurnRules, finalizePacket, hasPlaceholder, readingsOutcome, redactProtected, registerFakeHandlers,
   SCORECARD_READINGS, scorecardOutcome, scorecardReadings, unfairQuestion, verifyQuotes, type ScoringIdentity,
 } from "@ros/agents";
 import { importanceOf, type EvidenceAssessment, type ResumeExtraction, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTurn } from "@ros/contracts";
@@ -14,7 +14,7 @@ import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intak
 import { writeupCaseFailures, writeupCaseNotes, writeupCases, writeupContextOf } from "./writeup-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
-import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeBenchmarkBasis, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, reviseCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
+import { CONSISTENCY_READS, KEPT_IN_ANSWER, RDH_FACTS, fairnessRuleCases, formAnswers, SCREEN_CANDIDATE, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, boardCaseFailures, boardCases, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, interviewSkillFailures, keptInInputFailures, withInterviewSkill, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, scorecardDifferences, screenAssessCases, screenConsistencyCases, screenPersonas, screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase, type ScreenAssessCase } from "./suites";
 
 /**
  * Evaluation runner (docs/11). `pnpm eval` runs every suite against the configured provider
@@ -66,7 +66,6 @@ async function main() {
   await runIntakeSuite("intake.illegal_criteria", intakeIllegal, true);
   await runIntakeSuite("intake.job_ad", intakeJobAd, false);
   await runIntakeSuite("intake.proxy_refusal", intakeProxyRefusal, false);
-  await runIntakeSuite("intake.benchmark_basis", intakeBenchmarkBasis, false);
 
   if (familyRuns("resume")) {
     const ext: (typeof results)[string]["cases"] = [];
@@ -87,7 +86,7 @@ async function main() {
   /** The golden dental hygienist packet the Slice 2 suites assess against (compiled once per run). */
   async function goldenPacket(): Promise<RolePacket> {
     const c: IntakeCase = { id: "golden_rdh", provenance: "synthetic", vertical: "dental", ownerMessages: ["I need a dental hygienist in Irvine."] };
-    const { ctx } = await intakeContextOf(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
+    const { ctx } = intakeContextOf(c, RDH_FACTS, [{ role: "owner", content: c.ownerMessages[0], at: new Date().toISOString() }]);
     const r = await runPrompt(q, rt, intakeCompilePrompt, ctx, { companyId: null, inputRef: { eval: "golden_packet" }, maxTokens: INTAKE_COMPILE_MAX_TOKENS });
     if (!r.ok) throw new Error(`golden packet failed: ${r.error}`);
     return finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
@@ -303,23 +302,6 @@ async function main() {
       return { id: c.id, pass: f.length === 0, failures: f };
     });
     results["board.determinism"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
-  }
-
-  // Change by chat (plan C10): each request against the golden packet (or the case's own copy of it), judged after the
-  // server's own merge.
-  if (runs("packet.revise")) {
-    const golden = await goldenPacket();
-    const out: (typeof results)[string]["cases"] = [];
-    for (const c of reviseCases) {
-      const base = c.base ? c.base(structuredClone(golden)) : golden;
-      const allowed = c.target === "role" ? REVISABLE_FOR_ROLE : REVISABLE_FOR_DRAFT;
-      const message = typeof c.message === "string" ? c.message : c.message(base);
-      const r = await runPrompt(q, rt, packetRevisePrompt, { companyName: "Eval Co", target: c.target, roleStatus: c.target === "role" ? "open" : null, packet: editableView(base, allowed), allowed: [...allowed], declined: [], message }, { companyId: null, inputRef: { eval: c.id }, maxTokens: 16000 });
-      if (!r.ok) { out.push({ id: c.id, pass: false, failures: [`revise failed: ${r.error}`] }); continue; }
-      const f = c.expect({ revision: r.output, merged: mergeRevision(base, r.output, c.target), base });
-      out.push({ id: c.id, pass: f.length === 0, failures: f });
-    }
-    results["packet.revise"] = { cases: out, passRate: out.filter((x) => x.pass).length / out.length };
   }
 
   // About the company (plan D10): the draft a person approves in Setup, judged as a candidate would read it.

@@ -11,9 +11,6 @@
   "intake.proxy_refusal": {
     "minPassRate": 1
   },
-  "intake.benchmark_basis": {
-    "minPassRate": 1
-  },
   "resume.extraction": {
     "minPassRate": 0.9
   },
@@ -63,9 +60,6 @@
     "minPassRate": 1
   },
   "screen.question_fairness": {
-    "minPassRate": 1
-  },
-  "packet.revise": {
     "minPassRate": 1
   },
   "company.about": {

@@ -17,7 +17,7 @@ Every CV and chat is made up (synthetic); no real candidate's data is used.
 | Honest quotes | Every quote in a CV reading or a screening reading is really in the CV. |
 | Reading a CV | Jobs, licences and skills are picked up correctly. |
 | Screening chat | The chat says it is an AI and offers a person, restates what the candidate said and asks one thing at a time, never guesses, never says the private note, never asks the same thing twice, leaves personal details such as children alone and closes without promising when they will hear. Questions about crime, health, age, origin, religion or past pay never reach a candidate. Its scorecard quotes only the candidate's own words and scores the same chat the same way twice, and the answers written up for Review & send hold nothing they did not write. |
-| Job builder | From what an owner types, the draft keeps their must-haves as requirements and puts exactly the questions they chose on the form. Unlawful wishes (people under 30, no children, a native speaker) are declined, and so is wording that stands in for them. A pasted job ad is read for its job and its pay, and a change asked for by chat touches only what it needs. |
+| Job builder | From what an owner types, the job keeps their must-haves as requirements, carries their pay and whether the job is on site, hybrid or remote as they said it (asked, never assumed), and puts the questions they wanted on the application form. Unlawful wishes (people under 30, no children, a native speaker) are declined, and so is wording that stands in for them. A pasted job ad is read for its job and its pay. |
 
 The automated checks on every pull request run the same tests against a stand-in AI, which proves the tests work but
 not that the real AI is fair. This button is the real-AI check. Run it after any change of model or prompt, and
@@ -37,11 +37,10 @@ whenever you want reassurance. It costs about ten cents.
    choose `screen,chat` for the screening chat (one restatement and one question per message, no guesses, the private
    note never said, no question asked twice, a fair close), its scorecard and the answers written up for Review & send,
    or `resume,triage,screen,chat` for both. The chat tests make more calls and cost more than ten cents. Choose
-   `intake,packet.revise` for the job builder: the draft written from what an owner types, unlawful wishes declined,
-   a pasted job ad, and changes asked for by chat. Claude Sonnet 5.5 writes each draft, so it also costs more than ten
-   cents. For the job builder, leave the model at `claude-haiku-5-5` and the effort at `app setting`: they also choose
-   how the job builder's conversation and changes by chat run, so any other choice no longer tests what the app runs.
-   **Run workflow**.
+   `intake` for the job builder: the job written from what an owner types, unlawful wishes declined and a pasted job
+   ad. Claude Sonnet 5.5 writes each job, so it also costs more than ten cents. For the job builder, leave the model
+   at `claude-haiku-5-5` and the effort at `app setting`: they also choose how the job builder's conversation runs, so
+   any other choice no longer tests what the app runs. **Run workflow**.
 3. After a few minutes, open the run. Its **Summary** says in plain words whether every check passed, which models ran
    and what the run cost, and names anything that needs a look.
 
