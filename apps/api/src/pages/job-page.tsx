@@ -1,7 +1,7 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import type { DraftRolePacket } from "@ros/contracts";
-import { candidateNotices, type Notice } from "@ros/core";
+import type { Notice } from "@ros/core";
 import type { ContactLine } from "../services/company-settings-profile";
 import { APPLY_TIME_LINE, applySteps } from "../services/job-preview";
 import { Description } from "./description";
@@ -155,7 +155,7 @@ export function JobPage(props: JobPageProps) {
   const { packet, company, role, preview } = props;
   const title = packet.identity.title;
   const pay = publicPay(packet, props.notices);
-  const notices = candidateNotices(props.notices).filter((n) => n.key === "ai_use" || n.key === "pay_transparency");
+  const notices = props.notices.filter((n) => n.key === "ai_use" || n.key === "pay_transparency");
   const mustHaves = packet.requirements.mustHaves.map((m) => m.text.trim()).filter(Boolean);
   const niceToHaves = packet.requirements.niceToHaves.map((m) => m.text.trim()).filter(Boolean);
   const careers = props.links.careers;

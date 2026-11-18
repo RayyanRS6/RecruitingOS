@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { CandidateList, CandidatePanel, RoleDetail } from "@ros/contracts";
-import { candidateNotices, noticesFor } from "@ros/core";
+import { noticesFor } from "@ros/core";
 import { applications, candidates, companies, events, rolePackets, roles, screens } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -85,12 +85,9 @@ describe("public job surfaces: the application form, the sitemap and structured 
     expect(packet.formQuestions[0].help).toBe("The owner stated the work model in the packet.");
   });
 
-  it("candidateNotices leaves the recording notice out of what a page renders and records", () => {
-    const all = noticesFor(["US-CA"]);
-    expect(all.map((n) => n.key)).toEqual(expect.arrayContaining(["recording", "ai_use", "privacy", "pay_transparency"]));
-    const shown = candidateNotices(all).map((n) => n.key);
-    expect(shown).not.toContain("recording");
-    expect(shown).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
+  it("a job's notices are the ones a page renders and records: AI use, privacy and, where a law asks for it, the pay range; none is about a recording", () => {
+    expect(noticesFor(["US-CA"]).map((n) => n.key)).toEqual(["ai_use", "privacy", "pay_transparency"]);
+    expect(noticesFor(["US-TX"]).map((n) => n.key)).toEqual(["ai_use", "privacy"]);
   });
 
   it("the form asks who they are, then the resume, then the job's screening questions, then the notice with its tick; nothing else, and no AI before Send", async () => {

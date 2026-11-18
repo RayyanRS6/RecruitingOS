@@ -3,7 +3,7 @@
 import { Hono, type Context } from "hono";
 import { ApplyRequest, ApplySource, MAX_RESUME_BYTES, applyLinkFor, inspectResumeFile, trialStanding, type DraftRolePacket, type FormAnswers, type FormQuestion, type RolePacket } from "@ros/contracts";
 import { afterApplyingSteps } from "@ros/agents";
-import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, candidateNotices, closeOutDayWords, closeOutDueAt, emit, onFileFormLine, onFileReceiptLine, openPayload, sealPayload, type Notice } from "@ros/core";
+import { ON_FILE_NOTICE, ON_FILE_SOFTWARE_LINE, closeOutDayWords, closeOutDueAt, emit, onFileFormLine, onFileReceiptLine, openPayload, sealPayload, type Notice } from "@ros/core";
 import { randomToken, uuidv7, withTenant } from "@ros/db";
 import { refFor } from "@ros/integrations";
 import { DISCARD_OBJECT_JOB_KIND } from "@ros/workflows";
@@ -58,14 +58,14 @@ export function keptSentence(resumeLost: boolean): string {
  * and again on the submission, never taken from the browser.
  */
 export function noticeVersionsFor(notices: Notice[]): string[] {
-  return candidateNotices(notices).map((n) => `${n.key}@${n.version}`);
+  return notices.map((n) => `${n.key}@${n.version}`);
 }
 
 export type ApplyFormProps = {
   company: { slug: string; name: string; contact: ContactLine };
   role: { id: string };
   packet: DraftRolePacket;
-  /** Every notice for the jurisdictions; the form itself decides what is rendered (candidateNotices). */
+  /** Every notice for the jurisdictions: the form renders each one as text, under "Read the full notice". */
   notices: Notice[];
   privacyEmail: string;
   /** The sealed "form opened at" value (services/closing-date.ts): a form opened before the closing date may still be sent. */
@@ -206,7 +206,7 @@ function ApplyFields(props: ApplyFormProps & { questions: FormQuestion[] }) {
           </ol>
         </section>
       ) : null}
-      <TransparencyBlock company={props.company} notices={candidateNotices(props.notices)} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={props.onFile} />
+      <TransparencyBlock company={props.company} notices={props.notices} privacyEmail={props.privacyEmail} acknowledged={!!props.state?.acknowledged} missing={missing.has("acknowledged")} resumeLost={!!props.state?.resumeLost} onFile={props.onFile} />
     </>
   );
 }

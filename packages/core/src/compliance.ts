@@ -7,7 +7,7 @@ import { closingDayWords } from "./closing-date";
  * marked [counsel] in docs/00 must be reviewed by an attorney before use with paying customers.
  */
 
-export type NoticeKey = "ai_use" | "recording" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
+export type NoticeKey = "ai_use" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
 
 export type Notice = { key: NoticeKey; version: string; jurisdictions: string[]; text: string };
 
@@ -20,12 +20,6 @@ export const DEFAULT_NOTICES: Notice[] = [
     text:
       "This employer uses software that includes artificial intelligence to help organize applications, ask screening questions, and summarize information for the hiring team. " +
       "People make the hiring decisions. You can ask to talk to a person at any point: before you apply, use the contact on the job page; after you apply, write to that contact or use the link in any of our messages.",
-  },
-  {
-    key: "recording",
-    version: "2026-09-01",
-    jurisdictions: ["*"],
-    text: "This conversation may be recorded and transcribed for the hiring team, with your consent. Say or type \"I agree\" to continue, or tell us you prefer not to be recorded.",
   },
   {
     key: "privacy",
@@ -89,22 +83,12 @@ export function payShown(compensation: { discloseRange: boolean }, notices: Noti
 }
 
 /**
- * The notices a candidate page renders as text. One key stays defined but is never shown as a notice: `recording` is
- * for a feature release 1 does not have (docs/DECISIONS.md, "Put off"), and does not belong in the versions recorded as
- * shown.
- */
-export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording"];
-
-export function candidateNotices(notices: Notice[]): Notice[] {
-  return notices.filter((n) => !NOTICES_NOT_RENDERED.includes(n.key));
-}
-
-/**
  * The line a decision message carries for a candidate covered by Colorado's rules on adverse decisions: the job is in
  * Colorado, or the candidate is. DRAFT WORDING PENDING COUNSEL (docs/legal-drafts/counsel-register.md item 24): the
  * text, its version and the 30-day window are placeholders until counsel answers; nothing goes to real candidates first.
- * A reply to a decision message lands in the reply mailbox a person at ITS reads, never with the hiring team that
- * decided and never with the assistant.
+ * A reply to a decision message lands with the company's own hiring contact when it set one, otherwise in the reply
+ * mailbox a person at ITS reads (packages/agents/src/coordinator.ts, `replyToFor`), and never with the assistant. With a
+ * contact of its own, who answers, and so the line's "someone who was not part of the decision", is the company's to keep.
  */
 export const ADVERSE_DECISION_LINE = {
   key: "adverse_decision_explanation" as const,
@@ -146,11 +130,18 @@ export function adverseDecisionLineApplies(input: { jobLocations: Array<Location
 
 /**
  * The disclosure line every automated candidate message carries when the job has none of its own. How to reach a
- * person is the line beside it in every such message (packages/agents/src/coordinator.ts, `personLine`).
+ * person is the job's other line, beside it in every such message (`REACH_A_PERSON_LINE` when the job has none).
  */
 export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant.`;
 }
+
+/**
+ * How to reach a person, as a job stores it when it has no line of its own. It is true wherever a job's line is shown:
+ * under an email, where a reply lands with a person (packages/agents/src/coordinator.ts, `replyToFor`), and on the AI
+ * interview's first page, since every job page prints a contact. Nothing reads a reply for a keyword, so it names none.
+ */
+export const REACH_A_PERSON_LINE = "To reach a person at any time, reply to any of our emails or use the contact on the job page.";
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* What the law asks of a job ad before it goes public (plan D5; Track L: counsel confirms the lists first).      */
