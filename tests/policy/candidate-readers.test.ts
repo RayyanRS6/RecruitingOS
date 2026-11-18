@@ -27,27 +27,24 @@ const READS_A_PERSON = /\b(?:from|leftJoin|innerJoin|rightJoin|fullJoin)\(candid
 
 /**
  * Who reads the `candidates` table, per file, as of Rule 3. Lower is fine; higher needs a line here saying why that read cannot
- * reach the team, or which filter it goes through (`visibleTo`, `notLocked`, or the path guard).
+ * reach the team, or which filter it goes through (`notLocked`, or the path guard).
  */
 const CANDIDATE_READERS: Record<string, number> = {
-  // Behind the path guard (middleware/candidate-lock.ts): only ever reached with an application the reader may read.
+  // The team's list, panel and actions: the people of applications each query took with `notLocked`, the one read behind
+  // the path guard (middleware/candidate-lock.ts) too; a bulk action's names are read with `notLocked` in the same query.
+  "apps/api/src/services/candidates.ts": 1,
   "apps/api/src/services/application-actions.ts": 1,
-  "apps/api/src/services/screens.ts": 1,
-  // Lists and body ids, each filtered in its query: `visibleTo` or `notLocked` beside the read of applications that names the people.
-  "apps/api/src/routes/roles.ts": 2,
-  "apps/api/src/services/brief.ts": 8,
-  "apps/api/src/services/pool.ts": 1,
   // Privacy requests, which only a platform administrator reads: ITS is not the paying customer (Rule 3, item 6).
   "apps/api/src/routes/privacy-requests.ts": 2,
   "packages/core/src/privacy-requests.ts": 5,
   // A candidate's own pages behind their own token: they read themselves.
-  "apps/api/src/pages/application-record.tsx": 3,
+  "apps/api/src/pages/application-record.tsx": 2,
   "apps/api/src/pages/candidate-shared.tsx": 1,
   "apps/api/src/pages/privacy-request.tsx": 1,
-  "apps/api/src/services/applications.ts": 6,
-  "apps/api/src/services/apply-conversation.ts": 1,
+  // A candidate's own acts: applying (found by the address they typed), "Lost your link?", a new status link, and
+  // withdrawing, whose notice to the team names them through `notify`'s `about`.
+  "apps/api/src/services/applications.ts": 7,
   "apps/api/src/services/email-subscriptions.ts": 1,
-  "apps/api/src/services/profile-facts.ts": 4,
   // Its consent check reads them to write to them; the notice that an email did not arrive names them through `notify`'s `about`.
   "packages/agents/src/outbox.ts": 2,
   // What a test does for itself.
@@ -129,7 +126,7 @@ describe("who reads a person", () => {
       if (n) counts[file] = n;
     }
     const over = Object.entries(counts).filter(([file, n]) => n > (CANDIDATE_READERS[file] ?? 0));
-    expect(over, `a new read of candidates in: ${over.map(([f, n]) => `${f} (${n}, allowed ${CANDIDATE_READERS[f] ?? 0})`).join("; ")}. Filter it by the lock (visibleTo, notLocked), or put it behind the path guard, and say so in tests/policy/candidate-readers.test.ts.`).toEqual([]);
+    expect(over, `a new read of candidates in: ${over.map(([f, n]) => `${f} (${n}, allowed ${CANDIDATE_READERS[f] ?? 0})`).join("; ")}. Filter it by the lock (notLocked), or put it behind the path guard, and say so in tests/policy/candidate-readers.test.ts.`).toEqual([]);
     // Lower is fine, and the list says so: an entry with nothing left to count is taken off.
     const stale = Object.keys(CANDIDATE_READERS).filter((f) => !(f in counts));
     expect(stale, `entries for files that no longer read candidates: ${stale.join(", ")}`).toEqual([]);

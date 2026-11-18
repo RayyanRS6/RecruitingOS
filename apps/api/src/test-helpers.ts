@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { RolePacket, TRIAL_PLAN_KEY, newTrialTerm, type ApplicationStage, type MembershipRole } from "@ros/contracts";
 import { entitlements, grantPlatformRole, isCompanyLive } from "@ros/core";
 import { applications, candidates, companies, memberships, rolePackets, roles, users, withPlatform } from "@ros/db";
@@ -8,9 +8,9 @@ import type { createApp } from "./app";
 import type { Container } from "./container";
 
 /**
- * Test-only helpers for staff accounts. Since 21 September 2026 (item 2) platform roles come from the
- * platform_role_grants ledger and administrator routes need a session with a second factor, so suites open staff
- * sessions through the fake identity issuer (Microsoft + TOTP) instead of the email link.
+ * Test-only helpers. Platform roles come from the platform_role_grants ledger and administrator routes need a session
+ * with a second factor, so suites open staff sessions through the fake identity issuer (Microsoft + TOTP) instead of
+ * the email link.
  */
 export async function signInWithIdentity(app: ReturnType<typeof createApp>, container: Container, input: { email: string; name?: string; provider?: "azure" | "google"; aal2?: boolean; subject?: string }): Promise<string> {
   const idp = container.integrations.identity as FakeIdentityProvider;
@@ -60,62 +60,14 @@ export function refuseApplicationRole(url: string): void {
 }
 
 /**
- * The status token of the application an address made for a role. Since Wave 0 item 0.1 the apply form answers every
- * submission with the same receipt and the link travels only by email, so suites read it from the database.
+ * The status token of the application an address made for a role. The apply form answers every submission with the
+ * same receipt and the link travels only by email, so suites read it from the database.
  */
 export async function statusTokenFor(container: Container, input: { roleId: string; email: string }): Promise<string> {
   const [row] = await container.db.select({ token: applications.statusToken }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), eq(candidates.email, input.email.trim().toLowerCase()))).limit(1);
   if (!row) throw new Error(`no application from ${input.email} for role ${input.roleId}`);
   return row.token;
 }
-
-/**
- * Runs `fn` with the engine's clock moved past the 40 to 90 seconds every waiting room says "preparing" first (Q14,
- * founder 21 Oct: the same timing for a new address and a known one), then puts the clock back.
- */
-export async function pastTheWaitingRoom<T>(container: Container, fn: () => Promise<T>): Promise<T> {
-  const engine = container.engine as unknown as { now: () => Date };
-  const real = engine.now;
-  const past = real().getTime() + 91_000;
-  engine.now = () => new Date(past);
-  try {
-    return await fn();
-  } finally {
-    engine.now = real;
-  }
-}
-
-/**
- * Follows the apply POST as a browser does (20 Oct 2026, R20-12): its 302 to the waiting room `…/applied`, which opens
- * the application's own AI interview once it exists (with the inline worker, by the time the POST answered) and the 40
- * to 90 seconds every waiting room says "preparing" first have passed (Q14, 21 Oct): `container`'s clock is moved past
- * them for that one look. `token`: the interview the waiting room opened, else null; `html`: the page shown instead (the
- * receipt, or the waiting room).
- */
-export async function followApply(app: ReturnType<typeof createApp>, res: Response, container: Container): Promise<{ token: string | null; html: string; status: number; cookie: string }> {
-  const location = res.headers.get("location") ?? "";
-  const cookie = res.headers.get("set-cookie")?.match(/ros_applied=[^;,]+/)?.[0] ?? "";
-  if (!location.endsWith("/applied")) return { token: null, html: await res.text(), status: res.status, cookie };
-  const room = await pastTheWaitingRoom(container, async () => app.request(location, { headers: { cookie } }));
-  const to = room.headers.get("location") ?? "";
-  const token = /^\/c\/screen\/([A-Za-z0-9_-]+)$/.exec(to)?.[1] ?? null;
-  return { token, html: token ? "" : await room.text(), status: room.status, cookie };
-}
-
-/**
- * Sets ITS's old "apply and talk in one visit" switch for a company (plan Wave E), as the console did. Since 20 October
- * 2026 (R20-12) nothing reads it: every applicant takes the same path, so these only write the saved setting.
- */
-async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
-  await withPlatform(container.db, async (tx) => {
-    // One JSON merge, so everything else kept in the company's settings stays as it is.
-    const [co] = await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('applyFlowDefault', ${flow}::text)` }).where(eq(companies.id, companyId)).returning({ id: companies.id });
-    if (!co) throw new Error(`no company ${companyId}`);
-  });
-}
-
-export const useLaterApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "form_then_screen");
-export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
 
 /**
  * Puts a company on a plan as the console's Change plan does (entitlements.applyPlan, which takes a retired plan too): for
