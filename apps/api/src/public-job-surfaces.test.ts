@@ -99,10 +99,11 @@ describe("public job surfaces: the apply form, the sitemap and structured data",
     expect(questionHelp("The owner needs coverage by the target date.")).toBe("The employer needs coverage by the target date.");
     // a reason that reads well is shown as it was written
     for (const fine of ["Required by law to practice dental hygiene.", "Required for employment; asked of every candidate.", "The desk must be covered during clinic hours."]) expect(questionHelp(fine)).toBe(fine);
-    const packet = { requirements: { mustHaves: [], niceToHaves: [], eligibility: [{ key: "schedule", type: "schedule_availability" as const, question: "Are you available?", expectation: {}, rationale: "The owner stated the work model in the packet.", knockout: true }] } };
+    // on the form, a screening question's own line is shown as written; one in the team's words shows nothing
+    const packet = { formQuestions: [{ kind: "yes_no" as const, key: "schedule", question: "Are you available?", help: "The owner stated the work model in the packet.", required: true }, { kind: "yes_no" as const, key: "license", question: "Do you hold a license?", help: "The owner needs it by law.", required: true }] };
     const shown = withPlainQuestionHelp(packet);
-    expect(shown.requirements.eligibility[0]).toMatchObject({ key: "schedule", question: "Are you available?", rationale: ASKED_OF_EVERYONE, knockout: true });
-    expect(packet.requirements.eligibility[0].rationale).toBe("The owner stated the work model in the packet.");
+    expect(shown.formQuestions.map((q) => q.help)).toEqual([undefined, "The employer needs it by law."]);
+    expect(packet.formQuestions[0].help).toBe("The owner stated the work model in the packet.");
   });
 
   it("candidateNotices leaves the recording notice out of what a page renders and records", () => {

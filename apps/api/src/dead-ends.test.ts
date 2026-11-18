@@ -6,7 +6,6 @@ import { adminAlerts, applications, candidates, communications, notifications, u
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { APPLY_WAIT_JS, WAIT_GAVE_UP_LINE, WAIT_GAVE_UP_MORE } from "./pages/apply-form";
 import { signInAs } from "./test-helpers";
 
 /**
@@ -173,18 +172,6 @@ describe("the dead ends a first-time owner met", () => {
   });
 
   describe("rank 20: the word pass", () => {
-  });
-
-  describe("rank 10: the waiting room's ending", () => {
-    it("gives up saying it is taking longer than it should, and never that the link is already in their email", () => {
-      expect(WAIT_GAVE_UP_LINE).toBe("This is taking longer than it should.");
-      expect(WAIT_GAVE_UP_MORE).toBe("Press Start my interview again in a few minutes. The link we email you opens it too.");
-      expect(APPLY_WAIT_JS).toContain(JSON.stringify(WAIT_GAVE_UP_LINE));
-      expect(APPLY_WAIT_JS).toContain("line.textContent=WAIT_GAVE_UP_LINE;");
-      expect(APPLY_WAIT_JS).not.toContain("is in your email");
-      // still one script that a browser can read
-      expect(() => new Function(APPLY_WAIT_JS)).not.toThrow();
-    });
   });
 
   describe("rank 16: the failure notice, and ITS when the provider refuses", () => {

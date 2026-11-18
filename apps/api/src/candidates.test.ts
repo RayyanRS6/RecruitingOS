@@ -6,7 +6,7 @@ import { applications, auditRecords, candidates, communications, notifications, 
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { plantJob, signInAs, statusTokenFor, usePlan } from "./test-helpers";
+import { plantJob, signInAs, statusTokenFor, usePlan, useTrial } from "./test-helpers";
 
 /**
  * A company's candidates through the API: the list, the panel, the resume file, the actions a person presses for one
@@ -249,5 +249,17 @@ describe("a job's candidates", () => {
     expect(home.notices).toEqual([]);
     expect(home.drafts).toEqual([]);
     expect(home.room).toMatchObject({ ok: true });
+  });
+
+  it("Home says when the trial has ended, with the request this person may send about it", async () => {
+    await useTrial(container, companyId);
+    expect((await read<HomeView>("/api/v1/home")).notices).toEqual([]);
+    await advance(31 * 24 * HOUR);
+    owner = await signIn("owner@candidates.test");
+    const [notice] = (await read<HomeView>("/api/v1/home")).notices;
+    expect(notice).toMatchObject({ kind: "trial_ended", title: "Your trial has ended", upgrade: true, ask: { label: "Ask ITS to choose a plan", reason: expect.any(String) } });
+    expect(notice.ask!.reason.length).toBeGreaterThan(10);
+    // and a new AI interview is refused for the same reason, in the plan's own words
+    expect(await refused("Eve", "shortlist")).toMatchObject({ status: 402, code: "limit_reached" });
   });
 });

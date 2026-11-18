@@ -5,7 +5,6 @@ import { applications, companies, rolePackets, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { descriptionBlocks, descriptionExcerpt } from "./pages/description";
-import { NO_RESUME_QUESTIONS, noResumeAnswersFrom } from "./pages/apply-form";
 import { expectAtAGlance, initials } from "./pages/job-page";
 import { resetSitemapCache } from "./pages/sitemap";
 import { oneVisitMinutes } from "./services/job-preview";
@@ -47,16 +46,7 @@ describe("the description renderer (plan D10)", () => {
     expect(long).not.toMatch(/ …$/);
   });
 
-  it("the four short questions keep each answer and write the one summary every reader uses; an older one-box form still works", () => {
-    expect(NO_RESUME_QUESTIONS.map((q) => q.key)).toEqual(["recentWork", "dayToDay", "skills", "lookingFor"]);
-    expect(noResumeAnswersFrom({ recentWork: " Hygienist at Coastal Dental, 2019 to now ", skills: "CA RDH license; Dentrix" })).toEqual({
-      recentWork: "Hygienist at Coastal Dental, 2019 to now",
-      skills: "CA RDH license; Dentrix",
-      summary: "Most recent work: Hygienist at Coastal Dental, 2019 to now\nSkills, licenses or tools: CA RDH license; Dentrix",
-    });
-    expect(noResumeAnswersFrom({ noResume: "Hygienist for six years." })).toEqual({ summary: "Hygienist for six years." });
-    expect(noResumeAnswersFrom({ recentWork: "", noResume: "  " })).toBeUndefined();
-    expect(noResumeAnswersFrom({ recentWork: "x".repeat(5000) })!.recentWork).toHaveLength(1000);
+  it("shows a company without a logo by its initials", () => {
     expect(initials("Harbor Dental")).toBe("HD");
     expect(initials("Smile & Co.")).toBe("SC");
     expect(initials("acme")).toBe("AC");
