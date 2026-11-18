@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { matchScore, readingConsistency } from "@ros/core";
-import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, liftableQuote, plainlyNotHeld, readingsOutcome, settledOverall, settledRecommendation, shownNotHeld, skillFloor, triageSettlement, verifyAssessmentQuotes, withResumeFlags } from "./triage";
+import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, liftableQuote, plainlyNotHeld, readingsOutcome, shownNotHeld, skillFloor, verifyAssessmentQuotes } from "./triage";
 
 /**
- * The fairness run on Haiku 5.5 (14 Oct 2026): one résumé read three times scored 83, 71 and 67, and an expired licence
- * was "unknown" in two readings of three although each quoted "expired". Three readings and their middle answer, and the
- * expired-credential rule in code, make the same application read and score the same each time. The review of the
- * first version (PR #38) found the rule overturning "yes" on "never lapsed" and a skipped finding letting one "no" win:
- * both are pinned here.
+ * One resume read three times can come back three ways, and an expired licence was "unknown" in two readings of three
+ * although each quoted "expired". Three readings and their middle answer, and the expired-credential rule in code, make
+ * the same application read the same each time. Two things found in review are pinned here: the rule overturning "yes"
+ * on "never lapsed", and a skipped finding letting one "no" win.
  */
 const RESUME = "Casey Morgan, RDH\nRegistered Dental Hygienist at Bayside Dental 2016 - 2021\nRDH license CA expired in 2021; renewal not started\nScaling and root planing, patient education";
 
@@ -17,8 +15,6 @@ type Met = EvidenceAssessment["requirementFindings"][number]["met"];
 type Found = EvidenceAssessment["competencyFindings"][number]["finding"];
 
 const reading = (licence: Met | null, perio: Met, chairside: Found, over: Partial<EvidenceAssessment> = {}): EvidenceAssessment => ({
-  overall: "potential",
-  confidence: "medium",
   summary: `licence ${licence}, perio ${perio}, chairside ${chairside}`,
   strengths: [],
   concerns: [],
@@ -28,14 +24,11 @@ const reading = (licence: Met | null, perio: Met, chairside: Found, over: Partia
     ...(licence === null ? [] : [{ requirementKey: "licence", met: licence, ...(licence === "unknown" ? {} : { evidence: { source: "resume" as const, quote: "RDH license CA expired in 2021" } }) }]),
     { requirementKey: "perio", met: perio, evidence: { source: "resume", quote: "Scaling and root planing" } },
   ],
-  anomalies: [],
-  recommendation: "screen",
-  rationale: "r",
   ...over,
 });
 
 const metOf = (a: EvidenceAssessment, key: string) => a.requirementFindings.find((f) => f.requirementKey === key)?.met;
-const decided = (a: EvidenceAssessment) => ({ overall: a.overall, recommendation: a.recommendation, confidence: a.confidence, met: a.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`), found: a.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`), summary: a.summary });
+const decided = (a: EvidenceAssessment) => ({ met: a.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`), found: a.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`), summary: a.summary });
 
 describe("three readings of the same application", () => {
   it("keep the middle answer of each finding, with the evidence of a reading that gave it", () => {
@@ -59,197 +52,29 @@ describe("three readings of the same application", () => {
     expect(metOf(combineReadings([twice, reading("yes", "yes", "evidenced"), reading("yes", "yes", "evidenced")]), "licence")).toBe("yes");
   });
 
-  it("take the overall reading and the confidence as their middle, and the recommendation and words from one reading", () => {
-    const split = [
-      reading("no", "yes", "evidenced", { overall: "weak", confidence: "low", recommendation: "hold", summary: "weak one" }),
-      reading("no", "yes", "evidenced", { overall: "potential", confidence: "medium", recommendation: "screen", summary: "potential one" }),
-      reading("no", "yes", "evidenced", { overall: "strong", confidence: "high", recommendation: "screen", summary: "strong one" }),
-    ];
-    expect(decided(combineReadings(split))).toMatchObject({ overall: "potential", confidence: "medium", recommendation: "screen", summary: "potential one" });
-    // "unknown" only when most readings say so
-    expect(combineReadings([split[0]!, reading("no", "yes", "evidenced", { overall: "unknown", recommendation: "review_manually" }), split[2]!]).overall).toBe("strong");
-    expect(combineReadings([reading("no", "yes", "evidenced", { overall: "unknown" }), reading("no", "yes", "evidenced", { overall: "unknown" }), split[2]!]).overall).toBe("unknown");
-  });
-
-  it("read exactly the same whatever order the readings come back in", () => {
-    const a = reading("no", "yes", "evidenced", { overall: "strong", confidence: "high", summary: "a" });
-    const b = reading("unknown", "partially", "partially_evidenced", { overall: "weak", confidence: "low", recommendation: "hold", summary: "b" });
-    const c = reading("no", "yes", "partially_evidenced", { overall: "potential", summary: "c" });
+  it("read exactly the same whatever order the readings come back in, with the words of one reading", () => {
+    const a = reading("no", "yes", "evidenced", { summary: "a" });
+    const b = reading("unknown", "partially", "partially_evidenced", { summary: "b" });
+    const c = reading("no", "yes", "partially_evidenced", { summary: "c" });
     const orders = [[a, b, c], [a, c, b], [b, a, c], [b, c, a], [c, a, b], [c, b, a]].map((o) => decided(combineReadings(o)));
     for (const o of orders) expect(o).toEqual(orders[0]);
-    expect(orders[0]).toMatchObject({ overall: "potential", met: ["licence:no", "perio:yes"], found: ["chairside:partially_evidenced"] });
+    expect(orders[0]).toMatchObject({ met: ["licence:no", "perio:yes"], found: ["chairside:partially_evidenced"] });
+    expect(["a", "b", "c"]).toContain(orders[0]!.summary);
   });
 
-  it("use the first reading when fewer than three came back, saying so, and fail on an outage so the step is retried", () => {
+  it("use the first reading when fewer than three came back, and fail on an outage so the step is retried", () => {
     const sources = { resume: RESUME };
     const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
     const invalid: RunOutcome<EvidenceAssessment> = { ok: false, runId: "r8", model: "m", reason: "invalid", error: "no valid output" };
     const outage: RunOutcome<EvidenceAssessment> = { ok: false, runId: "r9", model: "m", reason: "error", error: "provider error: 529" };
     const two = combineOutcomes([invalid, ok(reading("no", "yes", "evidenced"), "r2"), ok(reading("no", "partially", "evidenced"), "r3")], sources);
     expect(two).toMatchObject({ ok: true, runId: "r2" });
-    if (two.ok) {
-      expect(metOf(two.output, "perio")).toBe("yes");
-      expect(two.output.confidenceReasons).toContain("the assistant could read this application 2 times instead of 3");
-    }
+    if (two.ok) expect(metOf(two.output, "perio")).toBe("yes");
     expect(combineOutcomes([invalid, outage, invalid], sources)).toBe(outage);
     expect(combineOutcomes([invalid, invalid, invalid], sources)).toBe(invalid);
   });
 });
 
-/**
- * Wave S7 (fairness run of 15 Oct 2026, triage.consistency assistant_not_yet_hygienist and triage.credentials lapsed):
- * the licence finding was steady, but the overall reading moved between "potential" and "unknown" from one set of
- * readings to the next. The résumé reading's overall is now worked out in code from its settled findings.
- */
-describe("the overall reading, worked out from the settled findings (Wave S7)", () => {
-  const PACKET = {
-    requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume" as const] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume" as const] }], niceToHaves: [], eligibility: [] },
-    competencies: [{ key: "chairside", name: "Chairside skill", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }],
-  } as unknown as Parameters<typeof settledOverall>[1];
-  const ASSISTANT = "Riley Chen\nCosta Mesa, CA\nDental Assistant at Sunrise Family Dentistry 2020 - present\nChairside assisting, sterilization, X-rays, Dentrix scheduling\nEnrolled in a dental hygiene program, graduating 2027";
-  const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
-  const view = { restore: (s: string) => s };
-  const assistantReading = (overall: EvidenceAssessment["overall"], recommendation: EvidenceAssessment["recommendation"]): EvidenceAssessment =>
-    reading(null, "unknown", "partially_evidenced", {
-      overall,
-      recommendation,
-      requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "resume", quote: "Enrolled in a dental hygiene program, graduating 2027" } }, { requirementKey: "perio", met: "unknown" }],
-      competencyFindings: [{ competencyKey: "chairside", finding: "partially_evidenced", evidence: { source: "resume", quote: "Chairside assisting, sterilization, X-rays" } }],
-    });
-  const read = (overalls: Array<[EvidenceAssessment["overall"], EvidenceAssessment["recommendation"]]>) => {
-    const out = readingsOutcome(overalls.map(([o, r], i) => ok(assistantReading(o, r), `r${i}`)), view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } });
-    if (!out.ok) throw new Error("expected readings");
-    return out.output;
-  };
-
-  it("gives the same overall reading and recommendation whatever each reading said overall", () => {
-    const first = read([["potential", "screen"], ["unknown", "review_manually"], ["unknown", "review_manually"]]);
-    const second = read([["potential", "screen"], ["potential", "screen"], ["unknown", "review_manually"]]);
-    const third = read([["strong", "screen"], ["weak", "hold"], ["unknown", "review_manually"]]);
-    // the licence is in training (the licence rule: unknown), perio unknown, chairside partly shown: potential
-    for (const out of [first, second, third]) {
-      expect(out.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`)).toEqual(["licence:unknown", "perio:unknown"]);
-      expect(out.overall).toBe("potential");
-    }
-    // the recommendation goes with it (the prompt's rule), and the words come from a reading that said the same
-    for (const out of [first, second, third]) expect(out.recommendation).toBe("screen");
-    expect(first.summary).toBe(assistantReading("potential", "screen").summary);
-    expect(read([["weak", "hold"], ["weak", "hold"], ["weak", "hold"]])).toMatchObject({ overall: "potential", recommendation: "screen" });
-  });
-
-  it("asks a person to look, never a screening chat, when an eligibility answer did not match and no one kept them in", () => {
-    const failed = { evaluatedAt: "2026-10-15T10:00:00Z", passed: false, failedRules: [{ key: "schedule", question: "Can you work Saturdays?", answer: "no", reason: "answered no" }], unverifiable: [] };
-    const input = { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} }, eligibility: failed };
-    const runs = [ok(assistantReading("potential", "screen"), "r1"), ok(assistantReading("potential", "screen"), "r2"), ok(assistantReading("potential", "screen"), "r3")];
-    const held = readingsOutcome(runs, view, input);
-    expect(held.ok && held.output.recommendation).toBe("review_manually");
-    const kept = readingsOutcome(runs, view, { ...input, eligibilityKeptIn: true });
-    expect(kept.ok && kept.output.recommendation).toBe("screen");
-  });
-
-  it("is the same whatever order the readings come back in, and with fewer readings", () => {
-    const a = assistantReading("potential", "screen");
-    const b = assistantReading("unknown", "review_manually");
-    const c = assistantReading("strong", "screen");
-    const orders = [[a, b, c], [c, b, a], [b, a, c]].map((o) => readingsOutcome(o.map((x, i) => ok(x, `r${i}`)), view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } }));
-    const decidedOf = (r: RunOutcome<EvidenceAssessment>) => (r.ok ? decided(r.output) : null);
-    for (const o of orders) expect(decidedOf(o)).toEqual(decidedOf(orders[0]!));
-    const invalid: RunOutcome<EvidenceAssessment> = { ok: false, runId: "rx", model: "m", reason: "invalid", error: "no valid output" };
-    const one = readingsOutcome([invalid, ok(b, "r1"), invalid], view, { packet: PACKET as never, resumeText: ASSISTANT, applicationAnswers: { eligibility: {} } });
-    expect(one.ok && one.output.overall).toBe("potential");
-  });
-
-  it("follows the prompt's own definitions, read from the findings as the match score reads them", () => {
-    const f = (licence: Met, perio: Met, chairside: Found, quoted = true) => ({
-      requirementFindings: [
-        { requirementKey: "licence", met: licence, ...(quoted && licence !== "unknown" ? { evidence: { source: "resume" as const, quote: licence === "no" ? "I do not hold a CA RDH license" : "RDH license CA active" } } : {}) },
-        { requirementKey: "perio", met: perio, ...(perio !== "unknown" ? { evidence: { source: "resume" as const, quote: "Periodontal therapy daily" } } : {}) },
-      ],
-      competencyFindings: [{ competencyKey: "chairside", finding: chairside, ...(chairside !== "not_evidenced" ? { evidence: { source: "resume" as const, quote: "Chairside assisting daily" } } : {}) }],
-    });
-    const work = { hasWork: true };
-    expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, work)).toBe("strong");
-    // a "yes" with nothing quoted is partly shown, as in the score: potential, never strong
-    expect(settledOverall(f("yes", "yes", "evidenced", false), PACKET, work)).toBe("potential");
-    expect(settledOverall(f("yes", "partially", "evidenced"), PACKET, work)).toBe("potential");
-    expect(settledOverall(f("yes", "unknown", "evidenced"), PACKET, work)).toBe("potential");
-    // too few skills shown, or an essential one against them: potential
-    expect(settledOverall(f("yes", "yes", "partially_evidenced"), PACKET, work)).toBe("potential");
-    expect(settledOverall(f("yes", "yes", "contradicted"), PACKET, work)).toBe("potential");
-    // weak only on a must-have their own words show is not met
-    expect(settledOverall(f("no", "yes", "evidenced"), PACKET, work)).toBe("weak");
-    expect(settledOverall(f("no", "yes", "evidenced", false), PACKET, work)).toBe("potential");
-    // nothing either way, or a skill against them alone: the readings' own judgement of the work is all there is
-    // ("thin but relevant", or not this kind of work), as its middle; never strong on no findings
-    expect(settledOverall(f("unknown", "unknown", "not_evidenced"), PACKET, work)).toBe("unknown");
-    expect(settledOverall(f("unknown", "unknown", "contradicted"), PACKET, work)).toBe("unknown");
-    const silent = f("unknown", "unknown", "not_evidenced");
-    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["potential", "potential", "unknown"] })).toBe("potential");
-    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["potential", "unknown", "unknown"] })).toBe("unknown");
-    expect(settledOverall(silent, PACKET, { hasWork: true, said: ["strong", "strong", "strong"] })).toBe("potential");
-    expect(settledOverall(f("unknown", "unknown", "contradicted"), PACKET, { hasWork: true, said: ["weak", "weak", "potential"] })).toBe("weak");
-    // the findings decide whenever they say anything: what the readings said makes no difference then
-    expect(settledOverall(f("yes", "unknown", "evidenced"), PACKET, { hasWork: true, said: ["unknown", "unknown", "weak"] })).toBe("potential");
-    // no résumé text and no written description: unknown, whatever an answer on the form shows
-    expect(settledOverall(f("yes", "yes", "evidenced"), PACKET, { hasWork: false })).toBe("unknown");
-  });
-
-  // the draft's Essential skill "Periodontal therapy" beside the must-have of the same name, which the AI interview
-  // confirms, and a second skill
-  const confirmed = { ...PACKET.requirements, mustHaves: PACKET.requirements.mustHaves.map((m) => (m.key === "perio" ? { ...m, evidencedBy: ["resume", "screen"] } : m)) };
-  const twin = { ...PACKET, requirements: confirmed, competencies: [...PACKET.competencies, { key: "perio_skill", name: "Periodontal Therapy", definition: "d", weight: 5, evaluatedIn: "both" as const, indicators: ["x"] }, { key: "software", name: "Practice software", definition: "d", weight: 3, evaluatedIn: "both" as const, indicators: ["x"] }] } as unknown as Parameters<typeof settledOverall>[1];
-  type Twin = Parameters<typeof settledOverall>[0];
-  const twinReading = (perioSkill: Twin["competencyFindings"][number]): Twin => ({
-    requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "resume", quote: "RDH license CA active" } }, { requirementKey: "perio", met: "yes", evidence: { source: "resume", quote: "Periodontal therapy daily" } }],
-    competencyFindings: [{ competencyKey: "chairside", finding: "evidenced", evidence: { source: "resume", quote: "Chairside assisting daily" } }, perioSkill, { competencyKey: "software", finding: "not_evidenced" }],
-  });
-
-  it("counts a skill named as a must-have once, as the must-have, as the match score does (live test, 12 November 2026)", () => {
-    const reading = twinReading({ competencyKey: "perio_skill", finding: "evidenced", evidence: { source: "resume", quote: "Periodontal therapy daily" } });
-    // every must-have shown and one of the two skills the score counts: strong, as for the role without the twin
-    expect(settledOverall(reading, twin, { hasWork: true })).toBe("strong");
-    // nothing said about the twin leaves it so: the twin is the must-have, which is shown
-    const silent = twinReading({ competencyKey: "perio_skill", finding: "not_evidenced" });
-    expect(settledOverall(silent, twin, { hasWork: true })).toBe("strong");
-    // The second review of the live-test fixes (#2): beside a must-have the AI interview is not asked to confirm, the
-    // skill is a requirement of its own, as in the score, so one skill shown of the three is not enough
-    const resumeOnly = { ...twin, requirements: PACKET.requirements } as unknown as Parameters<typeof settledOverall>[1];
-    expect(settledOverall(silent, resumeOnly, { hasWork: true })).toBe("potential");
-  });
-
-  // The second review of the live-test fixes (#29): a "Strong" settled here was then flagged by the closer-look check,
-  // which still counts the twin's checked "goes against it"
-  it("never settles strong when their own checked words go against an Essential skill named as a must-have, so the closer-look check agrees", () => {
-    const against = twinReading({ competencyKey: "perio_skill", finding: "contradicted", evidence: { source: "resume", quote: "I have not done periodontal therapy since school" } });
-    const overall = settledOverall(against, twin, { hasWork: true });
-    expect(overall).toBe("potential");
-    const stored = (o: EvidenceAssessment["overall"]) => ({ kind: "triage", overall: o, result: { ...against, overall: o, confidence: "medium" as const, summary: "s", strengths: [], concerns: [], unknowns: [], anomalies: [], recommendation: "screen" as const, rationale: "r" } });
-    expect(readingConsistency(stored(overall), twin)).toEqual({ consistent: true, reason: null });
-    // a "Strong" on the same findings is what the check holds for a person
-    expect(readingConsistency(stored("strong"), twin)).toMatchObject({ consistent: false, reason: expect.stringContaining("essential skill (Periodontal Therapy)") });
-  });
-
-  it("gives the recommendation that goes with it, by the prompt's rule", () => {
-    expect(settledRecommendation("unknown", { eligible: true })).toBe("review_manually");
-    expect(settledRecommendation("weak", { eligible: true })).toBe("hold");
-    expect(settledRecommendation("potential", { eligible: true })).toBe("screen");
-    expect(settledRecommendation("strong", { eligible: true })).toBe("screen");
-    expect(settledRecommendation("strong", { eligible: false })).toBe("review_manually");
-    expect(settledRecommendation("weak", { eligible: false })).toBe("hold");
-  });
-
-  it("leaves the scorecard's overall reading as the middle of its readings (no settlement given)", () => {
-    expect(combineReadings([reading("no", "yes", "evidenced", { overall: "weak" }), reading("no", "yes", "evidenced", { overall: "strong" }), reading("no", "yes", "evidenced", { overall: "strong" })]).overall).toBe("strong");
-  });
-});
-
-/**
- * Wave S9 round 4 (real-model runs of 15 Oct 2026, triage.credentials said_plainly): the only findings that moved were
- * skills on a bare duty line, read partly shown by one reading and not shown by the other two, which moved the score a
- * candidate sees between 25 and 32. A skill one reading of three showed on a checked quote of the candidate's own work is
- * now partly shown, never more; never over a verified "contradicted"; never from a dated job line or a yes/no answer on
- * the form; never for a must-have; and the scorecard is not affected.
- */
 describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () => {
   const DUTY = "Scaling and root planing, patient education";
   const PLAIN_NO_LINE = "I do not hold a California RDH license";
@@ -258,14 +83,11 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
   /** The said_plainly CV of the fairness evals (packages/evals `credentialCases`). */
   const PLAIN_NO = `Drew Park\nAnaheim, CA\n${JOB_LINE}\nA.S. Dental Hygiene, Cypress College\n${PLAIN_NO_LINE}\n${DUTY}`;
   const PACKET = {
-    requirements: {
-      mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume"] }],
-      niceToHaves: [],
-      eligibility: [{ key: "el_license", type: "license", question: "Do you hold an active CA RDH license?", expectation: {}, rationale: "Required by law.", knockout: true }],
-    },
+    requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law" }, { key: "perio", text: "Periodontal therapy", rationale: "work" }], niceToHaves: [] },
+    formQuestions: [{ kind: "yes_no", key: "el_license", question: "Do you hold an active CA RDH license?", required: true }],
     competencies: [
-      { key: "clinical", name: "Clinical care", definition: "Thorough, gentle periodontal care.", weight: 5, evaluatedIn: "both", indicators: ["charts accurately"] },
-      { key: "patients", name: "Patient communication", definition: "Explains care plainly and builds trust.", weight: 5, evaluatedIn: "both", indicators: ["explains findings"] },
+      { key: "clinical", name: "Clinical care", definition: "Thorough, gentle periodontal care.", importance: "essential", indicators: ["charts accurately"] },
+      { key: "patients", name: "Patient communication", definition: "Explains care plainly and builds trust.", importance: "essential", indicators: ["explains findings"] },
     ],
   } as never;
   type Skill = EvidenceAssessment["competencyFindings"][number];
@@ -277,13 +99,12 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
     reading(null, "unknown", "not_evidenced", { requirementFindings, competencyFindings: [clinical, patients], summary: `${clinical.finding}/${patients.finding}`, ...over });
   const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
   const view = { restore: (s: string) => s };
-  const input = (resumeText: string) => ({ packet: PACKET, resumeText, applicationAnswers: { eligibility: { el_license: "yes" } } });
+  const input = (resumeText: string) => ({ packet: PACKET, resumeText, formAnswers: { el_license: "yes" } });
   const outcome = (readings: readonly EvidenceAssessment[], resumeText = PLAIN_NO) => {
     const out = readingsOutcome(readings.map((r, i) => ok(r, `r${i}`)), view, input(resumeText));
     if (!out.ok) throw new Error("expected readings");
     return out.output;
   };
-  const scoreOf = (a: EvidenceAssessment) => matchScore({ resume: { kind: "triage", result: a }, screen: null }, PACKET);
   const skillOf = (a: EvidenceAssessment, key: string) => a.competencyFindings.find((f) => f.competencyKey === key);
   const orders = <T>(xs: readonly [T, T, T]): T[][] => {
     const [a, b, c] = xs;
@@ -300,23 +121,7 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
       expect(out.requirementFindings.map((f) => `${f.requirementKey}:${f.met}`)).toEqual(["licence:no", "perio:partially"]);
       expect(out.competencyFindings).toEqual(outs[0]!.competencyFindings);
       expect(decided(out)).toEqual(decided(outs[0]!));
-      expect(scoreOf(out)).toEqual(scoreOf(outs[0]!));
     }
-  });
-
-  it("never lowers the score: 14 with no skill shown, 25 with one partly shown, 36 with both", () => {
-    const none = outcome([noneShown, noneShown, noneShown]);
-    const one = outcome([shownOnDuty, noneShown, noneShown]);
-    const patientsOnDuty = read(skill("clinical", "not_evidenced"), skill("patients", "partially_evidenced", DUTY));
-    const both = orders([shownOnDuty, patientsOnDuty, noneShown]).map((o) => outcome(o));
-    expect(scoreOf(none)?.score).toBe(14);
-    expect(scoreOf(one)?.score).toBe(25);
-    for (const out of both) {
-      expect(out.competencyFindings.map((f) => `${f.competencyKey}:${f.finding}`)).toEqual(["clinical:partially_evidenced", "patients:partially_evidenced"]);
-      expect(scoreOf(out)?.score).toBe(36);
-    }
-    // the must-have not met still holds the score down and is named, whatever the skills
-    expect(scoreOf(one)?.missingMustHave.map((m) => m.key)).toEqual(["licence"]);
   });
 
   it("lifts a skill one reading showed in full to partly shown, never to shown", () => {
@@ -355,7 +160,6 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
   it("never lifts on a dated job line or a yes/no answer on the form", () => {
     const jobLine = read(skill("clinical", "partially_evidenced", JOB_LINE), skill("patients", "not_evidenced"));
     expect(skillOf(outcome([jobLine, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
-    expect(scoreOf(outcome([jobLine, noneShown, noneShown]))?.score).toBe(14);
     // a part of the job line is read with the whole line
     const employer = read(skill("clinical", "partially_evidenced", "Registered Dental Hygienist at Bayside Dental"), skill("patients", "not_evidenced"));
     expect(skillOf(outcome([employer, noneShown, noneShown]), "clinical")?.finding).toBe("not_evidenced");
@@ -381,29 +185,12 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
     for (const o of orders([unknownLicence, unknownLicence, yesLicence])) expect(metOf(outcome(o, active), "licence")).toBe("unknown");
   });
 
-  it("leaves the scorecard as it was: no settlement, no floor", () => {
+
+  it("leaves a plain middle answer alone where no floor is asked for", () => {
     const runs = [ok(noneShown, "r1"), ok(noneShown, "r2"), ok(shownOnDuty, "r3")];
-    const out = combineRunOutcomes(runs, (r) => r, "this screening chat", 3);
+    const out = combineRunOutcomes(runs, (r) => r, 3);
     expect(out.ok && skillOf(out.output, "clinical")?.finding).toBe("not_evidenced");
     expect(combineReadings([noneShown, noneShown, shownOnDuty]).competencyFindings.map((f) => f.finding)).toEqual(["not_evidenced", "not_evidenced"]);
-  });
-
-  it("works the overall reading and the recommendation out from the floored finding", () => {
-    const bare = `Drew Park\nAnaheim, CA\n${JOB_LINE}\n${DUTY}`;
-    const unknowns: Must[] = [{ requirementKey: "licence", met: "unknown" }, { requirementKey: "perio", met: "unknown" }];
-    const saying = (overall: EvidenceAssessment["overall"], recommendation: EvidenceAssessment["recommendation"], clinical: Skill) => read(clinical, skill("patients", "not_evidenced"), unknowns, { overall, recommendation });
-    const readings: [EvidenceAssessment, EvidenceAssessment, EvidenceAssessment] = [saying("unknown", "review_manually", skill("clinical", "not_evidenced")), saying("unknown", "review_manually", skill("clinical", "not_evidenced")), saying("potential", "screen", skill("clinical", "partially_evidenced", DUTY))];
-    for (const o of orders(readings)) {
-      const out = outcome(o, bare);
-      expect(skillOf(out, "clinical")?.finding).toBe("partially_evidenced");
-      expect(out).toMatchObject({ overall: "potential", recommendation: "screen" });
-    }
-    // without the floor, the same readings gave "unknown" and asked a person to look
-    const app = input(bare);
-    const sources = assessmentSources(app);
-    const settle = { ...triageSettlement(PACKET, app, sources), skills: undefined };
-    const before = combineOutcomes(readings.map((r, i) => ok(r, `r${i}`)), sources, credentialMustHaves(PACKET), findingSubjects(PACKET), settle);
-    expect(before.ok && { overall: before.output.overall, recommendation: before.output.recommendation }).toEqual({ overall: "unknown", recommendation: "review_manually" });
   });
 
   it("uses the first reading as before when fewer than three came back", () => {
@@ -429,53 +216,6 @@ describe("a skill one reading showed on a checked quote (Wave S9 round 4)", () =
     expect(at("Hygienist at Coastal Dental 2020 - now")).toBe(false);
     for (const s of ["2016 - 2021", "2019 – Present", "2014 to 2019", "2018—current", "2020 until today"]) expect(DATED_JOB_LINE.test(s), s).toBe(true);
     for (const s of ["Graduated 2015", "2,019 patients", "since 2019"]) expect(DATED_JOB_LINE.test(s), s).toBe(false);
-  });
-});
-
-/**
- * Wave S9 round 2 (real-model run 38776059927, triage.edge_cases ai_generated_boilerplate): the words of the reading the
- * team sees come from one reading, so a flag about the résumé itself that the other readings or the extraction raised
- * was lost whenever that one reading left it out.
- */
-describe("the flags about the résumé itself (Wave S9 round 2)", () => {
-  const PACKET = { requirements: { mustHaves: [], niceToHaves: [], eligibility: [] }, competencies: [] } as never;
-  const TEMPLATE = "Results-driven hygienist.\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nScaling and root planing\nLorem ipsum dolor sit amet.";
-  const view = { restore: (s: string) => s };
-  const ok = (out: EvidenceAssessment, runId: string): RunOutcome<EvidenceAssessment> => ({ ok: true, output: out, runId, model: "m" });
-  const flagged = (flags: string[], perio: Met = "yes") => reading(null, perio, "evidenced", { anomalies: flags.map((kind) => ({ kind, detail: `${kind.replace(/_/g, " ")} seen` })) });
-  const EXTRACTION = { anomalies: [{ kind: "possible_ai_generated" as const, detail: "Taylor's résumé ends with Lorem ipsum" }] };
-  const read = (readings: EvidenceAssessment[], extraction: typeof EXTRACTION | null = null) => {
-    const out = readingsOutcome(readings.map((r, i) => ok(r, `r${i}`)), view, { packet: PACKET, resumeText: TEMPLATE, applicationAnswers: { eligibility: {} }, extraction: extraction as never });
-    if (!out.ok) throw new Error("expected readings");
-    return out.output;
-  };
-  const kinds = (a: EvidenceAssessment) => a.anomalies.map((x) => x.kind);
-
-  it("keeps a flag most readings raised, whichever reading's words are kept and in any order", () => {
-    const a = flagged(["possible_ai_generated"]);
-    const b = flagged(["possible_ai_generated"]);
-    const c = flagged([]);
-    for (const order of [[a, b, c], [c, a, b], [b, c, a]]) expect(kinds(read(order))).toEqual(["possible_ai_generated"]);
-    // the kept reading without it, two of three with it
-    expect(withResumeFlags(c, [a, b, c], null).anomalies).toEqual([{ kind: "possible_ai_generated", detail: "possible ai generated seen" }]);
-    expect(withResumeFlags(c, [a, c, c], null).anomalies).toEqual([]);
-    // one reading of three, and not the one kept: not on its own
-    expect(kinds(read([flagged(["date_inconsistency"], "partially"), flagged([]), flagged([])]))).toEqual([]);
-  });
-
-  it("adds a flag the résumé's extraction raised, in the code's words, and never twice", () => {
-    const out = read([flagged([]), flagged([]), flagged([])], EXTRACTION);
-    expect(out.anomalies).toEqual([{ kind: "possible_ai_generated", detail: expect.stringMatching(/generated or template text/) }]);
-    // never the extraction's own words, which can name the candidate
-    expect(JSON.stringify(out)).not.toContain("Taylor");
-    expect(kinds(read([flagged(["possible_ai_generated"]), flagged(["possible_ai_generated"]), flagged(["possible_ai_generated"])], EXTRACTION))).toEqual(["possible_ai_generated"]);
-  });
-
-  it("never moves the overall reading, the recommendation, the findings or the words", () => {
-    const plain = read([flagged([]), flagged([]), flagged([])]);
-    const withFlag = read([flagged([]), flagged([]), flagged([])], EXTRACTION);
-    expect(decided(withFlag)).toEqual(decided(plain));
-    expect({ ...withFlag, anomalies: [] }).toEqual(plain);
   });
 });
 
@@ -507,11 +247,11 @@ describe("a credential the candidate's own words show is not held", () => {
    * reading of the same CV gives the same finding and score.
    */
   it("holds a credential must-have to the licence rule, whatever the model answered", () => {
-    const credentials = credentialMustHaves({ requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume"] }, { key: "perio", text: "Periodontal therapy", rationale: "work", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] } });
+    const credentials = credentialMustHaves({ requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law" }, { key: "perio", text: "Periodontal therapy", rationale: "work" }], niceToHaves: [] } });
     expect([...credentials]).toEqual(["licence"]);
     const text = `${RESUME}\nI do not hold a Nevada RDH license\nRDH license CA active`;
     const inResume = (e: { quote?: string; source: string }) => (e.source === "resume" ? text.includes(e.quote ?? "") : null);
-    const quoted = (key: string, met: Met, quote: string, source: "resume" | "recruiter_note" = "resume") => reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: key, met, evidence: { source, quote } }] });
+    const quoted = (key: string, met: Met, quote: string) => reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: key, met, evidence: { source: "resume", quote } }] });
     const lapsed = "RDH license CA expired in 2021; renewal not started";
     // lapsed: "unknown" from every answer the model could give, so three readings always agree
     for (const met of ["no", "unknown", "partially", "yes"] as const) expect(metOf(applyEvidenceRules(quoted("licence", met, lapsed), inResume, { credentials }), "licence"), met).toBe("unknown");
@@ -519,22 +259,15 @@ describe("a credential the candidate's own words show is not held", () => {
     expect(metOf(applyEvidenceRules(quoted("licence", "no", "I do not hold a Nevada RDH license"), inResume, { credentials }), "licence")).toBe("no");
     // held: a "yes" stands
     expect(metOf(applyEvidenceRules(quoted("licence", "yes", "RDH license CA active"), inResume, { credentials }), "licence")).toBe("yes");
-    // the reason says why, without stepping the confidence down (nothing was invented)
-    const settled = applyEvidenceRules(quoted("licence", "no", lapsed), inResume, { credentials });
-    expect(settled.confidence).toBe("medium");
-    expect(settled.confidenceReasons?.at(-1)).toMatch(/lapsed, pending or unclear in the candidate's words, so not known yet/);
     // only a credential must-have, and only when the caller names the credentials
     expect(metOf(applyEvidenceRules(quoted("perio", "no", lapsed), inResume, { credentials }), "perio")).toBe("no");
     expect(metOf(applyEvidenceRules(quoted("licence", "no", lapsed), inResume), "licence")).toBe("no");
-    // a recruiter's note never makes a "no", and a lapsed licence in it is not a "yes" either
-    expect(metOf(applyEvidenceRules(quoted("licence", "no", "said the licence expired", "recruiter_note"), () => null, { credentials }), "licence")).toBe("unknown");
-    expect(metOf(applyEvidenceRules(quoted("licence", "yes", "said the licence expired last year", "recruiter_note"), () => null, { credentials }), "licence")).toBe("unknown");
     // a quote that is not in the résumé is no evidence at all
     expect(metOf(applyEvidenceRules(quoted("licence", "no", "I do not hold any license"), inResume, { credentials }), "licence")).toBe("unknown");
   });
 
   it("reads the candidate's whole line, never only the part the model quoted (review of Wave S5)", () => {
-    const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law", evidencedBy: ["resume" as const] }], niceToHaves: [], eligibility: [] } };
+    const packet = { requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "law" }], niceToHaves: [] } };
     const credentials = credentialMustHaves(packet);
     const subjects = findingSubjects(packet);
     const sources = { resume: `${RESUME}\nI do not hold a CA RDH license` };
@@ -564,13 +297,15 @@ describe("a credential the candidate's own words show is not held", () => {
     expect(credentialFinding("no", "RDH license CA; not licensed in Nevada", "Active CA RDH license")).toBe("unknown");
   });
 
-  it("never takes a self-reported eligibility box as a quote (the answers only, not their field names)", () => {
-    const input = { resumeText: null, applicationAnswers: { eligibility: { rdh_license: "yes", work_authorization: "I am authorised to work in the US" } } };
+
+  it("never takes a field name of the form as a quote: only the answers, as the sentences the reading was given", () => {
+    const input = { resumeText: null, packet: { formQuestions: [{ kind: "yes_no", key: "rdh_license", question: "Do you hold an active CA RDH license?", required: true }, { kind: "choice", key: "shift", question: "Which shift do you prefer?", options: ["Mornings", "Evenings"], required: true }] } as never, formAnswers: { rdh_license: "yes", shift: "Mornings" } };
     const sources = assessmentSources(input);
     expect(sources.application).not.toContain("rdh_license");
+    expect(sources.application).toContain("Do you hold an active CA RDH license? Yes.");
+    expect(sources.application).toContain("Mornings");
     const out = verifyAssessmentQuotes(reading("yes", "yes", "evidenced", { requirementFindings: [{ requirementKey: "licence", met: "yes", evidence: { source: "application", quote: 'rdh_license":"yes' } }] }), sources);
     expect(out.requirementFindings[0]).toMatchObject({ met: "partially", evidence: { source: "application", unquoted: true } });
-    expect(sources.application).toContain("I am authorised to work in the US");
   });
 
   it("makes the lapsed licence of the fairness run read the same in all three readings", () => {
