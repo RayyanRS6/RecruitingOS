@@ -158,10 +158,12 @@ describe("class names", () => {
 
 describe("icon set", () => {
   it("has every icon the pages ask for", () => {
-    const wanted = ["home", "today", "briefcase", "roles", "people", "talent", "calendar", "interviews", "settings", "plus", "search", "chevron-right", "chevron-down", "check", "x", "sparkle", "assistant", "mail", "send", "upload", "paperclip", "mic", "eye", "edit", "pencil", "clock", "alert", "lock", "link", "share", "filter", "sort", "more", "arrow-left", "arrow-right", "user", "building", "star", "flag", "refresh", "external"];
-    // the October 2026 redesign's shapes: the logo's bars, the rail's and the screens' new icons
-    wanted.push("bars", "shield", "life-buoy", "activity", "user-plus", "sliders", "arrow-up-right", "message-circle", "file-text", "sparkles", "inbox", "chart");
+    const wanted = ["home", "briefcase", "roles", "people", "talent", "settings", "plus", "search", "chevron-right", "chevron-left", "chevron-down", "chevron-up", "check", "check-circle", "x", "sparkle", "send", "paperclip", "eye", "edit", "alert", "lock", "sort", "more", "arrow-right", "user", "building", "star", "flag", "refresh", "copy", "log-out", "menu", "sun", "moon"];
+    // the logo's bars, the rail's and the screens' other shapes
+    wanted.push("bars", "shield", "activity", "user-plus", "arrow-up-right", "message-circle", "file-text", "inbox");
     for (const name of wanted) expect(ICON_NAMES).toContain(name);
+    // and nothing the pages do not ask for: a drawing nobody uses is deleted, not kept
+    expect([...ICON_NAMES].sort()).toEqual([...wanted].sort());
   });
   it("draws every name, aliases included, with at least one path on the 24-pixel grid", () => {
     for (const name of ICON_NAMES) {

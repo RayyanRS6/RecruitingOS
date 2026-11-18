@@ -20,24 +20,24 @@ function withClass(kit: string, className: string | undefined): string {
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "destructive";
 
-/** The tints an IconChip or a StatCell's icon can sit on. */
+/** The tints an IconChip can sit on. */
 export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neutral";
 
 /**
  * A button, a pill in every size. Primary is plum, secondary is outlined, ghost has no box, danger is for the few
- * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a
- * keyboard hint and announces it as the shortcut; `keyshortcuts` only announces one (aria-keyshortcuts, "Control+Enter"),
- * with nothing drawn, for a shortcut the fewer-words rule took off the screen (put it in `title` too). `ariaPressed`
- * makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its fill (left out, the button is
- * a plain button). `block` fills the width (its class is `wide`: Tailwind's `block` utility would turn the button into a
- * plain block). `className` adds classes after the kit's (spacing, a placement), never a second look. `ariaDisabled`
- * greys it as `disabled` does, but it can still be focused and pressed, so a press can show what is missing (`onClick`
- * decides what it does); `describedBy` is the id of the words that say why. Left out, neither attribute is written.
+ * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger).
+ * `keyshortcuts` announces a keyboard shortcut (aria-keyshortcuts, "Control+Enter") with nothing drawn (put it in
+ * `title` too). `ariaPressed` makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its
+ * fill (left out, the button is a plain button). `block` fills the width (its class is `wide`: Tailwind's `block`
+ * utility would turn the button into a plain block). `className` adds classes after the kit's (spacing, a placement),
+ * never a second look. `ariaDisabled` greys it as `disabled` does, but it can still be focused and pressed, so a press
+ * can show what is missing (`onClick` decides what it does); `describedBy` is the id of the words that say why. Left
+ * out, neither attribute is written.
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; ariaDisabled?: boolean; describedBy?: string; block?: boolean; className?: string }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; ariaDisabled?: boolean; describedBy?: string; block?: boolean; className?: string }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts ?? props.kbd} {...(props.ariaDisabled ? { "aria-disabled": true, "aria-describedby": props.describedBy } : {})}>
+    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts} {...(props.ariaDisabled ? { "aria-disabled": true, "aria-describedby": props.describedBy } : {})}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -48,7 +48,6 @@ export function Button(props: { children: ReactNode; variant?: ButtonVariant; si
           {props.icon ? <Icon name={props.icon} /> : null}
           {props.children}
           {props.iconEnd ? <Icon name={props.iconEnd} /> : null}
-          {props.kbd ? <Kbd decorative>{props.kbd}</Kbd> : null}
         </>
       )}
     </button>
@@ -64,18 +63,13 @@ export function IconButton(props: { icon: IconName; label: string; onClick?: () 
   );
 }
 
-/** A keyboard hint ("N"). Inside a button it is hidden from screen readers, which hear the shortcut from the button. */
-export function Kbd(props: { children: ReactNode; decorative?: boolean }) {
-  return <kbd className="kbd" aria-hidden={props.decorative || undefined}>{props.children}</kbd>;
-}
-
 /**
  * A card with an optional H2 title and an aside beside it. `needsYou` is the "Your next step" wash (something waits on
  * the reader); `hero` draws the title at the hero size (26px, 30px from 768px) for a page's one next step, so screens
  * never size it themselves; every other card's title, a needs-you one in a panel included, stays 19px. `lift` answers
  * the mouse. `flush` is a list card: no padding of its own, the title keeps the card's sides over a hairline, and the
- * rows (`list-row`, `list-item`) run edge to edge, their words in line with the title. Nothing is clipped, so a row's
- * menu still opens over what lies below. On a phone every other card has 16px sides and 20px above and below.
+ * rows (`list-row`) run edge to edge, their words in line with the title. Nothing is clipped, so a row's menu still
+ * opens over what lies below. On a phone every other card has 16px sides and 20px above and below.
  */
 export function Card(props: { children: ReactNode; needsYou?: boolean; hero?: boolean; lift?: boolean; flush?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
   return (
@@ -312,28 +306,15 @@ export function Segmented<T extends string>(props: { value: T; options: Array<{ 
   );
 }
 
-export function Timeline(props: { items: Array<{ when: string; what: string; who?: string }> }) {
-  return (
-    <ul className="timeline">
-      {props.items.map((it, i) => (
-        <li key={i}>
-          <span className="when">{new Date(it.when).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-          <span>{it.what}{it.who ? <span className="muted"> · {it.who}</span> : null}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /**
  * A table in a box that scrolls sideways when it must (docs/07). `head` takes words, or a TableHead: `num` for a column
  * of figures (right-aligned, heading included; give the cells className="num"), or `sort` and `onSort` for a heading
- * that sorts (from useTableSort). aria-sort is set on the sorted column only, and `announce` says a new order once,
- * politely. `scroll` keeps the headings in view in a long list on a wide screen; `pinFirst` keeps the first column in
- * view while a wide table scrolls sideways. `loading` shows that many quiet rows under the headings while the rows are
- * on their way; `empty` is the one row shown when there are none (a filter that found nothing), the headings kept.
- * `wrapHeads` lets long column headings wrap onto more lines (figure columns' included) instead of widening the table.
- * Hook-free: server components import it.
+ * that sorts (the page keeps the order, with nextSort and sortRows). aria-sort is set on the sorted column only, and
+ * `announce` says a new order once, politely. `scroll` keeps the headings in view in a long list on a wide screen;
+ * `pinFirst` keeps the first column in view while a wide table scrolls sideways. `loading` shows that many quiet rows
+ * under the headings while the rows are on their way; `empty` is the one row shown when there are none (a filter that
+ * found nothing), the headings kept. `wrapHeads` lets long column headings wrap onto more lines (figure columns'
+ * included) instead of widening the table. Hook-free: server components import it.
  */
 export function Table(props: { head: Array<string | TableHead>; children?: ReactNode; label?: string; scroll?: boolean; pinFirst?: boolean; wrapHeads?: boolean; loading?: number; empty?: ReactNode; announce?: string }) {
   const cols: TableHead[] = props.head.map((h) => (typeof h === "string" ? { label: h } : h));
@@ -392,57 +373,6 @@ export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "xs" |
 }
 
 /**
- * One card split into cells of figures (screenshots 1 and 4): put StatCells inside. `label` names the group for screen
- * readers. Only for numbers the page already shows; Today has none (founder decision Q4).
- */
-export function StatStrip(props: { children: ReactNode; label?: string }) {
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: a group of figures, not of form controls, so a fieldset would be the wrong element
-    <div className="stat-strip" role="group" aria-label={props.label}>
-      {props.children}
-    </div>
-  );
-}
-
-/**
- * Draws a link with the app's own router Link instead of a plain <a>, so following it is no full page load (the page's
- * data stays): `(cell) => <Link to={cell.href} className={cell.className}>{cell.children}</Link>`.
- */
-export type LinkRender = (cell: { href: string; className: string; children: ReactNode }) => ReactNode;
-
-/**
- * One cell of a StatStrip: what it counts (small) over the figure (large, tabular), an optional icon chip on the left
- * and a line under the figure (`note`). `highlight` is the tinted cell for a message at the end of the strip. With
- * `href` the cell is a link with an arrow on the right: a plain <a>, or, for an address inside the app, the app's own
- * Link drawn by `link` (a LinkRender), so following it does not load the whole app again.
- */
-export function StatCell(props: { label: ReactNode; value: ReactNode; icon?: IconName; tone?: "lavender" | "peach" | "plum"; note?: ReactNode; highlight?: boolean; href?: string; link?: LinkRender }) {
-  const body = (
-    <>
-      {props.icon ? <IconChip icon={props.icon} tone={props.tone} /> : null}
-      <span className="stat-cell-text">
-        <span className="stat-cell-label">{props.label}</span>
-        {props.value !== undefined && props.value !== null ? <span className="stat-cell-value">{props.value}</span> : null}
-        {props.note ? <span className="stat-cell-note">{props.note}</span> : null}
-      </span>
-      {props.href ? (
-        <span className="stat-cell-go" aria-hidden="true">
-          <Icon name="arrow-right" size={16} />
-        </span>
-      ) : null}
-    </>
-  );
-  const className = cx("stat-cell", props.highlight && "highlight");
-  if (!props.href) return <div className={className}>{body}</div>;
-  if (props.link) return props.link({ href: props.href, className, children: body });
-  return (
-    <a className={className} href={props.href}>
-      {body}
-    </a>
-  );
-}
-
-/**
  * The head of a section on a page: an optional eyebrow, the heading (an H2 by default, display 24px; an H3 at 19px)
  * with a line under it, and an action on the right (a TextLink such as "All applicants"). `id` goes on the heading, for
  * aria-labelledby or a link to it.
@@ -469,7 +399,6 @@ export { compareValues, cx, initials, nextSort, normalizeToast, numHead, type So
 // module: the rest of this file stays usable from server components.
 export { Dialog, Drawer } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
-export { useTableSort } from "./table-sort";
 export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";
 export { Menu, type MenuItem } from "./menu";

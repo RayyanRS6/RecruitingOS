@@ -186,7 +186,7 @@ describe("the application's stylesheet", () => {
   it("finds what it guards, and would catch a slip", () => {
     // the hover fills it checks are there, so the check above cannot pass by finding none
     const found = hoverFills(app).map((f) => f.selector);
-    for (const sel of [".btn.primary:hover", ".icon-btn:hover", ".menu-item:hover", ".table tbody tr:hover > :is(td, th):not(.table-empty)", "a.stat-cell:hover"]) expect(found).toContain(sel);
+    for (const sel of [".btn.primary:hover", ".icon-btn:hover", ".menu-item:hover", ".table tbody tr:hover > :is(td, th):not(.table-empty)", "a.list-row:hover, button.list-row:hover"]) expect(found).toContain(sel);
     // a new ungated hover fill, a keyframe on anything but transform and opacity, a press outside the motion query
     const probe = `${app}\n.probe:hover { background: red; }`;
     expect(hoverFills(probe).filter((f) => !insideMedia(probe, f.at, HOVER)).map((f) => f.selector)).toEqual([".probe:hover"]);
@@ -204,14 +204,9 @@ describe("the application's stylesheet", () => {
 
   it("keeps the stylesheet within its byte budget (gzip level 9, without comments)", () => {
     const gz = (s: string) => gzipSync(Buffer.from(s), { level: 9 }).length;
-    // 23 October 2026, the redesign's foundation: tokens, base and the whole kit in one sheet, 10,723 bytes (it replaces
-    // tokens.css, board.css and app-shell.css, whose ceilings were 12,000 + 2,350 + 820; the screens' own styling is
-    // Tailwind utilities, built from the classes they use). After the review fixes (the alerts' marks as data: images,
-    // the hover variant, the touch targets): 11,173, ceiling unchanged. Round 2 (vertical tabs, option rows, dl.glance,
-    // .pill.wrap, IconLabel, wrapping card titles and row titles, the hero card's title): 11,740, ceiling unchanged.
-    // Round 3 (the rail breakpoint, PageHeader hero, Card flush and the phone padding of cards, Field aside, Table
-    // wrapHeads, IconChip xs, Pill busy, .ordinal, .inline-tag, .list-row-title.wrap): 12,106, ceiling unchanged.
-    expect(gz(app)).toBeLessThanOrEqual(12_500);
+    // Tokens, base and the whole kit in one sheet (the screens' own styling is Tailwind utilities, built from the classes
+    // they use): 10,753 bytes with only the classes the simple product writes. The ceiling leaves room for a few rules.
+    expect(gz(app)).toBeLessThanOrEqual(11_200);
   });
 });
 
@@ -241,31 +236,31 @@ describe("the kit's component layer", () => {
   it("styles every class the kit's components render", () => {
     const words = kitClasses();
     expect(words.size).toBeGreaterThan(100);
-    for (const w of ["btn", "table-wrap", "th-sort", "tab-label", "stat-cell", "menu-item", "toast-region", "drawer-head", "keep-in-view", "wide", "eyebrow", "icon-label", "chip", "alert"]) expect(words.has(w), w).toBe(true);
+    for (const w of ["btn", "table-wrap", "th-sort", "tab-label", "menu-item", "toast-region", "drawer-head", "keep-in-view", "wide", "eyebrow", "icon-label", "chip", "alert"]) expect(words.has(w), w).toBe(true);
     for (const w of words) if (!NO_RULE.has(w)) expect(selects(app, `.${w}`), `.${w} has no rule in styles.css`).toBe(true);
     // the variants chosen by a prop (a tone, a size), which the scan above cannot see as literals
     const variants = [
       ...["primary", "secondary", "ghost", "quiet", "danger", "destructive", "sm", "wide"].map((v) => `.btn.${v}`),
       ...["accent", "needs", "good", "caution", "critical", "info", "warm", "source"].map((v) => `.chip.${v}`),
-      ...["good", "caution", "critical", "accent", "info", "warm"].map((v) => `:is(.pill, .pill-button).${v}`),
+      ...["good", "caution", "critical", "accent", "info", "warm"].map((v) => `.pill.${v}`),
       ...["good", "caution", "critical", "accent", "info", "warm"].map((v) => `.dot.${v}`),
       ...["good", "caution", "neutral", "none", "sm", "lg"].map((v) => `.score.${v}`),
       ...["sm", "lg", "xl", "ink", "square"].map((v) => `.avatar.${v}`),
       ...["info", "caution", "critical"].map((v) => `.alert.${v}`),
-      ...["assistant", "user", "system", "recruiter", "typing", "answers"].map((v) => `.bubble.${v}`),
+      ...["assistant", "user", "system", "typing", "answers"].map((v) => `.bubble.${v}`),
       ...["xs", "sm", "lg", "peach", "plum", "good", "caution", "neutral"].map((v) => `.icon-chip.${v}`),
       ...["done", "active", "failed"].map((v) => `.steps li[data-state="${v}"]`),
-      ".pill.sm", ".pill.solid", ".icon-btn.sm", ".toast.good", ".toast.critical", ".toast.has-action", ".sheet.lg", ".dialog.lg", ".dialog-mark.good", ".menu-item.danger", ".tabs.counts", ".stat-cell.highlight", ".table-wrap.scroll", ".table-wrap.pin-first", ".table th.num .th-sort", ".table .skeleton", ".dot.pulse::after",
+      ".pill.sm", ".pill.solid", ".icon-btn.sm", ".toast.good", ".toast.critical", ".toast.has-action", ".sheet.lg", ".dialog.lg", ".dialog-mark.good", ".menu-item.danger", ".tabs.counts", ".table-wrap.scroll", ".table-wrap.pin-first", ".table th.num .th-sort", ".table .skeleton", ".dot.pulse::after",
     ];
     for (const sel of variants) expect(selects(app, sel), `${sel} has no rule`).toBe(true);
   });
 
   it("styles the shared primitives the screens combine with utilities (spec 0b.3 and 5b)", () => {
-    for (const sel of [".stack", ".row", ".muted", ".small", ".grid-2", ".kv", "details.more > summary", ".link-btn", ".link-like", ".tabular", ".num", ".list", ".list-item", ".list-item-main", ".list-item-main .sub", ".list-item-end", ".setup-section", ".input", ".textarea", ".select", ".field", ".hint", ".field-error", ".check", ".dropzone", ".toggle-chip", ".toggle-chip .count", ".segmented", ".spinner", ".skeleton", ".kbd", ".dot.pulse", ".side-card", ".list-card", ".list-row", ".list-row-lead", ".list-row-main", ".list-row-title", ".list-row-meta", ".list-row-end", ".chev", ".text-link", ".eyebrow.live::before", ".page-header", ".page-header-row", ".page-header-actions", ".page-header-sub", ".section-header", ".icon-chip", ".stat-strip", ".stat-cell", ".bubble-label", ".composer", ".composer-send", ".suggestion", ".card.needs-you", ".card.lift", ".autogrow", ".timeline .when", ".pipeline"]) {
+    for (const sel of [".stack", ".row", ".muted", ".small", ".grid-2", "details.more > summary", ".link-like", ".num", ".input", ".textarea", ".select", ".field", ".hint", ".check", ".toggle-chip", ".toggle-chip .count", ".segmented", ".spinner", ".skeleton", ".dot.pulse", ".list-card", ".list-row", ".list-row-lead", ".list-row-main", ".list-row-title", ".list-row-meta", ".list-row-end", ".chev", ".text-link", ".eyebrow.live::before", ".page-header", ".page-header-row", ".page-header-actions", ".page-header-sub", ".section-header", ".icon-chip", ".stat-strip", ".stat-cell", ".stat-cell-label", ".stat-cell-value", ".bubble-label", ".composer", ".card.needs-you", ".card.lift", ".autogrow"]) {
       expect(selects(app, sel), `${sel} has no rule`).toBe(true);
     }
-    // the older rows' trailing chevron answers the row's hover like .chev does
-    expect(app).toMatch(/:is\(\.list-item, \.list-row\):hover :is\(\.chev, \.list-item-end > \.icon:last-child\)/);
+    // a row's trailing arrow answers the row's hover
+    expect(app).toContain(".list-row:hover .chev, .table tbody tr:hover .chev { color: var(--primary); }");
   });
 
   it("keeps the menu's keyboard fill on every device; only the pointer's fill waits for a mouse", () => {
@@ -316,7 +311,7 @@ describe("the kit's component layer", () => {
 
   it("gives every small control a 40px target on a touch screen", () => {
     const coarse = mediaBody(app, "(pointer: coarse)");
-    for (const sel of [".btn.sm", ".pill-button", ".toggle-chip", ".segmented button", ".suggestion", ".toast-action", ".menu-item", ".th-sort", "details.more > summary", ".sbars-more > summary"]) expect(selects(coarse, sel), sel).toBe(true);
+    for (const sel of [".btn.sm", ".toggle-chip", ".segmented button", ".toast-action", ".menu-item", ".th-sort", "details.more > summary"]) expect(selects(coarse, sel), sel).toBe(true);
     expect(coarse).toMatch(/\.icon-btn, \.icon-btn\.sm \{ width: 40px; height: 40px; \}/);
   });
 
@@ -374,8 +369,6 @@ describe("the kit's component layer", () => {
     const hover = app.indexOf(".option-row:not(:has(input:checked, input:disabled)):hover { border-color: var(--line-strong); }");
     expect(hover).toBeGreaterThan(0);
     expect(insideMedia(app, hover, "(hover: hover) and (pointer: fine)")).toBe(true);
-    expect(rule(app, ".option-tag")).toContain("margin-left: auto;");
-    expect(selects(app, ".option-row:has(input:checked) .option-tag")).toBe(true);
     // the radio or checkbox itself is never redrawn
     expect(app).not.toMatch(/\.option-row[^{]*input[^{]*\{[^}]*appearance/);
   });
@@ -455,8 +448,8 @@ describe("the kit's component layer", () => {
     expect(rule(app, ".card.flush")).toBe(" padding: 0; ");
     const title = rule(app, ".card.flush > .card-title");
     for (const d of ["margin: 0;", "padding: 16px 24px;", "border-bottom: 1px solid var(--line);"]) expect(title).toContain(d);
-    expect(rule(app, ".card.flush :is(.list-row, .list-item)")).toBe(" padding-inline: 24px; ");
-    expect(phone).toContain(".card.flush > .card-title, .card.flush :is(.list-row, .list-item) { padding-inline: 16px; }");
+    expect(rule(app, ".card.flush .list-row")).toBe(" padding-inline: 24px; ");
+    expect(phone).toContain(".card.flush > .card-title, .card.flush .list-row { padding-inline: 16px; }");
     // nothing is clipped (a row's menu opens over what lies below): the end rows take the card's corners instead
     expect(app).not.toMatch(/\.card\.flush[^{]*\{[^}]*overflow/);
     expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 15px;");
@@ -467,7 +460,7 @@ describe("the kit's component layer", () => {
   it("draws the small marks screens used to copy: the numbered circle, the inline tag, a row title that wraps, an IconLabel by a card's title", () => {
     const ordinal = rule(app, ".ordinal");
     for (const d of ["width: 24px; height: 24px;", "border-radius: 9999px;", "background: var(--tint-2);", "color: var(--primary);", "font-family: var(--font-mono); font-size: 11px;"]) expect(ordinal).toContain(d);
-    // Tailwind's `ordinal` utility (font-variant-numeric) would beat the kit's rule: switched off, like list-item
+    // Tailwind's `ordinal` utility (font-variant-numeric) would beat the kit's rule, so it is switched off
     expect(app).toContain('@source not inline("ordinal");');
     const tag = rule(app, ".inline-tag");
     for (const d of ["background: var(--tint-2);", "color: var(--primary);", "font-family: var(--font-mono); font-size: 11px;", "white-space: nowrap;"]) expect(tag).toContain(d);
@@ -485,8 +478,8 @@ describe("the kit's component layer", () => {
     // a figure column's heading too (`.table .num` keeps figures on one line)
     expect(rule(app, ".table-wrap.wrap-heads thead th")).toBe(" white-space: normal; ");
     expect(rule(app, ".eyebrow:is(h2, h3)")).toContain("font-size: 11px;");
-    // it must come after the card's and the side card's own heading sizes, which share its specificity
-    for (const sel of [".card-title h2 {", ".side-card > :is(h2, h3) {", ".section-header h3 {"]) expect(app.indexOf(".eyebrow:is(h2, h3) {"), sel).toBeGreaterThan(app.indexOf(sel));
+    // it must come after the card's and the section header's own heading sizes, which share its specificity
+    for (const sel of [".card-title h2 {", ".section-header h3 {"]) expect(app.indexOf(".eyebrow:is(h2, h3) {"), sel).toBeGreaterThan(app.indexOf(sel));
   });
 });
 
