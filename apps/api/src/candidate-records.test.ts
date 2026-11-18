@@ -253,6 +253,10 @@ describe("candidates and their applications", () => {
       expect(answers).toContain("Do you hold an active CA RDH license?");
       expect(answers).not.toMatch(/Answered No|flag/i);
       expect(answers).not.toContain("From your AI interview");
+      // to correct something they are pointed at the request further down this page, by its own name, never sent to "your status page"
+      expect(answers).toContain('<h2 id="answers-h">Your answers</h2><p class="meta">To correct something, use <a href="#help">"Ask for a copy, a fix, deletion, or a person\'s review"</a> below.</p>');
+      expect(page).toContain('<h2 id="help">Need something?</h2>');
+      expect(page).not.toContain("on your status page");
       // the job as it was when they applied, and its page while it is public
       expect(page).toContain(`<a href="/careers/${slug}/jobs/${roleA}">See the job page</a>`);
       expect(page).not.toMatch(NEVER);
@@ -285,6 +289,8 @@ describe("candidates and their applications", () => {
         expect((await form(base, { message: `At Harbor Dental I see about nine patients a day, with periodontal charting in Dentrix (${turn + 1}).` })).status).toBe(302);
         html = await (await app.request(base)).text();
       }
+      // "Check your answers" is not the status page: there the same request is named with where to find it
+      expect(decode(html)).toContain('this chat does not change them. To correct something, use "Ask for a copy, a fix, deletion, or a person\'s review" on your status page; its link is in the email we sent you when you applied.');
       expect((await form(`${base}/submit`)).status).toBe(302);
       await container.drain();
       const page = await statusPage(roleA, stan);

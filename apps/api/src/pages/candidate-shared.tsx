@@ -19,11 +19,14 @@ export function jobNotices(packet: RolePacket, company: Pick<typeof companies.$i
   return jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
 }
 
+/** The request on the status page, by the name its fold carries there. */
+export const CORRECTION_REQUEST = "Ask for a copy, a fix, deletion, or a person's review";
+
 /**
- * How a candidate corrects what went with their form, said the same way wherever they read it ("Check your answers" and
- * their status page): the request on their status page, whose link is in the email about their application.
+ * How a candidate corrects what went with their form, as "Check your answers" says it: the request on their status
+ * page, whose link is in the email about their application. The status page itself points at that request further down.
  */
-export const CORRECTION_LINE = "To correct something, use \"Ask for a copy, a fix, deletion, or a person's review\" on your status page; its link is in the email we sent you when you applied.";
+export const CORRECTION_LINE = `To correct something, use "${CORRECTION_REQUEST}" on your status page; its link is in the email we sent you when you applied.`;
 
 /** "a***@example.com": enough for the person to recognise their own address, nothing more. */
 export function maskEmail(email: string): string {

@@ -13,7 +13,7 @@ import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { packetOf, screensOf, sentAnswersFor, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink, withdrawApplication } from "../services/applications";
 import { contactLineFor } from "../services/company-settings-profile";
-import { CORRECTION_LINE, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
+import { CORRECTION_REQUEST, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
 import { Icon } from "./icons";
 import { JobFacts } from "./job-facts";
 import { ContactLink } from "./job-page";
@@ -271,7 +271,7 @@ function AnswersSection(props: { sent: SentAnswers; companyName: string; timeZon
   return (
     <section id="answers" aria-labelledby="answers-h">
       <h2 id="answers-h">Your answers</h2>
-      <p class="meta">{CORRECTION_LINE}</p>
+      <p class="meta">To correct something, use <a href="#help">"{CORRECTION_REQUEST}"</a> below.</p>
       <div class="card">
         <h3>Your details</h3>
         <dl class="details">
@@ -422,7 +422,7 @@ candidatePages.get("/c/status/:token", async (c) => {
       {c.req.query("request") ? <div class="card" role="status"><strong>We have your request.</strong><p>A confirmation with the completion date is on its way to {cand?.email ?? "your email"}. Reference {c.req.query("request")}.</p></div> : null}
       {/* Requests about their information, and a review by a person, one click away. */}
       <details class="more">
-        <summary>Ask for a copy, a fix, deletion, or a person's review</summary>
+        <summary>{CORRECTION_REQUEST}</summary>
         <p>To request, correct, or delete your information you can also email <a href={`mailto:${container.env.PRIVACY_EMAIL}`}>{container.env.PRIVACY_EMAIL}</a>; see <a href="/privacy">how we handle your information</a>.</p>
         <form method="post" action={`/c/status/${app.statusToken}/privacy`} class="card">
           <label for="pk" class="flush">What would you like?</label>
