@@ -259,9 +259,10 @@ export function hasPlaceholder(text: string): boolean {
 }
 
 /**
- * The model's own words in a reading that owners read (summary, rationale, claims, unknowns, confidence reasons: every
- * string except a `quote`) with no placeholder left in them: "[name]" reads "the candidate", any other "a detail that was
- * hidden". Quotes are left alone: `restoreQuotes` maps them back to the original, and the quote check fails any it cannot.
+ * The model's own words in a reading that the hiring team reads (the summary, the claims, the open questions, each
+ * finding's sentence: every string except a `quote`) with no placeholder left in them: "[name]" reads "the candidate",
+ * any other "a detail that was hidden". Quotes are left alone: `restoreQuotes` maps them back to the original, and the
+ * quote check fails any it cannot.
  */
 export function withoutPlaceholders<T>(value: T): T {
   const words = (s: string) => s.replace(PLACEHOLDER_SPLIT_ALL, (m) => (m === PLACEHOLDER.name ? "the candidate" : "a detail that was hidden"));
