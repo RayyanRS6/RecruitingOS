@@ -1,105 +1,69 @@
 # Recruiting OS: the product
 
-What the product is. If code, tests or other docs disagree with this file, this file wins.
-Decisions marked OWNER are the owner's own words or answers; the rest are the lead's.
+What the product is, as built. The owner asked for it on 17 and 18 November 2026: "clean, simple, user-friendly", "keep only the features and settings that are actually required", "one clear and consistent system for CV analysis, candidate scoring, and ranking". Decisions marked OWNER are the owner's own words or answers; the rest are the team's. The decisions that sit around the product (sign-in, plans, AI models, hosting, legal) are in [DECISIONS.md](DECISIONS.md).
 
 ## The flow (OWNER)
 
-1. A company signs in with Google (or Microsoft) and gives its company details.
-2. The platform admin accepts or declines the company in her dashboard.
-3. An accepted company types a short job idea. The AI finds what is missing (location, on site / hybrid / remote, pay
-   range, other essentials) and asks follow-up questions.
-4. The AI writes the job description, the structured posting, a LinkedIn post and an Indeed post.
-5. The company publishes the job itself. The platform admin does NOT approve jobs; she can see every company and its jobs.
+1. A company signs in with Google or Microsoft and gives its company details.
+2. The platform administrator accepts or declines the company in the admin dashboard.
+3. An accepted company types a short job idea, or pastes an ad. The AI finds what is missing (the place, on site / hybrid / remote, the pay, the other essentials) and asks follow-up cards.
+4. The AI writes the job: the description, the structured posting, the questions, and a LinkedIn post and an Indeed post.
+5. The company publishes the job itself. Nobody approves a job. The platform administrator can see every company and its jobs, as counts.
 6. The company posts on LinkedIn and Indeed with our job page as the Apply link.
-7. A candidate lands on our job page, reads the full description, answers basic screening questions (like LinkedIn Easy
-   Apply) and uploads a CV. Nothing about applying is an AI interview or AI-written.
-8. The AI reads the CV, scores it against the job, and the list ranks candidates best to worst. The company shortlists.
-9. Only shortlisted candidates do the AI interview. It asks about the job description and requirements and is rated.
-10. The company reads the interview result and marks the person Hired or Not selected. That is the end.
+7. A candidate opens our job page, reads the whole description, fills in a short form with the job's screening questions and uploads a resume. Nothing about applying is an AI interview or written by AI.
+8. The AI reads the resume once and scores it against the job. The list ranks candidates best first. The company shortlists.
+9. Only shortlisted candidates do the AI interview, by email. It asks about the job's requirements and is scored.
+10. The company reads the result and marks the person Hired or Not selected. That is the end.
 
 ## Decisions
 
-D1 People. Platform admin. Company team with three roles: owner, admin, and `hiring_manager` shown on screen as "Member".
-   Candidates (no account; an emailed status link). Removed: company roles hr, interviewer, recruiter; the platform role
-   its_recruiter.
+**D1 People.** A platform administrator. A company's team with three roles: Owner, Admin and Member (`hiring_manager` in code). Candidates, who have no account: an emailed status link is their key.
 
-D2 One company gate. Accept / Decline / Take away access in the admin dashboard is the only gate. Accepting makes the
-   company live. The separate "ITS check" and everything that waits for it (held emails, publishing that waits) are removed.
-   Sign-up modes: `approval` (production) and `open` (local and tests). The `invite` mode and its allow-list are removed.
+| | Owner | Admin | Member | Platform administrator |
+|---|---|---|---|---|
+| See jobs, candidates, pay, Home, updates | yes | yes | yes | no |
+| Start, write, edit and publish a job; edit its posts | yes | yes | yes (their own drafts) | no |
+| Every action on a candidate, one person or many | yes | yes | yes | no |
+| Pause, resume or close a job; set its closing date; take over a draft | yes | yes | no | no |
+| Change company details; invite, change and remove people | yes | yes | no | no |
+| Make someone an owner | yes | no | no | no |
+| Ask for a bigger plan; set their own email switch; leave | yes | yes | yes | no |
+| The admin dashboard | no | no | no | yes |
 
-D3 Jobs. Statuses: draft, open, paused, closed. The company publishes with one button once the legal and fairness checks
-   pass. No approval requests, no second approver, no named decision maker, no expiry. Editing an open job saves a new
-   version that is live at once.
+Nobody changes their own membership, and the last owner stays. The platform administrator never sees a candidate's name, resume, answers or score: a company's jobs show as counts only.
 
-D4 Job builder. One way in: type an idea or paste an ad. The AI asks follow-up cards for missing essentials: title,
-   location, work arrangement (on site / hybrid / remote), pay (a person confirms it), employment type and schedule,
-   key requirements. Removed: the QuickStart wizard, change-by-chat, the market-pay benchmark, the questions "why are you
-   hiring", "who interviews", "who decides", the human interview plan and scorecard template. Kept: the fairness guard on
-   wording, the legal check (benefits line, pay range, closing date where a state asks), the closing date.
+**D2 One company gate.** Accept, Decline and Take away access in the admin dashboard are the only gate. Accepting makes the company live: its people can work, its careers page and job pages are public, and its emails to candidates go. While a company waits or is declined, nothing of it works or is public. On a hosted deployment a new company always starts as a request (`SIGNUP_MODE=approval`); on a developer's machine and in tests it is live at once (`open`).
 
-D5 What the builder produces. The job description; the structured posting (title, place, arrangement, type, pay,
-   requirements, benefits); a LinkedIn post and an Indeed post written by AI (one separate AI stage), both editable, each
-   carrying the Apply link (the job page address with `?src=linkedin` or `?src=indeed`). The job's Share tab shows the link
-   and the two posts with Copy buttons. Removed: the per-board posting records and their state machine, link checking,
-   ITS posting tasks, ZipRecruiter, applications by email, tracked `/a/` links, share places, XML/JSON feeds. Kept: the
-   careers page, the job page, its Google structured data, sitemap and robots.
+**D3 Jobs.** A job is a draft, open, paused or closed. The company publishes with one button once every essential is there, no wording flag is open and the legal check passes. Editing an open or paused job saves a new version that is live at once. Paused takes no new applications. Closed is final and tells nobody anything.
 
-D6 Applying. Job page, then a plain form: name, email, phone (optional), CV (required), the job's screening questions
-   (yes/no, choice, number), the notices and the acknowledgment tick, Send. Then a receipt and ONE email "we received your
-   application" with the status link. No AI call before Send, no waiting room, no "no resume" path, no saved-details reuse.
-   A second application to the same job from the same address creates nothing.
+**D4 Job builder.** One way in: type an idea or paste an ad. The AI reads facts only from what the person typed, and asks cards for the essentials it lacks: the title, the place, the work arrangement (asked, never assumed), the pay (a person confirms it), full or part time, the schedule, and one must-have. "Write the job" needs every essential. Three checks stay on the written job: the fairness guard on wording (a flagged phrase is reworded, or kept with a reason), the legal check (the benefits line, the pay range and a closing date where a state asks for one), and the closing date.
 
-D7 Stages (the only place a person's position is stored): applied, received, triaged, screen_invited, screening,
-   screen_complete, hired, rejected, withdrawn. On screen: New (applied, received, triaged), Shortlisted (screen_invited,
-   screening; "AI interview sent" or "started"), Interviewed (screen_complete), Hired, Not selected (rejected), Withdrew.
-   A "No" to a screening question never holds or declines anyone: it is a flag on the row and evidence for the CV reading.
-   Plan-locked applicants work as today.
+**D5 What the builder produces.** The job description. The structured posting: title, place, arrangement, type, pay, must-haves, skills with their importance, benefits. The application form's screening questions and the AI interview's questions. A LinkedIn post and an Indeed post, written by AI in a step of their own after the job is published, both editable, each carrying its Apply link (the job page's address with `?src=linkedin` or `?src=indeed`). The job's Share tab shows the link and the two posts with Copy buttons. A post a person edited is never replaced, except by that post's own "Write again". The public side is the careers page, the job page with its data for Google, the sitemap and `robots.txt`.
 
-D8 What a company can do with a candidate: Shortlist (one or many; sends the AI interview), remind or send a new link,
-   Hire, Not selected (private), undo Not selected before the candidate was told, Email the decision (one standard
-   wording; one or many).
+**D6 Applying.** The job page, then a plain form: first name, last name, email, phone (optional), resume (required), the job's screening questions (yes or no, a choice, a number), the notices and the acknowledgment tick, Send. Then a receipt and one email, "we received your application", with the status link. No AI runs before Send. A second application to the same job from the same address creates nothing and sends the status link again.
 
-D9 AI interview. Starts only with Shortlist. An email with a link open five days, one reminder after 48 hours, then it
-   closes and the company can send a new link. One chat engine. Questions come from the job: its interview questions and
-   the must-haves the CV does not show, then one closing question. The interviewer is given the job description. The
-   candidate presses "Send my answers"; nothing reaches the company before that. "I'd rather not do the AI interview" is
-   recorded and shown to the company. Removed: texting, the AI write-up step, the outage retry run, detached repeat
-   interviews, the recruiter hand-over.
+**D7 Stages.** The stage is the only place a person's position is stored: `applied`, `received`, `triaged`, `screen_invited`, `screening`, `screen_complete`, `hired`, `rejected`, `withdrawn`. A job's Candidates list has five tabs: New (`applied`, `received`, `triaged`), Shortlisted (`screen_invited`, `screening`), Interviewed (`screen_complete`), Hired, and Not selected (`rejected`, and `withdrawn`, shown as "Withdrew"). A "No" to a screening question never holds or declines anyone: it is a flag on the row and evidence for the resume reading. An applicant past the plan's limit is locked: the team sees a card with no name ([DECISIONS.md](DECISIONS.md), "Plans and locked applicants").
 
-D10 One scoring system.
-   - CV score, 0-100, from the CV reading only: points earned over all the job's requirements (must-haves weigh 4; skills
-     3, 2 or 1 by importance; shown 100%, partly shown 50%, otherwise 0; held at 54 when a must-have is shown not met).
-     The candidates list ranks by it.
-   - Interview score, 0-100, from the interview scorecard only: how many of the interview's questions were answered to
-     the job's standard (yes 100%, partly 50%, otherwise 0), with the per-question table beside it.
-   - One band word for both numbers, the same for everyone who sees it. No merged number, no second verdict word, no
-     decision that reads the AI's stored "overall" or "recommendation", no "needs a closer look", no confidence chip.
-   - Candidates are not shown scores.
-   - The evidence rules stay (every quote checked against the candidate's own words; three readings, middle answer).
+**D8 What a company can do with a candidate.** Shortlist, one person or many, which sends the AI interview. Send a reminder, send a new link, or cancel the AI interview. Hire. Not selected, which is private and emails nobody. Undo Hired, or Not selected before the candidate was told. Email the decision, one standard wording, to one person or many, with a short time to take it back. The software never declines, never hires and never emails a decision by itself.
 
-D11 Removed outright (OWNER for the first two lines): ITS recruiter requests, queue, takeover and access grants; in-person
-   interview scheduling, calendar, availability, the Cancelled column, new times, offers and offer tracking. Also: the
-   rules engine, approval requests and the rules screen; nudges, the stuck-job detector, the "still reviewing" note, the
-   untold safety net; marks (longlist, shortlist-as-mark, on hold, not a fit), the pool board, review-and-apply, ask the
-   pool, compare, the talent pool; notes; free-form messages, replies and threads; the job report and CSV; notification
-   groups and digests; texting; notice rewording; contact hours.
+**D9 AI interview.** It starts only with Shortlist: an email with a link open five days, one reminder after 48 hours, then the link closes and the company can send a new one. The questions come from the job: its interview questions and the must-haves the resume does not show, then one closing question. The candidate presses "Send my answers"; nothing reaches the company before that, not even how far they got. "I'd rather not do the AI interview" is recorded and shown to the company.
 
-D12 Settings is one page: Company, Team, Plan, Email updates (one switch per person).
+**D10 One scoring system.** Two numbers, never merged, both worked out in code. The AI writes findings and quotes only.
+- **Resume score**, 0 to 100, from the resume reading alone: points earned over all the job's requirements. A must-have weighs 4; a skill 3, 2 or 1 (Essential, Important, Helpful). Shown earns all, Partly shown half, anything else nothing. A must-have the candidate's own words show is not met holds the number at 54. The list ranks by it.
+- **Interview score**, 0 to 100, from the AI interview's scorecard alone: each question the interview asked counts once, answered to the job's standard 100, partly 50, otherwise 0. The table of questions sits beside it.
+- One band word for both numbers: Very high from 85, High from 70, Medium from 55, Low below. One set of finding words: Shown, Partly shown, Not met, Not shown yet. What nothing shows earns no points and is never read as a no.
+- A finding is Shown only on a quote the code found in the candidate's own words. Each resume and each interview is read three times and the middle answer kept.
+- When a job's must-haves or skills change, everyone still in the process is read again; until then their score says "Scored against an earlier version of the job".
+- Candidates are never shown a score, a band or a finding.
 
-D13 Admin dashboard: Companies (requests to accept or decline; the list; a company's page with its plan and its jobs),
-   Privacy requests, System.
+**D11 The order of every list is the server's.** Candidates: the resume score, highest first, people with no score last, then who applied first. Interviewed: the interview score first. Jobs and companies: newest first.
 
-D14 Kept as they are (OWNER for plans): plans, limits, AI credit and locked applicants; sign-in, sessions and the staff
-   second factor; privacy requests; audit records and events; the workflow engine; the email outbox; file storage and
-   scanning; the UI kit; the closing date; the fairness guard; every required candidate notice.
+**D12 Settings** is one page: Company, Team, Plan, Email updates (one switch for each person).
+
+**D13 Admin dashboard.** Companies (requests to accept or decline; the list; one company with its plan and its jobs), Privacy requests, and System (Health, Costs, Email, Security reports, Administrators).
+
+**D14 Under the product** (OWNER for plans): plans, limits, AI credit and locked applicants; sign-in, sessions and the staff second factor; privacy requests; audit records and events; the workflow engine; the email outbox; file storage and scanning; the UI kit; every required candidate notice.
 
 ## Never cut (legal)
 
-The AI-use notice, the privacy notice, pay transparency, the accommodation lines, "people make every hiring decision", the
-acknowledgment tick (never pre-ticked, enforced on the server), the disclosure line and human alternative on automatic
-emails, the Colorado adverse-decision line in decision emails, "your replies go to the company only when you press Send",
-the locked-applicant wording, and every block marked DRAFT WORDING PENDING COUNSEL. The texts live in
-`packages/core/src/compliance.ts`.
-
-The earlier founder context, specifications and audits are in git history, at commit `199c94f` and before.
+The AI-use notice, the privacy notice, pay transparency, the accommodation lines, "people make every hiring decision", the acknowledgment tick (never pre-ticked, enforced on the server), the disclosure line and the way to reach a person on automatic emails, the Colorado line in decision emails, "your replies go to the company only when you press Send", the wording a locked applicant reads, and every block marked DRAFT WORDING PENDING COUNSEL. The texts are in `packages/core/src/compliance.ts` and `packages/core/src/candidate-lock.ts`.
