@@ -1,16 +1,14 @@
 import { Hono, type Context } from "hono";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
-import { aiCreditView, assertCan, audit, entitlements, hiddenAmong, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
-import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
-import { mailbox } from "@ros/integrations";
+import { aiCreditView, assertCan, entitlements, setActiveCompany } from "@ros/core";
+import { companies, plans, withTenant } from "@ros/db";
 import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { sendAccessRequest } from "../services/access-requests";
 import { INVITE_ONLY_MESSAGE, createCompany, signupDoor } from "../services/companies";
 import { candidateEmailHealth } from "../services/email-health";
 import { tellItsAboutNewCompany } from "../services/company-trust";
-import { sendToIts } from "../services/escalation-queue";
 import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
 import { HttpError } from "../middleware/errors";
 
@@ -68,14 +66,11 @@ companyRoutes.get("/current", requireTenant, async (c) => {
     const usage = await entitlements.usageOf(tx, t.companyId, { now });
     // Home's row about the AI credit: its level, its percentage and its words; null when the plan puts no limit on it.
     const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone, planKey: co.planKey });
-    // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
-    const itsPosting = await planIncludesItsPosting(tx, t.companyId);
-    const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);
     // Whether email to candidates is really arriving, from the last week's sends (6 November 2026): what Settings says beside
     // the email service, instead of "connected" because a key exists. Counts only, never anyone the team may not read.
     const candidateEmail = await candidateEmailHealth(tx, { companyId: t.companyId, now });
     // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now), candidateEmail };
+    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, trial: trialStanding(co, now), candidateEmail };
   });
   // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
   // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
@@ -162,78 +157,4 @@ companyRoutes.post("/current/leave", requireTenant, async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { confirm?: unknown };
   if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm that you want to leave this company.");
   return c.json(await leaveCompany(teamOf(c), { sessionId: c.get("session")!.sessionId }));
-});
-
-/** ITS recruiter access to this company: who, why, what it covers, when it ends. Everyone on the team can see it. */
-companyRoutes.get("/current/staff-access", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "company.read");
-  const container = c.get("container");
-  const grants = await withTenant(container.db, t.companyId, async (tx) => {
-    const list = await tx.select({ id: staffAccessGrants.id, userId: staffAccessGrants.userId, kind: staffAccessGrants.kind, purpose: staffAccessGrants.purpose, escalationId: staffAccessGrants.escalationId, roleId: staffAccessGrants.roleId, applicationId: staffAccessGrants.applicationId, startsAt: staffAccessGrants.startsAt, expiresAt: staffAccessGrants.expiresAt, endedAt: staffAccessGrants.endedAt, revokedAt: staffAccessGrants.revokedAt, revokeReason: staffAccessGrants.revokeReason })
-      .from(staffAccessGrants).where(eq(staffAccessGrants.companyId, t.companyId)).orderBy(desc(staffAccessGrants.createdAt)).limit(100);
-    // A grant about someone the reader cannot read (Rule 3 of the plans) still says it covers one candidate, and not which one.
-    const hidden = await hiddenAmong(tx, t, list.flatMap((g) => (g.applicationId ? [g.applicationId] : [])));
-    const out = [];
-    for (const g of list) {
-      const role = g.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, g.roleId)).limit(1))[0] : null;
-      out.push({ ...g, applicationId: g.applicationId && hidden.has(g.applicationId) ? null : g.applicationId, oneCandidate: !!g.applicationId, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
-    }
-    return out;
-  });
-  // Recruiters are not members, so the tenant role cannot see their user rows; name them from the platform side (name and email only).
-  const rows = [];
-  for (const g of grants) {
-    const [u] = await container.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, g.userId)).limit(1);
-    const { userId: _omit, ...rest } = g;
-    rows.push({ ...rest, recruiterName: u?.name ?? null, recruiterEmail: u?.email ?? "" });
-  }
-  return c.json(rows);
-});
-
-/**
- * Ends a recruiter's access now (item 1 of the 21 Sep instruction): owner or admin only, confirmation and a reason
- * required, the recruiter told, the request returned to the queue, everything recorded in the customer's own history.
- */
-companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "staff_access.revoke");
-  const body = (await c.req.json().catch(() => ({}))) as { reason?: string; confirm?: boolean };
-  if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm that you want to end this recruiter's access now.");
-  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-  if (reason.length < 5) throw new HttpError(400, "reason_required", "Say why you are ending the access; the recruiter and your activity log will show it.");
-  const container = c.get("container");
-  const now = container.engine.clock();
-  const actor = actorOf(c);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.req.param("grantId") ?? "")) throw new HttpError(404, "not_found", "No active recruiter access with that id.");
-  // The tenant role may read grants but never write them (migration 0004); the revocation runs on the platform side,
-  // scoped to the signed-in customer's own company (the company id comes from the session, never from the request).
-  const result = await withPlatform(container.db, async (tx) => {
-    const r = await revokeStaffGrant(tx, { grantId: c.req.param("grantId") ?? "", companyId: t.companyId, actor, reason, now });
-    if (!r) throw new HttpError(404, "not_found", "No active recruiter access with that id.");
-    if (r.escalationId) {
-      const [esc] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, r.escalationId)).limit(1);
-      if (esc && esc.assignedToUserId === r.recruiterUserId && !["resolved", "cancelled"].includes(esc.status)) {
-        await tx.update(recruiterEscalations).set({ assignedToUserId: null, status: "open", accessExpiresAt: null }).where(eq(recruiterEscalations.id, esc.id));
-      }
-    }
-    const [recruiter] = await tx.select({ email: users.email, name: users.name }).from(users).where(eq(users.id, r.recruiterUserId)).limit(1);
-    const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
-    return { ...r, recruiter, companyName: company?.name ?? "the customer" };
-  });
-  // Tell the recruiter and the queue. Neither message carries candidate data.
-  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
-  let recruiterNotified = false;
-  if (result.recruiter?.email) {
-    const sent = await container.integrations.email.send({ to: result.recruiter.email, from, subject: `Your access to ${result.companyName} was ended by the customer`, text: `${actor.name ?? "The customer"} at ${result.companyName} ended your access just now.\nReason: ${reason}\n\n${result.escalationId ? "The request is back in the queue, unassigned. " : ""}Do not keep or use any copies of the customer's information.`, idempotencyKey: `grant_revoked:${result.grant.id}`, tags: { template: "staff_access_revoked" } });
-    recruiterNotified = sent.status !== "failed";
-    if (sent.status === "failed") {
-      // Never tell the customer the recruiter was told when they were not: record it and put it in front of ITS.
-      await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: "A recruiter was not told their access ended", body: `The customer ended a recruiter's access but the email to the recruiter failed (${sent.error}). Tell them another way.`, companyId: t.companyId, target: { type: "user", id: result.recruiterUserId }, details: { grantId: result.grant.id, error: sent.error } });
-      await audit(container.db, { companyId: t.companyId, actor: { kind: "system", id: "email" }, action: "staff.access_revoked", target: { type: "user", id: result.recruiterUserId }, reason: "recruiter notification failed", details: { grantId: result.grant.id, error: sent.error } });
-    }
-  }
-  // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
-  await sendToIts(container, { companyId: t.companyId, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, template: "staff_access_revoked_queue" });
-  return c.json({ ok: true, grantId: result.grant.id, endedAt: now.toISOString(), escalationId: result.escalationId, recruiterNotified });
 });

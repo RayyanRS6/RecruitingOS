@@ -6,7 +6,7 @@ import { HELD_REASON, UndoError, freeformFooter, sendFreeformMessage, suggestMes
 import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
-import { NO_APPROVER_WHILE_LOCKED, undoUntil } from "./application-actions";
+import { undoUntil } from "./application-actions";
 
 /**
  * Messages a person writes to a candidate (docs/spec/21 F11). The text is the person's own; the product adds the
@@ -57,13 +57,6 @@ function waitsForApprover(policy: Pick<PolicyDecision, "level" | "approverRoles"
 }
 
 /**
- * ITS staff writing to someone locked, under a grant naming them or break glass: nobody at the company may read this person,
- * so nobody there can approve a message to them, and someone who asked for a person must not wait for an upgrade. The company's
- * rule does not apply, and the send is on the record (`NO_APPROVER_WHILE_LOCKED`).
- */
-const pastApprovalRule = (app: Pick<App, "lockedAt">, t: Pick<Tenant, "staff">): boolean => !!app.lockedAt && !!t.staff;
-
-/**
  * What the sheet shows around the text box: who the message goes to, the footer that follows it (and the one it gets
  * when the person keeps a line the assistant suggested, `aiFooter`), whether a reply comes back into the product, and
  * how long the Undo lasts after Send.
@@ -80,7 +73,7 @@ export async function composeMessagePreview(tx: Tx, container: Container, input:
     repliesComeBack: container.integrations.env.emailInConfigured,
     policyLevel: policy.level,
     /** True when this person's message would wait for one of the approver roles before it goes out. */
-    needsApproval: !pastApprovalRule(input.app, input.tenant) && waitsForApprover(policy, input.tenant.role),
+    needsApproval: waitsForApprover(policy, input.tenant.role),
     undoSeconds: container.env.MESSAGE_UNDO_SECONDS,
   };
 }
@@ -136,10 +129,6 @@ export async function sendCandidateMessage(tx: Tx, container: Container, input: 
   const proposal: MessageProposal = { subject: input.body.subject?.trim() || null, text: input.body.text.trim(), senderName, senderUserId: t.userId, candidateName, ...(aiHelped ? { aiHelped: true, suggestionRunId: suggestionRunId ?? input.body.suggestionRunId ?? null } : {}) };
   const subject = { type: "application", id: app.id } as const;
   const rationale = `${senderName} wrote to ${candidateName} about ${b.role.title}.`;
-  if (pastApprovalRule(app, t)) {
-    await audit(tx, { companyId: t.companyId, actor, action: "message.approval_skipped", target: subject, reason: NO_APPROVER_WHILE_LOCKED, details: { actionType: "message.send_freeform" } });
-    return queueMessage(tx, container, { app, bundle: b, sender: actor, auditActor: actor, tenant: t, proposal, idempotencyKey: `freeform:${app.id}:${uuidv7()}`, approvalRequestId: null, approvedBy: null, holdForUndo: true });
-  }
   const d = await gate(tx, { companyId: t.companyId, roleId: app.roleId, applicationId: app.id, actionType: "message.send_freeform", subject, proposal, rationale, requestedBy: actor });
   const open = `/roles/${app.roleId}/talent?open=${app.id}`;
   if (d.outcome === "wait_for_approval") {

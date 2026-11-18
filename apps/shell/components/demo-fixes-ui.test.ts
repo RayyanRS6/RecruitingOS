@@ -28,7 +28,7 @@ const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/Cand
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   // A query that failed stays failed while the page is drawn (nothing is fetched on the server).
@@ -73,18 +73,17 @@ describe("the approval card while the worker catches up", () => {
     expect(text(render(client(), createElement(CatchingUpCard, { latest: rejected, sentBackHere: false })))).toContain("Getting the approval ready");
   });
 
-  it("once the page has waited as long as it reads the role again, it stops the spinner and says so, with Reload and Bring in a recruiter (6 November 2026)", () => {
-    const html = render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1", stalled: true }));
+  it("once the page has waited as long as it reads the role again, it stops the spinner and says so, with Reload (6 November 2026)", () => {
+    const html = render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, stalled: true }));
     const words = text(html);
     expect(words).toContain("This is taking longer than it should");
-    expect(words).toContain("It usually takes a few seconds. Reload the page in a minute; if it still shows this, bring in a recruiter.");
+    expect(words).toContain("It usually takes a few seconds. Reload the page in a minute.");
     expect(words).not.toContain("updates on its own");
     expect(html).not.toContain('class="spinner"');
     expect(html).toContain('role="status"');
     expect(html).toMatch(/<button type="button" class="btn secondary sm"[^>]*>.*Reload the page<\/button>/);
-    expect(words).toContain("Bring in a recruiter");
     // before the two minutes the card still says the approval is on its way, with its spinner
-    expect(render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false, roleId: "r1" }))).toContain('<span class="spinner" aria-hidden="true"></span>');
+    expect(render(client(), createElement(CatchingUpCard, { latest: null, sentBackHere: false }))).toContain('<span class="spinner" aria-hidden="true"></span>');
   });
 
   it("a job closed while it waited, and reopened by ITS, can ask for approval again: closing withdrew the request", () => {

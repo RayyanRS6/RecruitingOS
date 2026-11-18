@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { CANDIDATES_PER_JOB, MORE_CANDIDATES_LINE, moreAppliedTitle } from "@ros/contracts";
 import { applications, candidates, companies, events, notifications, type Queryable } from "@ros/db";
 import { zonedParts } from "./business-hours";
@@ -82,23 +82,6 @@ export async function lockedAmong(q: Queryable, applicationIds: readonly string[
 export const notLocked = () => isNull(applications.lockedAt);
 
 /**
- * Who is reading, for the wall of Rule 3: someone on the team, or ITS staff under a grant. ITS is not the paying customer, but
- * a recruiter inside a customer's workspace reads the same lists as the customer, so they cannot name a locked person by
- * accident. Only two grants read past the lock: break glass, and one naming exactly this application, which is how a
- * candidate who asked for a person gets one. A grant for a role or for the whole company does not.
- */
-export type LockReader = { staff?: { kind: string; scope: { applicationId: string | null } } | null } | null | undefined;
-
-const readsEveryone = (reader: LockReader) => reader?.staff?.kind === "break_glass";
-
-/** The filter for a query over applications, in the query, before anything is ordered or counted. Undefined for break glass, who reads everyone. */
-export function visibleTo(reader: LockReader): SQL | undefined {
-  if (readsEveryone(reader)) return undefined;
-  const named = reader?.staff?.scope.applicationId;
-  return named ? or(notLocked(), eq(applications.id, named)) : notLocked();
-}
-
-/**
  * Of those locked, who an upgrade could still open: not someone who withdrew or was deleted while locked. Their place was taken
  * once and never comes back, so `decideLock` goes on counting them; but they use no room when a change of plan opens people, and
  * they have no card, no place in "N more" and no part in "view more", because nobody would open. Nothing about them changes:
@@ -106,22 +89,6 @@ export function visibleTo(reader: LockReader): SQL | undefined {
  */
 export function lockedAndWaiting(): SQL {
   return and(isNotNull(applications.lockedAt), ne(applications.stage, "withdrawn"), sql`not exists (select 1 from ${candidates} where ${candidates.id} = ${applications.candidateId} and ${candidates.anonymizedAt} is not null)`) as SQL;
-}
-
-/** The locked applications this reader may not read, to count them, if an upgrade could still open them (`lockedAndWaiting`). Null for break glass, who has none. */
-export function hiddenFrom(reader: LockReader): SQL | null {
-  if (readsEveryone(reader)) return null;
-  const named = reader?.staff?.scope.applicationId;
-  return named ? (and(lockedAndWaiting(), ne(applications.id, named)) as SQL) : lockedAndWaiting();
-}
-
-/** The applications among these this reader may not read. */
-export async function hiddenAmong(q: Queryable, reader: LockReader, applicationIds: readonly string[]): Promise<Set<string>> {
-  if (readsEveryone(reader)) return new Set();
-  const locked = await lockedAmong(q, applicationIds);
-  const named = reader?.staff?.scope.applicationId;
-  if (named) locked.delete(named);
-  return locked;
 }
 
 /** Whether anyone at this company is locked: a company with nobody locked reads every list as it always did. */
@@ -235,5 +202,5 @@ export function onFileEarlierFactsLine(companyName: string): string {
   return `If ${companyName} reviews your application, they see what you keep.`;
 }
 
-/** The line above the messages on the status page while locked: a reply reaches ITS, not the team. */
+/** The line above the messages on the status page while locked. */
 export const LOCKED_THREAD_LINE = "To write to us, reply to any of our emails.";

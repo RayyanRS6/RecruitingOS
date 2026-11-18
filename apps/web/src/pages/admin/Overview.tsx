@@ -33,13 +33,12 @@ import { costsSinceKey, monthStartIn } from "./system";
 
 type FailuresDto = { failedRuns: Array<{ id: string }>; failedJobs: Array<{ id: number; createdAt?: string }>; failedAi: Array<{ id: string; createdAt?: string }>; alerts: AlertRow[]; pendingDeletions: Array<{ id: string }> };
 type CspDto = { mode: string; reports: Array<{ id: string; reviewedAt: string | null }> };
-type EscalationPreview = { id: string; status: string; overdue: boolean; companyName: string };
 type CostRow = { companyId: string | null; task: string; model: string; runs: number; inputTokens: number; outputTokens: number; costUsd: number };
 type QueueDto = { queued: number; failed: number; oldestQueuedAt: string | null; waitingRuns: number; definitions: string[] };
 type CalendarDto = { version: number | null; current: { timeZone: string } };
 
 /** What Overview reads to build "Needs attention"; a source not (yet) read is left out. */
-export type OverviewSources = { customers?: CustomerRow[]; alerts?: AlertRow[]; failures?: FailuresDto; privacy?: DataRequest[]; failedEmail?: Array<{ id: string }>; csp?: CspDto; escalations?: EscalationPreview[] };
+export type OverviewSources = { customers?: CustomerRow[]; alerts?: AlertRow[]; failures?: FailuresDto; privacy?: DataRequest[]; failedEmail?: Array<{ id: string }>; csp?: CspDto };
 
 /**
  * One row of "Needs attention": one sentence, an optional quieter line, and the one button that opens the exact place.
@@ -86,8 +85,8 @@ export function dueWords(slaDueAt: string, now: number = Date.now()): string {
  * "Needs attention", most urgent first (redesign spec 3.2): requests for access (one row each, the longest waiting first,
  * up to five, then one row linking to the rest); companies waiting for the ITS check (the longest waiting first, B7); alerts
  * that need a person (urgent first); privacy requests overdue or due within 5 days; failed work; security reports not
- * reviewed; email applications that could not be imported; credentials still stored after a disconnect; recruiter requests
- * past their reply-by time; customers at 80% or more of their screening chats.
+ * reviewed; email applications that could not be imported; credentials still stored after a disconnect; customers at
+ * 80% or more of their screening chats or their AI credit; customers who asked to upgrade.
  */
 export function attentionRows(s: OverviewSources, now: number = Date.now()): AttentionRow[] {
   const rows: AttentionRow[] = [];
@@ -174,17 +173,6 @@ export function attentionRows(s: OverviewSources, now: number = Date.now()): Att
 
   const stored = s.failures?.pendingDeletions.length ?? 0;
   if (stored) rows.push({ key: "credentials", urgent: true, text: `${count(stored, "credential is", "credentials are")} still stored after a disconnect`, action: { label: "Open", href: "/admin/problems?view=failed" } });
-
-  const late = (s.escalations ?? []).filter((e) => e.overdue);
-  if (late.length) {
-    rows.push({
-      key: "recruiter",
-      urgent: false,
-      text: `${count(late.length, "recruiter request is", "recruiter requests are")} overdue`,
-      sub: someNames([...new Set(late.map((e) => e.companyName))]),
-      action: { label: "Open", href: late.length === 1 ? `/recruiter/queue/${encodeURIComponent(late[0].id)}` : "/recruiter/queue?show=overdue" },
-    });
-  }
 
   const low = [...allowanceAlerts(s.alerts ?? []).values()].sort((a, b) => (a.level === b.level ? 0 : a.level === "used_up" ? -1 : 1));
   if (low.length > LOW_ROWS_EACH) {
@@ -279,11 +267,8 @@ const CUSTOMERS_SHOWN = 5;
  * A tab left open stays true (the review of 6 November 2026): every source behind "Needs attention" and its "Nothing needs
  * you right now." is asked again when the window comes back into focus and every minute while the tab is visible, never in
  * a hidden one, as Home is (TODAY_REFRESH), because each read is recorded (admin.ts) and a request for access may be waiting.
- * The recruiter requests are recorded per customer on each read, so they are asked every five minutes, and on focus only once
- * the answer is two minutes old.
  */
 export const OVERVIEW_REFRESH = TODAY_REFRESH;
-export const ESCALATIONS_REFRESH = { refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 } as const;
 
 /** Whether the staff session ended under a tab left open (the review of 9 November 2026): session-ended.ts, shared with Home and Customers. */
 export { sessionEnded };
@@ -297,16 +282,13 @@ export function Overview() {
   const privacy = useQuery({ queryKey: adminKeys.privacy, queryFn: () => api.get<DataRequest[]>("/api/v1/admin/data-requests", why), ...OVERVIEW_REFRESH });
   const failedEmail = useQuery({ queryKey: adminKeys.failedEmailApplications, queryFn: () => api.get<Array<{ id: string }>>("/api/v1/admin/failed-email-applications", why), ...OVERVIEW_REFRESH });
   const csp = useQuery({ queryKey: adminKeys.csp, queryFn: () => api.get<CspDto>("/api/v1/admin/csp-reports", why), ...OVERVIEW_REFRESH });
-  // The recruiter queue's own list: `overdue` is worked out on business time by the API. Each read of it is recorded per
-  // customer (as the queue list), so Overview keeps an answer for two minutes instead of reading it again on every visit.
-  const escalations = useQuery({ queryKey: ["escalations"], queryFn: () => api.get<EscalationPreview[]>("/api/v1/escalations"), ...ESCALATIONS_REFRESH });
   const calendar = useQuery({ queryKey: adminKeys.calendar, queryFn: () => api.get<CalendarDto>("/api/v1/admin/calendar", why) });
   const queue = useQuery({ queryKey: adminKeys.queue, queryFn: () => api.get<QueueDto>("/api/v1/admin/queue", why), refetchInterval: 30_000 });
   // "This month" starts on the 1st in the business calendar's time zone; the costs wait for the calendar's answer.
   const since = monthStart(calendar.data?.current.timeZone);
   const costs = useQuery({ queryKey: costsSinceKey(since), queryFn: () => api.get<CostRow[]>(`/api/v1/admin/costs?since=${since}`, why), enabled: !calendar.isLoading });
   const isClient = useIsClient();
-  useSignInWhenSessionEnds([me, customers, alerts, failures, privacy, failedEmail, csp, escalations, calendar, queue, costs].map((q) => q.error));
+  useSignInWhenSessionEnds([me, customers, alerts, failures, privacy, failedEmail, csp, calendar, queue, costs].map((q) => q.error));
 
   // A source whose latest look failed counts as failed even while it still holds an earlier answer (the review of 9
   // November 2026), so "Nothing needs you right now." never stands over a look that failed.
@@ -317,9 +299,8 @@ export function Overview() {
     { key: "failures", thing: "failed work", q: failures },
     { key: "csp", thing: "security reports", q: csp },
     { key: "email", thing: "email applications", q: failedEmail },
-    { key: "escalations", thing: "recruiter requests", q: escalations },
   ].map(({ key, thing, q }) => ({ key, thing, loading: q.data === undefined && !q.isError, failed: q.isError, retry: () => void q.refetch() }));
-  const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data, escalations: escalations.data });
+  const rows = attentionRows({ customers: customers.data, alerts: alerts.data, failures: failures.data, privacy: privacy.data, failedEmail: failedEmail.data, csp: csp.data });
   const things = attentionCount(rows);
   const loading = sources.filter((s) => s.loading);
   const failed = sources.filter((s) => s.failed);
@@ -336,7 +317,6 @@ export function Overview() {
       <PageHeader
         title={`Good ${partOfDay(isClient)}${first ? `, ${first}` : ""}.`}
         sub={settled && things ? `${count(things, "thing needs", "things need")} you.` : undefined}
-        actions={<Link to="/recruiter/queue" className="btn secondary">Open the recruiter queue</Link>}
       />
 
       <div className="stack gap-6">

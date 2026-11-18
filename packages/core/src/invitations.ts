@@ -41,7 +41,7 @@ export function invitationLink(appBaseUrl: string, token: string): string {
 
 /** The role in plain words, as the invitation email and the team page say it. */
 export function roleInWords(role: string): string {
-  return ({ owner: "an owner", admin: "an administrator", hiring_manager: "a hiring manager", interviewer: "an interviewer", hr: "HR", recruiter: "a recruiter" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
+  return ({ owner: "an owner", admin: "an administrator", hiring_manager: "a hiring manager", interviewer: "an interviewer", hr: "HR" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
 }
 
 /** What an invitation is right now. A pending row past its expiry reads as expired even before anything marks it. */

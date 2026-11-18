@@ -35,7 +35,7 @@ describe("framing of the application's pages", () => {
     // the walk found both kinds of mount and the pages
     expect(mounts).toContainEqual({ path: "/api", catchAll: true });
     expect(mounts).toContainEqual({ path: "/healthz", catchAll: false });
-    expect(pages).toEqual(expect.arrayContaining(["/", "/login", "/roles/123", "/admin", "/recruiter/queue/123", "/setup/company"]));
+    expect(pages).toEqual(expect.arrayContaining(["/", "/login", "/roles/123", "/admin", "/setup/company"]));
     // the console's sections, each its own page (Wave S6); /admin/privacy is the console's, not the mounted /privacy
     expect(pages).toEqual(expect.arrayContaining(["/admin/customers", "/admin/privacy", "/admin/problems", "/admin/system"]));
 

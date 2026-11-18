@@ -2,6 +2,7 @@
 
 import { Children, type CSSProperties, type ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PLAN_REQUEST_ALERT_KIND } from "@ros/contracts";
 import { Button, Card, Chip, ErrorState, Field, Icon, numHead, Skeleton, Table, Tabs } from "@ros/ui";
 import { api, ApiError, type Me } from "../../api/client";
 import { toast } from "../../toast";
@@ -38,10 +39,11 @@ export function ackIsForAnother(a: Pick<AlertRow, "kind" | "details" | "target">
   return !!myUserId && a.kind.startsWith("platform_role.") && (a.details?.actorId === myUserId || a.target?.id === myUserId);
 }
 /**
- * Notices about what a customer's plan has used: they belong to the customer. AI interviews have Customers › Running low and
- * a row each on Overview; the AI credit has its chip and its dollar line on the customer (the plans of 5 November 2026, Rule 4).
+ * Notices about a customer's plan: they belong to the customer. AI interviews have Customers › Running low and a row each
+ * on Overview; the AI credit has its chip and its dollar line on the customer (the plans of 5 November 2026, Rule 4); a
+ * request to change the plan has its row on Overview and its chip on the customer, and closes when the plan is changed.
  */
-export const SCREENING_ALERT_KINDS: ReadonlySet<string> = new Set(["billing.screens_warning", "billing.screens_used_up", "billing.ai_credit_warning", "billing.ai_credit_used_up"]);
+export const SCREENING_ALERT_KINDS: ReadonlySet<string> = new Set(["billing.screens_warning", "billing.screens_used_up", "billing.ai_credit_warning", "billing.ai_credit_used_up", PLAN_REQUEST_ALERT_KIND]);
 /** An alert that waits for a person: open, and not such a notice. Overview and the Alerts tab count the same ones. */
 export function needsAPerson(a: Pick<AlertRow, "status" | "kind">): boolean {
   return a.status === "open" && !SCREENING_ALERT_KINDS.has(a.kind);

@@ -47,7 +47,7 @@ function detail(over: Record<string, unknown> = {}) {
 
 function client(details: Array<ReturnType<typeof detail>>, extra: Array<[unknown[], unknown]> = []) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+  qc.setQueryData(["me"], { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } });
   for (const d of details) qc.setQueryData(["application", d.id], d);
   for (const [key, value] of extra) qc.setQueryData(key, value);
   return qc;
@@ -142,7 +142,7 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(basis(overview({ score: null }))).toBeNull();
   });
 
-  it("keeps everything else under Full breakdown: the bars, what is not known yet, the AI review with its flag, and the eligibility answers", () => {
+  it("keeps everything else under Full breakdown: the bars, what is not known yet, the AI review, and the eligibility answers", () => {
     const html = panel(client([scored]));
     const more = html.slice(html.indexOf("<summary>Full breakdown</summary>"));
     const t = text(more);
@@ -157,7 +157,6 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(t).toContain("AI review: the résumé");
     expect(t).toContain("Strength 4");
     expect(t).toContain("Can they work Saturdays?");
-    expect(more).toContain('aria-label="Something wrong with this assessment?"');
     expect(t).toContain("Eligibility answers");
   });
 
@@ -169,7 +168,6 @@ describe("the candidate panel's Overview, the Kanvis way (Wave S1)", () => {
     expect(t).toContain("Applied through careers page");
     expect(t).toContain("See all activity");
     expect(t).not.toContain("Recent activity");
-    expect(t).toContain("Bring in a recruiter");
     // the whole record stays on the History tab, in the glossary's words
     expect(text(panel(client([scored]), { tab: "history" }))).toContain("AI review of the résumé: Worth an AI interview");
   });
@@ -228,8 +226,8 @@ describe("telling a candidate the decision (Wave G)", () => {
     expect(text(column(1))).toContain("No AI review yet");
   });
 
-  it("under 'Ask me first' the safety net brings in a recruiter instead, and sends nothing", () => {
-    expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/If nobody tells Maria first, an ITS recruiter is brought in on \w+day, \w+ \d{1,2}\. Nothing is sent by itself\./);
+  it("under 'Ask me first' the safety net reminds the team instead, and sends nothing", () => {
+    expect(text(panel(client([{ ...declined, declineMessage: "needs_approval" }])))).toMatch(/If nobody tells Maria first, your team is reminded on \w+day, \w+ \d{1,2}\. Nothing is sent by itself\./);
   });
 
   it("the decline step says it is private and names the safety net's day before the click; the rest one click away (D-03 A)", () => {
@@ -254,12 +252,12 @@ describe("telling a candidate the decision (Wave G)", () => {
       // the close card's line too
       const apps = { applications: [{ id: "a1", stage: "triaged", ownerStage: "new", ownerStageLabel: "New", candidate: { id: "c1", name: "Maria Reyes" } }], counts: {} };
       const close = text(render(client([], [[["applications", "r1"], apps], company]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })));
-      expect(close).toContain("If nobody tells them first, the closing message goes by itself on Wednesday, November 18 (or an ITS recruiter is brought in, if your settings say so).");
+      expect(close).toContain("If nobody tells them first, the closing message goes by itself on Wednesday, November 18 (or your team is reminded, if your settings say so).");
       // a company that contacts candidates on Mondays, Wednesdays and Fridays: its contact days, as the daily check and the
       // toast after the click count them (the second review of the live-test fixes, #11)
       const fewerDays: [unknown[], unknown] = [["company"], { settings: { businessHours: { days: [1, 3, 5], start: "09:00", end: "17:00" } }, timezone: "America/Los_Angeles" }];
       expect(text(panel(client([detail({ allowedActions: ["reject"] })], [fewerDays]), { step: "decline" }))).toContain("If nobody tells them first, the standard message goes by itself on Monday, November 23.");
-      expect(text(render(client([], [[["applications", "r1"], apps], fewerDays]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })))).toContain("the closing message goes by itself on Monday, November 23 (or an ITS recruiter");
+      expect(text(render(client([], [[["applications", "r1"], apps], fewerDays]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: true, onClose: () => undefined })))).toContain("the closing message goes by itself on Monday, November 23 (or your team is reminded");
       // the "not told yet" card: the day the API names comes on the company's calendar, never at noon on the reader's clock (#28, #36)
       const named = detail({ ...declined, untoldFallbackOn: "2026-11-18" });
       vi.setSystemTime(new Date("2026-11-18T07:00:00.000Z")); // 11 PM on Tuesday the 17th in Los Angeles
@@ -468,11 +466,11 @@ describe("closing a role and its one closing message (Q30)", () => {
     expect(t).not.toContain("Luis Ortega");
     expect(t).toContain("These 2 people move to your talent pool, privately");
     // rule 8 (D-03 A): "private" also says the safety net, with the day it acts if they close now
-    expect(t).toMatch(/nobody is told the decision yet\. If nobody tells them first, the closing message goes by itself on \w+, \w+ \d+ \(or an ITS recruiter is brought in, if your settings say so\)\./);
+    expect(t).toMatch(/nobody is told the decision yet\. If nobody tells them first, the closing message goes by itself on \w+, \w+ \d+ \(or your team is reminded, if your settings say so\)\./);
     expect(t).toContain("Next you see the one closing message for all of them before anything goes.");
     // HR may close the role but not tell candidates: told who sends the message, never promised a Send of their own
     const hr = text(render(client([], [[["applications", "r1"], apps]]), createElement(CloseRoleCard, { roleId: "r1", initialOutcome: "filled_outside_platform", mayTell: false, onClose: () => undefined })));
-    expect(hr).toContain("An owner, admin, hiring manager or recruiter then sends them the one closing message; it waits on their Home page.");
+    expect(hr).toContain("An owner, admin or hiring manager then sends them the one closing message; it waits on their Home page.");
     expect(hr).not.toContain("Next you see the one closing message");
   });
 
@@ -490,7 +488,7 @@ describe("closing a role and its one closing message (Q30)", () => {
     expect(t).toContain("Not now leaves them on your Home page as not told yet. If nobody tells them within 5 working days, the closing message goes to them by itself.");
     expect(t).not.toContain("nothing is sent until someone sends it");
     const asked = text(render(client([]), createElement(ClosingMessageCard, { roleId: "r1", preview: { ...preview, policy: "needs_approval" } as never, onDone: () => undefined })));
-    expect(asked).toContain("Nothing is sent by itself: if nobody tells them within 5 working days, an ITS recruiter is brought in to make sure they are told.");
+    expect(asked).toContain("Nothing is sent by itself: if nobody tells them within 5 working days, your team is reminded.");
   });
 });
 

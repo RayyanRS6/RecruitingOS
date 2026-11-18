@@ -367,23 +367,23 @@ describe("the loop after an interview", () => {
     expect((await application(cand.id)).stage).toBe("interview_complete");
   });
 
-  it("a recruiter holds the decision and may mark a finalist", async () => {
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter", email: "rita.recruiter@loop.test", name: "Rita" });
+  it("a hiring manager holds the decision and may mark a finalist", async () => {
+    const manager = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hana.manager@loop.test", name: "Hana" });
     const cand = await apply("Elena", "Costa");
-    const iv = await requestInterview(cand.id, {}, recruiter);
+    const iv = await requestInterview(cand.id, {}, manager);
     await book(iv.id);
     await finish(iv.id);
-    expect((await detail(cand.id, recruiter)).allowedActions).toContain("record_decision");
-    expect((await brief(recruiter)).cards.find((c) => c.applicationId === cand.id)).toMatchObject({ kind: "decision", title: "Decide after the interview: Elena Costa" });
-    const r = await json(recruiter, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist", note: "Calm and thorough." });
+    expect((await detail(cand.id, manager)).allowedActions).toContain("record_decision");
+    expect((await brief(manager)).cards.find((c) => c.applicationId === cand.id)).toMatchObject({ kind: "decision", title: "Decide after the interview: Elena Costa" });
+    const r = await json(manager, "POST", `/api/v1/applications/${cand.id}/decision`, { decision: "finalist", note: "Calm and thorough." });
     expect(r.status, await r.clone().text()).toBe(200);
     expect(await r.json()).toMatchObject({ ok: true, stage: "finalist" });
     expect((await application(cand.id)).stage).toBe("finalist");
     expect(await interview(iv.id)).toMatchObject({ decision: "finalist", decisionNote: "Calm and thorough." });
   });
 
-  it("the permission matrix: owner, admin, hiring manager and recruiter hold the three interview permissions; HR and interviewers do not", () => {
-    const table: Record<MembershipRole, boolean> = { owner: true, admin: true, hiring_manager: true, recruiter: true, hr: false, interviewer: false };
+  it("the permission matrix: owner, admin and hiring manager hold the three interview permissions; HR and interviewers do not", () => {
+    const table: Record<MembershipRole, boolean> = { owner: true, admin: true, hiring_manager: true, hr: false, interviewer: false };
     for (const permission of ["interview.request", "interview.manage", "interview.decide"] as Permission[]) {
       for (const [role, allowed] of Object.entries(table) as Array<[MembershipRole, boolean]>) expect(can(role, permission), `${role} ${permission}`).toBe(allowed);
     }
@@ -393,9 +393,9 @@ describe("the loop after an interview", () => {
     expect(can("interviewer", "application.read")).toBe(false);
     // the state machine agrees with the matrix: every role that holds interview.decide may mark a finalist, and every
     // member who can sit on an interview may record that it ended
-    for (const role of ["owner", "admin", "hiring_manager", "recruiter"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(true);
+    for (const role of ["owner", "admin", "hiring_manager"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(true);
     for (const role of ["hr", "interviewer"] as MembershipRole[]) expect(canTransition("interview_complete", "finalist", role), `${role} finalist`).toBe(false);
-    for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) expect(canTransition("interview_scheduled", "interview_complete", role), `${role} ends an interview`).toBe(true);
+    for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer"] as MembershipRole[]) expect(canTransition("interview_scheduled", "interview_complete", role), `${role} ends an interview`).toBe(true);
   });
 
   /* ---------------------------------------------------------------------------------------------------------------- */

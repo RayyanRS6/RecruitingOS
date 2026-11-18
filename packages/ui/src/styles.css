@@ -19,7 +19,7 @@
  * Tailwind clash audit (spec 0b.5, 23 October 2026). Tailwind makes a utility of every word in the sources that names
  * one, and a utility beats the component layer, so a class word that is also a utility gets that utility's CSS too.
  * Every such word found in a string in apps/web/src, apps/shell and packages/ui, and what was decided:
- *   list-item  rows on Home, Jobs, the recruiter queue and the job builder (pinned by tests). Harmful: the utility is
+ *   list-item  rows on Home, Jobs and the job builder (pinned by tests). Harmful: the utility is
  *              display: list-item. Switched off below, so .list-item keeps its flex row.
  *   block      Button's `block` modifier. Harmful on .btn (display: block). Kit-internal and unpinned, so the kit now
  *              writes `wide` (.btn.wide). The assessment's `<div class="block">` is a block already: harmless.

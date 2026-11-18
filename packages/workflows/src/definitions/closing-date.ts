@@ -25,7 +25,6 @@ export const roleClosingDate: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "wait",
   maxAttempts: 5,
-  escalationKind: "stuck_role",
   steps: {
     async wait(ctx) {
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);

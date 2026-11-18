@@ -30,7 +30,6 @@ const { AppShell, CONSOLE_LINKS, RAIL_COLLAPSED_KEY, markMove, parentTrail, rail
 const templates = {
   "(company)": (await import("../app/(app)/(company)/template")).default,
   admin: (await import("../app/(app)/admin/template")).default,
-  recruiter: (await import("../app/(app)/recruiter/template")).default,
 };
 
 const company = { companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental" };
@@ -40,7 +39,6 @@ function meAs(role: string | null, extra: Partial<Me> = {}): Me {
     auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null },
     memberships: role ? [{ ...company, role }] : [],
     activeCompanyId: role ? "co1" : null,
-    staffAccess: null,
     ai: { provider: "openai" },
     ...extra,
   };
@@ -113,7 +111,7 @@ describe("the rail", () => {
   });
 
   it("offers Start a hire only to the roles that may start one", () => {
-    for (const role of ["owner", "admin", "hiring_manager", "recruiter"]) expect(render(meAs(role)), role).toContain('aria-label="Start a hire"');
+    for (const role of ["owner", "admin", "hiring_manager"]) expect(render(meAs(role)), role).toContain('aria-label="Start a hire"');
     for (const role of ["hr", "interviewer"]) expect(render(meAs(role)), role).not.toContain('aria-label="Start a hire"');
   });
 
@@ -151,22 +149,13 @@ describe("the rail", () => {
     expect(html).not.toContain("Role packets");
   });
 
-  it("reads the company's roles for a member, and never for an ITS recruiter inside a customer under a grant", () => {
+  it("reads the company's roles for a member, and never for ITS staff with no company", () => {
     expect(rolesQueryEnabled(renderWith(meAs("owner")).qc)).toBe(true);
-    // Every request a recruiter makes under a grant is recorded for the customer as a page they opened: the rail makes
-    // none, and lists nothing even when another page left the customer's roles in the cache.
-    const staff = meAs(null, {
-      user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" },
-      activeCompanyId: "co1",
-      staffAccess: { grantId: "g1", kind: "escalation", purpose: "Review these candidates", expiresAt: "2026-10-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r-open", applicationId: null } },
-    });
-    const { html, qc } = renderWith(staff, { roles });
+    // No company in use: the rail asks for no jobs, and lists none even when another page left some in the cache.
+    const { html, qc } = renderWith(admin(), { roles });
     expect(rolesQueryEnabled(qc)).toBe(false);
     expect(html).not.toContain("Jobs in progress");
     expect(html).not.toContain("Dental Hygienist");
-    expect(html).toContain("ITS recruiter, limited access");
-    expect(html).toContain("Every page you open is recorded for the customer.");
-    expect(html).toContain("Bright Dental (recruiter access)");
     expect(html).not.toContain('aria-label="Start a hire"');
   });
 
@@ -197,25 +186,17 @@ describe("the rail", () => {
     // the chip still names the company in use and keeps its cog to Settings
     expect(html).toMatch(/<strong[^>]*>Bright Dental<\/strong>/);
     expect(html).toContain('aria-label="Company settings"');
-    // an ITS recruiter inside a customer under a grant enters companies from the queue, never from here
-    const staff = meAs(null, {
-      user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" },
-      activeCompanyId: "co1",
-      staffAccess: { grantId: "g1", kind: "escalation", purpose: "Review", expiresAt: "2026-10-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: null, applicationId: null } },
-    });
-    expect(render(staff)).not.toContain('aria-label="Switch company"');
+    // ITS staff with no company have no chip, so no switcher
+    expect(render(admin())).not.toContain('aria-label="Switch company"');
   });
 
-  it("gives ITS staff without a company the queue and Sign out, and no company chip", () => {
-    const html = render(meAs(null, { user: { id: "s1", email: "nadine@identifiedtalent.com", name: "Nadine", platformRole: "its_recruiter" } }));
+  it("gives ITS staff without a company the console and Sign out, and no company chip", () => {
+    const html = render(admin());
     expect(html).toContain("ITS staff");
     expect(html).not.toContain('aria-label="Company settings"');
     expect(html).not.toContain('aria-label="Start a hire"');
-    expect(html).toContain('href="/recruiter/queue"');
+    expect(html).toContain('href="/admin"');
     expect(html).toContain(">Sign out</span></button>");
-    // an ITS recruiter has the queue, never the console or its sections
-    expect(html).not.toContain('href="/admin');
-    expect(html).not.toContain("Console sections");
   });
 
   it("lists the console's five sections under Console for a platform administrator, marking the one open", () => {
@@ -378,12 +359,11 @@ describe("the bar above the page", () => {
     expect(sectionTrail("/roles")).toEqual(["Jobs"]);
     expect(sectionTrail("/roles/new", jobs)).toEqual(["Jobs", "Start a hire"]);
     expect(sectionTrail("/roles/r-open/talent", jobs)).toEqual(["Jobs", "Dental Hygienist"]);
-    // a job the rail does not list is not named (closed ones, or anything an ITS recruiter opens under a grant)
+    // a job the rail does not list is not named (a closed one)
     expect(sectionTrail("/roles/r-closed", jobs)).toEqual(["Jobs"]);
     expect(sectionTrail("/talent")).toEqual(["Candidates"]);
     expect(sectionTrail("/interviews/i1")).toEqual(["Interviews"]);
     expect(sectionTrail("/setup")).toEqual(["Settings"]);
-    expect(sectionTrail("/recruiter/queue/q1")).toEqual(["Queue"]);
     expect(sectionTrail("/admin")).toEqual(["Console", "Overview"]);
     expect(sectionTrail("/admin/problems")).toEqual(["Console", "Problems"]);
     expect(sectionTrail("/nothing-here")).toEqual([]);
@@ -400,7 +380,7 @@ describe("the bar above the page", () => {
     expect(parentTrail("/roles/r-closed", jobs)).toEqual({ parent: jobsUp, here: null });
     expect(parentTrail("/roles/r-open")).toEqual({ parent: jobsUp, here: null });
     // a section's own page: its heading says where it is, so there is no bar (the console's Overview is Console itself)
-    for (const path of ["/", "/roles", "/talent", "/people", "/interviews", "/interviews/i1", "/setup", "/recruiter/queue", "/recruiter/queue/q1", "/admin", "/nothing-here", ""]) expect(parentTrail(path, jobs), path).toBeNull();
+    for (const path of ["/", "/roles", "/talent", "/people", "/interviews", "/interviews/i1", "/setup", "/admin", "/nothing-here", ""]) expect(parentTrail(path, jobs), path).toBeNull();
   });
 
   it("draws the trail with its link back up and never the company (the rail's chip names it), adds no landmark, and leaves the page its 1040px column (wider where a page needs it)", () => {
@@ -457,10 +437,9 @@ describe("the rail's foot and labels (founder, 23 October 2026: fewer words)", (
     }
   });
 
-  it("keeps the ITS staff's Recruiter and Admin labels, which tell their groups apart from the company's links", () => {
+  it("keeps the ITS staff's Admin label, which tells the console apart from the company's links", () => {
     nav.path = "/admin";
     const html = render(admin());
-    expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Recruiter<\/div>/);
     expect(html).toMatch(/<div class="[^"]*font-mono[^"]*">Admin<\/div>/);
   });
 });

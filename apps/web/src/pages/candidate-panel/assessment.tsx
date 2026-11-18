@@ -1,13 +1,11 @@
 "use client";
 
-import { Fragment, type ReactNode, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, Dialog, EvidenceChip, Menu } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Me, type Screen } from "../../api/client";
-import { ACCESS_LIMITS, accessWords } from "../../recruiter-access";
+import { Fragment, type ReactNode } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Alert, Button, Card, Chip, EvidenceChip } from "@ros/ui";
+import { api, ApiError, type ApplicationDetail, type AssessmentResult, type Screen } from "../../api/client";
 import { toast } from "../../toast";
 import { AI_HELP_UPGRADE_QUESTION, sureBeside } from "@ros/contracts";
-import { AskRecruiter } from "../../components/AskRecruiter";
 import { Upgrade } from "../../components/Upgrade";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, NO_QUOTE_LABEL, RESUME_UNREADABLE_TEXT, SCORECARD_UNAVAILABLE_TEXT, SCORECARD_WAITING_TEXT, closerLook, competencyUnquoted, isUnquoted, openScreenOf, requirementUnquoted, resumeUnreadable, scorecardUnavailable, scorecardWaiting, screenAnswerQuestion } from "../../evidence";
 import { APPLIED_IN_ONE_VISIT, DECLINED_WORDS, EDITED_WORDS, SCREEN_STATUS_LABEL, TAPPED_WORDS, answerLines, generalNotes, hiddenAnswersLine, isRecruiterNote, recruiterNoteLabel, screenOrigin, transcriptBubble, unansweredWords } from "../../screen-view";
@@ -29,21 +27,6 @@ export const MET_TONE: Record<string, "good" | "accent" | "neutral" | "caution">
 
 type PacketLabels = ApplicationDetail["packetLabels"];
 
-const FLAG_KINDS: Array<[string, string]> = [
-  ["wrong_evidence", "Cited the wrong evidence"],
-  ["hallucination", "Made something up"],
-  ["policy_error", "Broke a rule we set"],
-  ["bias_concern", "Bias concern"],
-  ["poor_communication", "Poorly worded"],
-  ["wrong_workflow_action", "Took the wrong next step"],
-  ["false_negative", "Missed a good candidate"],
-  ["false_positive", "Overrated this candidate"],
-  ["missing_context", "Missed context we gave"],
-];
-
-/** Said before a team member's flag goes to ITS: what the recruiter will see, and for how long (Q31: say the real access). */
-export const FLAG_SHARE = `This asks an ITS recruiter to check the AI review. Once they pick it up they see ${accessWords("application")}. ${ACCESS_LIMITS}`;
-
 /** A bulleted list inside a card, the bullets in the muted ink. */
 const LIST = "grid list-disc gap-1.5 pl-5 text-sm marker:text-ink-3";
 /** A finding's quote in a list: the candidate's words in the same lavender block with a plum rule, under the finding. */
@@ -52,46 +35,6 @@ const LIST_QUOTE = `${QUOTE} small mt-1.5`;
 const PART = "grid gap-1.5";
 /** Messages of a chat, oldest first: the assistant's on the left, the candidate's on the right (the bubbles place themselves). */
 const BUBBLES = "grid justify-items-start gap-2";
-
-/**
- * One-click flag with the founder context's taxonomy (§23). It records; it never retrains anything on its own. A team
- * member's flag reaches an ITS recruiter as a check of this reading (plan F11), so choosing a kind asks first, saying
- * what the recruiter will see, and the toast says what the API did. An ITS recruiter's own flag is only recorded.
- */
-function FlagAssessment({ applicationId, assessmentId }: { applicationId: string; assessmentId: string }) {
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const staff = !!me.data?.staffAccess;
-  const [kind, setKind] = useState("");
-  const [done, setDone] = useState(false);
-  const flag = useMutation({
-    mutationFn: (k: string) => api.post<{ message?: string; review?: { escalationId: string; created: boolean } | null }>(`/api/v1/applications/${applicationId}/assessments/${assessmentId}/flag`, { kind: k }),
-    onSuccess: (r) => { setDone(true); toast(r.message ?? "Flagged and recorded.", "Nothing changes for the candidate."); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not flag this."),
-  });
-  if (done) return <span className="small muted">Flagged, thank you.</span>;
-  const label = FLAG_KINDS.find(([v]) => v === kind)?.[1] ?? "";
-  // A menu, not a dropdown: the arrow keys only move through the kinds, and a kind is acted on with Enter or a click
-  // (a dropdown acts on its first arrow press on Windows). The menu hands the focus back to its button before the
-  // dialog opens, so closing the dialog lands there.
-  const choose = (k: string) => { if (staff) flag.mutate(k); else setKind(k); };
-  return (
-    <span className="row gap-1.5">
-      <Menu label="Something wrong?" ariaLabel="Something wrong with this assessment?" heading="What looks wrong?" items={FLAG_KINDS.map(([id, l]) => ({ id, label: l }))} onSelect={choose} align="end" disabled={flag.isPending} />
-      {kind && !staff ? (
-        <Dialog
-          open
-          onClose={() => setKind("")}
-          title="Ask an ITS recruiter to check this AI review?"
-          sub={`You chose: ${label}.`}
-          footer={<><Button variant="ghost" onClick={() => setKind("")} disabled={flag.isPending}>Cancel</Button><Button variant="primary" loading={flag.isPending} onClick={() => flag.mutate(kind)}>Send for a check</Button></>}
-        >
-          <p>{FLAG_SHARE}</p>
-          <p className="small muted mt-3">Nothing changes for the candidate, and they are not told.</p>
-        </Dialog>
-      ) : null}
-    </span>
-  );
-}
 
 /**
  * "Ask about this in a screen" (docs/spec/21, P1): the one-click follow-up on a résumé assessment with open questions.
@@ -138,18 +81,16 @@ function NoQuote() {
 }
 
 /**
- * The screen is finished but its scorecard could not be written (plan 0.9): the run gave up after two unusable answers
- * and asked ITS to look. The panel says so, so a finished screen never sits there looking unread.
+ * The screen is finished but its scorecard could not be written (plan 0.9): the run gave up after two unusable answers,
+ * and ITS is alerted. The panel says so, so a finished screen never sits there looking unread.
  */
-export function ScorecardUnavailableCard({ detail, roleId }: { detail: ApplicationDetail; roleId: string }) {
-  const state = scorecardUnavailable(detail);
-  if (!state.unavailable) return null;
+export function ScorecardUnavailableCard({ detail }: { detail: ApplicationDetail }) {
+  if (!scorecardUnavailable(detail)) return null;
   return (
     <Card needsYou title="AI review of the AI interview" className={STEP}>
       <div className="row"><Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip></div>
       <p>{SCORECARD_UNAVAILABLE_TEXT}</p>
-      <div className="row"><AskRecruiter roleId={roleId} applicationId={detail.id} size="sm" /></div>
-      <Why>Nothing is hidden: the whole chat is on the AI interview tab. {state.recruiterAsked ? "An ITS recruiter has been asked to look into it." : "ITS has the details."}</Why>
+      <Why>Nothing is hidden: the whole chat is on the AI interview tab. ITS has the details.</Why>
     </Card>
   );
 }
@@ -234,7 +175,7 @@ export function AssessmentCard({ assessment, detail, roleId, labels, title }: { 
   const sure = sureBeside(fit);
   const rec = recChip(result.recommendation, fit);
   return (
-    <Card title={title ?? (kind === "screen" ? "AI review of the AI interview" : "AI review of the résumé")} className={marked ? STEP : CARD} needsYou={marked} aside={<span className="row"><span className="small muted">{new Date(createdAt).toLocaleDateString()}</span><FlagAssessment applicationId={detail.id} assessmentId={assessmentId} /></span>}>
+    <Card title={title ?? (kind === "screen" ? "AI review of the AI interview" : "AI review of the résumé")} className={marked ? STEP : CARD} needsYou={marked} aside={<span className="small muted">{new Date(createdAt).toLocaleDateString()}</span>}>
       <div className="row">{verdict ? <Chip tone={verdict.tone}>{verdict.label}</Chip> : null}{rec ? <Chip tone={result.recommendation === "decline_recommended" ? "caution" : "neutral"}>{rec}</Chip> : null}{sure ? <Chip>{confidence} confidence</Chip> : null}{marked ? <Chip tone="needs">{CLOSER_LOOK_LABEL}</Chip> : null}</div>
       {marked && look.inconsistent && look.reason ? <Alert tone="caution">{look.reason}</Alert> : null}
       <p>{result.summary}</p>

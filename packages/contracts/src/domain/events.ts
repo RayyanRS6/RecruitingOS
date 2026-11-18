@@ -44,8 +44,8 @@ export const EventType = z.enum([
   // Past the plan's candidates per job when it came in, with its place in arrival order and never a name; opened to the
   // team by a change of plan, oldest first (the plans of 5 November 2026, Rule 2).
   "application.locked", "application.unlocked",
-  // The untold safety net (Q27): five working days on, the standard message went by itself, or a recruiter was brought
-  // in instead; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
+  // The untold safety net (Q27): five working days on, the standard message went by itself, or the team was told it must
+  // tell them; and the one closing message for everyone a closed role left untold (Q30), sent or put to one approval.
   "application.untold_fallback", "role.closing_message",
   // The Cancelled column (founder decisions 1A to 4A): someone went under Cancelled (a candidate's cancel, a no-show, or
   // back after a decision was taken back) or left it; new times went to them, or the automatic set did not go. All on
@@ -57,9 +57,9 @@ export const EventType = z.enum([
   "note.added", "note.updated",
   "screen.invited", "screen.started", "screen.completed", "screen.abandoned", "screen.expired", "screen.human_requested", "screen.assessed", "screen.cancelled",
   // Wave E: the conversation in the same visit as applying. Sent without it, closed part-way after a reminder, paused while
-  // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, a recruiter's call
-  // notes, and how a role's applicants meet the conversation (set by ITS).
-  "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited", "screen.recruiter_notes_added",
+  // the assistant is down and resumed, a question skipped or tapped, an answer changed before sending, and how a role's
+  // applicants meet the conversation (set by ITS).
+  "screen.declined_by_candidate", "screen.unfinished", "screen.idle_reminded", "screen.paused", "screen.resumed", "screen.question_skipped", "screen.answer_tapped", "screen.answer_edited",
   "screen.repeat_started", "screen.repeat_confirmation_sent", "screen.repeat_confirmed", "screen.repeat_discarded",
   // A person's "Send a reminder" about an open AI interview link (20 Oct 2026, R20-7), once a day at most.
   "screen.reminded",
@@ -83,12 +83,8 @@ export const EventType = z.enum([
   "message.held", "message.released",
   "consent.granted", "consent.revoked", "candidate.opted_out", "candidate.data_request", "candidate.data_request_fulfilled", "candidate.anonymized", "candidate.complaint",
   "workflow.started", "workflow.step_completed", "workflow.waiting", "workflow.resumed", "workflow.retried", "workflow.failed", "workflow.completed",
-  "workflow.escalated", "workflow.cancelled", "approval.requested", "approval.granted", "approval.denied", "approval.expired",
+  "workflow.cancelled", "approval.requested", "approval.granted", "approval.denied", "approval.expired",
   "ai.run_completed", "ai.run_failed", "ai.output_invalid", "ai.refused", "human.override",
-  "recruiter.requested", "recruiter.claimed", "recruiter.resolved", "recruiter.takeover_started", "recruiter.takeover_ended",
-  "recruiter.access_granted", "recruiter.access_ended", "recruiter.access_revoked", "recruiter.sla_recalculated",
-  // The thread on a recruiter request (plan B5): a note from the team, a reply from the recruiter, and "this didn't solve it".
-  "customer.replied", "recruiter.replied", "recruiter.reopened",
   "intervention.sent", "intervention.responded", "brief.sent",
   "integration.connected", "integration.disconnected", "integration.credentials_deleted", "integration.deletion_failed", "integration.health_changed",
   "availability.updated", "interview.requested", "interview.slots_offered", "interview.slots_reminded", "interview.offer_expired", "interview.candidate_availability",

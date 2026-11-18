@@ -31,7 +31,7 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
-const owner = (role = "owner") => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+const owner = (role = "owner") => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
 const confirmed = { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" }, timezone: "America/Chicago" };
 const waiting = { settings: {}, timezone: "America/Chicago" };
 

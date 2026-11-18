@@ -16,7 +16,7 @@ import {
   type InterviewFollowUpRef,
   type NewTimesProgress,
 } from "@ros/contracts";
-import { applicationMarks, applications, candidates, communications, companies, interviewFollowups, interviews, takeovers, workflowRuns, type CompanySettings, type Queryable } from "@ros/db";
+import { applicationMarks, applications, candidates, communications, companies, interviewFollowups, interviews, workflowRuns, type CompanySettings, type Queryable } from "@ros/db";
 import { zonedParts } from "./business-hours";
 import { emit } from "./events";
 import { notify } from "./notifications";
@@ -256,10 +256,10 @@ const AUTO_MOVES: Record<AutoNewTimesState, readonly AutoNewTimesState[]> = {
   sent: [],
   not_sent: [],
 };
-const NOT_SENT_WHILE_PARKED: readonly AutoNewTimesReason[] = ["stopped_by_team", "switched_off", "team_acted", "candidate_replied", "left_process", "details_deleted", "interview_changed", "takeover", "no_interviewers", "no_email", "company_not_checked"];
-// While it is being prepared, a reply asking for a person or saying no, and an ITS recruiter taking the role over, stop it
-// too, as long as its email has not left (founder questions 7 and 8; `stopPreparedNewTimes` in packages/workflows).
-const NOT_SENT_WHILE_PREPARING: readonly AutoNewTimesReason[] = ["no_email", "team_acted", "left_process", "interview_changed", "candidate_replied", "takeover"];
+const NOT_SENT_WHILE_PARKED: readonly AutoNewTimesReason[] = ["stopped_by_team", "switched_off", "team_acted", "candidate_replied", "left_process", "details_deleted", "interview_changed", "no_interviewers", "no_email", "company_not_checked"];
+// While it is being prepared, a reply asking for a person or saying no stops it too, as long as its email has not left
+// (founder question 8; `stopPreparedNewTimes` in packages/workflows).
+const NOT_SENT_WHILE_PREPARING: readonly AutoNewTimesReason[] = ["no_email", "team_acted", "left_process", "interview_changed", "candidate_replied"];
 
 function moveAllowed(from: AutoNewTimesState, to: AutoNewTimesState, reason: AutoNewTimesReason | null): boolean {
   if (!AUTO_MOVES[from].includes(to)) return false;
@@ -364,28 +364,6 @@ export async function newTimesOffered(
   return { row: counted, counted: true };
 }
 
-/**
- * Of these times emails (keyed `slots:<interview>:<attempt>`), the ones of an automatic set still being prepared for a
- * role an ITS recruiter has taken over since (founder question 7: no automatic set during a takeover). The outbox
- * withdraws them before a release or a send, so one held for the ITS check never leaves when ITS confirms the company;
- * the set's own run then ends it and brings the recruiter in (`stopPreparedNewTimes` in packages/workflows). A person's
- * send or re-offer is theirs and is never among them, nor is a time someone booked for the candidate on their behalf,
- * nor a set already sent.
- */
-export async function autoTimesUnderTakeover(q: Queryable, emailKeys: readonly string[]): Promise<Set<string>> {
-  const runKeys = emailKeys.filter((k) => k.startsWith("slots:")).map((k) => `schedule:${k.slice("slots:".length)}`);
-  if (!runKeys.length) return new Set();
-  const rows = await q
-    .select({ key: workflowRuns.idempotencyKey })
-    .from(workflowRuns)
-    .innerJoin(interviewFollowups, sql`${interviewFollowups.id}::text = ${workflowRuns.state}->>'followUpId'`)
-    .innerJoin(interviews, and(eq(interviews.id, interviewFollowups.currentInterviewId), sql`${interviews.id}::text = ${workflowRuns.state}->>'interviewId'`, sql`coalesce(${interviews.selectedSlot}, 'null'::jsonb) = 'null'::jsonb`))
-    .innerJoin(applications, eq(applications.id, interviewFollowups.applicationId))
-    .innerJoin(takeovers, and(eq(takeovers.companyId, applications.companyId), eq(takeovers.roleId, applications.roleId), eq(takeovers.status, "active")))
-    .where(and(inArray(workflowRuns.idempotencyKey, runKeys), sql`${workflowRuns.state}->>'via' = 'auto'`, eq(interviewFollowups.autoState, "preparing"), isNull(interviewFollowups.resolvedAt)));
-  return new Set(rows.map((r) => `slots:${(r.key ?? "").slice("schedule:".length)}`));
-}
-
 /** Who the team's notice is about, in their words: the candidate's name, the interview's title, the role and the company's zone. */
 async function aboutFollowUp(q: Queryable, f: FollowUpRow): Promise<{ first: string; full: string; title: string; href: string; timeZone: string } | null> {
   const [a] = await q
@@ -420,7 +398,7 @@ async function notifyNewTimesSent(q: Queryable, f: FollowUpRow): Promise<void> {
 
 /**
  * Tells the team an automatic set did not go, with why (the reasons the team needs to act on: no email, the interview
- * changed, a recruiter takeover, nobody left to interview, the ITS check). Also used by the timer run.
+ * changed, nobody left to interview, the ITS check). Also used by the timer run.
  */
 export async function notifyNewTimesNotSent(q: Queryable, input: { followUp: FollowUpRow; reason: AutoNewTimesReason }): Promise<void> {
   const f = input.followUp;
@@ -468,7 +446,6 @@ const REASON_TEXT: Partial<Record<AutoNewTimesReason, string>> = {
   switched_off: "Automatic new times are off in Settings.",
   already_used: "They already had their one automatic set of new times.",
   reschedules_used: "They had already asked twice for a different time, so a person arranges the next time.",
-  takeover: "An ITS recruiter is running this role, so nothing was sent automatically.",
   was_on_hold: "You had put them on hold, so nothing goes automatically.",
   stopped_by_team: "Someone on your team stopped the automatic new times.",
   team_acted: "Your team took it from there.",

@@ -13,8 +13,7 @@ import { activeCompanyOf } from "../../rail";
 import { canManageRole } from "../../roles";
 import { browserStorage, QUICK_START_HREF } from "../../start-hire";
 import { toast } from "../../toast";
-import { AskRecruiter } from "../../components/AskRecruiter";
-import { presetOf } from "../../recruiter-access";
+import { Upgrade } from "../../components/Upgrade";
 import { CandidatePreview } from "./CandidatePreview";
 import { Composer } from "./Composer";
 import { Conversation, type LocalLine } from "./Conversation";
@@ -25,13 +24,13 @@ import { QuestionCard } from "./QuestionCard";
 import { quickStartDraftKey } from "./quick-start";
 import { RoomAlert } from "./StartView";
 import {
-  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftRecruiterAsk, draftSections,
+  NEW_ROLE_FRESH_HREF, TAKEN_OVER_TOAST, answersFirst, answersPayload, approvalHelp, cardsKey, cardsToShow, carriedLine, changedSections, closeDeck, composerPlaceholder, deckFor, draftSections,
   blockersHeading, draftNoRoom, draftSteps, draftTitle, draftingNow, echoText, errorWords, initialCards, mayTakeOverDrafts, problemAsk, refusedLines, turnProblem, typeInstead, typedWithCards,
-  type Deck, type DraftSection, type RecruiterAction, type SectionId, type payPayload,
+  type Deck, type DraftSection, type PlanAsk, type SectionId, type payPayload,
 } from "./rules";
 import { CHANGE_REQUEST_MAX, checkSignature, nothingToConfirm, proposalSections, refinePaths, replyWords } from "./refine-api";
 
-type Problem = { message: string; ask: RecruiterAction | null };
+type Problem = { message: string; ask: PlanAsk | null };
 type Member = { userId: string; role: string; status: string; email: string; name: string | null };
 type Pay = NonNullable<ReturnType<typeof payPayload>>;
 type CardsFirst = ReturnType<typeof answersFirst>;
@@ -42,8 +41,7 @@ type SessionData = { session: IntakeSessionView };
  * right (one or the other on a phone, with a switch). The assistant asks with tap-to-answer cards docked where the
  * message box is; the picks go back as one summary message. "Write the draft" puts the job together, with each real
  * step shown as it happens; after that, typed words ask for a change, which is shown and saved only on Confirm. "Ask for
- * approval" stays greyed, listing what is missing, until the server says the essentials are in. Whenever the assistant
- * fails, "Bring in a recruiter" hands the draft and the conversation to ITS.
+ * approval" stays greyed, listing what is missing, until the server says the essentials are in.
  */
 export function Builder({ sessionId, companyName }: { sessionId: string; companyName: string | null }) {
   const qc = useQueryClient();
@@ -66,7 +64,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
 
   const [problem, setProblem] = useState<Problem | null>(() => {
     const p = turnProblem(qc.getQueryData<IntakeTurnReply>(["intake", "first-reply", sessionId]) ?? null);
-    return p ? { message: p.message, ask: p.ask ?? (p.upgrade ? null : draftRecruiterAsk(sessionId)) } : null;
+    return p ? { message: p.message, ask: p.ask } : null;
   });
   const [pending, setPending] = useState<LocalLine | null>(null);
   const [thinking, setThinking] = useState<string | null>(null);
@@ -83,7 +81,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   const [previewOpen, setPreviewOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [blockers, setBlockers] = useState<string[] | null>(null);
-  const [room, setRoom] = useState<{ room: PlanRoom | null; ask: RecruiterAction | null } | null>(null);
+  const [room, setRoom] = useState<{ room: PlanRoom | null; ask: PlanAsk | null } | null>(null);
   const [patchDone, setPatchDone] = useState(0);
   // The closing date (plan D7) belongs to the role, which does not exist yet: it is saved with the draft on the server
   // (row 61, so another device finds it and the role gets it when it asks for approval), with a copy in this browser
@@ -115,15 +113,13 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
   }, [changed]);
 
   const apply = (s: IntakeSessionView) => qc.setQueryData<SessionData>(key, { session: s });
-  // Whatever fails, a person can take over: "Bring in a recruiter" hands them this draft and its conversation (C12).
-  const recruiter = draftRecruiterAsk(sessionId);
   const afterTurn = (r: IntakeTurnResponse) => {
     apply(r.session);
     const p = turnProblem(r.reply);
-    setProblem(p ? { message: p.message, ask: p.ask ?? (p.upgrade ? null : recruiter) } : null);
+    setProblem(p ? { message: p.message, ask: p.ask } : null);
     qc.invalidateQueries({ queryKey: ["intake", "mine"] });
   };
-  const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: err instanceof ApiError ? problemAsk(err, recruiter) : recruiter });
+  const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: err instanceof ApiError ? problemAsk(err) : null });
   // What is answered on the open cards goes ahead of the draft and the ask for approval, or the draft would leave it out
   // and a role would lose it for good. A card answered after newer ones arrived: show the newer ones.
   const saveCards = async (first: CardsFirst) => {
@@ -241,9 +237,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
         return;
       }
       if (err instanceof ApiError && err.code === "limit_reached") {
-        const d = err.details as { room?: PlanRoom; actions?: Array<{ label: string; body?: Record<string, unknown> }> } | undefined;
-        const a = d?.actions?.[0];
-        setRoom({ room: d?.room ?? null, ask: a ? { label: a.label, body: a.body ?? {} } : null });
+        setRoom({ room: (err.details as { room?: PlanRoom } | undefined)?.room ?? null, ask: problemAsk(err) });
         return;
       }
       failed(err);
@@ -269,7 +263,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
     onSuccess: (r) => { apply(r.session); toast(TAKEN_OVER_TOAST.title, TAKEN_OVER_TOAST.body); qc.invalidateQueries({ queryKey: ["intake"] }); },
     onError: (err) => toast(errorWords(err)),
   });
-  // Only owners and admins may take a draft over (an ITS recruiter helping with it may not).
+  // Only owners and admins may take a draft over.
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const mayTakeOver = mayTakeOverDrafts(activeCompanyOf(me.data).role);
   // Setting the closing date needs role.manage, so the builder offers it only to those who hold it.
@@ -419,7 +413,7 @@ export function Builder({ sessionId, companyName }: { sessionId: string; company
         <Alert tone="caution">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>{problem.message}</span>
-            {problem.ask ? <AskRecruiter label={problem.ask.label} size="sm" variant="primary" preset={presetOf(problem.ask.body)} /> : null}
+            {problem.ask ? <Upgrade label={problem.ask.label} size="sm" variant="primary" reason={problem.ask.reason} /> : null}
           </div>
         </Alert>
       ) : null}

@@ -1,15 +1,13 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { NOTE_BODY_MAX, type Actor, type AiInterviewView, type ApplicationStage, type RecruiterCallNotes, type ScreeningFunnel, type ScreenTranscriptEntry } from "@ros/contracts";
-import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, CALL_NOTES_STAGES, aiInterviewCanRemind, aiInterviewOf, audit, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, unsentScreenReadings, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
-import { HELD_REASON, createScreen, deliver, linkEmailWaiting, linkEmailsWaiting, loadScreenBundle, sendConversationIdleReminder, sendConversationNotStartedReminder, sendConversationReviewReminder, sendScreenReminder, type ScreenDeps } from "@ros/agents";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import type { Actor, AiInterviewView, ApplicationStage, ScreeningFunnel } from "@ros/contracts";
+import { AI_INTERVIEW_PHASE, AI_INTERVIEW_REMIND_EXTENDS_HOURS, aiInterviewCanRemind, aiInterviewOf, disclosureLine, emit, isOneVisitFlow, notLocked, screeningFunnel, transition, writtenQuestionsOf, type AiInterviewScreen } from "@ros/core";
+import { HELD_REASON, deliver, linkEmailWaiting, linkEmailsWaiting, loadScreenBundle, sendConversationIdleReminder, sendConversationNotStartedReminder, sendConversationReviewReminder, sendScreenReminder, type ScreenDeps } from "@ros/agents";
 import { interviewsWaitingForMore } from "@ros/workflows";
-import { applicationNotes, applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
+import { applications, candidates, companies, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { SendResult } from "@ros/integrations";
-import { HttpError, messageTooLong } from "../middleware/errors";
-import type { Tenant } from "../middleware/session";
+import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { exitCleanup } from "./exit-cleanup";
-import { writeOwnNote } from "./notes";
 
 /**
  * What the screening agent needs from the app: the model, the channels, the public host candidate links use, a way to
@@ -49,102 +47,6 @@ export async function stopScreenInvitation(tx: Tx, container: Container, input: 
   if (app.stage === "screen_invited") await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "triaged", by: input.by, actor, reason: input.note ?? "AI interview invitation stopped" });
   const candidateTold = await sendScreenStopped(tx, container, { app, actor, screenId: scr.id });
   return { screenId: scr.id, candidateTold };
-}
-
-/** Statuses a recruiter's call notes can be added to: everything except a conversation that is already complete, withdrawn or stopped. */
-const NOTES_ALLOWED: readonly string[] = ["invited", "reminded", "in_progress", "paused", "human_requested", "unfinished", "expired", "declined_by_candidate"];
-/**
- * The stages a recruiter's call notes go on the AI interview at: past screening the route answers `not_screening`. The one list
- * in @ros/core, which the score reads too: a request for a person counts as still to come only at these stages.
- */
-const NOTES_STAGES: readonly string[] = CALL_NOTES_STAGES;
-
-/**
- * Whether a recruiter's notes from a call go on the candidate's AI interview tab now, by the rules `addRecruiterCallNotes`
- * applies (10 November 2026): someone locked always (they are kept on the recruiter's own note), anyone else at a screening
- * stage whose newest conversation, if any, still takes them. Otherwise what the call taught goes on their Notes tab, as the
- * route's own refusal says. The recruiter queue reads it, so its hint never sends anyone to a form that is not there.
- */
-export function callNotesGoOnAiInterview(app: { stage: string; lockedAt: string | null }, latest: { status: string } | null | undefined): boolean {
-  if (app.lockedAt) return true;
-  return NOTES_STAGES.includes(app.stage) && (!latest || NOTES_ALLOWED.includes(latest.status));
-}
-
-/**
- * A recruiter's notes from a call (plan E3, Q16): when a candidate asked for a person, the recruiter who called them
- * adds what they learned, per question where it fits. The notes go on the transcript as a recruiter's notes (role
- * `recruiter`, source `recruiter_call`), never as the candidate's words: the scorecard quotes them only as
- * `recruiter_note` evidence, checked against the notes, and they can never support a must-have "no". With `complete`
- * the conversation closes as complete and the scorecard is written from the notes alone: anything the candidate typed
- * before was never sent, so neither the team nor the recruiter sees it (founder decision of 9 October 2026).
- */
-export async function addRecruiterCallNotes(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; complete: boolean; actor: Actor; tenant: Tenant }): Promise<{ screenId: string | null; completed: boolean; keptAsNote?: true }> {
-  const { app, actor } = input;
-  if (app.lockedAt) return keepCallNotesAsNote(tx, container, input);
-  const [latest] = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt)).limit(1);
-  if (latest && !NOTES_ALLOWED.includes(latest.status)) throw new HttpError(409, "screen_closed", latest.status === "completed" ? "This AI interview is already complete. Add what you learned as a note on the candidate instead." : "This AI interview is closed.");
-  if (!NOTES_STAGES.includes(app.stage)) throw new HttpError(409, "not_screening", "This candidate is past the screening step.");
-  // With no conversation yet, the notes are the screening: they finish it, or there would be an invitation nobody sent,
-  // waiting for good, that no scorecard ever follows.
-  if (!latest && !input.complete) throw new HttpError(409, "no_conversation", "This candidate has no AI interview to keep open. Tick \"Finish the AI interview with these notes\" to record the call as their AI interview.");
-  const now = container.engine.clock();
-  const scr = latest ?? (await createScreen(tx, { companyId: app.companyId, applicationId: app.id, channel: "web", expiresAt: new Date(now.getTime() + 120 * 3600_000).toISOString(), now }));
-  const b = await loadScreenBundle(tx, scr.id);
-  if (!b) throw new HttpError(404, "not_found", "Application not found.");
-  const keys = new Set(b.packet.screening.questions.map((q) => q.key));
-  const by = actor.name ?? actor.id;
-  const entries: ScreenTranscriptEntry[] = input.notes.map((n) => ({ role: "recruiter", content: n.text, at: now.toISOString(), source: "recruiter_call", by, ...(n.questionKey && keys.has(n.questionKey) ? { questionKey: n.questionKey } : {}) }));
-  const patch: Partial<typeof screens.$inferInsert> = { transcript: [...b.screen.transcript, ...entries] };
-  // A finished conversation is written up afresh from the notes alone, even one that had a reading of what the candidate
-  // typed: the candidate never sent it, so it stays theirs (`completedBy`, founder decision of 9 October 2026).
-  if (input.complete) Object.assign(patch, { status: "completed", completedAt: now.toISOString(), assessmentId: null, startedAt: b.screen.startedAt ?? now.toISOString(), progress: { ...b.screen.progress, completedBy: "recruiter_call" } });
-  await tx.update(screens).set(patch).where(eq(screens.id, scr.id));
-  if (input.complete && b.screen.assessmentId) {
-    // That older reading (written before 9 October 2026 from what they typed) is no longer linked to the screen, and
-    // stays hidden because it says itself what it was read from (`unsentScreenReadings` with the readings). Until the
-    // notes' scorecard is written, the application's latest reading goes back to the newest one the team may see.
-    const [cur] = await tx.select({ latest: applications.latestAssessmentId }).from(applications).where(eq(applications.id, app.id)).limit(1);
-    if (cur?.latest === b.screen.assessmentId) {
-      const readings = await tx.select({ id: assessments.id, kind: assessments.kind, result: assessments.result }).from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
-      const hidden = unsentScreenReadings([{ status: b.screen.status, assessmentId: b.screen.assessmentId }], readings);
-      await tx.update(applications).set({ latestAssessmentId: readings.find((r) => !hidden.has(r.id))?.id ?? null }).where(eq(applications.id, app.id));
-    }
-  }
-  await emit(tx, { type: "screen.recruiter_notes_added", companyId: app.companyId, actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: app.id, notes: entries.length, complete: input.complete } });
-  await audit(tx, { companyId: app.companyId, actor, action: "screen.recruiter_notes_added", target: { type: "application", id: app.id }, reason: "notes from a call with the candidate", details: { screenId: scr.id, notes: entries.length, complete: input.complete } });
-  if (!input.complete) return { screenId: scr.id, completed: false };
-  await emit(tx, { type: "screen.completed", companyId: app.companyId, actor, subject: { type: "screen", id: scr.id }, payload: { via: "recruiter_call", questions: b.packet.screening.questions.length } });
-  const [cur] = await tx.select({ stage: applications.stage }).from(applications).where(eq(applications.id, app.id)).limit(1);
-  if (cur.stage === "screen_invited") await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "screening", by: "system", actor });
-  if (cur.stage === "screen_invited" || cur.stage === "screening") await transition(tx, { applicationId: app.id, companyId: app.companyId, to: "screen_complete", by: "system", actor });
-  // The screen's own run writes the scorecard if it is still waiting; otherwise a run starts for it.
-  const [run] = scr.workflowRunId ? await tx.select({ status: workflowRuns.status }).from(workflowRuns).where(eq(workflowRuns.id, scr.workflowRunId)).limit(1) : [];
-  if (run && ["waiting", "running"].includes(run.status)) await container.engine.signal(tx, { companyId: app.companyId, key: `screen:${scr.id}:completed` });
-  else {
-    const started = await container.engine.start(tx, { workflowKey: "screen", companyId: app.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId, screenId: scr.id, channel: scr.channel, invitedVia: "recruiter_call" }, idempotencyKey: `screen:${app.id}:recruiter:${scr.id}:${now.getTime()}`, actor });
-    await tx.update(screens).set({ workflowRunId: started.runId }).where(eq(screens.id, scr.id));
-  }
-  return { screenId: scr.id, completed: true };
-}
-
-/**
- * A call with someone locked (the plans of 5 November 2026, Rule 2): nothing spends AI on them, so there is no AI interview to
- * finish and no scorecard to write, whatever `complete` says. The notes go on the recruiter's own note on the candidate, after
- * what it already held: no AI reads that table and the candidate never sees it, and the team reads it once an upgrade opens them.
- * No screen is made, because a screen would stop the AI interview that upgrade starts by itself (`offerInterview`).
- */
-async function keepCallNotesAsNote(tx: Tx, container: Container, input: { app: App; notes: RecruiterCallNotes["notes"]; actor: Actor; tenant: Tenant }): Promise<{ screenId: null; completed: false; keptAsNote: true }> {
-  const { app, actor, tenant } = input;
-  const now = container.engine.clock();
-  const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  const asked = new Map((pv ? [...pv.packet.screening.questions, ...writtenQuestionsOf(pv.packet)] : []).map((q) => [q.key, q.question]));
-  const words = input.notes.map((n) => (n.questionKey && asked.has(n.questionKey) ? `${asked.get(n.questionKey)}\n${n.text}` : n.text)).join("\n\n");
-  const [mine] = await tx.select({ body: applicationNotes.body, starter: applicationNotes.starter }).from(applicationNotes).where(and(eq(applicationNotes.applicationId, app.id), eq(applicationNotes.authorUserId, tenant.userId), isNull(applicationNotes.deletedAt))).limit(1).for("update");
-  const body = `${mine ? `${mine.body}\n\n` : ""}Notes from a call, ${now.toISOString().slice(0, 10)}:\n${words}`;
-  if (body.length > NOTE_BODY_MAX) throw messageTooLong(NOTE_BODY_MAX);
-  await writeOwnNote(tx, { companyId: app.companyId, applicationId: app.id, tenant, actor, note: { starter: mine?.starter ?? null, body }, now });
-  await audit(tx, { companyId: app.companyId, actor, action: "screen.recruiter_notes_added", target: { type: "application", id: app.id }, reason: "notes from a call with the candidate", details: { screenId: null, notes: input.notes.length, complete: false, keptAsNote: true } });
-  return { screenId: null, completed: false, keptAsNote: true };
 }
 
 /**

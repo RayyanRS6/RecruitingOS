@@ -12,7 +12,7 @@ export const NotifyCadence = z.enum(NOTIFY_CADENCES);
 export type NotifyCadence = z.infer<typeof NotifyCadence>;
 
 /** The groups the updates are sorted into, in the order Setup lists them. */
-export const NOTIFY_GROUPS = ["approvals", "candidates", "interviews", "stuck", "recruiter", "messages", "account"] as const;
+export const NOTIFY_GROUPS = ["approvals", "candidates", "interviews", "stuck", "messages", "account"] as const;
 export const NotifyGroup = z.enum(NOTIFY_GROUPS);
 export type NotifyGroup = z.infer<typeof NotifyGroup>;
 

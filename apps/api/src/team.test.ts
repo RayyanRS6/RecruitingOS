@@ -188,7 +188,7 @@ describe("team invitations, members and roles", () => {
     const dup = await invite(owner, { email: "HANK.manager@teamtest.test", role: "admin" });
     expect(dup.status).toBe(409);
     expect(await errorCode(dup)).toBe("already_member");
-    expect((await invite(owner, { email: "x@teamtest.test", role: "recruiter" })).status).toBe(400);
+    expect((await invite(owner, { email: "x@teamtest.test", role: "boss" })).status).toBe(400);
     expect((await invite(owner, { email: "not-an-email", role: "admin" })).status).toBe(400);
     const first = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteResponse;
     const second = (await (await invite(owner, { email: "ann.admin@teamtest.test", role: "admin" })).json()) as InviteResponse;
@@ -281,7 +281,6 @@ describe("team invitations, members and roles", () => {
     const members = (await (await json(owner, "GET", "/api/v1/companies/current/members")).json()) as Array<{ userId: string; email: string }>;
     const hankId = members.find((m) => m.email === "hank.manager@teamtest.test")!.userId;
     const patch = (cookie: string, userId: string, body: unknown) => json(cookie, "PATCH", `/api/v1/companies/current/members/${userId}`, body);
-    expect((await patch(owner, hankId, { role: "recruiter" })).status).toBe(400);
     expect((await patch(owner, hankId, { role: "boss" })).status).toBe(400);
     expect((await patch(owner, hankId, { status: "invited" })).status).toBe(400);
     expect((await patch(owner, hankId, {})).status).toBe(400);
@@ -641,7 +640,7 @@ describe("leaving a company, and switching between companies", () => {
 
 /**
  * The Trial plan's people (founder decision L-02 B, 16 October 2026): at most 3 in the company, members of any role, and
- * invitations not yet answered count; ITS (a recruiter's grant, a platform-staff account) never does. A 4th invitation,
+ * invitations not yet answered count; ITS (a platform-staff account) never does. A 4th invitation,
  * and an invitation accepted when the trial is full, are refused in plain words; nobody already in is ever removed.
  */
 describe("people on the Trial plan", () => {
@@ -742,12 +741,10 @@ describe("people on the Trial plan", () => {
     expect(await statusOf("jo@seats.test")).toBe("pending");
   });
 
-  it("never counts ITS: a recruiter's grant and a platform-staff account in the company take no place", async () => {
+  it("never counts ITS: a platform-staff account in the company takes no place", async () => {
     const before = await seats();
     await withPlatform(container.db, async (tx) => {
-      const [rita] = await tx.insert(users).values({ email: "rita@identifiedtalent.com", name: "Rita Recruiter" }).returning();
-      await tx.insert(memberships).values({ companyId, userId: rita.id, role: "recruiter", status: "active" });
-      const [sam] = await tx.insert(users).values({ email: "sam@identifiedtalent.com", name: "Sam Staff", platformRole: "its_recruiter" }).returning();
+      const [sam] = await tx.insert(users).values({ email: "sam@identifiedtalent.com", name: "Sam Staff", platformRole: "platform_admin" }).returning();
       await tx.insert(memberships).values({ companyId, userId: sam.id, role: "interviewer", status: "active" });
     });
     expect(await seats()).toEqual(before);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { entitlements, setMark } from "@ros/core";
 import { newTimesDayWords } from "@ros/agents";
-import { applicationMarks, applications, communications, companies, events, interviewFollowups, interviews, jobs, notifications, roles, takeovers, users, withTenant, workflowRuns } from "@ros/db";
+import { applicationMarks, applications, communications, companies, events, interviewFollowups, interviews, jobs, notifications, roles, users, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -15,7 +15,7 @@ import { createContainer, type Container } from "./container";
  * and the interviewers are told, the calendar events are removed by the worker, the candidate gets a confirmation that
  * says only what will happen for them, a second press changes nothing, and a dead link is refused. The one automatic set
  * of new times (3A) is armed only when nothing stops it: the setting is on, ITS confirmed the company, they did not use
- * both reschedules, no ITS recruiter runs the role, and nobody had put them on hold.
+ * both reschedules, and nobody had put them on hold.
  */
 describe("candidate cancels an interview", () => {
   let container: Container;
@@ -341,7 +341,7 @@ describe("candidate cancels an interview", () => {
     }
   });
 
-  it("after both reschedules, under an ITS recruiter's takeover, or on hold, they still go under Cancelled but nothing is armed, and each says why", async () => {
+  it("after both reschedules, or on hold, they still go under Cancelled but nothing is armed, and each says why", async () => {
     // both "Ask for a different time" presses used: the page already promised a person
     const twice = await book("Elena", "Costa");
     await container.db.update(interviews).set({ rescheduleCountCandidate: 2 }).where(eq(interviews.id, twice.id));
@@ -351,19 +351,6 @@ describe("candidate cancels an interview", () => {
     await cancelAsking(twice.token);
     expect((await followUps(twice.cand.id))[0]).toMatchObject({ autoState: "none", autoReason: "reschedules_used" });
     expect((await teamNote("Elena Costa"))[0].body).toBe("They asked for new times after asking twice for a different time, so a person should arrange the time with them. Nothing goes to them automatically.");
-
-    // an ITS recruiter runs the role (founder question 7)
-    const taken = await book("Ivo", "Novak");
-    const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning();
-    try {
-      expect(await (await app.request(`/c/schedule/${taken.token}/confirmed`)).text()).toContain(TEAM_HINT);
-      await cancelAsking(taken.token);
-      expect((await followUps(taken.cand.id))[0]).toMatchObject({ autoState: "none", autoReason: "takeover" });
-      expect(await newTimesRuns(taken.cand.id)).toHaveLength(0);
-      expect((await teamNote("Ivo Novak"))[0].body).toBe("They asked for new times. An ITS recruiter is running this role, so nothing goes automatically: you or the recruiter decide.");
-    } finally {
-      await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
-    }
 
     // a person had put them on hold (founder question 6): the hold ends, they go under Cancelled, nothing is armed
     const held = await book("Hana", "Kim");

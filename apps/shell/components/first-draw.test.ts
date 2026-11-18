@@ -27,7 +27,7 @@ const { Home } = await import("@ros/web/src/pages/Home");
 const { Roles } = await import("@ros/web/src/pages/Roles");
 const { useIsClient } = await import("@ros/web/src/components/use-is-client");
 
-const me = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "openai" } };
+const me = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "openai" } };
 // Two live jobs, so a job picker or a job's title would show if the list leaked into the first draw.
 const jobs = [
   { id: "r1", title: "Dental Hygienist", status: "open", openedAt: "2026-10-01T00:00:00Z", createdAt: "2026-09-30T00:00:00Z", counts: { total: 6, waiting_on_you: 2 }, stageCounts: { new: 3 }, needsYou: 2, daysOpen: 13 },

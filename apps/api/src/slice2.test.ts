@@ -1,9 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
-import { addBusinessHours, isPostingTask } from "@ros/core";
 import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
 import { and, eq } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, policies, recruiterEscalations, screens, workflowRuns, companies, withTenant } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, auditRecords, candidates, entitlements, events, interventions, policies, screens, workflowRuns, companies, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -180,7 +179,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   });
 
   let luisId = "";
-  it("a person's new link goes by text to a consenting candidate inside contact hours (the automatic one never does), and HUMAN hands over to a person (4-hour SLA)", async () => {
+  it("a person's new link goes by text to a consenting candidate inside contact hours (the automatic one never does), and HUMAN stops the interview and tells the team", async () => {
     const a = await apply({ first: "Luis", last: "Ortega", email: "luis@example.com", phone: "949-555-0199", sms: true, resume: "Luis Ortega\nRegistered Dental Hygienist at Harbor Dental 2020 - present\nRDH license CA active\nPerio maintenance, Dentrix" });
     luisId = a.id;
     expect(a.stage).toBe("screen_invited");
@@ -207,12 +206,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const after = await screenOf(a.id);
     expect(after.status).toBe("human_requested");
     expect(after.transcript.map((t) => t.role)).toEqual(["assistant", "candidate", "assistant"]);
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id));
-    expect(esc.kind).toBe("candidate_issue");
-    // Four business hours (Monday to Friday, 9 to 5 Pacific), never wall-clock hours (founder decision F12).
-    expect(Math.abs(Date.parse(esc.slaDueAt!) - addBusinessHours(new Date(), 4).getTime())).toBeLessThanOrEqual(2 * 60_000);
-    expect(Date.parse(esc.slaDueAt!)).toBeGreaterThan(Date.now());
-    expect(smsOutbox().filter((m) => m.to === "+19495550199").at(-1)!.body).toMatch(/person/);
+    const told = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    expect(told.filter((n) => n.kind === "screen.human_requested").map((n) => n.title)).toEqual(["Luis Ortega asked to talk to a person"]);
+    expect(smsOutbox().filter((m) => m.to === "+19495550199").at(-1)!.body).toMatch(/has been told you asked for a person/);
     expect(await eventsOf("screen.human_requested")).toHaveLength(1);
     const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, after.workflowRunId!));
     expect(run.status).toBe("completed");
@@ -228,7 +224,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(luis.consent.sms?.granted).toBe(false);
     expect(await eventsOf("candidate.opted_out")).toHaveLength(1);
     expect(await eventsOf("consent.revoked")).toHaveLength(1);
-    // the owner re-invites after the recruiter talked to him: web only now
+    // the owner re-invites after talking to him: web only now
     const inv = await json("POST", `/api/v1/applications/${luisId}/actions`, { action: "invite_screen", channel: "sms" });
     expect(inv.status).toBe(200);
     await container.drain();
@@ -296,8 +292,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(first[0].text).not.toContain("/c/screen/");
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
     expect(notes.some((n) => n.kind === "entitlement.text_screens")).toBe(true);
-    // (ITS's job-board posting tasks, plan D3, are not a recruiter being paged)
-    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && !isPostingTask(e.kind))).toHaveLength(0);
     expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")))).toHaveLength(0);
     // more interviews are added: the run looks again within six hours and the link follows in an email of its own
     await container.db.update(entitlements).set({ used: 0 }).where(eq(entitlements.id, ent.id));
@@ -326,9 +320,9 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect((await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "invite_screen" })).status).toBe(409);
   });
 
-  it("nudges up the ladder when candidates wait on the owner, ends with a recruiter, and resolves when the owner acts", async () => {
+  it("nudges up the ladder when candidates wait on the owner, ends with an email, and resolves when the owner acts", async () => {
     const days = 86_400_000;
-    const LADDER = ["brief", "message", "offer_recruiter", "escalation"];
+    const LADDER = ["brief", "message"];
     const level = async (detector: string) => (await container.db.select().from(interventions).where(eq(interventions.detector, detector))).sort((x, y) => (x.sentAt < y.sentAt ? -1 : 1)).map((i) => `${i.ladderLevel}:${i.status}`);
     // The ladder's own emails go to whoever wants roles that need attention as they happen (plan B3; the default is the
     // morning summary), so the owner asks for them here.
@@ -350,12 +344,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
       expect(rungs).toEqual(LADDER.slice(0, n + 1).map((l) => `${l}:sent`));
     }
     expect(emailOutbox().find((m) => m.to === "dana@brightline.test" && /waiting on you/.test(m.subject))).toBeTruthy();
-    expect(emailOutbox().find((m) => m.to === "dana@brightline.test" && /Want a recruiter/.test(m.subject))).toBeTruthy();
-    const stuck = (await container.db.select().from(recruiterEscalations)).filter((e) => e.kind === "stuck_role");
-    expect(stuck).toHaveLength(1);
-    expect(stuck[0].question).toMatch(/waiting on you/);
-    await advance(49 * 3600_000); // already escalated: no fifth rung
-    expect((await level("candidates_waiting")).length).toBe(4);
+    await advance(49 * 3600_000); // already told by email: no third rung
+    expect((await level("candidates_waiting")).length).toBe(2);
     // the owner acts on everyone who was waiting; the next daily run closes the interventions
     // (an AI interview nobody started keeps them under "No AI interview yet", waiting on nobody: Priya is not among them, R20-7)
     const waitingNow = (await container.db.select().from(applications).where(eq(applications.roleId, roleId))).filter((x) => ["triaged", "screen_complete", "interview_recommended"].includes(x.stage)).map((x) => x.id);
@@ -363,8 +353,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(waitingNow).not.toContain(priyaId);
     for (const id of waitingNow) expect((await json("POST", `/api/v1/applications/${id}/actions`, { action: "reject", reason: "position_filled", note: "Hired internally." })).status).toBe(200);
     await advance(25 * 3600_000);
-    expect(await level("candidates_waiting")).toEqual(["brief:resolved", "message:resolved", "offer_recruiter:resolved", "escalation:resolved"]);
-    expect((await eventsOf("intervention.responded")).length).toBeGreaterThanOrEqual(4);
+    expect(await level("candidates_waiting")).toEqual(["brief:resolved", "message:resolved"]);
+    expect((await eventsOf("intervention.responded")).length).toBeGreaterThanOrEqual(2);
   });
 
   it("lists notifications and marks them read", async () => {
@@ -377,7 +367,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     void priyaId;
   });
 
-  it("a Design Partner over its screen allowance keeps screening; the owner is told and nobody is paged (founder decision F8)", async () => {
+  it("a Design Partner over its screen allowance keeps screening, and the owner is told (founder decision F8)", async () => {
     const { entitlements: ent } = await import("@ros/core");
     const [co] = await container.db.select().from(companies).limit(1);
     await ent.applyPlan(container.db, co.id, "design_partner");
@@ -393,7 +383,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect((await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, co.id), eq(entitlements.key, "text_screens"))))[0].used).toBe(row.limit!);
     expect((await form(`/c/screen/${(await screenOf(a.id)).token}`, { message: "Yes, my RDH license is active in California." })).status).toBe(302);
     expect((await screenOf(a.id)).status).toBe("in_progress");
-    expect((await container.db.select().from(recruiterEscalations)).filter((e) => e.kind !== "candidate_issue" && e.kind !== "stuck_role" && !isPostingTask(e.kind))).toHaveLength(0);
     const current = (await (await json("GET", "/api/v1/companies/current")).json()) as { plan: { name: string }; usage: Record<string, { used: number; limit: number | null }> };
     expect(current.plan.name).toBe("Design Partner");
     expect(current.usage.text_screens.used).toBeGreaterThan(current.usage.text_screens.limit!);

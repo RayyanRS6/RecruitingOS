@@ -1,17 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { detectStuckRoles } from "@ros/agents";
-import { LOCKED_REQUEST_LINE, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION, type ClosingMessagePreview, type RecruiterRequestView } from "@ros/contracts";
+import { MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION, type ClosingMessagePreview } from "@ros/contracts";
 import { MORE_APPLIED_KIND, anonymizeCandidate } from "@ros/core";
-import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, documents, entitlements, events, interviewParticipants, interviews, notifications, plans, postings, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, auditRecords, candidates, communications, documents, entitlements, events, interviewParticipants, interviews, notifications, plans, postings, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import { fakePostmarkEvent, type FakeEmailAdapter, type FakeIdentityProvider } from "@ros/integrations";
-import { Hono } from "hono";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { errorHandler } from "./middleware/errors";
-import { sessionMiddleware, type Vars } from "./middleware/session";
-import { interviewRoutes } from "./routes/interviews";
-import { putOnInterview, signInAdmin, signInAs, signInStaff, usePlan } from "./test-helpers";
+import { putOnInterview, signInAdmin, signInAs, usePlan } from "./test-helpers";
 
 const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 
@@ -44,7 +40,7 @@ const leaks = (text: string) => MARKS.filter((m) => text.toLowerCase().includes(
 /** Routes outside the team's API, each for a reason: a candidate's own pages behind their own token, the public pages, and machines. */
 const NOT_THE_TEAMS = /^\/(c|careers|privacy|feeds|files|a|webhooks|dev)(\/|$)|^\/(healthz|sitemap\.xml|robots\.txt)$|^\/api\/csp-report$/;
 
-type Ids = { company: string; role: string; locked: string; lockedDoc: string; lockedCandidate: string; visible: string; visibleDoc: string; interview: string; session: string; lockedRequest: string; roleRequest: string; run: string };
+type Ids = { company: string; role: string; locked: string; lockedDoc: string; lockedCandidate: string; visible: string; visibleDoc: string; interview: string; session: string; run: string };
 
 /** What each parameter of each team route is filled with, by the prefix it sits under. A new route with a new parameter joins here. */
 const FILL = (ids: Ids): Array<[string, Record<string, string>]> => [
@@ -52,7 +48,6 @@ const FILL = (ids: Ids): Array<[string, Record<string, string>]> => [
   ["/api/v1/interviews/:id", { id: ids.interview }],
   ["/api/v1/roles/:id", { id: ids.role, channel: "careers_page", kind: "missing_must_have" }],
   ["/api/v1/intake/sessions/:id", { id: ids.session }],
-  ["/api/v1/escalations/:id", { id: ids.lockedRequest }],
   ["/api/v1/admin/customers/:id", { id: ids.company }],
   ["/api/v1/admin/runs/:id", { id: ids.run }],
   ["/api/v1/admin/ai-runs/:id", { id: ids.run }],
@@ -74,10 +69,9 @@ function fillRoute(route: string, table: Array<[string, Record<string, string>]>
 const QUERIES = (ids: Ids): Record<string, string[]> => ({
   "/api/v1/roles/:id/applications": ["?counts=1", "?order=name", "?order=score", "?order=waiting", "?stage=received", "?stage=talent_pool", "?ownerStage=no_ai_interview", "?group=in_process", "?told=not_told", "?counts=1&order=name"],
   "/api/v1/roles/:id/compare": [`?ids=${ids.locked}`, `?ids=${ids.locked},${ids.visible}`],
-  "/api/v1/events": [`?subjectId=${ids.locked}`, `?subjectType=candidate&subjectId=${ids.lockedCandidate}`, "?type=application.received", "?type=message.bounced", "?type=message.suppressed", "?type=recruiter.requested", "?subjectType=escalation", `?subjectId=${ids.lockedRequest}`],
+  "/api/v1/events": [`?subjectId=${ids.locked}`, `?subjectType=candidate&subjectId=${ids.lockedCandidate}`, "?type=application.received", "?type=message.bounced", "?type=message.suppressed"],
   "/api/v1/approvals": ["?status=pending", "?status=approved"],
   "/api/v1/interviews": ["?mine=1", "?status=scheduled"],
-  "/api/v1/escalations": ["?status=open", "?status=resolved"],
   "/api/v1/admin/data-requests/lookup/candidate": [`?email=${encodeURIComponent(M.email)}&companyId=${ids.company}`],
 });
 
@@ -141,7 +135,6 @@ describe("the team cannot read a locked person", () => {
   let owner = "";
   let hr = "";
   let interviewer = "";
-  let recruiter = "";
   let lockedRow: typeof applications.$inferSelect;
   let visibleRow: typeof applications.$inferSelect;
   let readers: Array<[string, string]> = [];
@@ -172,11 +165,11 @@ describe("the team cannot read a locked person", () => {
     expect(emailed.status, await emailed.clone().text()).toBe(200);
     await container.drain();
 
-    // They write back: their words on the thread, and a request for ITS whose question names them.
+    // They write back: their words are kept on the thread.
     expect((await reply(lockedRow, M.email, `${M.reply}: I have a question about my application.`, "wrote-1")).status).toBe(200);
     await container.drain();
 
-    // Someone asks for a person: another request naming them, raised by the candidate.
+    // Someone locked asks for a person.
     const human = await apply(job, { first: M.human, last: "Lockwood", email: `${M.human.toLowerCase()}@people.test` });
     expect((await reply(human, `${M.human.toLowerCase()}@people.test`, "HUMAN", "human-1")).status).toBe(200);
     await container.drain();
@@ -198,29 +191,12 @@ describe("the team cannot read a locked person", () => {
     await container.db.insert(approvalRequests).values({ companyId: job.id, roleId: job.roleId, applicationId: lockedRow.id, actionType: "message.send_freeform", subject: { type: "application", id: lockedRow.id }, proposal: { candidateName: `${M.approval} ${M.first}`, text: `A message to ${M.first}`, senderName: "A team member" }, rationale: `${M.approval} ${M.first} finished the AI interview.`, requestedBy: { kind: "system", id: "test" }, requiredRoles: ["owner"], createdAt: new Date(Date.now() - 5 * 86_400_000).toISOString() });
     await putOnInterview(container, app, { cookie: interviewer, roleId: job.roleId });
 
-    // An ITS recruiter under a grant for the role, asked for after all of them applied: its board has none of them in it.
-    const roleAsk = await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId: job.roleId, question: "Please look at this role." });
-    expect(roleAsk.status, await roleAsk.clone().text()).toBe(201);
-    const { id: roleRequest } = await read<{ id: string }>(roleAsk);
-    recruiter = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-    expect((await json(recruiter, "POST", `/api/v1/escalations/${roleRequest}/claim`)).status).toBe(200);
-    expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
-
-    // And one under a grant for all of the company's hiring: the widest there is, short of break glass, and it reads nobody locked either.
-    const companyAsk = await json(owner, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", question: "Please help with all of our hiring." });
-    expect(companyAsk.status, await companyAsk.clone().text()).toBe(201);
-    const { id: companyRequest } = await read<{ id: string }>(companyAsk);
-    const wide = await signInStaff(app, container, "wes@its.test", "its_recruiter", "Wes Recruiter");
-    expect((await json(wide, "POST", `/api/v1/escalations/${companyRequest}/claim`)).status).toBe(200);
-    expect((await json(wide, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
-
-    readers = [["the owner", owner], ["HR", hr], ["an interviewer", interviewer], ["an ITS recruiter under a grant for the role", recruiter], ["an ITS recruiter under a grant for the company", wide]];
+    readers = [["the owner", owner], ["HR", hr], ["an interviewer", interviewer]];
 
     const [lockedDoc] = await container.db.select().from(documents).where(eq(documents.applicationId, lockedRow.id));
     const [visibleDoc] = await container.db.select().from(documents).where(eq(documents.applicationId, visibleRow.id));
-    const [lockedRequest] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, lockedRow.id));
     const [run] = await container.db.select({ id: workflowRuns.id }).from(workflowRuns).where(eq(workflowRuns.companyId, job.id)).limit(1);
-    ids = { company: job.id, role: job.roleId, locked: lockedRow.id, lockedDoc: lockedDoc.id, lockedCandidate: lockedRow.candidateId, visible: visibleRow.id, visibleDoc: visibleDoc.id, interview: iv.id, session: job.session, lockedRequest: lockedRequest.id, roleRequest, run: run.id };
+    ids = { company: job.id, role: job.roleId, locked: lockedRow.id, lockedDoc: lockedDoc.id, lockedCandidate: lockedRow.candidateId, visible: visibleRow.id, visibleDoc: visibleDoc.id, interview: iv.id, session: job.session, run: run.id };
   }, 600_000);
 
   afterAll(async () => {
@@ -245,8 +221,6 @@ describe("the team cannot read a locked person", () => {
     for (const route of routesOf("GET").filter((r) => r.startsWith("/api/v1/applications/:id"))) paths.push(fillRoute(route, [["/api/v1/applications/:id", { id: ids.visible, documentId: ids.visibleDoc }]]));
     for (const kind of ["missing_must_have", "overlooked", "strongest_evidence?mustHave=rdh"]) paths.push(`/api/v1/roles/${ids.role}/questions/${kind}`);
     paths.push(`/api/v1/roles/${ids.role}/questions/compare?ids=${ids.locked},${ids.visible}`);
-    // The recruiter's own request: the role's board, as it stood.
-    paths.push(`/api/v1/escalations/${ids.roleRequest}`);
     return paths;
   };
 
@@ -273,54 +247,45 @@ describe("the team cannot read a locked person", () => {
     expect(fillRoute("/api/v1/roles/:id/postings/:channel/package", FILL(ids))).toBe(`/api/v1/roles/${ids.role}/postings/careers_page/package`);
   });
 
-  it("no GET holds a marker, as the owner, HR, an interviewer or an ITS recruiter under a grant for the role, and the sweep read real answers", async () => {
+  it("no GET holds a marker, as the owner, HR or an interviewer, and the sweep read real answers", async () => {
     const answered = await sweep();
     // It is not a sweep of refusals: most of the team's routes answered with their data.
-    expect(answered).toBeGreaterThan(200);
+    expect(answered).toBeGreaterThan(150);
     expect(routesOf("GET").filter((r) => r.startsWith("/api/v1/")).length).toBeGreaterThan(90);
   }, 600_000);
 
-  it("the markers would be seen: under a grant naming exactly this person ITS reads every one of them, in the same routes", async () => {
-    const [lockedRequest] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, ids.lockedRequest));
-    expect(lockedRequest.question).toContain(M.first);
-    const named = await signInStaff(app, container, "nia@its.test", "its_recruiter", "Nia Recruiter");
-    expect((await json(named, "POST", `/api/v1/escalations/${ids.lockedRequest}/claim`)).status).toBe(200);
-    expect((await json(named, "POST", "/api/v1/auth/switch", { companyId: job.id })).status).toBe(200);
+  it("the markers would be seen: once an upgrade opens this person, the owner reads every one of them in the same routes", async () => {
+    const company = await newCompany();
+    await setLimit(company.id, 1);
+    const j = await openRole(company);
+    await apply(j, person("Vera", "Visible"));
+    const row = await apply(j, { first: M.first, last: M.last, email: M.email, phone: `+1 ${M.phone}`, city: M.city, file: M.file, resume: M.resume });
+    expect(row.lockedAt).not.toBeNull();
+    expect((await reply(row, M.email, `${M.reply}: I have a question about my application.`, "seen-1")).status).toBe(200);
+    await container.drain();
+    const [doc] = await container.db.select().from(documents).where(eq(documents.applicationId, row.id));
+    expect((await json(company.cookie, "GET", `/api/v1/applications/${row.id}`)).status).toBe(402);
 
-    // Only as the database writes the id, even for them.
-    expect((await json(named, "GET", `/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(404);
-    const detail = await json(named, "GET", `/api/v1/applications/${ids.locked}`);
+    const moved = await json(admin, "POST", `/api/v1/admin/customers/${company.id}/plan`, { planKey: "pro", reason: "They asked to upgrade." });
+    expect(moved.status, await moved.clone().text()).toBe(200);
+    await container.drain();
+
+    // Only as the database writes the id, even now.
+    expect((await json(company.cookie, "GET", `/api/v1/applications/${row.id.replace(/-/g, "")}`)).status).toBe(404);
+    const detail = await json(company.cookie, "GET", `/api/v1/applications/${row.id}`);
     expect(detail.status).toBe(200);
     const text = await detail.text();
     for (const m of [M.first, M.last, M.email, M.phone, M.city, M.file, M.reply]) expect(text, m).toContain(m);
     // The file itself, and the words in it.
-    const file = await json(named, "GET", `/api/v1/applications/${ids.locked}/documents/${ids.lockedDoc}/inline`);
+    const file = await json(company.cookie, "GET", `/api/v1/applications/${row.id}/documents/${doc.id}/inline`);
     expect(file.status).toBe(200);
     expect(await file.text()).toContain(M.resume);
-    // On the lists, that one person and nobody else.
-    const list = await read<{ applications: Array<{ id: string }>; counts: { total: number }; locked: { count: number; cards: unknown[] } }>(await json(named, "GET", `/api/v1/roles/${ids.role}/applications?counts=1`));
-    expect(list.applications.map((a) => a.id)).toEqual([ids.locked]);
+    // On the lists, with nobody left behind the wall.
+    const list = await read<{ applications: Array<{ id: string; candidate: { name: string } | null }>; locked: { count: number; cards: unknown[] } }>(await json(company.cookie, "GET", `/api/v1/roles/${j.roleId}/applications?counts=1`));
+    expect(list.applications.find((a) => a.id === row.id)?.candidate?.name).toBe(`${M.first} ${M.last}`);
     expect(list.locked).toEqual({ count: 0, cards: [] });
-    expect(list.counts.total).toBe(1);
-    // The volume says that one person, by source too: the grant may read them.
-    expect(await read(await json(named, "GET", `/api/v1/roles/${ids.role}/volume`))).toMatchObject({ totals: { total: 1, bySource: { [lockedRow.source]: 1 } } });
-    expect(JSON.stringify(await read(await json(named, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
-    // Their call notes go through, as the recruiter's own note: nothing is scored while they are locked.
-    const notes = await json(named, "POST", `/api/v1/applications/${ids.locked}/screen/recruiter-notes`, { notes: [{ text: "We talked." }], complete: false });
-    expect(notes.status).toBe(200);
-    expect(await read(notes)).toMatchObject({ completed: false, keptAsNote: true });
-    // In the queue, with the warning: words cannot be checked by a machine.
-    const queue = await read<{ accessGranted: boolean; lockedForCompany: boolean; contextSnapshot: { candidate: { name: string } }; question: string }>(await json(named, "GET", `/api/v1/escalations/${ids.lockedRequest}`));
-    expect(queue).toMatchObject({ accessGranted: true, lockedForCompany: true });
-    expect(queue.contextSnapshot.candidate.name).toContain(M.first);
-    expect(queue.question).toContain(M.first);
-    // The grant reads this person, and nobody else who is locked.
-    const [other] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(candidates.firstName, M.bounced));
-    expect((await json(named, "GET", `/api/v1/applications/${other.id}`)).status).toBe(402);
-
-    // Hand it back, so the sweep's other readers are not affected.
-    expect((await json(named, "POST", `/api/v1/escalations/${ids.lockedRequest}/release`)).status).toBe(200);
-  }, 120_000);
+    expect(JSON.stringify(await read(await json(company.cookie, "GET", `/api/v1/events?subjectId=${row.id}`)))).toContain("application.received");
+  }, 300_000);
 
   it("every route under the two prefixes refuses before any handler: 402 candidate_locked, whatever the method, and nothing is written", async () => {
     const viewedBefore = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "candidate.viewed"))).filter((r) => r.target?.id === ids.locked).length;
@@ -340,13 +305,13 @@ describe("the team cannot read a locked person", () => {
     // Refused before the handler: no `candidate.viewed`, and no signed link was ever minted for the file.
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "candidate.viewed"))).filter((r) => r.target?.id === ids.locked).length).toBe(viewedBefore);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.read"))).length).toBe(readBefore);
-    // The refusal offers the owner the way on, with the upgrade's question; an ITS recruiter is not offered a company's plan.
-    const asOwner = await read<{ error: { message: string; details: { upgrade: boolean; actions: Array<{ label: string; path: string; body: { topic: string; question: string; scope: string } }> } } }>(await json(owner, "GET", `/api/v1/applications/${ids.locked}`));
+    // The refusal offers the owner the way on, with the upgrade's question; an interviewer, who may not ask for a plan, is offered nothing.
+    const asOwner = await read<{ error: { message: string; details: { upgrade: boolean; actions: Array<{ label: string; path: string; body: { reason: string } }> } } }>(await json(owner, "GET", `/api/v1/applications/${ids.locked}`));
     expect(asOwner.error.message).toBe(`Locked. ${MORE_CANDIDATES_LINE}`);
     expect(asOwner.error.details.upgrade).toBe(true);
-    expect(asOwner.error.details.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/escalations", body: { topic: "plan", scope: "company", question: MORE_CANDIDATES_UPGRADE_QUESTION } });
-    const asRecruiter = await read<{ error: { details: { upgrade: boolean; actions: unknown[] } } }>(await json(recruiter, "GET", `/api/v1/applications/${ids.locked}`));
-    expect(asRecruiter.error.details).toEqual({ upgrade: false, actions: [] });
+    expect(asOwner.error.details.actions).toEqual([{ label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: MORE_CANDIDATES_UPGRADE_QUESTION } }]);
+    const asInterviewer = await read<{ error: { details: { upgrade: boolean; actions: unknown[] } } }>(await json(interviewer, "GET", `/api/v1/applications/${ids.locked}`));
+    expect(asInterviewer.error.details).toEqual({ upgrade: false, actions: [] });
     // A malformed id or someone else's company names nobody: the handler answers as it always did.
     expect((await json(owner, "GET", "/api/v1/applications/00000000-0000-0000-0000-000000000000")).status).toBe(404);
     // Somebody visible opens as usual, and their id is no way to someone else's file.
@@ -425,17 +390,6 @@ describe("the team cannot read a locked person", () => {
     expect((await app.request(`/api/v1/applications/${ids.locked.replace(/-/g, "")}`)).status).toBe(401);
   }, 300_000);
 
-  it("the interview scope guard refuses another spelling itself, with no help from the guard at the prefix", async () => {
-    const bare = new Hono<Vars>();
-    bare.onError(errorHandler);
-    bare.use("*", sessionMiddleware(container));
-    bare.route("/api/v1/interviews", interviewRoutes);
-    const open = (id: string) => bare.request(`/api/v1/interviews/${id}`, { headers: { cookie: recruiter } });
-    // The canonical id reaches the handler here, so the refusals below are the guard's and nothing else's.
-    expect((await open(ids.interview)).status).toBe(200);
-    for (const [how, spelled] of respelled(ids.interview)) expect((await open(spelled)).status, how).toBe(404);
-  }, 60_000);
-
   it("an interviewer cannot read a job they do not interview for by writing its id another way", async () => {
     const company = await newCompany();
     await usePlan(container, company.id, "ultra");
@@ -454,37 +408,6 @@ describe("the team cannot read a locked person", () => {
     }
     // Their own job, written another way, is not looked up either: the same answer for every id not written the database's way.
     expect((await json(onIt, "GET", `/api/v1/roles/${theirs.roleId.replace(/-/g, "")}`)).status).toBe(404);
-  }, 300_000);
-
-  it("Settings' recruiter access says a grant covers one candidate and leaves out which, for someone the reader cannot read", async () => {
-    const company = await newCompany();
-    await setLimit(company.id, 1);
-    const j = await openRole(company);
-    const seen = await apply(j, person("Sia", "Open"));
-    const email = "zqgrantmark@people.test";
-    const hidden = await apply(j, { first: "Zqgrantfirst", last: "Zqgrantlast", email });
-    expect((await reply(hidden, email, "HUMAN", "grant-human")).status).toBe(200);
-    await container.drain();
-    const about = await json(company.cookie, "POST", "/api/v1/escalations", { kind: "review", applicationId: seen.id, question: "Please look at this person." });
-    expect(about.status, await about.clone().text()).toBe(201);
-    const [lockedAsk] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, hidden.id));
-    const staffOnHidden = await signInStaff(app, container, "hope@its.test", "its_recruiter", "Hope Recruiter");
-    const staffOnSeen = await signInStaff(app, container, "seth@its.test", "its_recruiter", "Seth Recruiter");
-    expect((await json(staffOnHidden, "POST", `/api/v1/escalations/${lockedAsk.id}/claim`)).status).toBe(200);
-    expect((await json(staffOnSeen, "POST", `/api/v1/escalations/${(await read<{ id: string }>(about)).id}/claim`)).status).toBe(200);
-
-    type Row = { recruiterEmail: string; applicationId: string | null; oneCandidate: boolean };
-    const listed = await json(company.cookie, "GET", "/api/v1/companies/current/staff-access");
-    const text = await listed.text();
-    expect(listed.status, text).toBe(200);
-    expect(text).not.toContain(hidden.id);
-    const rows = JSON.parse(text) as Row[];
-    expect(rows.find((g) => g.recruiterEmail === "hope@its.test")).toMatchObject({ applicationId: null, oneCandidate: true });
-    expect(rows.find((g) => g.recruiterEmail === "seth@its.test")).toMatchObject({ applicationId: seen.id, oneCandidate: true });
-    // The recruiter under that grant may read that person, so their own list may say who it is.
-    expect((await json(staffOnHidden, "POST", "/api/v1/auth/switch", { companyId: company.id })).status).toBe(200);
-    const own = await read<Row[]>(await json(staffOnHidden, "GET", "/api/v1/companies/current/staff-access"));
-    expect(own.find((g) => g.recruiterEmail === "hope@its.test")?.applicationId).toBe(hidden.id);
   }, 300_000);
 
   it("the list: nobody locked is a row, whatever the order or the filter; `locked` holds where they came in and when, and nothing else; counts cover those shown, and only the total says more applied", async () => {
@@ -526,11 +449,10 @@ describe("the team cannot read a locked person", () => {
     expect(board.summary.total).toBeLessThanOrEqual(1);
 
     // The report covers those shown, and says how many it does not.
-    const report = await read<{ applicants: { total: number; locked: number }; pendingDecisions: { list: Array<{ applicationId: string | null }>; approvals: number }; escalations: { total: number } }>(await json(owner, "GET", `/api/v1/roles/${ids.role}/report`));
+    const report = await read<{ applicants: { total: number; locked: number }; pendingDecisions: { list: Array<{ applicationId: string | null }>; approvals: number } }>(await json(owner, "GET", `/api/v1/roles/${ids.role}/report`));
     expect(report.applicants).toMatchObject({ total: 1, locked: lockedCount });
     expect(report.pendingDecisions.list.map((p) => p.applicationId)).not.toContain(ids.locked);
     expect(report.pendingDecisions.approvals).toBe(0);
-    expect(report.escalations.total).toBe(1);
     const csv = await (await json(owner, "GET", `/api/v1/roles/${ids.role}/report/summary.csv`)).text();
     expect(csv).toContain(`Applicants,Locked,${lockedCount}`);
     const applicantsCsv = await (await json(owner, "GET", `/api/v1/roles/${ids.role}/report.csv`)).text();
@@ -565,7 +487,7 @@ describe("the team cannot read a locked person", () => {
     // Review and apply: "not a candidate of this role", named "Unknown", dry run and real.
     const dry = await read<{ items: Array<{ name: string; allowed: boolean; refusedReason: string; score: unknown }> }>(await json(owner, "POST", `/api/v1/roles/${ids.role}/batch`, { dryRun: true, items: [{ applicationId: ids.locked, action: "shortlist" }] }));
     expect(dry.items[0]).toMatchObject({ name: "Unknown", allowed: false, refusedReason: "Not a candidate of this role.", score: null });
-    for (const item of [{ action: "not_moving_forward", reason: "position_filled" }, { action: "escalate" }, { action: "shortlist" }]) {
+    for (const item of [{ action: "not_moving_forward", reason: "position_filled" }, { action: "shortlist" }]) {
       const real = await json(owner, "POST", `/api/v1/roles/${ids.role}/batch`, { dryRun: false, items: [{ applicationId: ids.locked, ...item }] });
       const realText = await real.text();
       expect(real.status, realText).toBe(200);
@@ -584,11 +506,6 @@ describe("the team cannot read a locked person", () => {
     const inCapitals = await read<{ results: Array<{ code: string }> }>(await json(owner, "POST", `/api/v1/roles/${ids.role}/new-times`, { applicationIds: [ids.locked.toUpperCase()] }));
     expect(inCapitals.results[0]).toMatchObject({ code: "not_found" });
 
-    // Bringing in a recruiter on them is refused; on the role it goes on as ever.
-    const asked2 = await json(owner, "POST", "/api/v1/escalations", { kind: "review", applicationId: ids.locked, question: "Who is this?" });
-    expect(asked2.status).toBe(402);
-    expect((await read<{ error: { code: string } }>(asked2)).error.code).toBe("candidate_locked");
-
     // Deciding an approval about them: the id in the path is the approval's, so no path guard saw it.
     const [req] = await container.db.select().from(approvalRequests).where(eq(approvalRequests.applicationId, ids.locked));
     const decided = await json(owner, "POST", `/api/v1/approvals/${req.id}/decide`, { decision: "approve" });
@@ -604,46 +521,14 @@ describe("the team cannot read a locked person", () => {
     expect(after.toldState).toBe(before.toldState);
   }, 120_000);
 
-  it("a request about someone locked keeps only that it exists: no name, no id, no question, no answer and no thread, and the team can add nothing to it", async () => {
-    const mine = await read<RecruiterRequestView[]>(await json(owner, "GET", "/api/v1/escalations/mine"));
-    const masked = mine.filter((r) => r.locked);
-    expect(masked.length).toBeGreaterThanOrEqual(2);
-    for (const r of masked) {
-      expect(r).toMatchObject({ question: LOCKED_REQUEST_LINE, applicationId: null, candidateName: null, resolution: null, thread: [], reopenedCount: 0, scope: "application", locked: true });
-      expect(r.roleTitle).toBe(job.title);
-      expect(leaks(JSON.stringify(r))).toEqual([]);
-    }
-    // ... and the owner's own request about the role is as it was.
-    const own = mine.find((r) => r.id === ids.roleRequest)!;
-    expect(own.question).toBe("Please look at this role.");
-    expect(own.locked).toBeUndefined();
-    expect(own.thread.length).toBeGreaterThan(0);
-
-    const added = await json(owner, "POST", `/api/v1/escalations/mine/${masked[0].id}/messages`, { body: "Who is this person?" });
-    expect(added.status).toBe(402);
-    const reopened = await json(owner, "POST", `/api/v1/escalations/mine/${masked[0].id}/reopen`, { note: "Please reopen this." });
-    expect(reopened.status).toBe(402);
-
-    // ITS's answer stays with ITS: on the thread, and in no notice.
-    const staff = await signInStaff(app, container, "kit@its.test", "its_recruiter", "Kit Recruiter");
-    expect((await json(staff, "POST", `/api/v1/escalations/${ids.lockedRequest}/claim`)).status).toBe(200);
-    expect((await json(staff, "POST", `/api/v1/escalations/${ids.lockedRequest}/messages`, { body: `Spoke with ${M.first} today.` })).status).toBe(201);
-    expect((await json(staff, "POST", `/api/v1/escalations/${ids.lockedRequest}/resolve`, { resolution: `${M.first} is all set.` })).status).toBe(200);
-    await container.drain();
-    const answered = (await read<RecruiterRequestView[]>(await json(owner, "GET", "/api/v1/escalations/mine"))).find((r) => r.id === ids.lockedRequest)!;
-    expect(answered).toMatchObject({ status: "resolved", resolution: null, thread: [], locked: true });
-    expect(leaks(JSON.stringify(await read(await json(owner, "GET", "/api/v1/events?type=recruiter.resolved"))))).toEqual([]);
-    expect(leaks(JSON.stringify(await read(await json(owner, "GET", "/api/v1/notifications"))))).toEqual([]);
-  }, 120_000);
-
   it("the owner's Home and the job builder's conversation read from the same place: visible people, and one neutral card", async () => {
-    const brief = await read<{ cards: Array<{ kind: string; title: string; body: string; actions: Array<{ label: string; path: string; body?: { question?: string } }> }>; summary: string }>(await json(owner, "GET", "/api/v1/brief"));
+    const brief = await read<{ cards: Array<{ kind: string; title: string; body: string; actions: Array<{ label: string; path: string; body?: { reason?: string } }> }>; summary: string }>(await json(owner, "GET", "/api/v1/brief"));
     expect(leaks(JSON.stringify(brief))).toEqual([]);
     // The people it counts are the ones it can say something true about.
     expect(brief.cards.map((c) => c.title)).toContain(`1 person applied to ${job.title} since yesterday`);
     const card = brief.cards.find((c) => c.title === `More people applied to ${job.title}.`)!;
     expect(card).toMatchObject({ kind: "new_applicants", body: MORE_CANDIDATES_LINE });
-    expect(card.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/escalations", body: { question: MORE_CANDIDATES_UPGRADE_QUESTION } });
+    expect(card.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/plans/request", body: { reason: MORE_CANDIDATES_UPGRADE_QUESTION } });
     // A person who may not draft gets the brief through the conversation route (the critic's second way to it).
     const answer = await json(hr, "POST", "/api/v1/intake/conversation/messages", { message: "What is going on?" });
     expect(answer.status).toBe(200);
@@ -654,9 +539,6 @@ describe("the team cannot read a locked person", () => {
     const theirs = await read<{ cards: Array<{ body: string }>; summary: string }>(await json(interviewer, "GET", "/api/v1/brief"));
     expect(leaks(JSON.stringify(theirs))).toEqual([]);
     expect(theirs.summary).not.toMatch(/^1 interview coming up/);
-    // No ITS recruiter is offered a company's plan.
-    const staffHome = await read<{ cards: Array<{ title: string }> }>(await json(recruiter, "GET", "/api/v1/brief"));
-    expect(staffHome.cards.map((c) => c.title)).not.toContain(`More people applied to ${job.title}.`);
   }, 120_000);
 
   it("the stuck-role check the daily job runs names nobody locked, even over an approval left waiting about them", async () => {
@@ -701,7 +583,7 @@ describe("the team cannot read a locked person", () => {
     expect(leaks(await preview.text())).toEqual([]);
     await container.drain();
     // Sent for the others: nobody here, so the refusal is the same; the sweep still holds with the job closed.
-    expect(await sweep()).toBeGreaterThan(200);
+    expect(await sweep()).toBeGreaterThan(150);
   }, 600_000);
 
   it("the console, a privacy request and the audit trail stay as they are: ITS is not the paying customer", async () => {
@@ -731,29 +613,6 @@ describe("the team cannot read a locked person", () => {
     expect(leaks(await history.text())).toEqual([]);
     const historyCsv = await json(owner, "GET", "/api/v1/companies/current/audit.csv");
     expect(leaks(await historyCsv.text())).toEqual([]);
-  }, 120_000);
-
-  it("break glass reads everyone: a row, the record and the list, and it is on the record", async () => {
-    const [ada] = await container.db.select().from(users).where(eq(users.email, "ada.admin@identifiedtalent.com"));
-    const glass = await json(admin, "POST", "/api/v1/admin/break-glass", { companyId: ids.company, reason: "Investigating a reported data issue for the customer.", minutes: 30 });
-    expect(glass.status, await glass.clone().text()).toBe(201);
-    expect((await json(admin, "POST", "/api/v1/auth/switch", { companyId: ids.company })).status).toBe(200);
-    expect((await json(admin, "GET", `/api/v1/applications/${ids.locked}`)).status).toBe(200);
-    const list = await read<{ applications: Array<{ id: string }>; locked: { count: number } }>(await json(admin, "GET", `/api/v1/roles/${ids.role}/applications?counts=1`));
-    expect(list.applications.map((a) => a.id)).toContain(ids.locked);
-    expect(list.locked.count).toBe(0);
-    expect((await json(admin, "GET", `/api/v1/events?subjectId=${ids.locked}`)).status).toBe(200);
-    expect(JSON.stringify(await read(await json(admin, "GET", `/api/v1/events?subjectId=${ids.locked}`)))).toContain("application.received");
-    const logged = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "admin.break_glass"))).filter((r) => r.actor.id === ada.id);
-    expect(logged.length).toBeGreaterThan(0);
-    // The volume by source covers everyone it can read, which here is everyone.
-    const volume = await read<{ totals: { total: number; bySource: Record<string, number> } }>(await json(admin, "GET", `/api/v1/roles/${ids.role}/volume`));
-    expect(Object.values(volume.totals.bySource).reduce((a, b) => a + b, 0)).toBe(volume.totals.total);
-    // The jobs list counts what waits on a person: all of it, not only what is about nobody.
-    const [waiting] = await container.db.insert(approvalRequests).values({ companyId: ids.company, roleId: ids.role, applicationId: ids.locked, actionType: "message.send_freeform", subject: { type: "application", id: ids.locked }, proposal: { text: "A message." }, requestedBy: { kind: "system", id: "test" }, requiredRoles: ["owner"] }).returning();
-    const jobs = await read<Array<{ id: string; needsYou: number }>>(await json(admin, "GET", "/api/v1/roles"));
-    expect(jobs.find((j) => j.id === ids.role)?.needsYou).toBeGreaterThanOrEqual(1);
-    await container.db.delete(approvalRequests).where(eq(approvalRequests.id, waiting.id));
   }, 120_000);
 
   it("the Share tab's volume counts someone locked only while an upgrade could open them: who withdrew or was deleted while locked is in no figure, so it adds up and agrees with the job page", async () => {
@@ -887,7 +746,7 @@ describe("the team cannot read a locked person", () => {
       const row = await apply(j, zed);
       const clean = async (step: string) => {
         for (const [who, cookie] of [["the owner", company.cookie], ["HR", hrHere]] as const) {
-          for (const path of [`/api/v1/roles/${j.roleId}/applications?counts=1`, `/api/v1/roles/${j.roleId}/board`, `/api/v1/roles/${j.roleId}/timeline`, `/api/v1/roles/${j.roleId}/report`, `/api/v1/roles/${j.roleId}/report.csv`, `/api/v1/roles/${j.roleId}`, "/api/v1/roles", "/api/v1/brief", "/api/v1/events", "/api/v1/approvals", "/api/v1/escalations/mine", "/api/v1/notifications", "/api/v1/interviews"]) {
+          for (const path of [`/api/v1/roles/${j.roleId}/applications?counts=1`, `/api/v1/roles/${j.roleId}/board`, `/api/v1/roles/${j.roleId}/timeline`, `/api/v1/roles/${j.roleId}/report`, `/api/v1/roles/${j.roleId}/report.csv`, `/api/v1/roles/${j.roleId}`, "/api/v1/roles", "/api/v1/brief", "/api/v1/events", "/api/v1/approvals", "/api/v1/notifications", "/api/v1/interviews"]) {
             const text = await (await json(cookie, "GET", path)).text();
             expect(/Zqjourney/i.test(text), `${step}: ${who} reads a marker at ${path}`).toBe(false);
           }

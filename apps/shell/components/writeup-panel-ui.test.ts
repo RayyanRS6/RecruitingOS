@@ -27,7 +27,7 @@ const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/Cand
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const at = new Date(Date.now() - 86_400_000).toISOString();
 
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
 const STAGES = ["new", "longlist", "shortlist", "interviewing", "cancelled", "on_hold", "offer", "hired", "not_moving_forward"] as const;
 const moves = STAGES.map((to) => ({ to, label: to, via: to === "new" || to === "cancelled" ? "none" : "set_mark", allowed: to !== "new" && to !== "cancelled", current: to === "new" }));
 const evidence = { needsCloserLook: false, reason: null, assessmentUnavailable: false, resumeUnreadable: false, unknowns: [], unknownCount: 0, topStrength: null, topConcern: null, confidenceReasons: [] };
@@ -35,7 +35,7 @@ const evidence = { needsCloserLook: false, reason: null, assessmentUnavailable: 
 const NOTE = "No example of charting work was given.";
 const DRAFT = "I calmed a scared boy by letting him hold the mirror and counting down with him.";
 const screen = {
-  id: "s1", channel: "web", status: "completed", invitedAt: at, startedAt: at, completedAt: at, remindedAt: null, invitedVia: "apply", assessmentId: null, scorecard: "writing", recruiterAsked: false, answersShared: true,
+  id: "s1", channel: "web", status: "completed", invitedAt: at, startedAt: at, completedAt: at, remindedAt: null, invitedVia: "apply", assessmentId: null, scorecard: "writing", answersShared: true,
   answers: { wq_patient: "A boy was scared of the scaler, so I let him hold the mirror and counted down with him.", wq_tools: "I have not used any charting software yet.", q_start: "Monday" },
   transcript: [
     { role: "assistant", content: "Tell me about a time you calmed a nervous patient.", at, questionKey: "wq_patient" },
@@ -86,9 +86,9 @@ function detail(over: Record<string, unknown> = {}) {
   };
 }
 
-function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen", me: typeof owner = owner) {
+function panel(d: ReturnType<typeof detail>, tab: "overview" | "screen") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], me);
+  qc.setQueryData(["me"], owner);
   qc.setQueryData(["roles"], [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: at, counts: { total: 1 }, needsYou: 1, daysOpen: 7 }]);
   qc.setQueryData(["applications", "r1"], { applications: [], counts: { total: 0 } });
   qc.setQueryData(["company"], { settings: { verifiedAt: at }, planKey: "starter", usage: {} });
@@ -180,14 +180,5 @@ describe("the company's questions on the AI interview tab (Wave S7)", () => {
     expect(answers).toContain('<span class="muted small">Is there anything else you would like the hiring team to know before we finish?</span>');
     expect(answers).toContain('<span class="muted small">When could you start?</span>');
     expect(text(answers)).not.toMatch(/_|\bmh\b|wrap up/i);
-  });
-});
-
-describe("a recruiter's notes from a call on the AI interview tab (plan E3)", () => {
-  it("closed, it is the one button, not a card titled the same over it", () => {
-    const recruiter = { ...owner, memberships: [{ ...owner.memberships[0], role: "recruiter" }] };
-    const html = panel(detail({ stage: "screening", screens: [{ ...screen, status: "in_progress", completedAt: null }] }), "screen", recruiter);
-    expect(html).toMatch(/Add notes from a call<\/button>/);
-    expect(html).not.toContain("<h2>Notes from a call</h2>");
   });
 });

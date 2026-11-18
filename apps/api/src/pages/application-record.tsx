@@ -712,7 +712,7 @@ candidatePages.get("/c/status/:token", async (c) => {
     const packet = await packetOf(tx, app.roleId, app.packetVersion);
     return {
       packet,
-      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, stageShown: shownStage, now: container.engine.clock() }),
+      score: await recordScoreFor(tx, { app, companySettings: company?.settings, screens: all, hiddenDecision: view.hidden, now: container.engine.clock() }),
       sent: sentAnswersFor({ app, packet, screens: all }),
       others: await otherApplicationsFor(tx, { companyId: app.companyId, candidateId: app.candidateId, exceptId: app.id }),
       facts: await learnedFactsFor(tx, { companyId: app.companyId, candidateId: app.candidateId }),
@@ -877,7 +877,7 @@ candidatePages.post("/c/status/:token/privacy", rateLimit(POLICIES.privacy), asy
       return same;
     }
     let r = await createDataRequest(tx, { companyId: app.companyId, kind: parsed.data.kind, requesterEmail: cand?.email ?? `unknown+${app.candidateId}@example.invalid`, details: parsed.data.details, candidateId: app.candidateId, applicationId: app.id, channel: "status_page", verified: true, actor, now: container.engine.clock() });
-    if (parsed.data.kind === "human_review") r = await openHumanReview(tx, r, { roleId: app.roleId, actor });
+    if (parsed.data.kind === "human_review") r = await openHumanReview(tx, r, { actor });
     await sendPrivacyAcknowledgment(tx, container.integrations, { row: r, companyName: company?.name ?? "the hiring team", privacyEmail: container.env.PRIVACY_EMAIL, actor });
     return r;
   });

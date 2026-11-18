@@ -1,12 +1,12 @@
-import { and, asc, desc, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { ApplicationStage as ApplicationStageEnum, CANCELLED_REASON_LABEL, MARK_LABEL, OWNER_STAGE_LABEL, OwnerStage as OwnerStageEnum, type ApplicationStage, type MarkKind, type OwnerGroup, type OwnerStage, type PoolMustHaveCount, type PoolSummary, type ToldState } from "@ros/contracts";
-import { DECISION_STAGES, OUTCOME_STATEMENT, POSTING_TASK_KINDS, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, interviewsInMotionFor, isSource, lockedAndWaiting, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, recruiterEscalations, roles, type Tx } from "@ros/db";
+import { DECISION_STAGES, OUTCOME_STATEMENT, SOURCES, SOURCE_LABEL, STAGE_LABEL, activeFollowUpsFor, groupFor, holdEnded, inCancelled, interviewsInMotionFor, isSource, lockedAndWaiting, notLocked, ownerGroup, ownerStage, type FollowUpStrip } from "@ros/core";
+import { applicationMarks, applications, approvalRequests, candidates, communications, companies, events, hiringOutcomes, interviews, roles, type Tx } from "@ros/db";
 import { localDays } from "@ros/workflows";
 import { boardView, loadPool, shownLatestReadings } from "./pool";
 
 /**
- * The role report (docs/spec/21 section 7, P1): the ten figures an owner asked for, computed from the system of record
+ * The role report (docs/spec/21 section 7, P1): the nine figures an owner asked for, computed from the system of record
  * inside the caller's tenant transaction with one query per figure and no per-application queries. Counts and
  * durations only: nothing here ranks or scores a candidate, and the JSON never carries a name. The applicant list is
  * the separate CSV, audited on export. The administrator's customer view runs the same composition over every role of
@@ -14,7 +14,6 @@ import { boardView, loadPool, shownLatestReadings } from "./pool";
  */
 
 const DAY_MS = 86_400_000;
-const OPEN_ESCALATION_STATUSES = ["open", "claimed", "in_progress"];
 
 export type SourceCount = { source: string; label: string; sourceDetail: string | null; count: number };
 export type DayCount = { day: string; count: number };
@@ -47,8 +46,7 @@ export type RoleReport = {
   /** Decisions only a person can make: pending approvals plus candidates waiting on the owner (including those held on an eligibility answer). */
   pendingDecisions: { count: number; approvals: number; candidates: number; oldestDays: number | null; list: PendingItem[] };
   recommendationsVsDecisions: { assessed: number; rows: RecommendationRow[] };
-  overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; flaggedAssessments: number; byAction: Record<string, number> };
-  escalations: { total: number; open: number; resolved: number; overdue: number; medianResponseHours: number | null };
+  overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; byAction: Record<string, number> };
   messages: { total: number; sent: number; failed: number; bounced: number; unknown: number; pending: number; candidatesAffected: number };
   outcomes: {
     statement: string; hired: number; withdrew: number; declinedByEmployer: number; declinedOffer: number; noHire: number; talentPool: number; corrections: number;
@@ -72,7 +70,6 @@ type AssessmentRow = { id: string; applicationId: string; createdAt: string; rec
 /** `offered`: how many times are offered to pick from; optional so hand-made rows need not say. */
 type InterviewRow = { applicationId: string; status: string; outcome?: string | null; roundKey: string; title: string; rescheduleCountCandidate: number; decision: string | null; offered?: number };
 type ApprovalRow = { id: string; actionType: string; applicationId: string | null; createdAt: string };
-type EscalationRow = { status: string; createdAt: string; firstResponseAt: string | null; slaDueAt: string | null; resolvedAt: string | null };
 type OutcomeRow = { applicationId: string | null; roleId: string | null; outcome: string; milestone: string; recordedAt: string; correctionOf: string | null; correctedAt: string | null };
 type RoleRow = { id: string; title: string; status: string; openedAt: string | null; closedAt: string | null };
 
@@ -86,7 +83,6 @@ export type ReportData = {
   assessments: AssessmentRow[];
   interviews: InterviewRow[];
   approvals: ApprovalRow[];
-  escalations: EscalationRow[];
   messages: RoleReport["messages"];
   outcomes: OutcomeRow[];
   /** Optional so hand-made rows from before the marks need not list any. */
@@ -102,18 +98,14 @@ export type ReportData = {
 const NO_MESSAGES: RoleReport["messages"] = { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 };
 
 /**
- * One query per figure. `roleIds` null means every role of the company (the administrator's view). `onlyApplicationId`
- * (an ITS grant about one candidate) keeps that candidate's rows alone, and the role's own outcome: no other applicant is
- * counted or named, as the role's applications list and the applicant CSV show that candidate alone. Nobody past the plan's
+ * One query per figure. `roleIds` null means every role of the company (the administrator's view). Nobody past the plan's
  * candidates per job (Rule 3) is in a figure, or in a row of the file; `lockedCount` says how many. `includeLocked` is for the
  * ITS console alone: ITS is not the paying customer.
  */
-export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null; onlyApplicationId?: string | null; includeLocked?: boolean }): Promise<ReportData> {
+export async function loadReportData(tx: Tx, input: { companyId: string; roleIds: string[] | null; includeLocked?: boolean }): Promise<ReportData> {
   const { companyId } = input;
-  const only = input.onlyApplicationId ?? null;
-  // A grant about one candidate reads them, whoever they are, and nobody else; the rest of the team reads nobody locked.
-  const leavesOutLocked = !only && !input.includeLocked;
-  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], escalations: [], messages: NO_MESSAGES, outcomes: [], marks: [], followUps: [] };
+  const leavesOutLocked = !input.includeLocked;
+  const empty: ReportData = { roles: [], timeZone: null, apps: [], stageEvents: [], overrides: [], assessments: [], interviews: [], approvals: [], messages: NO_MESSAGES, outcomes: [], marks: [], followUps: [] };
   if (input.roleIds && input.roleIds.length === 0) return empty;
   const roleRows = await tx
     .select({ id: roles.id, title: roles.title, status: roles.status, openedAt: roles.openedAt, closedAt: roles.closedAt })
@@ -127,7 +119,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId, source: applications.source, sourceDetail: applications.sourceDetail, stage: applications.stage, stageChangedAt: applications.stageChangedAt, createdAt: applications.createdAt, latestAssessmentId: applications.latestAssessmentId, rejectReason: applications.rejectReason, talentPoolOptOut: sql<boolean>`coalesce((${candidates.preferences}->>'talentPoolOptOut')::boolean, false)`, toldState: applications.toldState, dataDeleted: sql<boolean>`${candidates.anonymizedAt} is not null` })
     .from(applications)
     .leftJoin(candidates, eq(candidates.id, applications.candidateId))
-    .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds), leavesOutLocked ? notLocked() : undefined, ...(only ? [eq(applications.id, only)] : [])))
+    .where(and(eq(applications.companyId, companyId), inArray(applications.roleId, roleIds), leavesOutLocked ? notLocked() : undefined))
     .orderBy(asc(applications.createdAt))) as AppRow[];
   const ids = apps.map((a) => a.id);
   const idSet = new Set(ids);
@@ -150,12 +142,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
     .select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId, createdAt: approvalRequests.createdAt })
     .from(approvalRequests)
     // An "Invite to a screening chat?" from before 20 Oct 2026 waits on nobody (Home leaves it out; the daily check retires it).
-    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), ne(approvalRequests.actionType, "application.invite_screen"), ...(only ? [eq(approvalRequests.applicationId, only)] : []))));
-  // The team's recruiter requests; ITS's own job-board posting tasks (plan D3) are not requests and are left out.
-  const escalations = notAboutSomeoneLeftOut(await tx
-    .select({ applicationId: recruiterEscalations.applicationId, status: recruiterEscalations.status, createdAt: recruiterEscalations.createdAt, firstResponseAt: recruiterEscalations.firstResponseAt, slaDueAt: recruiterEscalations.slaDueAt, resolvedAt: recruiterEscalations.resolvedAt })
-    .from(recruiterEscalations)
-    .where(and(eq(recruiterEscalations.companyId, companyId), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS]), only ? eq(recruiterEscalations.applicationId, only) : ids.length ? or(inArray(recruiterEscalations.roleId, roleIds), inArray(recruiterEscalations.applicationId, ids)) : inArray(recruiterEscalations.roleId, roleIds))));
+    .where(and(eq(approvalRequests.companyId, companyId), inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), ne(approvalRequests.actionType, "application.invite_screen"))));
   const [m] = ids.length
     ? await tx
         .select({
@@ -177,7 +164,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const outcomes = notAboutSomeoneLeftOut(await tx
     .select({ applicationId: hiringOutcomes.applicationId, roleId: hiringOutcomes.roleId, outcome: hiringOutcomes.outcome, milestone: hiringOutcomes.milestone, recordedAt: hiringOutcomes.recordedAt, correctionOf: hiringOutcomes.correctionOf, correctedAt: hiringOutcomes.correctedAt })
     .from(hiringOutcomes)
-    .where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.roleId, roleIds), ...(only ? [or(eq(hiringOutcomes.applicationId, only), isNull(hiringOutcomes.applicationId))!] : []))));
+    .where(and(eq(hiringOutcomes.companyId, companyId), inArray(hiringOutcomes.roleId, roleIds))));
   const marks = ids.length
     ? await tx.select({ applicationId: applicationMarks.applicationId, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, createdAt: applicationMarks.createdAt, clearedAt: applicationMarks.clearedAt }).from(applicationMarks).where(and(eq(applicationMarks.companyId, companyId), inArray(applicationMarks.applicationId, ids))).orderBy(asc(applicationMarks.createdAt))
     : [];
@@ -185,7 +172,7 @@ export async function loadReportData(tx: Tx, input: { companyId: string; roleIds
   const followUps = [...(await activeFollowUpsFor(tx, ids)).values()].map((f) => ({ applicationId: f.applicationId, reason: f.reason, autoState: f.autoState, interviewOpen: f.interviewOpen }));
   // Whose interview is in motion (a time booked, or times out that reached them), the same loader as the Talent list.
   const inMotion = [...(await interviewsInMotionFor(tx, ids))];
-  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, escalations, messages, outcomes, marks, followUps, lockedCount, inMotion };
+  return { roles: roleRows, timeZone: company?.timezone ?? null, apps, stageEvents, overrides, assessments: asmts, interviews: ivs, approvals, messages, outcomes, marks, followUps, lockedCount, inMotion };
 }
 
 /** The active mark of each application, from the rows the report loaded. */
@@ -206,16 +193,13 @@ function activeFollowUpOf(data: ReportData): Map<string, FollowUpStrip> {
   return new Map((data.followUps ?? []).map((f) => [f.applicationId, f]));
 }
 
-/**
- * The report for one role, or null when the role is not visible in this transaction. `onlyApplicationId` (an ITS grant
- * about one candidate): every figure, the must-haves included, counts that candidate alone.
- */
-export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date; onlyApplicationId?: string | null }): Promise<RoleReport | null> {
-  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId], onlyApplicationId: input.onlyApplicationId });
+/** The report for one role, or null when the role is not visible in this transaction. */
+export async function roleReport(tx: Tx, input: { companyId: string; roleId: string; now: Date }): Promise<RoleReport | null> {
+  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId] });
   if (!data.roles.length) return null;
   const report = composeRoleReport(data, input.now);
   // How the pool meets each must-have (plan F7), from the same findings as the board, with its gentle "stricter than needed?" note.
-  const pool = await loadPool(tx, { roleId: input.roleId, scopeApplicationId: input.onlyApplicationId ?? null, now: input.now });
+  const pool = await loadPool(tx, { roleId: input.roleId, now: input.now });
   const summary = boardView(pool, input.now).summary;
   // Everyone on the board with a reading; each must-have's own total counts only those read against a version that had it.
   const people = pool.rows.filter((r) => !r.noAiInterview && r.placement.column && r.match).length;
@@ -302,7 +286,6 @@ export const APPROVAL_LABEL: Record<string, string> = {
   "application.recommend_interview": "Interview this candidate?",
   "application.hold_ineligible": "Decide on an eligibility hold",
   "disposition.send": "Send the decision message?",
-  "intervention.offer_recruiter": "Want a recruiter to take a look?",
 };
 
 const ROLE_STATUS_LABEL: Record<string, string> = {
@@ -474,22 +457,12 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     byAction[action] = (byAction[action] ?? 0) + 1;
   }
   // "Put on hold" reads the marks (plan A4): every hold a person set, whether it is still running or not.
-  const overrides = { eligibilityOverrides: byAction.override_eligibility ?? 0, reviewAnyway: byAction.review_anyway ?? 0, holds: markCounts.holdsEverSet, flaggedAssessments: byAction.flag_assessment ?? 0, byAction };
+  const overrides = { eligibilityOverrides: byAction.override_eligibility ?? 0, reviewAnyway: byAction.review_anyway ?? 0, holds: markCounts.holdsEverSet, byAction };
 
-  // 8. Recruiter help on this role: open, resolved, past the promised response time, and how quickly a recruiter first responded.
-  const responseHours = data.escalations.filter((e) => e.firstResponseAt).map((e) => Math.max(0, Date.parse(e.firstResponseAt!) - Date.parse(e.createdAt)) / 3_600_000);
-  const escalations = {
-    total: data.escalations.length,
-    open: data.escalations.filter((e) => OPEN_ESCALATION_STATUSES.includes(e.status)).length,
-    resolved: data.escalations.filter((e) => e.status === "resolved").length,
-    overdue: data.escalations.filter((e) => OPEN_ESCALATION_STATUSES.includes(e.status) && !e.resolvedAt && e.slaDueAt && Date.parse(e.slaDueAt) < nowMs).length,
-    medianResponseHours: round1(median(responseHours)),
-  };
-
-  // 9. Messages to candidates, straight from the outbox's own statuses (loaded as one aggregate).
+  // 8. Messages to candidates, straight from the outbox's own statuses (loaded as one aggregate).
   const messages = data.messages;
 
-  // 10. Outcomes: the current record per candidate (a corrected record is replaced by its correction), the role's own outcome, and why candidates were declined.
+  // 9. Outcomes: the current record per candidate (a corrected record is replaced by its correction), the role's own outcome, and why candidates were declined.
   const current = data.outcomes.filter((o) => !o.correctedAt);
   const count = (outcome: string) => current.filter((o) => o.applicationId && o.outcome === outcome).length;
   const roleOutcomes = current.filter((o) => !o.applicationId && o.milestone === "role");
@@ -513,7 +486,7 @@ export function composeRoleReport(data: ReportData, now: Date): RoleReport {
     declineReasons: [...reasons.entries()].map(([reason, n]) => ({ reason, label: REJECT_REASON_LABEL[reason] ?? reason.replace(/_/g, " "), count: n })).sort((x, y) => y.count - x.count || x.reason.localeCompare(y.reason)),
   };
 
-  return { generatedAt: now.toISOString(), role, applicants, stages, timeInStage, interviews: interviewsOut, pendingDecisions, recommendationsVsDecisions, overrides, escalations, messages, outcomes };
+  return { generatedAt: now.toISOString(), role, applicants, stages, timeInStage, interviews: interviewsOut, pendingDecisions, recommendationsVsDecisions, overrides, messages, outcomes };
 }
 
 function median(values: number[]): number | null {
@@ -587,13 +560,9 @@ const OUTCOME_LABEL: Record<string, string> = {
   no_hire: "No hire",
 };
 
-/**
- * One row per application, oldest first. No AI rationale, evidence, résumé text or pay in the file. `onlyApplicationId`
- * is the candidate a staff grant names: a recruiter who accepted a request about one candidate gets that row alone,
- * the same limit the role's applications list applies.
- */
-export async function applicantRows(tx: Tx, input: { companyId: string; roleId: string; now: Date; onlyApplicationId?: string | null }): Promise<{ role: RoleRow; rows: ApplicantRow[] } | null> {
-  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId], onlyApplicationId: input.onlyApplicationId });
+/** One row per application, oldest first. No AI rationale, evidence, résumé text or pay in the file. */
+export async function applicantRows(tx: Tx, input: { companyId: string; roleId: string; now: Date }): Promise<{ role: RoleRow; rows: ApplicantRow[] } | null> {
+  const data = await loadReportData(tx, { companyId: input.companyId, roleIds: [input.roleId] });
   if (!data.roles.length) return null;
   const { apps } = data;
   const candidateIds = [...new Set(apps.map((a) => a.candidateId))];
@@ -705,12 +674,6 @@ export function summaryRows(r: RoleReport): Array<[string, string, string | numb
   add("Overrides", "Eligibility overridden", r.overrides.eligibilityOverrides);
   add("Overrides", "Reviewed anyway", r.overrides.reviewAnyway);
   add("Overrides", "Put on hold", r.overrides.holds);
-  add("Overrides", "AI reviews flagged", r.overrides.flaggedAssessments);
-  add("Recruiter help", "Requests", r.escalations.total);
-  add("Recruiter help", "Open", r.escalations.open);
-  add("Recruiter help", "Resolved", r.escalations.resolved);
-  add("Recruiter help", "Past the promised response time", r.escalations.overdue);
-  add("Recruiter help", "Typical first response (hours)", r.escalations.medianResponseHours);
   add("Messages", "Sent", r.messages.sent);
   add("Messages", "Failed", r.messages.failed);
   add("Messages", "Bounced", r.messages.bounced);

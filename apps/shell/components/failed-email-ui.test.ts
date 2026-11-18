@@ -14,7 +14,7 @@ const { failedEmailLine, PROBLEMS_EMPTY, ProblemsSection } = await import("@ros/
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const now = new Date().toISOString();
-const admin = { user: { id: "u1", email: "admin@its.test", name: "Admin", platformRole: "platform_admin" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: now }, memberships: [], activeCompanyId: null, staffAccess: null, ai: { provider: "fake" } };
+const admin = { user: { id: "u1", email: "admin@its.test", name: "Admin", platformRole: "platform_admin" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: now }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 const ready = { id: "in1", receivedAt: now, companyName: "Bright Dental", roleTitle: "Dental Assistant", from: "noreply@indeed.com", subject: "New applicant: Ezra Lind", error: "role is not accepting applications", hasResume: true, canRetry: true, text: "Ezra Lind applied via Indeed." };
 const waiting = { ...ready, id: "in2", subject: "New applicant: Ada Moss", hasResume: false, canRetry: false, roleTitle: null, companyName: null, from: null };
 

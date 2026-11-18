@@ -5,6 +5,7 @@ import {
 } from "@ros/contracts";
 import type { StepState } from "@ros/ui";
 import { START_HIRE_HREF } from "../../start-hire";
+import { isPlanAsk, reasonOf } from "../../upgrade";
 import { HOLDS_FOR_DECISION } from "../role/applicant-questions";
 
 /**
@@ -614,35 +615,32 @@ export function messageProblem(text: string, first: boolean, changeMax?: number)
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
-/* Turns that fail, and the hand-off (C4, C12)                                                                          */
+/* Turns that fail (C4, C12)                                                                                            */
 /* ------------------------------------------------------------------------------------------------------------------ */
 
-export type RecruiterAction = { label: string; body: Record<string, unknown> };
+/** A request about the plan the server offers with a refusal: the Upgrade button's words, and why it is asked. */
+export type PlanAsk = { label: string; reason?: string };
 type ActionLike = { kind?: string; label?: string; path?: string; body?: Record<string, unknown> };
 
-const askOf = (actions: readonly ActionLike[] | undefined): RecruiterAction | null => {
-  const a = actions?.find((x) => x.kind === "ask_recruiter" || x.path === "/api/v1/escalations");
-  return a ? { label: a.label ?? "Bring in a recruiter", body: a.body ?? {} } : null;
+const askOf = (actions: readonly ActionLike[] | undefined): PlanAsk | null => {
+  const a = actions?.find((x) => isPlanAsk(x));
+  return a ? { label: a.label ?? "Upgrade", reason: reasonOf(a.body) } : null;
 };
 
 /**
- * A turn the assistant could not take: what to say, and the "Bring in a recruiter" the server offers with the draft
- * attached. The model's own error text is never shown; it means nothing to the person. A turn with no AI help left
- * (`upgrade`) failed at nothing, so it says only that, and the way on is the server's Upgrade: never "try again".
+ * A turn the assistant could not take: what to say, and the request about the plan the server offers with it, if any.
+ * The model's own error text is never shown; it means nothing to the person. A turn with no AI help left (`upgrade`)
+ * failed at nothing, so it says only that, and the way on is the server's Upgrade: never "try again".
  */
-export function turnProblem(reply: { error?: string; recovery?: string; proposedActions?: readonly ActionLike[]; upgrade?: boolean } | null | undefined): { message: string; ask: RecruiterAction | null; upgrade?: boolean } | null {
+export function turnProblem(reply: { error?: string; recovery?: string; proposedActions?: readonly ActionLike[]; upgrade?: boolean } | null | undefined): { message: string; ask: PlanAsk | null; upgrade?: boolean } | null {
   if (!reply?.error) return null;
   if (reply.upgrade) return { message: reply.recovery ?? "Your plan's AI help is used up.", ask: askOf(reply.proposedActions), upgrade: true };
   return { message: `The assistant could not reply just now. ${reply.recovery ?? "Try again."}`, ask: askOf(reply.proposedActions) };
 }
 
-/**
- * What a problem from the API offers: its own way on, otherwise "Bring in a recruiter" with the draft. When the way on is to
- * upgrade (no AI help left, no room) a recruiter is never offered instead, which would hand out a free person in place of the
- * upgrade; someone who may not ask gets the words alone.
- */
-export function problemAsk(err: { details?: unknown } | null | undefined, recruiter: RecruiterAction): RecruiterAction | null {
-  return askFromDetails(err?.details) ?? ((err?.details as { upgrade?: unknown } | null | undefined)?.upgrade ? null : recruiter);
+/** What a problem from the API offers: its own request about the plan, if it carries one; someone who may not ask gets the words alone. */
+export function problemAsk(err: { details?: unknown } | null | undefined): PlanAsk | null {
+  return askFromDetails(err?.details);
 }
 
 /**
@@ -654,23 +652,14 @@ export function draftNoRoom(room: PlanRoom | null | undefined, hasDraft: boolean
   return room && !room.ok && room.upgrade && !(room.aiHelp && hasDraft) ? room : null;
 }
 
-/**
- * "Bring in a recruiter" for a draft (C12), the same request the server offers on a failed turn
- * (apps/api/src/routes/intake.ts): all of the hiring, with this draft and its conversation attached. Offered on every
- * failure in the job builder, also when the error itself carries no offer.
- */
-export function draftRecruiterAsk(sessionId: string): RecruiterAction {
-  return { label: "Bring in a recruiter", body: { kind: "ask", scope: "company", intakeSessionId: sessionId, question: "Please help me finish drafting this role. The assistant could not finish it with me." } };
-}
-
 /** What to say when a request fails: the API's own plain sentence, or a line about the connection when there is none. */
 export function errorWords(err: unknown, fallback = "That did not go through. Check your connection and try again."): string {
   const e = err as { status?: unknown; message?: unknown } | null | undefined;
   return typeof e?.status === "number" && typeof e.message === "string" && e.message.trim() ? e.message : fallback;
 }
 
-/** The "Bring in a recruiter" an error from the API carries (a draft that could not be written, an approval that failed). */
-export function askFromDetails(details: unknown): RecruiterAction | null {
+/** The request about the plan an error from the API carries (no room for another job, no AI help left). */
+export function askFromDetails(details: unknown): PlanAsk | null {
   return askOf((details as { actions?: ActionLike[] } | null | undefined)?.actions);
 }
 

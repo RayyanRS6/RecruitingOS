@@ -117,17 +117,16 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(found).toHaveLength(1);
       expect(found[0].applicationIds).toContain(id);
       expect(found[0].body).toContain("Cy Moss");
-      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", itsQueueEmail: "queue@its.test", now: new Date(), actor: { kind: "system" as const, id: "test" } };
+      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", now: new Date(), actor: { kind: "system" as const, id: "test" } };
       const first = await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps, companyId, found));
       expect(first).toEqual([expect.objectContaining({ detector: "hold_ended", level: "brief" })]);
       expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "stuck.hold_ended")))).length).toBeGreaterThan(0);
-      // later runs never climb the ladder: no emails, no recruiter, for the team's own reminder
+      // later runs never climb the ladder: no emails for the team's own reminder
       const later = { ...deps, now: new Date(Date.now() + 3 * DAY) };
       expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, later, companyId, found))).toEqual([expect.objectContaining({ level: "skipped", reason: "already told in the app" })]);
       const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string; actions: Array<{ label: string }> }> };
       const card = brief.cards.find((c) => /hold has ended/.test(c.title));
       expect(card).toMatchObject({ kind: "needs_review" });
-      expect(card!.actions.some((a) => /recruiter/i.test(a.label))).toBe(false);
       // deciding takes them off the hold
       await act(owner, id, { action: "clear_mark" });
     });
@@ -542,14 +541,14 @@ describe("the stage strip, private marks and private decisions", () => {
       expect(found).toHaveLength(1);
       expect(found[0].applicationIds).toContain(id);
       expect(found[0].body).toContain("Hal Moss");
-      // the reminder says what happens at five working days (Q27): the standard message by itself, or a recruiter instead
+      // the reminder says what happens at five working days (Q27): the standard message by itself, or the team is told who still waits
       expect(found[0].body).toMatch(/after 5 working days, the standard message goes by itself and you are told/);
-      expect(found[0].body).toMatch(/a recruiter is brought in instead and nothing is sent/);
+      expect(found[0].body).toMatch(/nothing is sent and you are told who still waits/);
       expect(found[0].action.href).toBe(`/roles/${roleId}/talent?ownerStage=not_moving_forward&told=not_told`);
-      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", itsQueueEmail: "queue@its.test", now: new Date(), actor: { kind: "system" as const, id: "test" } };
+      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", now: new Date(), actor: { kind: "system" as const, id: "test" } };
       expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps, companyId, found))).toContainEqual(expect.objectContaining({ detector: "decisions_untold", level: "brief" }));
       expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "stuck.decisions_untold")))).length).toBeGreaterThan(0);
-      // never climbs to emails or a recruiter, and Today shows them on the "not told" card, not as a role at risk
+      // never climbs to emails, and Today shows them on the "not told" card, not as a role at risk
       const later = { ...deps, now: new Date(Date.now() + 3 * DAY) };
       expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, later, companyId, found))).toContainEqual(expect.objectContaining({ detector: "decisions_untold", level: "skipped" }));
       const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; title: string }> };

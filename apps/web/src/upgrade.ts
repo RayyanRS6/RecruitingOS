@@ -33,13 +33,18 @@ export function firstChoice(plans: readonly PublicPlan[]): PublicPlan | null {
 }
 
 /** An action the API offers (a card's, a refusal's) that is a request about the plan: it opens the upgrade sheet, never sends in one click. */
-export function isPlanAsk(action: { path?: string; body?: Record<string, unknown> | null }): boolean {
-  return !!action.path?.includes("/escalations") && action.body?.topic === "plan";
+export function isPlanAsk(action: { path?: string }): boolean {
+  return action.path === "/api/v1/plans/request";
 }
 
-/** Why the request is being made, from such an action's body: goes after the plan's name in the question. */
+/** Why the request is being made, from such an action's body: goes with the request to ITS. */
 export function reasonOf(body: Record<string, unknown> | null | undefined): string | undefined {
-  return typeof body?.question === "string" ? body.question : undefined;
+  return typeof body?.reason === "string" ? body.reason : undefined;
+}
+
+/** What stands in place of the Upgrade button while a request is with ITS: "Request sent on November 18, 2026". */
+export function requestSentWords(requestedAt: string): string {
+  return `Request sent on ${new Date(requestedAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`;
 }
 
 /** A group of locked people folded into one line on the list and the board. */

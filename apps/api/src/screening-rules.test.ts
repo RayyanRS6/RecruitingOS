@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { ScreenTurn } from "@ros/contracts";
-import { aiRuns, applications, candidates, events, notifications, recruiterEscalations, screens, usageEvents } from "@ros/db";
+import { aiRuns, applications, candidates, events, notifications, screens, usageEvents } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { useOneVisitApplyFlow } from "./test-helpers";
@@ -157,7 +157,7 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     // two equal choices: the same button, side by side
     expect(choice).toContain('<input type="hidden" name="choice" value="send_without"/><button class="btn secondary" type="submit">Send without the conversation</button>');
     expect(choice).toContain('<input type="hidden" name="choice" value="contact_me"/><button class="btn secondary" type="submit">Have a person contact me</button>');
-    expect(choice).toMatch(/will get in touch (within four business hours|on the next business day)/);
+    expect(choice).toContain("The hiring team at Rules Dental Group is told you asked to talk to a person, to go through the questions with you or answer yours.");
 
     const r = await form(`/c/screen/${token}/person`, { choice: "contact_me" });
     expect(r.status).toBe(302);
@@ -165,36 +165,27 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     const after = await screenOf(application.id);
     expect(after.status).toBe("human_requested");
     expect(after.humanRequestedAt).toBeTruthy();
-    // the candidate is told, in the conversation and on the page, when a person will be in touch (business hours, never a wall-clock promise)
+    // the candidate is told, in the conversation and on the page, that the hiring team has been told: no time is promised
     const last = after.transcript.at(-1)!;
     expect(last.role).toBe("assistant");
-    expect(last.content).toMatch(/A person from Rules Dental Group will follow up with you (within four business hours|on the next business day)/);
+    expect(last.content).toBe("Understood. The hiring team at Rules Dental Group has been told you asked for a person. Thank you for your patience.");
     const html = decodeEntities(await (await app.request(`/c/screen/${token}`)).text());
-    expect(html).toContain("<h1>A person will be in touch</h1>");
-    // the page keeps the time promised when they asked: four business hours from the request, as a day and a time
-    expect(html).toMatch(/Someone working with the hiring team at Rules Dental Group aims to contact you by [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}/);
+    expect(html).toContain("<h1>The hiring team has been told</h1>");
+    expect(html).toContain("The hiring team at Rules Dental Group has been told you asked to talk to a person. If nobody has been in touch, reply to any of our emails.");
     expect(html).not.toContain('name="message"'); // the conversation is closed to the assistant
-    // counted, as ITS covers it (Q16), never against the company's recruiter requests
+    // counted (Q16)
     expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === screenId)).toMatchObject([{ ref: { choice: "contact_me" } }]);
-    // the request for a person carries the application and the conversation's state, but not the answers he never sent
-    // (founder decision of 9 October 2026, "hide them until they send"): the recruiter goes through the questions on a call
-    const escs = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id));
-    expect(escs).toHaveLength(1);
-    expect(escs[0]).toMatchObject({ kind: "candidate_issue", status: "open", roleId });
-    expect(escs[0].question).toContain("Luis Ortega needs a person");
-    expect(escs[0].question).toContain("chose 'Have a person contact me'");
-    expect(Date.parse(escs[0].slaDueAt!)).toBeGreaterThan(Date.now());
-    const snapshot = escs[0].contextSnapshot as { screens: Array<{ status: string; transcript: Array<{ role: string; content: string }>; answers: Record<string, string>; answersShared: boolean }>; candidate: { name: string } };
-    expect(snapshot.candidate.name).toBe("Luis Ortega");
-    expect(snapshot.screens).toHaveLength(1);
-    expect(snapshot.screens[0]).toMatchObject({ status: "human_requested", answersShared: false, answers: {}, transcript: [] });
-    expect(JSON.stringify(snapshot)).not.toContain(answer);
+    // the team reads that he asked, and none of the answers he never sent (founder decision of 9 October 2026, "hide them
+    // until they send")
+    const detail = await (await json("GET", `/api/v1/applications/${application.id}`)).text();
+    expect((JSON.parse(detail) as { screens: unknown[] }).screens).toEqual([expect.objectContaining({ status: "human_requested", answersShared: false, answers: {}, transcript: [] })]);
+    expect(detail).not.toContain(answer);
     // the facts and the owner's notification
     expect(await eventsFor("screen.human_requested", screenId)).toHaveLength(1);
     expect((await eventsFor("screen.human_requested", screenId))[0].payload).toMatchObject({ reason: "candidate chose 'Have a person contact me'" });
     const notes = await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"));
     expect(notes.length).toBe(notesBefore + 1);
-    expect(notes.at(-1)!.title).toBe("Luis asked for a person");
+    expect(notes.at(-1)!.title).toBe("Luis Ortega asked to talk to a person");
     expect(notes.at(-1)!.body).not.toContain(answer); // the owner's notice never carries the candidate's words
     const owner = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(owner.some((n) => n.kind === "screen.human_requested" && /Luis/.test(n.title))).toBe(true);
@@ -203,12 +194,11 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     const [row] = await container.db.select().from(candidates).where(eq(candidates.id, candidate.id));
     expect(row).toMatchObject({ firstName: "Luis", lastName: "Ortega", email: "luis.ortega@rules.test" });
 
-    // pressing again, either way, changes nothing: one request, one event, one notification, the same time stamp; the choice page sends back to the conversation
+    // pressing again, either way, changes nothing: one event, one notification, the same time stamp; the choice page sends back to the conversation
     const again = await form(`/c/screen/${token}/person`, { choice: "send_without" });
     expect(again.status).toBe(302);
     expect((await screenOf(application.id)).status).toBe("human_requested");
     expect((await screenOf(application.id)).humanRequestedAt).toBe(after.humanRequestedAt);
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id))).toHaveLength(1);
     expect(await eventsFor("screen.human_requested", screenId)).toHaveLength(1);
     expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).length).toBe(notesBefore + 1);
     expect((await app.request(`/c/screen/${token}/person`)).headers.get("location")).toBe(`/c/screen/${token}`);
@@ -221,7 +211,7 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     expect(fourth.status).toBe(429);
     expect(Number(fourth.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(await fourth.text()).toContain("Please try again in");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id))).toHaveLength(1);
+    expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).length).toBe(notesBefore + 1);
   });
 
   it("a dead link and a closed conversation are refused without creating anything", async () => {
@@ -235,7 +225,7 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     const r = await app.request(`/c/screen/${token}/person`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": "203.0.113.77" }, body: new URLSearchParams({ choice: "contact_me" }) });
     expect(r.status).toBe(302);
     expect((await screenOf(application.id)).status).toBe("expired");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id))).toHaveLength(0);
+    expect((await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).filter((n) => (n.action?.href ?? "").includes(application.id))).toHaveLength(0);
     // the closed page says the application went on without the conversation (it was offered with it, plan E4), and
     // offers nothing to press
     const html = (await (await app.request(`/c/screen/${token}`)).text()).replace(/&#39;/g, "'");

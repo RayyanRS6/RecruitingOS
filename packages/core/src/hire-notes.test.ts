@@ -3,7 +3,7 @@ import type { MembershipRole } from "@ros/contracts";
 import { baseOwnerStage, canTransition, candidateStep, groupFor, ownerGroup, ownerStage } from "./stages";
 import { can } from "./permissions";
 
-const ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"];
+const ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "interviewer"];
 
 describe("Offer made, record-only (founder decision Q29; plan H2)", () => {
   it("moves a finalist to Offer by the roles that record outcomes, never by the system or anyone else", () => {
@@ -12,7 +12,7 @@ describe("Offer made, record-only (founder decision Q29; plan H2)", () => {
       expect(canTransition("reference_check", "offer_sent", by), by).toBe(true);
       expect(can(by, "outcome.record"), by).toBe(true);
     }
-    for (const by of ["recruiter", "interviewer", "system", "agent", "candidate"] as const) expect(canTransition("finalist", "offer_sent", by), by).toBe(false);
+    for (const by of ["interviewer", "system", "agent", "candidate"] as const) expect(canTransition("finalist", "offer_sent", by), by).toBe(false);
     // only from a finalist: an interview still to decide, or anyone earlier, records no offer
     expect(canTransition("interview_complete", "offer_sent", "owner")).toBe(false);
     expect(canTransition("triaged", "offer_sent", "owner")).toBe(false);
@@ -40,10 +40,10 @@ describe("Offer made, record-only (founder decision Q29; plan H2)", () => {
 });
 
 describe("team note permissions (founder decision Q24; plan H3)", () => {
-  it("owners, admins, hiring managers, HR and an ITS recruiter read and write notes; an interviewer holds neither", () => {
+  it("owners, admins, hiring managers and HR read and write notes; an interviewer holds neither", () => {
     const readers = ROLES.filter((r) => can(r, "note.read"));
     const writers = ROLES.filter((r) => can(r, "note.write"));
-    expect(readers).toEqual(["owner", "admin", "hiring_manager", "hr", "recruiter"]);
+    expect(readers).toEqual(["owner", "admin", "hiring_manager", "hr"]);
     expect(writers).toEqual(readers);
     expect(can("interviewer", "note.read")).toBe(false);
     expect(can("interviewer", "note.write")).toBe(false);

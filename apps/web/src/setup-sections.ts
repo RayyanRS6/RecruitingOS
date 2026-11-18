@@ -29,7 +29,6 @@ const SECTIONS: ReadonlyArray<SettingsSection & { only?: keyof Viewer }> = [
   { id: "setup-boards", label: "Job boards", tab: "rules" },
   { id: "setup-new-times", label: "When a candidate cancels", tab: "rules" },
   { id: "setup-sessions", label: "Your sessions", tab: "security" },
-  { id: "setup-recruiters", label: "Recruiter access", tab: "security" },
   { id: "setup-services", label: "Connected services", tab: "security" },
   { id: "setup-audit", label: "Audit history", tab: "security", only: "seesAudit" },
 ];

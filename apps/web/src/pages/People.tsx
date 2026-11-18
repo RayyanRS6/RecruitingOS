@@ -9,7 +9,6 @@ import { api, ApiError, type ActionResult, type ApplicationSummary, type Applica
 import { toast } from "../toast";
 import { NEW_TIMES_SHEET_TEXT, cancelledAlertText, cancelledChips, mergeNewTimesResults, newTimesResultLine, newTimesSendLabel, newTimesSheetRows } from "../cancelled";
 import { messageOnItsWayChip } from "../company-check";
-import { AskRecruiter } from "../components/AskRecruiter";
 import { CloseRoleCard, ClosingMessageCard } from "../components/ClosingMessage";
 import { LockedCandidates } from "../components/LockedCandidates";
 import { ShareJob } from "../components/ShareJob";
@@ -111,7 +110,7 @@ export function People() {
   const jobListLoading = !isClient || roles.isLoading;
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = activeCompanyOf(me.data);
-  const myRole = company.role ?? (me.data?.staffAccess ? "recruiter" : null);
+  const myRole = company.role;
   const roleId = params.id ?? jobList?.find((r) => r.status === "open")?.id ?? jobList?.[0]?.id;
   const role = jobList?.find((r) => r.id === roleId);
   // The job itself, for the header's More menu (its accepting switch, its version for Candidate view).
@@ -273,8 +272,8 @@ export function People() {
   // in, so the line is never empty and nothing jumps when the details arrive.
   const facts = job ? jobFactsFor(job) : null;
   const sub = !roleId ? undefined : facts ?? (apps.data ? headline : undefined);
-  // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
-  const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!job?.currentPacket && total > 0;
+  // Only with someone to put in order (roles.ts canTryWeights).
+  const mayTryWeights = canTryWeights(myRole) && !!job?.currentPacket && total > 0;
 
   // An interviewer: a job they are not on says so; on their own job, where the people they interview are.
   if (interviewer && roleId) {
@@ -308,8 +307,6 @@ export function People() {
                 onSelect={(id) => nav(`/roles/${id}/talent`)}
               />
             ) : null}
-            {/* On the board, "Have a recruiter check this" sits in the board's own header. */}
-            {roleId && mode === "list" ? <AskRecruiter roleId={roleId} /> : null}
             {roleId && status ? (
               <JobMenu
                 roleId={roleId}

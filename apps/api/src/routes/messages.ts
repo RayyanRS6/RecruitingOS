@@ -3,16 +3,15 @@ import { eq } from "drizzle-orm";
 import { SendCandidateMessage, SuggestMessageLine } from "@ros/contracts";
 import { assertCan, can } from "@ros/core";
 import { applications, communications, withTenant } from "@ros/db";
-import { actorOf, applicationScopeGuard, requireTenant, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { composeMessagePreview, sendCandidateMessage, suggestLine, undoMessage } from "../services/messages";
 
 /**
  * Writing to a candidate from their sheet (docs/spec/21 F11). Mounted under /api/v1/applications beside the
- * application routes; the scope guard keeps ITS staff inside their grant like everywhere else.
+ * application routes.
  */
 export const messageRoutes = new Hono<Vars>();
-messageRoutes.use("/:id/*", applicationScopeGuard);
 
 /** Who the message goes to, the footer that follows it (and `aiFooter`), whether this person's message would wait for an approval, and `undoSeconds`. */
 messageRoutes.get("/:id/messages/preview", requireTenant, async (c) => {

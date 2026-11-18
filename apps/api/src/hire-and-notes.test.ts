@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { NOTE_VERSION_SITTING_MINUTES, type HireFollowUp, type InterviewDraft, type NoteView, type NotesView, type OfferMadeResult } from "@ros/contracts";
-import { addCalendarDays, anonymizeCandidate, buildEscalationContext, companyToday, correctOutcome, entitlements, exportCandidateData, reopenOfferSettledBy } from "@ros/core";
+import { addCalendarDays, anonymizeCandidate, companyToday, correctOutcome, entitlements, exportCandidateData, reopenOfferSettledBy } from "@ros/core";
 import { composeInterviewerBrief, loadApplicationBundle, prepareScreenOpening } from "@ros/agents";
 import type { FakeProvider, StructuredRequest } from "@ros/ai";
 import { applicationNotes, applications, approvalRequests, auditRecords, candidates, documents, events, hiringOutcomes, interviewParticipants, interviews, offers, randomToken, rolePackets, users, withTenant } from "@ros/db";
@@ -14,7 +14,7 @@ import { createContainer, type Container } from "./container";
 import { composeBrief } from "./services/brief";
 import { backupsWarmCards, hireFollowUp } from "./services/hire-sheet";
 import { APPLICANT_COLUMNS } from "./services/role-report";
-import { signInAs, signInStaff } from "./test-helpers";
+import { signInAdmin, signInAs } from "./test-helpers";
 
 const DAY = 86_400_000;
 
@@ -258,7 +258,7 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect(declined).toMatchObject({ status: 201, stage: "declined", offer: "declined", offerMadeOn: madeOn });
       // their own answer is not the team's to take back: an ITS administrator voids it
       expect((await json(owner, "POST", `/api/v1/applications/${ora.id}/actions`, { action: "undo_decision" })).status).toBe(409);
-      const admin = await signInStaff(app, container, "admin@its.test");
+      const admin = await signInAdmin(app, container, "admin@its.test");
       const voided = await app.request(`/api/v1/admin/outcomes/${declined.outcomeId}/correct`, { method: "POST", headers: { "content-type": "application/json", cookie: admin }, body: JSON.stringify({ confirm: true, reason: "Recorded in error, the owner says." }) });
       expect(voided.status, await voided.clone().text()).toBe(200);
       expect(await stageOf(ora.id)).toBe("offer_sent");
@@ -297,7 +297,7 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       expect(hired).not.toHaveProperty("offer");
       // ITS voids the hire: they are back in the talent pool, and the offer "No hire" withdrew stays withdrawn, as the
       // newest offer and the one the newest offer fact names; "No hire" still stands
-      const admin = await signInStaff(app, container, "admin@its.test");
+      const admin = await signInAdmin(app, container, "admin@its.test");
       const voided = await app.request(`/api/v1/admin/outcomes/${hired.outcomeId}/correct`, { method: "POST", headers: { "content-type": "application/json", cookie: admin }, body: JSON.stringify({ confirm: true, reason: "Recorded in error, the owner says." }) });
       expect(voided.status, await voided.clone().text()).toBe(200);
       expect(await stageOf(pia.id)).toBe("talent_pool");
@@ -497,7 +497,7 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       walk(join(root, "agents", "src"));
       expect(sources.length).toBeGreaterThan(10);
       for (const file of sources) expect(readFileSync(file, "utf8"), file).not.toMatch(/application_notes|applicationNotes/);
-      // and the context the assistant is handed for this candidate, or the recruiter's copy, has none of the words
+      // and the context the assistant is handed for this candidate has none of the words
       const provider = container.ai.provider as FakeProvider;
       const original = provider.structured.bind(provider);
       const prompts: string[] = [];
@@ -514,30 +514,9 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
       const context = await withTenant(container.db, companyId, async (tx) => ({
         bundle: await loadApplicationBundle(tx, nia.id),
         brief: await composeInterviewerBrief(tx, { applicationId: nia.id, candidateFirstName: "Nia", packet: (await tx.select().from(rolePackets).where(eq(rolePackets.roleId, roleId)))[0].packet, roundKey: plan[0].key }),
-        recruiter: await buildEscalationContext(tx, companyId, roleId, nia.id),
       }));
       expect(context.bundle).toBeTruthy();
       expect(JSON.stringify(context)).not.toContain("MARKER");
-    });
-
-    it("an ITS recruiter reads and writes notes while a grant gives them the candidate, and on no other candidate", async () => {
-      const uma = await seed("Uma", "finalist");
-      expect((await write(owner, { body: "MARKER-owner: Uma has two offers elsewhere" }, uma.id)).status).toBe(201);
-      const recruiter = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-      const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", applicationId: uma.id, question: "Could you look at this finalist?" })).json()) as { id: string };
-      expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-      const seen = (await notesOf(recruiter, uma.id)).body!;
-      expect(seen).toMatchObject({ canRead: "all", canWrite: true });
-      expect(seen.notes.map((n) => n.body)).toEqual(["MARKER-owner: Uma has two offers elsewhere"]);
-      expect((await write(recruiter, { body: "MARKER-its: references are strong" }, uma.id)).status).toBe(201);
-      // the team sees it among its notes, said to be the ITS recruiter's
-      expect((await notesOf(owner, uma.id)).body!.notes.map((n) => [n.author.name, n.body])).toEqual([["Olivia Owner", "MARKER-owner: Uma has two offers elsewhere"], ["ITS recruiter", "MARKER-its: references are strong"]]);
-      const added = await container.db.select().from(events).where(and(eq(events.subjectId, uma.id), eq(events.type, "note.added")));
-      expect(added.map((e) => e.actor.kind).sort()).toEqual(["recruiter", "user"]);
-      // the grant names one candidate: every other candidate's notes stay out of reach
-      expect((await notesOf(recruiter, nia.id)).status).toBe(403);
-      expect((await write(recruiter, { body: "MARKER-its: elsewhere" }, nia.id)).status).toBe(403);
     });
 
     it("notes never reach the candidate: not on the status page, not in a privacy export; a deletion empties them", async () => {
@@ -650,7 +629,7 @@ describe("interviews to hire: offer made, hire sheet, team notes, one-step inter
     it("HR is told who sends the closing message, since they may close a role but not tell candidates", async () => {
       const [cara] = await container.db.select({ id: applications.id }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(candidates.firstName, "Cara"));
       const forHr = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "hr" }));
-      expect(forHr.closeRole!.words).toMatch(/an owner, admin, hiring manager or recruiter sends them the closing message/);
+      expect(forHr.closeRole!.words).toMatch(/an owner, admin or hiring manager sends them the closing message/);
       expect(forHr.closeRole!.words).not.toMatch(/you see the closing message/);
       const forOwner = await withTenant(container.db, companyId, (tx) => hireFollowUp(tx, { roleId, hiredApplicationId: cara.id, startDate: null, role: "owner" }));
       expect(forOwner.closeRole!.words).toMatch(/you see the closing message before it goes/);

@@ -7,7 +7,6 @@ import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Skeleton } from 
 import { formatPayRange, skillsCountedAsMustHaves } from "@ros/contracts";
 import { api, ApiError, type Me, type RoleDetail as RoleDetailT, type RolePacket } from "../api/client";
 import { ROLE_WAITS_FOR_CHECK } from "../company-check";
-import { AskRecruiter } from "../components/AskRecruiter";
 import { useCompanyCheck } from "../components/use-company-check";
 import { canApproveRole, canChangeCompany, canDecline, canEditPacket, canEditPacketJson, canManageRole, canRecordOutcome, canSeeActivity, canSeePay, canSeeTalent, canShareJob, canTryWeights } from "../roles";
 import { outdatedBoardsLine } from "../publishing";
@@ -107,7 +106,7 @@ export function RoleDetail() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const membership = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId);
   const myRole = membership?.role ?? null;
-  const companyName = membership?.companyName ?? me.data?.staffAccess?.companyName ?? null;
+  const companyName = membership?.companyName ?? null;
   // The editor is mounted only while open and starts from the version it was opened on (the one waiting for approval, when there is one).
   // `focus` opens it at the must-haves or the skills.
   const [editBase, setEditBase] = useState<{ version: number; packet: RolePacket; proposed: boolean; newestAtOpen: number; focus: EditorFocus | null } | null>(null);
@@ -177,8 +176,8 @@ export function RoleDetail() {
   // Everyone at a stage, and those past the plan's candidates per job, who are at none: the same number as the Candidates page's tab.
   const applicants = (r.counts ? Object.values(r.counts).reduce((a, b) => a + b, 0) : 0) + (r.lockedCount ?? 0);
   const tabItems = jobTabs({ seesCandidates: talent, candidates: applicants });
-  // Only with someone to put in order, and never on an ITS grant about one candidate (roles.ts canTryWeights).
-  const mayTryWeights = canTryWeights(myRole, me.data?.staffAccess?.scope) && !!current && applicants > 0;
+  // Only with someone to put in order (roles.ts canTryWeights).
+  const mayTryWeights = canTryWeights(myRole) && !!current && applicants > 0;
   const visibleTab: JobPageTab = tabItems.some((o) => o.id === tab) ? tab : "job";
   // the skills the score counts as the must-have of the same name ("Counts as the must-have" on the Scoring tab)
   const asMustHave = new Set(visibleTab === "scoring" && p ? skillsCountedAsMustHaves(p).map((c) => c.key) : []);
@@ -194,25 +193,22 @@ export function RoleDetail() {
         // place · type · how it is worked · pay, and "Apply by …" (plan D7) while a closing date is set
         sub={jobFactsFor(r) ?? "No job details yet."}
         actions={
-          <>
-            <AskRecruiter roleId={r.id} />
-            <JobMenu
-              roleId={r.id}
-              role={r}
-              status={r.status}
-              myRole={myRole}
-              closingMessageOpen={closingMessage || !!closing}
-              on={{
-                edit: editSource ? () => openEditor() : undefined,
-                preview: shown && talent ? () => setPreviewOpen(true) : undefined,
-                weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
-                close: () => setClosing({ outcome: defaultCloseOutcome(r) }),
-                // Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it.
-                "closing-message": () => setClosingMessage(true),
-                "hire-again": () => again.hireAgain(r.id),
-              }}
-            />
-          </>
+          <JobMenu
+            roleId={r.id}
+            role={r}
+            status={r.status}
+            myRole={myRole}
+            closingMessageOpen={closingMessage || !!closing}
+            on={{
+              edit: editSource ? () => openEditor() : undefined,
+              preview: shown && talent ? () => setPreviewOpen(true) : undefined,
+              weights: mayTryWeights ? () => setWeightsOpen(true) : undefined,
+              close: () => setClosing({ outcome: defaultCloseOutcome(r) }),
+              // Not while the close card is up (it shows the closing message, then its Undo): the sheet would not open under it.
+              "closing-message": () => setClosingMessage(true),
+              "hire-again": () => again.hireAgain(r.id),
+            }}
+          />
         }
       />
 
@@ -220,9 +216,9 @@ export function RoleDetail() {
 
       {again.limit?.room && !again.limit.room.ok ? <RoomAlert room={again.limit.room} ask={again.limit.ask} /> : null}
       {again.problem ? <Alert tone="critical">{again.problem}</Alert> : null}
-      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("share")} canManage={manage} whoPosts={r.whoPosts} />
+      <StillUpAlert channels={r.boardsStillUp ?? []} roleStatus={r.status} onOpen={() => pickTab("share")} canManage={manage} />
       {/* An approved change is live on the job page; the boards posted by hand still show the earlier version (plan D4). */}
-      {(r.status === "open" || r.status === "paused") && r.boardsShowingOldVersion?.length ? <Alert tone="caution">{outdatedBoardsLine(r.boardsShowingOldVersion, r.whoPosts)} <Button size="sm" onClick={() => pickTab("share")}>Go to the Share tab</Button></Alert> : null}
+      {(r.status === "open" || r.status === "paused") && r.boardsShowingOldVersion?.length ? <Alert tone="caution">{outdatedBoardsLine(r.boardsShowingOldVersion)} <Button size="sm" onClick={() => pickTab("share")}>Go to the Share tab</Button></Alert> : null}
       <ClosedBanner role={r} canManage={manage} onOpenPosting={() => pickTab("share")} />
       {check === "waiting" && ["open", "paused"].includes(r.status) ? <Alert tone="caution">{ROLE_WAITS_FOR_CHECK}</Alert> : null}
 
@@ -242,7 +238,7 @@ export function RoleDetail() {
               <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
                 <div className="stack gap-5">
                   <Card title="Job description" aside={<CandidatesSeeThis />}><p className="whitespace-pre-wrap text-ink-2">{p.description.publicJobDescription}</p></Card>
-                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} whoPosts={r.whoPosts} /> : null}
+                  {editPacket && REFINABLE.includes(r.status) ? <RoleRefine roleId={r.id} packet={editSource?.packet ?? p} /> : null}
                 </div>
                 <Card title="The basics" aside={<Chip>Version {shown!.version}</Chip>} className="p-5">
                   <dl className="glance">
@@ -306,7 +302,6 @@ export function RoleDetail() {
                 roleId={r.id}
                 packet={p}
                 editBase={editPacket && editSource && r.status !== "closed" ? { version: editSource.version, packet: editSource.packet } : null}
-                whoPosts={r.whoPosts}
                 onEditEligibility={editPacket && editSource && r.status !== "closed" ? () => openEditor() : undefined}
               />
               <details className="more">
@@ -345,7 +340,7 @@ export function RoleDetail() {
         </>
       ) : null}
 
-      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} whoPosts={r.whoPosts} closingDate={r.closingDate ?? null} canManage={manage} focus={editBase.focus} /> : null}
+      {editBase ? <EditPacket key={editBase.version} open onClose={() => setEditBase(null)} roleId={r.id} packet={editBase.packet} version={editBase.version} proposed={editBase.proposed} currentVersion={current?.version ?? null} newerVersion={newestVersion > editBase.newestAtOpen ? newestVersion : null} advanced={canEditPacketJson(myRole)} roleStatus={r.status} mayApprove={canApproveRole(myRole)} closingDate={r.closingDate ?? null} canManage={manage} focus={editBase.focus} /> : null}
       {/* "Use these weights" closes the preview and opens the editor at the part that changed; nothing is carried over. */}
       {weightsOpen && current ? <WeightsPreview roleId={r.id} packet={current.packet} onClose={() => setWeightsOpen(false)} onUse={(focus) => { setWeightsOpen(false); openEditor(focus); }} /> : null}
       {afterApproval ? <AfterApproval open onClose={() => setAfterApproval(null)} roleId={r.id} roleTitle={r.title} companyName={companyName} editWhileOpen={afterApproval.editWhileOpen} canManage={manage} canShare={share} canEditPacket={editPacket} onOpenTab={(t) => pickTab(t)} /> : null}

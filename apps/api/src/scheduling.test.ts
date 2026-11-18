@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { bookedFor, cancelInterviewEvents } from "@ros/agents";
 import { defaultSchedulingWindow, entitlements, zonedParts } from "@ros/core";
-import { applications, auditRecords, communications, companies, integrations, interviewFollowups, interviews, notifications, recruiterEscalations, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { applications, auditRecords, communications, companies, integrations, interviewFollowups, interviews, notifications, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeGoogleCalendarProvider, MemorySecretStore } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -702,7 +702,7 @@ describe("interview scheduling", () => {
     await container.drain();
   });
 
-  it("only real collisions count toward bringing in a recruiter: after two moves, a taken time is simply offered again", async () => {
+  it("only real collisions count toward telling the team the times keep colliding: after two moves, a taken time is simply offered again", async () => {
     const lia = await apply("Lia", "Fox");
     const ivA = await requestInterview(lia.id);
     // the team moves it twice: attempt 3, and nothing has collided yet
@@ -785,7 +785,7 @@ describe("interview scheduling", () => {
     setClock(0);
   });
 
-  it("a required interviewer who never adds hours: the owner is reminded at each two-day wait, and after the second a recruiter is brought in", async () => {
+  it("a required interviewer who never adds hours: the owner is reminded at each two-day wait, for as long as it takes", async () => {
     const pat = await signInAs(container, app, { companyId, role: "hiring_manager", email: "pat@smile.test", name: "Pat Lee" });
     expect(pat).toBeTruthy();
     const patId = (await container.db.select({ id: users.id }).from(users).where(eq(users.email, "pat@smile.test")))[0].id;
@@ -796,20 +796,19 @@ describe("interview scheduling", () => {
     const asked = () => container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "interview.no_availability"), eq(notifications.userId, ownerId))).then((rows) => rows.filter((x) => x.title.includes("Noa")));
     expect(await asked()).toHaveLength(1);
     expect((await asked())[0].action?.href).toBe(`/interviews/${iv.id}`);
-    const escalations = () => container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), eq(recruiterEscalations.kind, "candidate_issue"))).then((rows) => rows.filter((e) => (e.question ?? "").includes("Noa Kim")));
-    // two days on, still no hours: the owner hears again, nobody else is brought in yet
+    // two days on, still no hours: the owner hears again
     setClock(49 * H);
     await container.drain();
     expect(await asked()).toHaveLength(2);
     expect((await asked()).some((x) => /^Still waiting: .*Pat/.test(x.body))).toBe(true);
-    expect(await escalations()).toHaveLength(0);
-    // two more days: a recruiter is brought in, once
+    // and again at each two days after that, with the interview still waiting for the hours
     setClock(98 * H);
     await container.drain();
-    expect(await escalations()).toHaveLength(1);
+    expect(await asked()).toHaveLength(3);
     setClock(147 * H);
     await container.drain();
-    expect(await escalations()).toHaveLength(1);
+    expect(await asked()).toHaveLength(4);
+    expect((await interview(iv.id)).status).toBe("proposed");
     await json(owner, "POST", `/api/v1/interviews/${iv.id}/cancel`, { reason: "test cleanup" });
     await container.drain();
     setClock(0);

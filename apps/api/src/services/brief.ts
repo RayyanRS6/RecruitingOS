@@ -1,15 +1,14 @@
 import { and, count, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
-import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, isPlanRequest, isPostingTask, lockedAmong, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, plainRequestText, postingTaskLabel, selfApprovalCheck, unfinishedPostingTasks, unlockedAtFor, unresolvedFlags, waitingSince, whoPostsBoards, withoutSentimentWords, zoneShortName, type FollowUpView } from "@ros/core";
+import { CLOSING_DATE_REASON, DECISION_STAGES, POSTING_CHANNELS, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, addCalendarDays, can, closingDayWords, companyToday, followUpInMotion, groupFor, lockedAndWaiting, inCancelled, interviewsInMotionFor, isBoardChannel, mayDecideApproval, notLocked, openFlagsMessage, ownerGroup, ownerStage, selfApprovalCheck, unlockedAtFor, unresolvedFlags, waitingSince, zoneShortName, type FollowUpView } from "@ros/core";
 import { withoutLockedApprovals, withoutLockedEvents } from "./locked-visibility";
 import { askToViewMore } from "../middleware/candidate-lock";
 import { legalCheckFor, legalCheckMessage } from "./packet-approval";
 import { HELD_STATUS, UNTOLD_SEND_WORKING_DAYS, decisionsWaitingApproval, detectStuckRoles, isClosingProposal, removedCandidates } from "@ros/agents";
-import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, PLAN_REQUEST_OPEN_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
-import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, interviewParticipants, interviews, invitations, memberships, postings, recruiterEscalations, rolePackets, roles, screens, type Tx } from "@ros/db";
+import { CANCELLED_REASON_LABEL, DECISION_WORDING_LABEL, MORE_CANDIDATES_LINE, companyOnboarding, companyVerifiedAt, moreAppliedTitle, type AiInterviewGroup, type ApplicationStage, type CompanyOnboarding, type DecisionWording, type GettingStarted, type GettingStartedStep, type MembershipRole, type PoolSummary } from "@ros/contracts";
+import { applications, approvalRequests, candidates, communications, companies, events, intakeSessions, interviewParticipants, interviews, invitations, memberships, postings, rolePackets, roles, screens, type Tx } from "@ros/db";
 import type { Tenant } from "../middleware/session";
 import { mayDecideByRole } from "./approvers";
 import { APPROVAL_LABEL } from "./role-report";
-import { escalationInScope, inStaffScope, staffMayAsk, staffScopeOf, type StaffScope } from "./staff-scope";
 import { boardView, fitsOf, loadPool } from "./pool";
 import { aiInterviewsFor } from "./screens";
 import { backupsWarmCards, closeAfterHireCards } from "./hire-sheet";
@@ -49,7 +48,7 @@ const CHANNEL_NAME: Record<string, string> = { careers_page: "your careers page"
  * person and their address and phone to hand (6 November 2026).
  */
 export type BriefCard = {
-  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "escalation" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire" | "unreached";
+  kind: "new_applicants" | "needs_review" | "decision" | "posting_action" | "stuck" | "screening" | "interviews" | "empty" | "getting_started" | "draft" | "closing_date" | "share" | "pool_ready" | "hire" | "unreached";
   title: string;
   body: string;
   roleId?: string;
@@ -75,8 +74,8 @@ export const UNREACHED_NAMED = 8;
  * so a failed one is a person waiting on nothing. One card for the company, for those who read applications, naming each
  * person with their address and phone, each opening their page. Never someone the team may not read (`unreachedCandidates`).
  */
-async function unreachedCard(tx: Tx, companyId: string, now: Date, scope: StaffScope | null): Promise<BriefCard | null> {
-  const people = await unreachedCandidates(tx, { companyId, now, inScope: (x) => inStaffScope(scope, x) });
+async function unreachedCard(tx: Tx, companyId: string, now: Date): Promise<BriefCard | null> {
+  const people = await unreachedCandidates(tx, { companyId, now });
   if (!people.length) return null;
   const n = emailsOf(people);
   const named = people.slice(0, UNREACHED_NAMED);
@@ -99,8 +98,8 @@ export const POOL_READY_MIN = 2;
  * The pool board's card on Today (plan F7): the role's pool, sorted by the board's rules and waiting for a person, with
  * the summary's sentences and next steps. It suggests; nothing is applied until someone uses Review and apply.
  */
-async function poolReadyCard(tx: Tx, role: typeof roles.$inferSelect, scope: StaffScope | null): Promise<BriefCard | null> {
-  const pool = await loadPool(tx, { roleId: role.id, scopeApplicationId: scope?.applicationId ?? null });
+async function poolReadyCard(tx: Tx, role: typeof roles.$inferSelect): Promise<BriefCard | null> {
+  const pool = await loadPool(tx, { roleId: role.id });
   const summary = boardView(pool, new Date()).summary;
   if (summary.toSort < POOL_READY_MIN) return null;
   const steps = summary.nextSteps.map((s) => `${s.label}: ${s.name}. ${s.reason}`);
@@ -116,14 +115,11 @@ async function poolReadyCard(tx: Tx, role: typeof roles.$inferSelect, scope: Sta
 
 export type Brief = { generatedAt: string; cards: BriefCard[]; summary: string };
 
-/**
- * Who is reading the brief. An interviewer sees only their own interviews; an ITS recruiter under a grant for one role
- * or one candidate sees only that (`scope`); every other role sees the company's day.
- */
-export type BriefViewer = { userId: string; role: MembershipRole; scope?: StaffScope | null };
+/** Who is reading the brief. An interviewer sees only their own interviews; every other role sees the company's day. */
+export type BriefViewer = { userId: string; role: MembershipRole };
 
 export function briefViewerOf(t: Tenant): BriefViewer {
-  return { userId: t.userId, role: t.role, scope: staffScopeOf(t) };
+  return { userId: t.userId, role: t.role };
 }
 
 /** Where "Start a hire" goes (plan C4): the full-screen job builder. A draft is continued at `${START_HIRE_PATH}?session=<id>`. */
@@ -137,26 +133,19 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   if (viewer?.role === "interviewer") return interviewerBrief(tx, companyId, viewer);
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
   const cards: BriefCard[] = [];
-  const scope = viewer?.scope ?? null;
   // The after-interview cards ask for a decision or an approval, so they go only to the roles that can give one (HR cannot). An unknown viewer is treated as the owner.
   const afterInterview = { decides: !viewer || can(viewer.role, "interview.decide"), requests: !viewer || can(viewer.role, "interview.request") };
   // Posting work (post on a board and record its address, tick a board off once taken down) needs role.manage; every
   // posting route refuses anyone else, so a hiring manager or HR never gets a card they cannot act on.
   const managesPostings = !viewer || can(viewer.role, "role.manage");
-  // Closing a role records its outcome (outcome.record): an owner, an admin, the hiring manager or HR. A recruiter, an
-  // ITS recruiter under a grant among them, manages the closing date but is never offered "Close the job".
+  // Closing a role records its outcome (outcome.record): an owner, an admin, the hiring manager or HR.
   const closesRoles = !viewer || can(viewer.role, "outcome.record");
-  // "Bring in a recruiter" about a whole role is offered only to someone POST /escalations accepts it from: an ITS recruiter
-  // given one candidate may not ask about the whole role (staff-scope.ts, staffMayAsk).
-  const mayAskAboutRole = (roleId: string) => staffMayAsk(scope, { roleId, applicationId: null });
-  const openRoles = (await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])))).filter((r) => inStaffScope(scope, { roleId: r.id }));
+  const openRoles = await tx.select().from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "pending_approval"])));
 
   const now = new Date();
-  // Only the requests the viewer may decide (`staffMayAsk`, the rule POST /approvals/:id/decide applies): an ITS recruiter
-  // given one candidate gets no card for a request about the whole role, such as a closing message naming every applicant.
   // Home never names or counts anyone past the plan's candidates per job, whoever reads it (Rule 3): this is built here, so
   // the job builder's conversation, which answers with these cards, follows too.
-  const pending = await withoutLockedApprovals(tx, null, (await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt))).filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId })));
+  const pending = await withoutLockedApprovals(tx, await tx.select().from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), eq(approvalRequests.status, "pending"))).orderBy(desc(approvalRequests.createdAt)));
   // The candidates the waiting requests are about, in one query, so a card can name the person instead of an action key.
   const pendingAppIds = [...new Set(pending.map((p) => p.applicationId).filter((x): x is string => !!x))];
   const pendingNames = pendingAppIds.length ? await tx.select({ id: applications.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(inArray(applications.id, pendingAppIds)) : [];
@@ -183,7 +172,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       // an old suggestion still waiting lapses on its own within its week.
       continue;
     } else if (p.actionType === "application.recommend_interview") {
-      // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles (during a recruiter takeover, everyone but the recruiter).
+      // The card's "Yes" posts to the decide route, which refuses anyone outside the request's approver roles.
       if (viewer && !mayDecideByRole(p.requiredRoles, viewer.role)) continue;
       // "Not now" turns the suggestion down (plan A6); the candidate stays where they are and nothing is sent.
       const verb = "Interview";
@@ -205,14 +194,14 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       // A closed role is not among the open ones: its closing message's card names it from the request.
       const closing = p.actionType === "disposition.send" && !p.applicationId && isClosingProposal(p.proposal) ? { count: p.proposal.applicationIds.length } : null;
       const [closedRole] = closing && !role && p.roleId ? await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, p.roleId)).limit(1) : [];
-      const words = approvalCardWords(p.actionType, { who: n ? `${n.firstName} ${n.lastName}`.trim() || "the candidate" : "the candidate", roleTitle: role?.title ?? closedRole?.title ?? null, rationale: closing ? null : p.rationale, requestedBy: p.requestedBy.kind === "user" || p.requestedBy.kind === "recruiter" ? p.requestedBy.name ?? null : null, closing, proposal: p.proposal as Record<string, unknown> });
+      const words = approvalCardWords(p.actionType, { who: n ? `${n.firstName} ${n.lastName}`.trim() || "the candidate" : "the candidate", roleTitle: role?.title ?? closedRole?.title ?? null, rationale: closing ? null : p.rationale, requestedBy: p.requestedBy.kind === "user" ? p.requestedBy.name ?? null : null, closing, proposal: p.proposal as Record<string, unknown> });
       cards.push({ kind: "decision", title: words.title, body: words.body, roleId: p.roleId ?? undefined, applicationId: p.applicationId ?? undefined, approvalRequestId: p.id, actions: [{ label: words.approve, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "approve" } }, { label: words.reject, method: "POST", path: `/api/v1/approvals/${p.id}/decide`, body: { decision: "reject" } }, ...(where ? [{ label: "Review first", method: "GET" as const, path: where }] : [])] });
     }
   }
 
   // Emails to candidates that did not arrive (6 November 2026): for those who read applications, before the work of each job.
   if (!viewer || can(viewer.role, "application.read")) {
-    const unreached = await unreachedCard(tx, companyId, now, scope);
+    const unreached = await unreachedCard(tx, companyId, now);
     if (unreached) cards.push(unreached);
   }
 
@@ -220,9 +209,7 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   const tells = !viewer || can(viewer.role, "application.reject");
   // The pool board's card (plan F7) goes to those who can apply its suggestions (Review and apply needs application.act).
   const sortsPools = !viewer || can(viewer.role, "application.act");
-  // Who posts on the boards (plan D3): when ITS does, the posting and taking-down work is ITS's, not a card for the team.
   const [company] = await tx.select({ settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  const teamPosts = (await whoPostsBoards(tx, companyId, company?.settings)) === "self";
   // Sharing a job is open to those who manage postings and those who approve roles (routes/postings.ts, share-links).
   const shares = !viewer || can(viewer.role, "role.manage") || can(viewer.role, "role.approve");
   for (const card of closingDateCards(openRoles, company?.timezone ?? null, now, managesPostings, closesRoles)) cards.push(card);
@@ -234,9 +221,9 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (shares && publicSince !== null && publicSince >= Date.parse(since)) {
       cards.push({ kind: "share", title: `${role.title} is live. Share it now`, body: "Send it to people you know, a school or a local group. Each place gets its own link, so you can see where applicants come from.", roleId: role.id, actions: [{ label: "Share the job", method: "GET", path: `/roles/${role.id}?tab=posting#share` }] });
     }
-    // A recruiter given one candidate counts and names only that candidate, never the rest of the role's applicants. Nobody
-    // past the plan's candidates per job counts here or is named (Rule 2), so what the cards say about those they count is true.
-    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, role.id), notLocked()))).filter((a) => inStaffScope(scope, { roleId: role.id, applicationId: a.id }));
+    // Nobody past the plan's candidates per job counts here or is named (Rule 2), so what the cards say about those they
+    // count is true.
+    const apps = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), notLocked()));
     const marks = await activeMarksFor(tx, apps.map((a) => a.id));
     const followUps = await activeFollowUpsFor(tx, apps.map((a) => a.id));
     // An interview booked or with times out waits on nobody at the company (6 November 2026); one with no time does.
@@ -265,14 +252,14 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     if (fresh.length) {
       cards.push({ kind: "new_applicants", title: `${fresh.length} ${fresh.length === 1 ? "person" : "people"} applied to ${role.title} since yesterday`, body: waiting.length ? `${waiting.length} ${waiting.length === 1 ? "is" : "are"} ready for your review.` : "Each gets the AI interview link by email once their résumé is read.", roleId: role.id, actions: [{ label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
-    // People past the plan's candidates per job (Rule 3): that more applied, in a neutral line and no number, and the way to read them. Not for ITS staff, who cannot ask for a company's plan.
-    if (viewer?.role !== "recruiter" && (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), lockedAndWaiting(), gte(applications.createdAt, since))).limit(1)).length) {
-      cards.push({ kind: "new_applicants", title: moreAppliedTitle(role.title), body: MORE_CANDIDATES_LINE, roleId: role.id, actions: [...(!viewer || can(viewer.role, "escalation.create") ? [askToViewMore] : []), { label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
+    // People past the plan's candidates per job (Rule 3): that more applied, in a neutral line and no number, and the way to read them.
+    if ((await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, role.id), lockedAndWaiting(), gte(applications.createdAt, since))).limit(1)).length) {
+      cards.push({ kind: "new_applicants", title: moreAppliedTitle(role.title), body: MORE_CANDIDATES_LINE, roleId: role.id, actions: [...(!viewer || can(viewer.role, "plan.request") ? [askToViewMore] : []), { label: "See applicants", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (waiting.length) {
       const names = await tx.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, waiting.slice(0, 5).map((a) => a.candidateId)));
       const list = waiting.slice(0, 5).map((a) => { const n = names.find((x) => x.id === a.candidateId); return `${`${n?.firstName ?? ""} ${n?.lastName ?? ""}`.trim()} (${STAGE_LABEL[a.stage]})`; }).join(", ");
-      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent` }, ...(mayAskAboutRole(role.id) ? [{ label: "Bring in a recruiter", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: role.id } }] : [])] });
+      cards.push({ kind: "needs_review", title: `${waiting.length} ${waiting.length === 1 ? "candidate needs" : "candidates need"} your review for ${role.title}`, body: list, roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent` }] });
     }
     if (ineligible.length) {
       cards.push({ kind: "needs_review", title: `${ineligible.length} ${ineligible.length === 1 ? "applicant" : "applicants"} for ${role.title} did not meet an eligibility rule`, body: "Check eligibility: they are held for your decision. Keep them in if the answer was a mistake, or decline with a reason. Either way nothing is sent to them until someone sends the decision message.", roleId: role.id, actions: [{ label: "Review", method: "GET", path: `/roles/${role.id}/talent?stage=ineligible` }] });
@@ -280,12 +267,12 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
     const told = await notToldCard(tx, role, notTold);
     if (told) cards.push(told);
     // Boards waiting to be posted by hand (docs/spec/20): ready to post means the package and the tracked link exist and
-    // nothing is on the board yet. Only for a company that posts itself; otherwise ITS has a task per board (plan D3).
-    const manualPostings = managesPostings && teamPosts ? (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel)) : [];
+    // nothing is on the board yet.
+    const manualPostings = managesPostings ? (await tx.select().from(postings).where(and(eq(postings.roleId, role.id), eq(postings.status, "ready_to_post")))).filter((p) => isBoardChannel(p.channel)) : [];
     if (manualPostings.length) {
       cards.push({ kind: "posting_action", title: `${role.title}: post it on ${manualPostings.map((p) => CHANNEL_NAME[p.channel] ?? p.channel).join(", ")} from your own account`, body: "These boards are not connected to the product. The job's Share tab has the posting package, each board's own apply link and the steps; record the public URL there once it is up.", roleId: role.id, actions: [{ label: "See instructions", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
-    const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role, scope) : null;
+    const pool = sortsPools && apps.length >= POOL_READY_MIN ? await poolReadyCard(tx, role) : null;
     if (pool) cards.push(pool);
     // "No AI interview yet" (R20-7): one FYI line per job, never "needs you", in neutral words (never how far anyone got),
     // from the same column as the Talent page and the Jobs list; it replaces the per-person "didn't finish" alerts.
@@ -302,21 +289,20 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Closing a role moves its people to the talent pool privately: a closed role keeps its card until they are told,
   // however long ago it closed, so nobody drops out of sight (the untold safety net). One query for every closed role.
   if (tells) {
-    const closedRoles = (await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")))).filter((r) => inStaffScope(scope, { roleId: r.id }));
+    const closedRoles = await tx.select({ id: roles.id, title: roles.title }).from(roles).where(and(eq(roles.companyId, companyId), eq(roles.status, "closed")));
     // Someone locked hears by themselves, and the team never hears their name (Rule 2).
     const untoldClosed = closedRoles.length ? await tx.select({ id: applications.id, roleId: applications.roleId, candidateId: applications.candidateId }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(inArray(applications.roleId, closedRoles.map((r) => r.id)), inArray(applications.stage, [...DECISION_STAGES]), eq(applications.toldState, "not_told"), isNull(candidates.anonymizedAt), notLocked())) : [];
     // whose message (their own, or the closing message's one request) waits for an approver: on the approver's card instead
     const waitingClosed = await decisionsWaitingApproval(tx, untoldClosed.map((a) => a.id));
     for (const role of closedRoles) {
-      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && !waitingClosed.has(a.id) && inStaffScope(scope, { roleId: role.id, applicationId: a.id })), { closed: true });
+      const card = await notToldCard(tx, role, untoldClosed.filter((a) => a.roleId === role.id && !waitingClosed.has(a.id)), { closed: true });
       if (card) cards.push(card);
     }
   }
   // Boards still up after a posting closed (docs/spec/20 item 15): the checklist lives on the role's Posting tab. The
   // whole role may be closed, or a person closed one board's posting while the role stays open; the card says which.
   const channelOrder = (channel: string) => (POSTING_CHANNELS as readonly string[]).indexOf(channel);
-  // When ITS posts for the company, taking a board down is ITS's task (plan D3), so the team gets no card for it.
-  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings || !teamPosts ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel) && inStaffScope(scope, { roleId: p.roleId })).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
+  const stillUp: Array<{ roleId: string; channel: string }> = !managesPostings ? [] : (await tx.select({ roleId: postings.roleId, channel: postings.channel }).from(postings).where(and(eq(postings.companyId, companyId), eq(postings.closureRequired, true), isNull(postings.closureConfirmedAt)))).filter((p) => isBoardChannel(p.channel)).sort((a, b) => channelOrder(a.channel) - channelOrder(b.channel));
   if (stillUp.length) {
     const affectedRoles = await tx.select({ id: roles.id, title: roles.title, status: roles.status }).from(roles).where(inArray(roles.id, [...new Set(stillUp.map((p) => p.roleId))]));
     for (const role of affectedRoles) {
@@ -328,75 +314,40 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
       cards.push({ kind: "posting_action", title: `Still posted on ${boards.join(", ")}`, body, roleId: role.id, actions: [{ label: "Open the Share tab", method: "GET", path: `/roles/${role.id}?tab=posting` }] });
     }
   }
-  // A board task ITS could not do (plan D3) comes back to the team, with the recruiter's words, until it is done or asked again.
-  const unfinished = managesPostings && !teamPosts ? (await unfinishedPostingTasks(tx, { companyId })).filter((u) => inStaffScope(scope, { roleId: u.roleId })) : [];
-  if (unfinished.length) {
-    const titles = await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(unfinished.map((u) => u.roleId))]));
-    for (const u of unfinished) {
-      const label = postingTaskLabel(u.kind, CHANNEL_NAME[u.channel] ?? u.channel);
-      cards.push({ kind: "posting_action", title: `${titles.find((r) => r.id === u.roleId)?.title ?? "A role"}: ITS could not ${label.charAt(0).toLowerCase()}${label.slice(1)}`, body: `${u.note ? `ITS wrote: "${u.note}" ` : ""}Ask ITS again from the Share tab once that is sorted out, or do it from your company's own account and record it there.`, roleId: u.roleId, actions: [{ label: "Open the Share tab", method: "GET", path: `/roles/${u.roleId}?tab=posting` }] });
-    }
-  }
   for (const d of await detectStuckRoles(tx, companyId, now)) {
-    if (!inStaffScope(scope, { roleId: d.roleId })) continue;
     // The untold reminder goes out as a notification; Today already lists those people on the role's "not told" card.
     if (d.detector === "decisions_untold") continue;
-    // A hold that ended is the team's own reminder (plan A4), not a role at risk: a review card, no recruiter offer.
-    if (d.detector === "hold_ended") {
-      // A recruiter given one candidate hears about that candidate only, and the card names nobody else.
-      const own = scope?.applicationId ? (d.applicationIds ?? []).filter((id) => id === scope.applicationId) : d.applicationIds ?? [];
+    // A hold that ended is the team's own reminder (plan A4), not a role at risk: a review card.
+    // An offer made outside the app with no answer recorded (plan G10) is the team's own follow-up too.
+    if (d.detector === "hold_ended" || d.detector === "offers_waiting") {
+      const own = d.applicationIds ?? [];
       if (!own.length) continue;
-      const narrowed = own.length !== (d.applicationIds ?? []).length;
-      cards.push({ kind: "needs_review", title: narrowed ? `A hold has ended (${d.roleTitle})` : d.title, body: narrowed ? "You put them on hold until now; decide what comes next. Nothing has been sent to them." : d.body, roleId: d.roleId, ...(own.length === 1 ? { applicationId: own[0] } : {}), actions: [{ label: d.action.label, method: "GET", path: own.length === 1 ? `/roles/${d.roleId}/talent?open=${own[0]}` : d.action.href }] });
-      continue;
-    }
-    // An offer made outside the app with no answer recorded (plan G10): the team's own follow-up, not a role at risk.
-    if (d.detector === "offers_waiting") {
-      const own = scope?.applicationId ? (d.applicationIds ?? []).filter((id) => id === scope.applicationId) : d.applicationIds ?? [];
-      if (!own.length) continue;
-      const narrowed = own.length !== (d.applicationIds ?? []).length;
-      cards.push({ kind: "needs_review", title: narrowed ? `An offer has had no answer recorded (${d.roleTitle})` : d.title, body: narrowed ? "Check in with them, then record whether they accepted or declined. The app never sends or changes an offer." : d.body, roleId: d.roleId, ...(own.length === 1 ? { applicationId: own[0] } : {}), actions: [{ label: d.action.label, method: "GET", path: own.length === 1 ? `/roles/${d.roleId}/talent?open=${own[0]}` : d.action.href }] });
+      cards.push({ kind: "needs_review", title: d.title, body: d.body, roleId: d.roleId, ...(own.length === 1 ? { applicationId: own[0] } : {}), actions: [{ label: d.action.label, method: "GET", path: own.length === 1 ? `/roles/${d.roleId}/talent?open=${own[0]}` : d.action.href }] });
       continue;
     }
     // A long wait (plan G10): the person waiting longest, named, with the three ways forward on their page: decide, hold
-    // with a date, or send them a note. A recruiter given one candidate hears about that candidate only.
+    // with a date, or send them a note.
     if (d.detector === "candidates_waiting" && d.applicationIds?.length) {
-      const own = scope?.applicationId ? d.applicationIds.filter((id) => id === scope.applicationId) : d.applicationIds;
-      if (!own.length) continue;
-      const card = await longWaitCard(tx, d, own, scope?.applicationId ? null : mayAskAboutRole(d.roleId));
+      const card = await longWaitCard(tx, d, d.applicationIds);
       if (card) cards.push(card);
       continue;
     }
-    cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }, ...(mayAskAboutRole(d.roleId) ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : [])] });
+    cards.push({ kind: "stuck", title: d.title, body: d.body, roleId: d.roleId, actions: [{ label: d.action.label, method: "GET", path: d.action.href }] });
   }
 
-  // "Keep your backups warm" until a new hire starts (plan H1); the cards filter by application.read and the staff scope.
-  for (const card of await backupsWarmCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
+  // "Keep your backups warm" until a new hire starts (plan H1); the cards filter by application.read.
+  for (const card of await backupsWarmCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner" }, now })) cards.push(card);
   // Then, once every hire on a job has started, "Close this job?" until it is closed (6 November 2026).
-  for (const card of await closeAfterHireCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner", scope }, now })) cards.push(card);
+  for (const card of await closeAfterHireCards(tx, { companyId, viewer: { role: viewer?.role ?? "owner" }, now })) cards.push(card);
   for (const card of await draftCards(tx, companyId, viewer)) cards.push(card);
 
-  // ITS posting tasks are ITS's own work, shown with each board on the Posting tab, not as the team's requests (plan D3).
-  const openRequests = (await tx.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"])))).filter((e) => escalationInScope(scope, e) && !isPostingTask(e.kind));
-  // A request about someone locked stays with ITS (Rule 3): its question names them. "Your recruiter requests" says only that it exists.
-  const aboutLocked = await lockedAmong(tx, openRequests.flatMap((e) => (e.applicationId ? [e.applicationId] : [])));
-  const escalations = openRequests.filter((e) => !e.applicationId || !aboutLocked.has(e.applicationId));
-  // Each open request leads to itself in "Your recruiter requests" on Today, where its thread, notes and (once it comes)
-  // the answer in full are; answered requests are shown there for two weeks, so the brief needs no card of its own.
-  const readsRequests = !viewer || can(viewer.role, "escalation.create");
-  for (const e of escalations) {
-    // A hand-over reason from before 9 October 2026 in today's words: never how the candidate sounded. A stopped run's
-    // request from before 13 October 2026 in plain words, never the technical error (before it is cut to length). A talk about
-    // the plan is with ITS, as the upgrade sheet said: no recruiter is working on their hiring.
-    cards.push({ kind: "escalation", title: isPlanRequest(e) ? PLAN_REQUEST_OPEN_LINE : e.status === "open" ? "A recruiter will pick this up" : "A recruiter is on it", body: withoutSentimentWords(plainRequestText(e.question, e.requestedBy.kind)).slice(0, 200), roleId: e.roleId ?? undefined, applicationId: e.applicationId ?? undefined, actions: readsRequests ? [{ label: "See the request", method: "GET", path: `/?request=${e.id}` }] : [] });
-  }
   // Getting started leads Today until the company is set up; its steps step aside once real decisions are waiting. Its
   // "Start your first role" makes the empty card's "Start a hire" redundant, so that card is left out while it shows.
   const setup = await gettingStartedCard(tx, companyId, viewer, { decisionsWaiting: cards.some((c) => c.kind === "decision" || c.kind === "needs_review") });
   const offersFirstRole = !!setup?.gettingStarted?.steps.some((s) => s.key === "first_role" && !s.done);
   if (cards.length === 0 && !offersFirstRole) {
     // A brand-new company's first screen always offers the way forward; so does a quiet day.
-    const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read") && !scope);
+    const startsHires = !viewer || (can(viewer.role, "role.create") && can(viewer.role, "compensation.read"));
     const actions: BriefCard["actions"] = openRoles.length ? [{ label: "See your jobs", method: "GET", path: "/roles" }] : startsHires ? [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }] : [];
     // A quiet day says what is true (6 November 2026): no promise about emails that may not arrive, and no judgement of
     // who is "worth your time", which the app does not make.
@@ -407,19 +358,16 @@ export async function composeBrief(tx: Tx, companyId: string, viewer?: BriefView
   // Strong in the same word the list shows beside their number (`fit`, 6 November 2026): worked out from both readings, never
   // from one reading's stored word, and never someone the list shows as "Needs a closer look" (11 November 2026). A reading of
   // a conversation the candidate never sent is never counted (9 October 2026).
-  const companyApps = (await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()))).filter((a) => inStaffScope(scope, { roleId: a.roleId, applicationId: a.id }));
+  const companyApps = await tx.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage, packetVersion: applications.packetVersion, latestAssessmentId: applications.latestAssessmentId }).from(applications).where(and(eq(applications.companyId, companyId), notLocked()));
   const companyMarks = await activeMarksFor(tx, companyApps.map((a) => a.id));
   const companyFollowUps = await activeFollowUpsFor(tx, companyApps.map((a) => a.id));
   const companyInMotion = await interviewsInMotionFor(tx, companyApps.map((a) => a.id));
   const waitingOnYou = companyApps.filter((a) => groupFor(a, companyMarks.get(a.id), now, companyFollowUps.get(a.id), companyInMotion.has(a.id)) === "waiting_on_you");
   const strongWaiting = [...(await fitsOf(tx, waitingOnYou)).values()].filter((fit) => fit === "strong").length;
-  // A request to upgrade puts no hire at risk.
-  const atRisk = cards.filter((c) => c.kind === "stuck").length + escalations.filter((e) => !isPlanRequest(e)).length;
+  const atRisk = cards.filter((c) => c.kind === "stuck").length;
   const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
-  const recent = await withoutLockedEvents(tx, { companyId, reader: null }, await tx.select({ id: events.id, type: events.type, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since))));
-  // Under a scoped grant, only what was done about the role or the candidate in scope is counted.
-  const inScopeSubjects = scope ? new Set<string>([...openRoles.map((r) => r.id), ...companyApps.map((a) => a.id)]) : null;
-  const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent") && (!inScopeSubjects || inScopeSubjects.has(e.subjectId))).length;
+  const recent = await withoutLockedEvents(tx, companyId, await tx.select({ id: events.id, type: events.type, actor: events.actor, subjectType: events.subjectType, subjectId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, since))));
+  const handled = recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent")).length;
   const summary = `${needsMe} ${needsMe === 1 ? "thing needs" : "things need"} you · ${strongWaiting} strong ${strongWaiting === 1 ? "candidate" : "candidates"} ready · ${atRisk} at risk · ${handled} handled for you since yesterday.`;
   return { generatedAt: new Date().toISOString(), cards: setup ? [setup, ...cards] : cards, summary };
 }
@@ -462,11 +410,10 @@ function closingDateCards(list: ReadonlyArray<typeof roles.$inferSelect>, timeZo
 
 /**
  * "Draft in progress" (plan C18): the roles this person started and has not finished, three at most, each with Continue
- * and Discard. Drafts are private to whoever started them (founder decision Q6), so nobody else's ever shows here, and
- * none for an ITS recruiter under a grant narrower than the company.
+ * and Discard. Drafts are private to whoever started them (founder decision Q6), so nobody else's ever shows here.
  */
 async function draftCards(tx: Tx, companyId: string, viewer: BriefViewer | undefined): Promise<BriefCard[]> {
-  if (!viewer || viewer.scope || !can(viewer.role, "role.create") || !can(viewer.role, "compensation.read")) return [];
+  if (!viewer || !can(viewer.role, "role.create") || !can(viewer.role, "compensation.read")) return [];
   const drafts = await tx
     .select({ id: intakeSessions.id, facts: intakeSessions.facts, messages: intakeSessions.messages, draftPacket: intakeSessions.draftPacket })
     .from(intakeSessions)
@@ -492,19 +439,16 @@ export const GETTING_STARTED_PATH = "/api/v1/companies/current/getting-started";
 /** Who migration 0027 recorded as confirming the companies that existed when the ITS check began. */
 const EXISTING_COMPANY_ACTOR_ID = "migration_0027";
 
-/** What "Draft it with an ITS recruiter" asks; the request covers all of the company's hiring, as the form says before it is sent. */
-export const FIRST_ROLE_QUESTION = "Please help us draft our first role. We would like an ITS recruiter to go through the job with us and draft it for us to approve.";
-
 /**
  * Getting started (plan B1 and B2; docs/customer/04 steps 3 to 9). While ITS has not confirmed the company the card says
  * so, with what waits meanwhile (the public pages, and how many messages to candidates are held), whatever else Today
  * shows: nobody can hide that. Below it, the steps this viewer can do, each with one line on why it matters, ticked when
  * done (derived from the record, never asked). The steps are left out once real decisions are waiting or the viewer hid
- * them, and the card goes once the company is confirmed and every step of the viewer's is done. Never for ITS staff, and
- * no steps for a company that was already running when the check began (migration 0027): ITS set those up by hand.
+ * them, and the card goes once the company is confirmed and every step of the viewer's is done. No steps for a company
+ * that was already running when the check began (migration 0027): ITS set those up by hand.
  */
 async function gettingStartedCard(tx: Tx, companyId: string, viewer: BriefViewer | undefined, opts: { decisionsWaiting: boolean }): Promise<BriefCard | null> {
-  if (viewer?.scope || viewer?.role === "recruiter" || viewer?.role === "interviewer") return null;
+  if (viewer?.role === "interviewer") return null;
   const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company) return null;
   const verified = companyVerifiedAt(company.settings) !== null;
@@ -565,30 +509,12 @@ async function gettingStartedSteps(tx: Tx, companyId: string, role: MembershipRo
   if (can(role, "role.create") && can(role, "compensation.read")) {
     const [anyRole] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.companyId, companyId)).limit(1);
     const [draft] = anyRole ? [] : await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(and(eq(intakeSessions.companyId, companyId), ne(intakeSessions.status, "abandoned"))).limit(1);
-    // a talk with ITS about the plan (more roles) is not a request to draft the first role
-    const [asked] = await tx.select({ id: recruiterEscalations.id }).from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), eq(recruiterEscalations.kind, "ask"), isNull(recruiterEscalations.roleId), isNull(recruiterEscalations.applicationId), inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]), sql`coalesce(${recruiterEscalations.billing}->>'topic', '') <> 'plan'`)).limit(1);
-    // The page opens this request in the request form, prefilled, so what the recruiter would see, the reply-by time and
-    // the plan's recruiter requests are shown before anything is sent (Q31); nothing goes in one click.
-    const askRecruiter = can(role, "escalation.create") && !asked ? [{ label: "Draft it with an ITS recruiter", method: "POST" as const, path: "/api/v1/escalations", body: { kind: "ask", scope: "company", question: FIRST_ROLE_QUESTION } }] : [];
     steps.push({
       key: "first_role",
       title: "Start your first role",
-      why: "Describe the job in a sentence or two; the assistant asks for the rest and drafts it for you to approve. An ITS recruiter can draft it with you instead: you see what they would have access to before you send the request.",
+      why: "Describe the job in a sentence or two; the assistant asks for the rest and drafts it for you to approve.",
       done: !!anyRole || !!draft,
-      ...(asked ? { detail: "You asked an ITS recruiter to draft it with you; they will be in touch." } : {}),
-      actions: [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }, ...askRecruiter],
-    });
-  }
-  // Only while ITS posts for the company (Rule 6): on a plan with no ITS staff time this step would never finish, and it
-  // would tell the owner to add ITS to LinkedIn for nothing.
-  if (can(role, "integration.manage") && (await whoPostsBoards(tx, companyId, settings)) === "its") {
-    steps.push({
-      key: "job_boards",
-      title: "Give ITS access to your job boards",
-      why: "ITS posts your jobs on LinkedIn, Indeed and ZipRecruiter under your own employer accounts. Add the ITS recruiter your contact names as a user on each; never send a password by email.",
-      done: !!onboarding.jobBoardsConfirmedAt,
-      ...(onboarding.jobBoardsConfirmedAt ? {} : { detail: "This ticks once ITS confirms it can sign in to each one." }),
-      actions: [],
+      actions: [{ label: "Start a hire", method: "GET", path: START_HIRE_PATH }],
     });
   }
   if (can(role, "policy.manage")) {
@@ -641,16 +567,15 @@ async function notToldCard(tx: Tx, role: { id: string; title: string }, apps: Ar
   const how = opts.closed
     ? "The role is closed: one courteous closing message tells everyone it left in your talent pool, and you approve it once for all of them. Or send each person their own message, or record telling them in person."
     : "Check the message first; it goes to each of them separately. Or record telling them in person.";
-  return { kind: "needs_review", title: `${apps.length} ${apps.length === 1 ? "person has" : "people have"} not been told your decision yet (${role.title})`, body: `${list}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}. Your decision is private until someone tells them. ${how} If nobody has after ${UNTOLD_SEND_WORKING_DAYS} working days, the standard message goes by itself and you are told (when your settings ask for approval or keep decision messages with a person, or a recruiter runs the role, a recruiter is brought in instead and nothing is sent).`, roleId: role.id, actions: [{ label: "Review and send", method: "GET", path: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` }, ...(opts.closed ? [{ label: "Send the closing message", method: "GET" as const, path: `/roles/${role.id}?closingMessage=1` }] : [])] };
+  return { kind: "needs_review", title: `${apps.length} ${apps.length === 1 ? "person has" : "people have"} not been told your decision yet (${role.title})`, body: `${list}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}. Your decision is private until someone tells them. ${how} If nobody has after ${UNTOLD_SEND_WORKING_DAYS} working days, the standard message goes by itself and you are told (when your settings ask for approval or keep decision messages with a person, nothing is sent and you are reminded instead).`, roleId: role.id, actions: [{ label: "Review and send", method: "GET", path: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` }, ...(opts.closed ? [{ label: "Send the closing message", method: "GET" as const, path: `/roles/${role.id}?closingMessage=1` }] : [])] };
 }
 
 /**
  * The long-wait card (plan G10): people have waited on the team for days. It names the one waiting longest and opens
  * them on the three ways forward: decide, put them on hold until a date (they come back to Today then), or send them a
- * note in your own words. Nothing is sent from here. `askRecruiter`: whether to offer a recruiter's review of the role
- * (null for a recruiter given one candidate, whose card names nobody else).
+ * note in your own words. Nothing is sent from here.
  */
-async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; title: string; body: string; days: number; action: { href: string } }, applicationIds: string[], askRecruiter: boolean | null): Promise<BriefCard | null> {
+async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; title: string; body: string; days: number; action: { href: string } }, applicationIds: string[]): Promise<BriefCard | null> {
   const [first] = await tx.select({ id: applications.id, stageChangedAt: applications.stageChangedAt, firstName: candidates.firstName, lastName: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(eq(applications.id, applicationIds[0])).limit(1);
   if (!first) return null;
   const name = `${first.firstName} ${first.lastName}`.trim() || "A candidate";
@@ -658,19 +583,17 @@ async function longWaitCard(tx: Tx, d: { roleId: string; roleTitle: string; titl
   const days = Math.max(0, Math.floor((Date.now() - waitingSince(first.stageChangedAt, (await unlockedAtFor(tx, [first.id])).get(first.id))) / 86_400_000));
   const others = applicationIds.length - 1;
   const open = `/roles/${d.roleId}/talent?open=${first.id}`;
-  const narrowed = askRecruiter === null;
   return {
     kind: "stuck",
-    title: narrowed ? `${name} has been waiting on you for ${days} days (${d.roleTitle})` : d.title,
-    body: `${narrowed ? "" : `${d.body} `}${name} has waited longest, ${days} ${days === 1 ? "day" : "days"}${!narrowed && others ? `; ${others} more ${others === 1 ? "is" : "are"} waiting too` : ""}. Decide what comes next, put them on hold until a date (they come back to Home then), or send them a note in your own words. Nothing is sent until you do.`,
+    title: d.title,
+    body: `${d.body} ${name} has waited longest, ${days} ${days === 1 ? "day" : "days"}${others ? `; ${others} more ${others === 1 ? "is" : "are"} waiting too` : ""}. Decide what comes next, put them on hold until a date (they come back to Home then), or send them a note in your own words. Nothing is sent until you do.`,
     roleId: d.roleId,
     applicationId: first.id,
     actions: [
       { label: "Decide", method: "GET", path: open },
       { label: "Hold until a date", method: "GET", path: `${open}&step=hold` },
       { label: "Send a note", method: "GET", path: `${open}&message=1` },
-      ...(!narrowed && others ? [{ label: "See everyone waiting", method: "GET" as const, path: d.action.href }] : []),
-      ...(askRecruiter ? [{ label: "Have a recruiter review", method: "POST" as const, path: `/api/v1/escalations`, body: { kind: "review", roleId: d.roleId } }] : []),
+      ...(others ? [{ label: "See everyone waiting", method: "GET" as const, path: d.action.href }] : []),
     ],
   };
 }

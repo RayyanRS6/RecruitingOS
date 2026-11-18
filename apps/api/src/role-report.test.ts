@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
 import { createApplicationLink, entitlements, findPostingLink, groupFor, openFollowUp, ownerGroup, setAutoState } from "@ros/core";
-import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, hiringOutcomes, interviews, jobs, postings, recruiterEscalations, roles, users, withTenant } from "@ros/db";
+import { applicationMarks, applications, approvalRequests, assessments, auditRecords, communications, events, hiringOutcomes, interviews, jobs, postings, roles, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { SEND_MAX_ATTEMPTS, TRIAGE_READINGS } from "@ros/agents";
 import { localDays } from "@ros/workflows";
@@ -10,7 +10,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { APPLICANT_COLUMNS, composeRoleReport, summaryRows, toCsv, type ReportData, type RoleReport } from "./services/role-report";
-import { putOnInterview, signInAdmin, signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAdmin, signInAs } from "./test-helpers";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -18,7 +18,7 @@ const HOUR = 3_600_000;
 /**
  * The role report (docs/spec/21 section 7, P1; findings G1 to G15 and J18): one role with applicants from several
  * sources, a held and an overridden applicant, a decline whose message could not be sent, interviews in every state,
- * recruiter requests, a recorded hire. Every figure is asserted, then the two CSV files, the refusals, the
+ * a recorded hire. Every figure is asserted, then the two CSV files, the refusals, the
  * administrator's aggregate over the customer's roles, and (J18) that the roles list, the role page and the brief
  * quote the same numbers as the report.
  */
@@ -27,8 +27,6 @@ describe("role report", () => {
   let app: ReturnType<typeof createApp>;
   let owner = "";
   let ownerActor: Actor;
-  let recruiterA = "";
-  let recruiterB = "";
   let admin = "";
   let companyId = "";
   let slug = "";
@@ -106,8 +104,6 @@ describe("role report", () => {
     owner = await signIn("owner@ledger.test");
     const [user] = await container.db.select().from(users).where(eq(users.email, "owner@ledger.test"));
     ownerActor = { kind: "user", id: user.id, name: "Owner Olivia" };
-    recruiterA = await signInStaff(app, container, "sam@its.test", "its_recruiter", "Sam");
-    recruiterB = await signInStaff(app, container, "kim@its.test", "its_recruiter", "Kim");
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Ledger Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id;
@@ -138,7 +134,7 @@ describe("role report", () => {
     // and one for the second role, so the administrator's aggregate has something to add up
     ids.ivy = await apply("Ivy", "Chen", "ivy.chen@example.com", { role: role2Id });
 
-    // People decide: Eve's eligibility answer is overridden, Ben goes to interview, Ana is held and her assessment flagged, Hal is hired.
+    // People decide: Eve's eligibility answer is overridden, Ben goes to interview, Ana is held, Hal is hired.
     // The scripted readings say "unknown" (nothing to judge her licence on until the exam).
     for (let i = 0; i < TRIAGE_READINGS; i++) container.fake!.scriptNext("triage.assess", { overall: "unknown", confidence: "medium", confidenceReasons: [], summary: "Hygiene work; the licence exam is still to come.", strengths: [], concerns: [], unknowns: [], competencyFindings: [], requirementFindings: [], anomalies: [], recommendation: "review_manually", rationale: "Scripted: a person looks first." });
     expect((await json(owner, "POST", `/api/v1/applications/${ids.eve}/actions`, { action: "override_eligibility", note: "She sits the exam next week." })).status).toBe(200);
@@ -154,9 +150,6 @@ describe("role report", () => {
     setClock(0);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ben}/actions`, { action: "advance_to_interview", note: "Strong referral." })).status).toBe(200);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.ana}/actions`, { action: "hold", note: "Waiting on her reply." })).status).toBe(200);
-    const anaDetail = (await (await json(owner, "GET", `/api/v1/applications/${ids.ana}`)).json()) as { assessments: Array<{ id: string }> };
-    expect(anaDetail.assessments.length).toBeGreaterThan(0);
-    expect((await json(owner, "POST", `/api/v1/applications/${ids.ana}/assessments/${anaDetail.assessments[0].id}/flag`, { kind: "wrong_evidence", note: "Quoted the wrong employer." })).status).toBe(200);
     expect((await json(owner, "POST", `/api/v1/applications/${ids.hal}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: "2026-10-05" })).status).toBe(201);
 
     // Interviews in every state (the rows a scheduling loop would leave behind). Each row is created at its own time, in the
@@ -173,18 +166,6 @@ describe("role report", () => {
       iv(ids.dev, "proposed", { createdAt: at(3 * HOUR) }),
       iv(ids.ana, "scheduled", { roundKey: "final", title: "Final conversation", startsAt: at(2 * DAY), endsAt: at(2 * DAY + HOUR), createdAt: at(4 * HOUR) }),
     ]));
-
-    // Recruiter help: one request resolved, one still open and past its promised time, one picked up and in progress.
-    const e1 = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId, question: "Can you look at our shortlist?" })).json()) as { id: string };
-    expect((await json(recruiterA, "POST", `/api/v1/escalations/${e1.id}/claim`)).status).toBe(200);
-    expect((await json(recruiterA, "POST", `/api/v1/escalations/${e1.id}/resolve`, { resolution: "The shortlist looks right; interview the top two.", minutesSpent: 20 })).status).toBe(200);
-    const e2 = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "ask", roleId, question: "What should we pay for evenings?" })).json()) as { id: string };
-    const e3 = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId, applicationId: ids.ana, question: "Is Ana worth a working interview?" })).json()) as { id: string };
-    expect((await json(recruiterB, "POST", `/api/v1/escalations/${e3.id}/claim`)).status).toBe(200);
-    // response times the report can be checked against: two hours and four hours (median three)
-    await container.db.update(recruiterEscalations).set({ createdAt: at(-10 * HOUR), firstResponseAt: at(-8 * HOUR), slaDueAt: at(DAY) }).where(eq(recruiterEscalations.id, e1.id));
-    await container.db.update(recruiterEscalations).set({ createdAt: at(-5 * HOUR), slaDueAt: at(-HOUR) }).where(eq(recruiterEscalations.id, e2.id));
-    await container.db.update(recruiterEscalations).set({ createdAt: at(-6 * HOUR), firstResponseAt: at(-2 * HOUR), slaDueAt: at(DAY) }).where(eq(recruiterEscalations.id, e3.id));
 
     // Gia is declined privately (founder decision B6), then the decision message is sent while the email provider is down
     // for good: the outbox retries it, it ends failed, and Gia counts as not told.
@@ -318,13 +299,8 @@ describe("role report", () => {
   });
 
   it("counts the times a person overruled the system; holds read the marks", () => {
-    expect(report.overrides).toMatchObject({ eligibilityOverrides: 1, reviewAnyway: 0, holds: 1, flaggedAssessments: 1 });
-    expect(report.overrides.byAction).toMatchObject({ override_eligibility: 1, set_mark: 1, flag_assessment: 1, reject: 1, advance_to_interview: 1, outcome: 1 });
-  });
-
-  it("counts recruiter requests: open, resolved, past the promised time, and the typical first response", () => {
-    // the three asked for, and Ana's flagged assessment, which reached the ITS queue as a review request (plan F11)
-    expect(report.escalations).toEqual({ total: 4, open: 3, resolved: 1, overdue: 1, medianResponseHours: 3 });
+    expect(report.overrides).toMatchObject({ eligibilityOverrides: 1, reviewAnyway: 0, holds: 1 });
+    expect(report.overrides.byAction).toMatchObject({ override_eligibility: 1, set_mark: 1, reject: 1, advance_to_interview: 1, outcome: 1 });
   });
 
   it("counts messages from the outbox's own statuses and names how many candidates could not be reached", async () => {
@@ -380,7 +356,7 @@ describe("role report", () => {
     }
     const strong = (await waitsOnYou(await container.db.select().from(applications).where(eq(applications.companyId, companyId)))).filter((a) => strongIds.has(a.id)).length;
     expect(Number(m![2])).toBe(strong);
-    expect(Number(m![3])).toBe(brief.cards.filter((c) => c.kind === "stuck").length + report.escalations.open);
+    expect(Number(m![3])).toBe(brief.cards.filter((c) => c.kind === "stuck").length);
     const AUTOMATED = new Set(["application.acknowledged", "resume.ingested", "eligibility.evaluated", "application.triaged", "screen.invited", "screen.assessed", "candidate.recommended", "posting.published", "message.sent", "intervention.sent"]);
     const recent = await container.db.select().from(events).where(and(eq(events.companyId, companyId), gte(events.occurredAt, new Date(Date.now() - 24 * HOUR).toISOString())));
     expect(Number(m![4])).toBe(recent.filter((e) => AUTOMATED.has(e.type) && (e.actor.kind === "system" || e.actor.kind === "agent")).length);
@@ -417,7 +393,7 @@ describe("role report", () => {
     expect(col("Cara Diaz", "Cancelled")).toBe("");
     expect(col("Ana Lopez", "Interviews")).toBe("2");
     expect(col("Ana Lopez", "Interviews completed")).toBe("1");
-    expect(col("Ana Lopez", "Decision")).toBe("AI review flagged");
+    expect(col("Ana Lopez", "Decision")).toBe("Put on hold");
     expect(col("Eve Kim", "Days in stage")).toBe("3");
     expect(col("Eve Kim", "Recommendation")).toBe("Needs a person's look");
     expect(col("Finn Ola", "Recommendation")).toBe("");
@@ -441,7 +417,6 @@ describe("role report", () => {
     expect(lines).toContain("Interviews,Candidate did not show,0");
     expect(lines).toContain("Interviews,Interviewer did not show,1");
     expect(lines.some((l) => l.startsWith("Interviews,No-shows"))).toBe(false);
-    expect(lines).toContain("Recruiter help,Typical first response (hours),3");
     expect(lines).toContain("Outcomes,Hired,1");
     expect(lines).toContain("Decline reasons,Experience not a match,1");
     expect(lines.filter((l) => l.startsWith("Suggestions vs decisions,")).length).toBe(report.recommendationsVsDecisions.rows.length * 7);
@@ -476,35 +451,6 @@ describe("role report", () => {
     expect((await app.request(`/api/v1/roles/${roleId}/report`)).status).toBe(401);
   });
 
-  it("gives a recruiter whose grant names one candidate that candidate's row of the applicant list and nobody else's", async () => {
-    // Kim accepted the request about Ana (e3), so her grant covers the role and Ana only; the applications list already honours that
-    expect((await json(recruiterB, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    const listed = (await (await json(recruiterB, "GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string }>;
-    expect(listed.map((a) => a.id)).toEqual([ids.ana]);
-    const r = await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report.csv`);
-    expect(r.status).toBe(200);
-    const lines = (await r.text()).replace(/^﻿/, "").split("\r\n").filter(Boolean);
-    expect(lines[0]).toBe(APPLICANT_COLUMNS.join(","));
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain("Ana Lopez");
-    expect(lines.join("\n")).not.toMatch(/Osei|Diaz|Dev Patel|Eve Kim|Finn Ola|Gia Ruiz|Hal Ng/);
-    const exported = (await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "report.exported")))).filter((a) => a.actor.kind === "recruiter");
-    expect(exported).toHaveLength(1);
-    expect(exported[0].details).toMatchObject({ kind: "applicants", rows: 1 });
-    // the figures stay readable under the grant, but count Ana alone: no other applicant's count or application id
-    const own = await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report`);
-    expect(own.status).toBe(200);
-    const figures = (await own.json()) as RoleReport;
-    expect(figures.applicants.total).toBe(1);
-    expect(figures.stages.total).toBe(1);
-    expect(figures.pendingDecisions.list.every((p) => p.applicationId === ids.ana || p.applicationId === null)).toBe(true);
-    const others = Object.entries(ids).filter(([k]) => k !== "ana").map(([, v]) => v);
-    for (const id of others) expect(JSON.stringify(figures)).not.toContain(id);
-    expect(figures.interviews.total).toBeLessThanOrEqual(report.interviews.total);
-    const summary = (await (await json(recruiterB, "GET", `/api/v1/roles/${roleId}/report/summary.csv`)).text()).replace(/^﻿/, "").split("\r\n");
-    expect(summary).toContain("Applicants,Total,1");
-  });
-
   it("gives the administrator the same figures aggregated over every role of the customer, and nobody else", async () => {
     expect((await json(owner, "GET", `/api/v1/admin/customers/${companyId}/report`)).status).toBe(403);
     expect((await json(admin, "GET", "/api/v1/admin/customers/00000000-0000-0000-0000-000000000000/report")).status).toBe(404);
@@ -524,7 +470,6 @@ describe("role report", () => {
     const all = await container.db.select().from(applications).where(eq(applications.companyId, companyId));
     expect(agg.stages.byGroup).toEqual(await groupCounts(all));
     expect(agg.interviews.total).toBe(5);
-    expect(agg.escalations).toEqual(report.escalations);
     expect(agg.overrides).toEqual(report.overrides);
     expect(agg.outcomes).toMatchObject({ hired: 1, corrections: 0, role: null });
     expect(agg.outcomes.declineReasons).toEqual(report.outcomes.declineReasons);
@@ -592,7 +537,6 @@ describe("role report arithmetic on hand-made rows", () => {
     assessments: [{ id: "s3", applicationId: "a3", createdAt: d(-3), recommendation: "screen" }, { id: "s1", applicationId: "a1", createdAt: d(-4), recommendation: "hold" }],
     interviews: [],
     approvals: [{ id: "p1", actionType: "application.invite_screen", applicationId: "a2", createdAt: d(-6) }],
-    escalations: [],
     messages: { total: 3, sent: 2, failed: 1, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 1 },
     outcomes: [],
   };
@@ -623,10 +567,9 @@ describe("role report arithmetic on hand-made rows", () => {
       { recommendation: "screen", label: "AI interview suggested", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 1, held: 0, noActionYet: 0 },
       { recommendation: "hold", label: "Thin evidence: your call", total: 1, invited: 0, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 },
     ]);
-    expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: { reject: 1 } });
+    expect(r.overrides).toEqual({ eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, byAction: { reject: 1 } });
     expect(r.messages).toEqual(data.messages);
     expect(r.outcomes.declineReasons).toEqual([{ reason: "other", label: "Other", count: 1 }]);
-    expect(r.escalations).toEqual({ total: 0, open: 0, resolved: 0, overdue: 0, medianResponseHours: null });
   });
 
   it("reads the decision recorded after an interview as the decision that followed the suggestion", () => {
@@ -701,10 +644,10 @@ describe("role report arithmetic on hand-made rows", () => {
       roles: [{ ...data.roles[0], status: "pending_approval" }],
       approvals: [
         { id: "p2", actionType: "application.hold_ineligible", applicationId: "a2", createdAt: d(-2) },
-        { id: "p3", actionType: "intervention.offer_recruiter", applicationId: null, createdAt: d(-1) },
+        { id: "p3", actionType: "disposition.send", applicationId: null, createdAt: d(-1) },
       ],
     }, new Date(BASE));
-    expect(r.pendingDecisions.list.map((p) => p.label)).toEqual(["Ready for your review", "Decide on an eligibility hold", "Want a recruiter to take a look?"]);
+    expect(r.pendingDecisions.list.map((p) => p.label)).toEqual(["Ready for your review", "Decide on an eligibility hold", "Send the decision message?"]);
     for (const p of r.pendingDecisions.list) expect(p.label).not.toMatch(/[._]/);
     expect(summaryRows(r)).toContainEqual(["Role", "Status", "waiting for approval"]);
   });

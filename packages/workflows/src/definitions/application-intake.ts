@@ -1,7 +1,7 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { ResumeExtraction, type EvidenceAssessment } from "@ros/contracts";
 import { outOfCredit, type RunOutcome } from "@ros/ai";
-import { ASSESSMENT_UNAVAILABLE_TEXT, createEscalation, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
+import { ASSESSMENT_UNAVAILABLE_TEXT, evaluateEligibility, emit, gate, notify, resolvePolicy, transition } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, communications, companies, documents, rolePackets, roles, screens, type ConsentRecord, type Tx } from "@ros/db";
 import { assessApplication, extractResume, verifyQuotes } from "@ros/agents";
 import { twoPhase, type StepContext, type WorkflowDefinition } from "../types";
@@ -47,7 +47,7 @@ export const heldDecisionSignal = (applicationId: string): string => `${applicat
 
 /**
  * From "application received" to "ready for the owner" (docs/06 `application_intake`).
- * acknowledge → validate (quarantined résumé checked, scanned, moved) → ai_notice (an emailed-in applicant's notice has gone) → extract → eligibility → (ineligible: hold for a person, remind, escalate an overdue review; never decline) | (eligible → assess)
+ * acknowledge → validate (quarantined résumé checked, scanned, moved) → ai_notice (an emailed-in applicant's notice has gone) → extract → eligibility → (ineligible: hold for a person, remind; never decline) | (eligible → assess)
  *
  * 20 October 2026 (R20-4, R20-5): `acknowledge` starts every applicant's AI interview run, which waits for this run's
  * reading (`readingSettledSignal`, sent at the end of `ready`, when nothing is read by AI, and when an answer holds the
@@ -65,7 +65,6 @@ export const applicationIntake: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "acknowledge",
   maxAttempts: 4,
-  escalationKind: "review",
   steps: {
     /**
      * A fresh application (never one admitted straight to the talent pool, nor a reopened one) is received, and its AI
@@ -253,7 +252,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
       await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "ineligible", by: "system", actor: ctx.actor, reason: result.failedRules.map((f) => f.reason).join("; "), correlationId: ctx.run.id });
       await emit(ctx.q, { type: "application.ineligible", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { failedRules: result.failedRules }, correlationId: ctx.run.id });
       // Founder decision (15 Sep 2026, correction 6): a failed eligibility answer places the application on hold for a person.
-      // The system notifies, starts a review timer, reminds, and escalates an overdue review. It never declines.
+      // The system notifies, starts a review timer and reminds. It never declines.
       const g = await gate(ctx.q, {
         companyId: ctx.companyId,
         roleId: ctx.state.roleId,
@@ -278,8 +277,8 @@ export const applicationIntake: WorkflowDefinition<State> = {
     },
 
     /**
-     * A person decided (the run goes on to the reading), or the review timer fired: remind the team, and after the
-     * escalation threshold bring in a recruiter. Nothing declines here.
+     * A person decided (the run goes on to the reading), or the review timer fired: remind the team, until the hold has
+     * waited `remindForHours`. Nothing declines here.
      */
     async ineligible_review(ctx) {
       const loaded = await load(ctx.q, ctx.state.applicationId);
@@ -288,17 +287,14 @@ export const applicationIntake: WorkflowDefinition<State> = {
       if (app.stage !== "ineligible") return { kind: "next", step: "ready" }; // a person decided: override (eligible) or decline (rejected)
       const policy = await resolvePolicy(ctx.q, ctx.companyId, ctx.state.roleId, "application.hold_ineligible");
       const remindEvery = Number(policy.params.remindEveryHours ?? 24);
-      const escalateAfter = Number(policy.params.escalateAfterHours ?? 72);
+      const remindFor = Number(policy.params.remindForHours ?? 72);
       const heldAt = ctx.state.heldAt ?? app.stageChangedAt;
       const hoursHeld = Math.round((ctx.now.getTime() - Date.parse(heldAt)) / 3600_000);
       const remindersSent = (ctx.state.remindersSent ?? 0) + 1;
       const name = `${candidate.firstName} ${candidate.lastName}`;
       await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "application.ineligible_review_due", title: `${name} has waited ${hoursHeld} hours for your decision`, body: "They answered no to an eligibility question. Decline with a reason, or override if the answer was a mistake. Nothing is sent to them, even if you decline, until someone sends the decision message.", action: { label: "Decide", href: `/roles/${role.id}/talent?stage=ineligible&open=${app.id}` } });
       await emit(ctx.q, { type: "application.hold_reminded", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { hoursHeld, remindersSent }, correlationId: ctx.run.id });
-      if (hoursHeld >= escalateAfter) {
-        await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: role.id, applicationId: app.id, kind: "review", question: `${name} answered no to an eligibility question for ${role.title} and has waited ${hoursHeld} hours for a decision. Please review it with the customer; only they can decline.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, now: ctx.now });
-        return { kind: "complete", state: { remindersSent } };
-      }
+      if (hoursHeld >= remindFor) return { kind: "complete", state: { remindersSent } };
       const until = new Date(ctx.now.getTime() + remindEvery * 3600_000).toISOString();
       return { kind: "wait", wait: { kind: "event", eventTypes: [HELD_DECISION_EVENT], subjectId: app.id, until, reason: "reminder for a held application" }, state: { remindersSent }, resumeStep: "ineligible_review" };
     },

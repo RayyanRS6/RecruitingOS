@@ -3,7 +3,7 @@ import { z } from "zod";
 import { SendNewTimesBatch } from "@ros/contracts";
 import { assertCan } from "@ros/core";
 import { withTenant } from "@ros/db";
-import { actorOf, applicationScopeGuard, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { sendNewTimes, sendNewTimesBatch, stopNewTimes } from "../services/new-times";
 
 /**
@@ -14,7 +14,6 @@ import { sendNewTimes, sendNewTimesBatch, stopNewTimes } from "../services/new-t
 const NoBody = z.object({}).strict();
 
 export const applicationNewTimesRoutes = new Hono<Vars>();
-applicationNewTimesRoutes.use("/:id/*", applicationScopeGuard);
 
 applicationNewTimesRoutes.post("/:id/new-times", requireTenant, async (c) => {
   const t = c.get("tenant")!;

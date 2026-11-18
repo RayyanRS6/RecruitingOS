@@ -2,7 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import type { ScreenAssessment, ScreenChannel, ScreenTurn } from "@ros/contracts";
 import type { RunOutcome } from "@ros/ai";
 import { outOfCredit, runPromptDetached, screenTurnPrompt } from "@ros/ai";
-import { audit, emit, entitlements, evaluateEligibility, gate, humanResponseExpectation, isOneVisitFlow, loadBusinessCalendar, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
+import { audit, emit, entitlements, evaluateEligibility, gate, isOneVisitFlow, nextContactWindow, notify, readingConsistency, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, interviews, rolePackets, roles, screens, withPlatform, type Tx } from "@ros/db";
 import {
   HELD_REASON, answersOf, applyScreenOpening, assessScreen, chatFactsFor, createScreen, finishScreenTurn, focusQuestionsFrom, linkEmailWaiting, loadScreenBundle, packetForFocusedInvite, prepareScreenOpening, requestHuman, screenContextOf, sendConversationHandedOver, sendConversationIdleReminder,
@@ -17,8 +17,8 @@ import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
 
 /**
  * `focus: "unknowns"` ("Ask about this in a screen"): the screen opens with the résumé assessment's open questions before the packet's own.
- * `invitedVia`: the screen was created before this run (with the application, after a confirmed repeat submission, or to
- * write the scorecard of a recruiter's call notes), so the run sends no invitation; `screenId` names it from the start.
+ * `invitedVia`: the screen was created before this run (with the application, or after a confirmed repeat submission),
+ * so the run sends no invitation; `screenId` names it from the start.
  * `waitingForAllowance`: when the run started waiting for the plan's allowance to be topped up (Q17).
  * `flow`: the screen it creates is the conversation that goes with the application, so it reads the same once the link goes out by email.
  * `mode` "with_application" (20 Oct 2026, R20-4): every applicant's AI interview, started by the intake; `readingDeadline`
@@ -28,7 +28,7 @@ import { HELD_DECISION_EVENT, aiNoticeSentSignal } from "./application-intake";
  * `idleQuietAt`: when an idle reminder was due but not sent because a person had set up an interview for them; the close
  * counts from it as from a reminder that went (the release review, 11 November 2026).
  */
-type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "recruiter_call" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string; creditWaitSince?: string; idleQuietAt?: string } & SuggestionState;
+type State = { applicationId: string; roleId: string; screenId?: string; channel?: "web" | "sms"; invitedBy?: string; remindedAt?: string; focus?: "unknowns"; invitedVia?: "apply" | "confirmed_repeat" | "with_application"; waitingForAllowance?: string; flow?: "one_visit"; mode?: "with_application"; readingDeadline?: string; heldSince?: string; creditWaitSince?: string; idleQuietAt?: string } & SuggestionState;
 
 /** A screen that is over without a scorecard: handed to a person, left, stopped by the team or closed with the application. Nothing more is sent. */
 const ENDED = ["human_requested", "abandoned", "cancelled", "expired"];
@@ -86,7 +86,6 @@ export const screen: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "await_reading",
   maxAttempts: 4,
-  escalationKind: "candidate_issue",
   steps: {
     /**
      * Every applicant's AI interview waits for the intake's reading of the résumé (its signal, or what is stored when the
@@ -133,7 +132,7 @@ export const screen: WorkflowDefinition<State> = {
         return { channel: plan.channel, opening };
       },
       async run(ctx, prepared) {
-        // Created before this run (with the application, a confirmed repeat, a recruiter's notes): nothing is sent here.
+        // Created before this run (with the application, a confirmed repeat): nothing is sent here.
         if (ctx.state.invitedVia && ctx.state.screenId) {
           const [scr] = await ctx.q.select().from(screens).where(eq(screens.id, ctx.state.screenId)).limit(1);
           if (!scr) return { kind: "fail", error: "screen missing", retryable: false };
@@ -374,9 +373,9 @@ export const screen: WorkflowDefinition<State> = {
 
     /**
      * E5: the assistant stopped working part-way. The candidate's last message is tried again every half hour; once the
-     * assistant answers, the conversation is open again and the candidate is emailed to finish. After a day a person
-     * takes it over. "I'd rather talk to a person" works the whole time. No AI credit left is not the assistant being down:
-     * the turn is worked out in code (`finishScreenTurn`) and the candidate is emailed to finish, with no recruiter brought in.
+     * assistant answers, the conversation is open again and the candidate is emailed to finish. After a day it closes
+     * and the hiring team is told. "I'd rather talk to a person" works the whole time. No AI credit left is not the
+     * assistant being down: the turn is worked out in code (`finishScreenTurn`) and the candidate is emailed to finish.
      */
     retry_paused: twoPhase<State, { screenId: string; latest: string; out: RunOutcome<ScreenTurn> } | null>({
       async prepare(ctx) {
@@ -402,12 +401,9 @@ export const screen: WorkflowDefinition<State> = {
         const deps = depsOf(ctx);
         const pausedAt = scr.progress.pausedAt ?? ctx.now.toISOString();
         const retryAt = new Date(ctx.now.getTime() + PAUSE_RETRY_MINUTES * 60_000).toISOString();
-        // A person took it over (after a day without the assistant, or the retried answer handed over): the candidate is
-        // told, by email, since the page that promised a link to finish will not get one.
-        const handedOver = async () => {
-          const expectation = humanResponseExpectation(ctx.now, await loadBusinessCalendar(ctx.q));
-          await sendConversationHandedOver(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id }, expectation });
-        };
+        // It went to the hiring team (after a day without the assistant, or the retried answer handed over): the candidate
+        // is told, by email, since the page that promised a link to finish will not get one.
+        const handedOver = () => sendConversationHandedOver(ctx.q, ctx.services.integrations, { application: b.app, candidate: b.candidate, role: b.role, company: b.company, packet: b.packet, actor: ctx.actor, correlationId: ctx.run.id, screen: { id: scr.id } });
         if (!prepared || prepared.screenId !== scr.id || (!prepared.out.ok && !outOfCredit(prepared.out))) {
           if (ctx.now.getTime() - Date.parse(pausedAt) >= PAUSE_GIVE_UP_HOURS * HOUR) {
             await requestHuman(ctx.q, deps, { screenId: scr.id, reason: "assistant failed for a day after pausing the AI interview", actor: ctx.actor, reply: null, replyChannel: "web" });
@@ -615,7 +611,7 @@ async function waitForAllowance(ctx: StepContext<State>, b: NonNullable<Awaited<
     await emit(ctx.q, { type: "screen.allowance_lapsed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "application", id: app.id }, payload: { waitingSince: since, days: ALLOWANCE_WAIT_DAYS, promised }, correlationId: ctx.run.id });
     if (app.stage === "eligible" || app.stage === "received") await transition(ctx.q, { applicationId: app.id, companyId: ctx.companyId, to: "triaged", by: "system", actor: ctx.actor, reason: `the plan's AI interviews stayed used up for ${ALLOWANCE_WAIT_DAYS} days`, correlationId: ctx.run.id });
     if (promised) await sendConversationNotOfferedNote(ctx.q, ctx.services.integrations, { application: app, candidate, role, company, packet, actor: ctx.actor, correlationId: ctx.run.id });
-    await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the AI interview`, body: `Your plan's AI interviews stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review; you can also ask a recruiter to call them.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
+    await notify(ctx.q, { companyId: ctx.companyId, about: app.id, kind: "entitlement.text_screens", title: `${candidate.firstName} ${candidate.lastName} never got the AI interview`, body: `Your plan's AI interviews stayed used up for ${ALLOWANCE_WAIT_DAYS} days, so ${candidate.firstName} never got the link.${promised ? " They have been told their application is with you as it is and that nothing else is needed." : ""} Their application is ready for your review.`, action: { label: "Review", href: `/roles/${role.id}/talent?open=${app.id}` } });
     return { kind: "complete" };
   }
   return { kind: "wait", wait: { kind: "timer", until: new Date(ctx.now.getTime() + ALLOWANCE_RECHECK_HOURS * HOUR).toISOString(), reason: "the plan's AI interviews are used up; waiting for more" }, state: { waitingForAllowance: since }, resumeStep: "invite" };

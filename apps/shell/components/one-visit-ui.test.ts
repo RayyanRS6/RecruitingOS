@@ -7,10 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 /**
  * Applying and the screening conversation in one visit (plan Wave E) as the signed-in app first draws it, from answers
  * shaped like the API's: "Still applying" beside the stage strip and never as waiting on you (E6); the candidate panel's
- * "Applied, then did the AI interview", questions the candidate chose not to answer, answers changed before sending and a
- * recruiter's call notes kept apart (E3, E10, E11); the call-notes form for a recruiter when the candidate asked for a
- * person (E3); the role report's conversation figures (E13); the ITS-only switch for a role and a company (E1); and the
- * 80% allowance card on Today and in the ITS console (Q17).
+ * "Applied, then did the AI interview", questions the candidate chose not to answer, answers changed before sending and
+ * stored notes from a call kept apart (E3, E10, E11); what the team reads when the candidate asked for a person (E3); the
+ * role report's conversation figures (E13); the ITS-only switch for a role and a company (E1); and the 80% allowance
+ * card on Today and in the ITS console (Q17).
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
 vi.mock("next/navigation", () => ({
@@ -54,8 +54,8 @@ const sofia = row("a2", "Sofia Lind", { stage: "screen_invited", stageLabel: "In
 const theo = row("a3", "Theo Park", { stage: "screening", stageLabel: "In the AI interview", ownerStage: "no_ai_interview", ownerStageLabel: "Started (not finished)", group: "waiting_on_you", stillApplying: true, aiInterview: ai("started", "Started (not finished)") });
 const counts = { total: 3, byOwnerStage: { no_ai_interview: 2, new: 1, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0 }, byGroup: { waiting_on_you: 2, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0, stillApplying: 2, aiInterview: { not_started: 1, started: 1, asked_person: 0, closed: 0 } };
 
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
-const itsRecruiter = { user: { id: "s1", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: daysAgo(0) }, memberships: [], activeCompanyId: "co1", staffAccess: { grantId: "g1", kind: "escalation", purpose: "candidate asked for a person", expiresAt: daysAgo(-1), companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: "a2" } }, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
+const itsAdmin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "azure", aal: "aal2", mfaVerifiedAt: daysAgo(0) }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 
 function client(me: unknown = owner) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -112,7 +112,7 @@ describe("No AI interview yet, the strip's first column (20 Oct 2026, R20-7; it 
   });
 });
 const at = daysAgo(1);
-const screenBase = { id: "s1", channel: "web", invitedAt: at, startedAt: at, remindedAt: null, assessmentId: null, scorecard: "writing", recruiterAsked: false };
+const screenBase = { id: "s1", channel: "web", invitedAt: at, startedAt: at, remindedAt: null, assessmentId: null, scorecard: "writing" };
 function detail(over: Record<string, unknown> = {}) {
   return {
     ...sofia, roleId: "r1", stage: "screen_complete", ownerStage: "new", ownerStageLabel: "New", aiInterview: null, candidateToldAt: null, rejectReason: null, rejectNote: null, declineMessage: "sends",
@@ -162,7 +162,7 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     expect(html).toContain('<span class="bubble-label">Changed on the check-your-answers page</span>');
   });
 
-  it("labels a recruiter's call notes as theirs, never as the candidate's words", () => {
+  it("labels stored notes from a call as the caller's, never as the candidate's words", () => {
     const d = detail({ screens: [{ ...detail().screens[0], transcript: [...detail().screens[0].transcript, { role: "recruiter", content: "Prefers Saturday mornings.", at, questionKey: "q_sat", source: "recruiter_call", by: "Rae Recruiter" }] }] });
     const html = panel(client(), d, "screen");
     expect(html).toContain("Finished on a call with a recruiter");
@@ -170,19 +170,9 @@ describe("the candidate panel (plan E3, E10, E11)", () => {
     expect(html).toContain('class="bubble recruiter"');
   });
 
-  it("asks a recruiter for the notes from their call when the candidate chose a person, and never an owner", () => {
+  it("says the candidate chose a person, and that the team follows up", () => {
     const asked = detail({ stage: "screen_invited", screens: [{ ...screenBase, status: "human_requested", completedAt: null, invitedVia: "apply", answers: {}, progress: { askedKeys: ["q_sat"], currentQuestionKey: "q_sat" }, transcript: [] }] });
-    const recruiter = panel(client(itsRecruiter), asked, "overview");
-    expect(text(recruiter)).toContain("Sofia asked to talk to a person");
-    expect(text(recruiter)).toContain("never shown or quoted as Sofia's own words");
-    expect(recruiter).toContain('<label for="call-note-q_sat">Can you work Saturdays?</label>');
-    expect(recruiter).toContain('id="call-note-other"');
-    expect(recruiter).toMatch(/<input type="checkbox" checked=""\/>Finish the AI interview with these notes/);
-    expect(text(recruiter)).toContain("Add the notes");
-    const ownerView = panel(client(), asked, "overview");
-    expect(text(ownerView)).not.toContain("asked to talk to a person");
-    expect(ownerView).not.toContain("call-note-q_sat");
-    expect(text(ownerView)).toContain("Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call.");
+    expect(text(panel(client(), asked, "overview"))).toContain("Asked to talk to a person instead of the assistant. Your team follows up with them.");
   });
 });
 
@@ -202,7 +192,7 @@ describe("the role report and the ITS controls", () => {
   });
 
   it("lets ITS switch a role between one visit and the later path, with the company's default named", () => {
-    const qc = client(itsRecruiter);
+    const qc = client(itsAdmin);
     qc.setQueryData(["role", "r1", "apply-mode"], { roleId: "r1", applyMode: null, companyDefault: "one_visit", effective: "one_visit" });
     const html = render(qc, createElement(RoleApplyMode, { roleId: "r1", roleTitle: "Dental Hygienist" }));
     expect(text(html)).toContain("How people apply (ITS only)");
@@ -227,8 +217,8 @@ describe("the role report and the ITS controls", () => {
   });
 
   it("shows ITS who is running low, and that every company's people apply the same way", () => {
-    const qc = client({ ...itsRecruiter, user: { ...itsRecruiter.user, platformRole: "platform_admin" }, staffAccess: null });
-    qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", screeningConversations: { used: 122, limit: 150 } }]);
+    const qc = client(itsAdmin);
+    qc.setQueryData(["admin", "customers"], [{ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 3, aiCostUsd: 0, lastActivityAt: daysAgo(0), createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, applyFlowDefault: "form_then_screen", screeningConversations: { used: 122, limit: 150 } }]);
     qc.setQueryData(["admin", "alerts"], [{ id: "al1", kind: "billing.screens_warning", severity: "info", title: "", body: "", status: "open", companyId: "co1", target: null, details: { used: 122, limit: 150 }, createdAt: daysAgo(1) }]);
     // the Customers section under its "Running low" pill, with the company's drawer open on its Overview (Wave S6)
     nav.search = "show=low&open=co1";

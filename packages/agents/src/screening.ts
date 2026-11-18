@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, SCREEN_PERSON_ROUTE_STATUSES, skillsInScore, type Actor, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreenChannel, type ScreeningQuestion, type ScreenInvitedVia, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScreenContext } from "@ros/ai";
-import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, createEscalation, emit, entitlements, errorForLog, humanResponseExpectation, isOneVisitFlow, jobNoticesFor, loadBusinessCalendar, noticesFor, notify, payShown, saysNotDone, screeningStoppedSummary, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
+import { CHAT_GAP_LIMIT, CHAT_WRAP_KEY, HANDED_TO_A_PERSON, applicationAnswerSentences, buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, isOneVisitFlow, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, teamScreenView, transition, writtenQuestionsOf, type ChatMove } from "@ros/core";
 import { aiRuns, applications, assessments, candidates, companies, documents, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { deliverSms, recordInbound, sendPersonRequestedNote } from "./coordinator";
@@ -1097,7 +1097,7 @@ export type BegunTurn = ({ kind: "done"; result: TurnResult } | { kind: "pending
 /** The holding answer to a conversation that is not open, by its status. */
 function closedMessage(status: string, companyName: string): string {
   if (status === "completed") return SCREEN_COMPLETE_MESSAGE;
-  if (status === "human_requested") return "A person from the hiring team will follow up with you shortly.";
+  if (status === "human_requested") return "The hiring team has been told you asked for a person.";
   if (status === "paused") return `This conversation is paused while we fix a problem on our end. Your answers are saved, and we will email you a link to finish. If you would rather talk to a person from ${companyName}, reply HUMAN.`;
   return "This screening has closed. Reply HUMAN if you would like a person to follow up.";
 }
@@ -1201,7 +1201,7 @@ export async function beginScreenTurn(q: Queryable, deps: ScreenDeps, input: Tur
     return { kind: "done", result: { kind: "reply", message: msg, done: command === "confirm_withdraw", humanRequested: false, ...(command === "confirm_withdraw" ? { withdrawn: true } : {}) } };
   }
   if (command === "human") {
-    const msg = `Understood. A person from ${company.name} will follow up with you ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}. Thank you for your patience.`;
+    const msg = `Understood. The hiring team at ${company.name} has been told you asked for a person. Thank you for your patience.`;
     await requestHuman(q, deps, { screenId: screen.id, reason: "candidate asked for a person", actor: input.actor, reply: msg, replyChannel: input.channel });
     return { kind: "done", result: { kind: "reply", message: msg, done: false, humanRequested: true } };
   }
@@ -1448,7 +1448,7 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     await emit(q, { type: "ai.run_failed", companyId: company.id, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: screen.id }, payload: { reason: out.reason, error: out.error, failures }, correlationId: screen.workflowRunId });
     if (failures >= 2) {
       if (isOneVisitFlow(fresh.progress) && input.channel === "web") return pauseScreen(q, deps, { ...b, screen: { ...fresh, progress: { ...fresh.progress, failures } } }, { reason: out.error });
-      const msg = `Sorry, we are having trouble on our end. A person from ${company.name} will pick this up and follow up with you ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}.`;
+      const msg = `Sorry, we are having trouble on our end. The hiring team at ${company.name} has been told.`;
       await requestHuman(q, deps, { screenId: screen.id, reason: `assistant failed twice (${out.error})`, actor: input.actor, reply: msg, replyChannel: input.channel });
       return { kind: "reply", message: msg, done: false, humanRequested: true };
     }
@@ -1468,9 +1468,7 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
   }
   // The run that wrote this turn: none when it was worked out in code, which counts toward no cap.
   const aiRunId = out.ok ? out.runId : undefined;
-  let turn = enforced.turn;
-  // The model never states a response time; the accurate business-hours expectation is appended in code (founder decision F12).
-  if (turn.humanRequested && !/business/i.test(turn.messageToCandidate)) turn = { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q))}.` };
+  const turn = enforced.turn;
   const answers = { ...fresh.answers };
   let progress = advanceProgress(fresh.progress, turn, enforced.move);
   if (turn.answerRecorded) {
@@ -1490,8 +1488,8 @@ export async function finishScreenTurn(q: Queryable, deps: ScreenDeps, input: Tu
     if (input.channel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: pending.b.role, company, packet, actor: aiRunId ? { kind: "agent", id: "screening", runId: aiRunId } : input.actor, text: turn.messageToCandidate, idempotencyKey: `screen_turn:${screen.id}:${fresh.transcript.length + 1}`, templateKey: "screen_turn", disclosureIncluded: false, aiRunId: aiRunId ?? null, correlationId: screen.workflowRunId });
     // A turn retried after an outage (E5) that hands over is told by the hand-over email instead: one email, not two.
     // One reason for every hand-over the assistant makes in the conversation, whether they asked for a person in their
-    // own words or it judged they needed one: either comes from words they have not sent, so the team and the recruiter
-    // never learn which, nor how the candidate sounded (9 October 2026). The AI run keeps its own reading.
+    // own words or it judged they needed one: either comes from words they have not sent, so the team never learns
+    // which, nor how the candidate sounded (9 October 2026). The AI run keeps its own reading.
     await requestHuman(q, deps, { screenId: screen.id, reason: HANDED_TO_A_PERSON, actor: input.actor, reply: null, replyChannel: input.channel, confirmByEmail: fresh.status !== "paused" });
     return { kind: "reply", message: turn.messageToCandidate, done: false, humanRequested: true };
   }
@@ -1535,10 +1533,10 @@ export async function runScreenTurn(db: Db, companyId: string, deps: ScreenDeps,
 }
 
 /**
- * The candidate asked for a person (or the assistant could not continue): a recruiter gets the whole context with a
- * 4-hour SLA. A request the candidate made is counted (Q16: ITS covers it; it never uses the company's recruiter requests).
- * The candidate also gets an email that says when to expect the person, from the business hours (plan G8), unless a
- * text already said so, or the caller answers them itself (`confirmByEmail: false`: the reply to their email does).
+ * The candidate asked for a person (or the assistant could not continue): the conversation closes as asked-for-a-person
+ * and the company's team is told. A request the candidate made is counted (Q16). The candidate also gets an email that
+ * says the team has been told (plan G8), unless a text already said so, or the caller answers them itself
+ * (`confirmByEmail: false`: the reply to their email does).
  */
 export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { screenId: string; reason: string; actor: Actor; reply: string | null; replyChannel: ScreenChannel; confirmByEmail?: boolean }): Promise<void> {
   const b = await loadScreenBundle(q, input.screenId);
@@ -1550,15 +1548,16 @@ export async function requestHuman(q: Queryable, deps: ScreenDeps, input: { scre
   await q.update(screens).set({ status: "human_requested", humanRequestedAt: now, transcript }).where(eq(screens.id, screen.id));
   await emit(q, { type: "screen.human_requested", companyId: company.id, actor: { kind: "candidate", id: candidate.id }, subject: { type: "screen", id: screen.id }, payload: { reason: input.reason }, correlationId: screen.workflowRunId });
   if (byCandidate) await entitlements.record(q, company.id, entitlements.PERSON_REQUESTS, 1, "request", { screenId: screen.id, choice: "contact_me" });
-  await createEscalation(q, { companyId: company.id, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: byCandidate ? "candidate" : "system", summary: byCandidate ? undefined : screeningStoppedSummary(!!app.roleId), question: `${candidate.firstName} ${candidate.lastName} needs a person during the ${packet.identity.title} screening (${input.reason}). Please reach out by ${candidate.phone ? "phone or " : ""}email and finish the screen.`, requestedBy: input.actor, workflowRunId: screen.workflowRunId });
-  // Their answers so far were never sent, so neither the team nor the recruiter reads them (9 October 2026): the
-  // recruiter calls and adds notes from the call.
-  await notify(q, { companyId: company.id, about: app.id, kind: "screen.human_requested", title: `${candidate.firstName} asked for a person`, body: `During the ${packet.identity.title} screening. A recruiter will contact them and add notes from the call. Anything they typed before asking was not sent, so it stays private. You can also reply to them directly.`, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
+  // Their answers so far were never sent, so the team does not read them (9 October 2026).
+  const name = `${candidate.firstName} ${candidate.lastName}`;
+  const words = byCandidate
+    ? { title: `${name} asked to talk to a person`, body: `During the AI interview for ${packet.identity.title}. Anything they typed before asking was not sent, so it stays private.` }
+    : { title: `The AI interview stopped for ${name}`, body: `The assistant could not continue during the AI interview for ${packet.identity.title}. Anything they typed was not sent, so it stays private.` };
+  await notify(q, { companyId: company.id, about: app.id, kind: "screen.human_requested", ...words, action: { label: "Open the candidate", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
   if (input.reply && input.replyChannel === "sms") await deliverSms(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, text: input.reply, idempotencyKey: `screen_human:${screen.id}`, templateKey: "screen_human", disclosureIncluded: false });
-  const textSaidWhen = !!input.reply && input.replyChannel === "sms";
-  if (byCandidate && input.confirmByEmail !== false && !textSaidWhen && candidate.email) {
-    const expectation = humanResponseExpectation(nowOf(deps), await loadBusinessCalendar(q, nowOf(deps)));
-    await sendPersonRequestedNote(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, correlationId: screen.workflowRunId, expectation, key: screen.id });
+  const textSaidSo = !!input.reply && input.replyChannel === "sms";
+  if (byCandidate && input.confirmByEmail !== false && !textSaidSo && candidate.email) {
+    await sendPersonRequestedNote(q, deps.integrations, { application: app, candidate, role: b.role, company, packet, actor: input.actor, correlationId: screen.workflowRunId, key: screen.id });
   }
   await deps.signal?.(q, { companyId: company.id, key: `screen:${screen.id}:human` });
 }

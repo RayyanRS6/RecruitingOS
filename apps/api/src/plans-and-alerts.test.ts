@@ -31,7 +31,7 @@ describe("allowances, plans and alerts", () => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@allowance.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
-    // a company on Trial (one that signed itself up earlier): 25 screening conversations, 1 recruiter request
+    // a company on Trial (one that signed itself up earlier): 25 screening conversations
     companyId = ((await (await json(owner, "POST", "/api/v1/companies", { name: "Reset Dental", vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
     await useTrial(container, companyId);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
@@ -72,23 +72,9 @@ describe("allowances, plans and alerts", () => {
     expect(Date.parse(co.usage.text_screens.resetsAt!)).toBe(ended.getTime() + 30 * DAY);
   });
 
-  it("recruiter requests start again too, and the billing alert about last month resolves itself", async () => {
-    const ent = await rowOf(allowance.RECRUITER_ASKS);
-    await container.db.update(entitlements).set({ used: 3 }).where(eq(entitlements.id, ent.id));
-    const standing = await withTenant(container.db, companyId, (tx) => allowance.recruiterAskStanding(tx, companyId));
-    expect(standing).toEqual({ used: 3, limit: 1, over: true });
-    const flagged = await withPlatform(container.db, (tx) => allowance.flagRecruiterAsksOver(tx, { companyId, companyName: "Reset Dental", standing, escalationId: "e1" }));
-    expect(flagged.created).toBe(true);
-    // the period ends
-    await container.db.update(entitlements).set({ periodEnd: new Date(Date.now() - 1000).toISOString() }).where(eq(entitlements.id, ent.id));
-    expect(await withTenant(container.db, companyId, (tx) => allowance.recruiterAskStanding(tx, companyId))).toEqual({ used: 0, limit: 1, over: false });
-    // the console resolves what no longer stands before it lists alerts
-    const listed = (await (await json(admin, "GET", "/api/v1/admin/alerts")).json()) as Array<{ id: string }>;
-    expect(listed.some((a) => a.id === flagged.id)).toBe(false);
-    expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.id, flagged.id)))[0].status).toBe("resolved");
-    const customers = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; recruiterAsks: { used: number; over: boolean }; screeningConversations: { used: number; limit: number | null; resetsAt: string | null } }>;
+  it("the console's customer row says how many AI interviews were used this period and when they start again", async () => {
+    const customers = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; screeningConversations: { used: number; limit: number | null; resetsAt: string | null } }>;
     const me = customers.find((c) => c.id === companyId)!;
-    expect(me.recruiterAsks).toEqual({ used: 0, limit: 1, over: false });
     expect(me.screeningConversations).toMatchObject({ used: 2, limit: 25 });
     expect(me.screeningConversations.resetsAt).toBeTruthy();
   });

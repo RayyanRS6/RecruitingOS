@@ -177,7 +177,7 @@ export function notReadYetWords(stage: string): string {
   return stage === "ineligible" ? "The assistant reads this application once someone keeps them in." : "The assistant has not read this application yet. It usually takes a minute or two after they apply.";
 }
 
-const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", recruiter: "a recruiter", hr: "HR", interviewer: "an interviewer" };
+const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", interviewer: "an interviewer" };
 /** "an owner or an admin": who a waiting message is waiting for, in the reader's words. */
 export function whoDecides(roles: readonly string[]): string {
   return roles.length ? roles.map((r) => ROLE_WORDS[r] ?? r.replace(/_/g, " ")).join(" or ") : "an owner or an admin";
@@ -510,9 +510,9 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
     case "application.untold_fallback":
       // Someone locked when their job closed (Rule 2): the closing message went by itself, because the team could not send it.
       if (p.locked) return p.action === "sent" ? { ...base, what: "The job closed while the team could not open them, so the closing message went by itself", who: "The system", told: "Told by the decision message." } : { ...base, what: "The job closed while the team could not open them, and there is no address on file to tell them", who: "The system" };
-      // The safety net (Q27): five working days after the decision, the standard message went by itself, or a recruiter was brought in.
+      // The safety net (Q27): five working days after the decision, the standard message went by itself, or nothing was sent.
       if (p.action === "sent") return { ...base, what: "Nobody had told them for five working days, so the standard decision message went by itself", who: "The system", told: "Told by the decision message." };
-      return { ...base, what: "Nobody had told them for five working days, so an ITS recruiter was brought in", who: "The system", ...(str(p.why) ? { why: `Nothing was sent, because ${String(p.why)}.` } : {}) };
+      return { ...base, what: "Nobody had told them for five working days, and nothing was sent", who: "The system", ...(str(p.why) ? { why: `Nothing was sent, because ${String(p.why)}.` } : {}) };
     case "application.hold_reminded":
       return { ...base, what: "Reminded the team about the hold" };
     // Offers made outside the app (founder decision Q29): recorded by a person, never written or sent by the app.
@@ -634,45 +634,17 @@ export function historyItem(e: TimelineEvent, i = 0): HistoryItem | null {
       return p.reason === "withdrawn" ? null : { ...base, what: "Left the AI interview" };
     case "screen.cancelled":
       return { ...base, what: SCREEN_CANCELLED[String(p.reason ?? "")] ?? "AI interview closed", ...(note ? { why: note } : {}) };
-    // recruiter help, from the second query (events about the escalation, not the application)
-    case "recruiter.requested":
-      return { ...base, what: "Asked an ITS recruiter for help" };
-    case "recruiter.claimed":
-      return { ...base, what: "An ITS recruiter picked up the request" };
-    // The system closes a request nobody needs any more, or notes it on one a recruiter holds (a hold a person decided, a
-    // stopped step that finished once ITS tried it again): no recruiter answered or wrote.
-    case "recruiter.resolved":
-      return { ...base, what: e.actor.kind === "system" ? "The request to ITS was closed" : "The ITS recruiter answered", ...(str(p.resolution) ? { why: String(p.resolution) } : {}) };
-    case "recruiter.replied":
-      return { ...base, what: e.actor.kind === "system" ? "A note was added to the request for the recruiter" : "The ITS recruiter wrote about the request" };
-    case "customer.replied":
-      return { ...base, what: "A note was added to the request for the recruiter" };
-    case "recruiter.reopened":
-      return { ...base, what: "The request was reopened: it was not solved yet" };
-    case "recruiter.access_granted":
-      return { ...base, what: `An ITS recruiter was given access until ${shortDay(p.expiresAt)}` };
-    case "recruiter.access_ended":
-      return { ...base, what: "The ITS recruiter's access ended" };
     default:
       return { ...base, what: e.type.replace(/[._]/g, " ") };
   }
 }
 
 /** The whole history, newest first, with the repeated records left out. */
-export function historyItems(timeline: readonly TimelineEvent[], extra: readonly TimelineEvent[] = []): HistoryItem[] {
-  return [...timeline, ...extra]
+export function historyItems(timeline: readonly TimelineEvent[]): HistoryItem[] {
+  return [...timeline]
     .map((e, i) => historyItem(e, i))
     .filter((x): x is HistoryItem => !!x)
     .sort((x, y) => Date.parse(y.when) - Date.parse(x.when));
-}
-
-/**
- * The escalation events about this candidate (recruiter help): requests and grants name the application, and every
- * other event of those escalations belongs with them.
- */
-export function recruiterEventsFor(applicationId: string, events: ReadonlyArray<TimelineEvent & { subjectType?: string; subjectId?: string }>): TimelineEvent[] {
-  const ids = new Set(events.filter((e) => (e.type === "recruiter.requested" || e.type === "recruiter.access_granted") && (e.payload as { applicationId?: unknown }).applicationId === applicationId && e.subjectId).map((e) => e.subjectId as string));
-  return events.filter((e) => e.subjectType === "escalation" && e.subjectId && ids.has(e.subjectId));
 }
 
 /** What the assistant suggested once it has read the AI interview, in words that finish "The assistant suggested …". */

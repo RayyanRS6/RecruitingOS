@@ -1,24 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import type { RolePacket, TapAnswer } from "@ros/contracts";
-import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
+import { composeInterviewerBrief } from "@ros/agents";
 import { HANDED_TO_A_PERSON, emit, exportCandidateData } from "@ros/core";
-import { aiRuns, applications, assessments, communications, companies, events, notifications, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
+import { aiRuns, applications, assessments, communications, companies, events, notifications, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { applyVisitNext, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
-import { signInAdmin, signInAs, signInStaff, useOneVisitApplyFlow, usePlan } from "./test-helpers";
+import { signInAdmin, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * "Hide them until they send" (founder decision, 9 October 2026; counsel register item 20). While a candidate is in the
- * screening conversation and has not pressed Send, the hiring team, and an ITS recruiter working for it, sees nothing
+ * screening conversation and has not pressed Send, the hiring team sees nothing
  * they said in it, nor anything worked out from it: not on the Talent list or the candidate's page, in Compare, on the
  * board, in the one-click questions, in the match score, on Today, in the role report or its CSV files, in the history,
- * in a notification, in an interviewer's brief, or in a recruiter's request. A conversation closed without being sent
+ * in a notification or in an interviewer's brief. A conversation closed without being sent
  * (unfinished, sent without it, handed to a person) stays that way, and is never read: the reading and the match score
- * stay the résumé's. Once sent, everything is there. A recruiter's notes from a call are not the candidate's answers and
- * are shown. The candidate's own copy of their data is unchanged.
+ * stay the résumé's. Once sent, everything is there. The candidate's own copy of their data is unchanged.
  */
 describe("answers the candidate has not sent stay hidden from the team", () => {
   let container: Container;
@@ -221,59 +220,22 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(JSON.stringify(await briefFor(maria.applicationId, "Maria"))).toContain("ZQXM-answer");
   });
 
-  let luisId = "";
-
-  it("asking for a person: the ITS recruiter's request and the team see the recruiter's call notes, never what he typed before", async () => {
+  it("asking for a person: the team is told he asked, and nothing he typed before reaches them", async () => {
     const luis = await applyNow({ first: "Luis", last: "Ortega", email: "luis@unsent.test" });
-    luisId = luis.applicationId;
     await startAndSay(luis.ref, "ZQXL");
-    expect((await conversationPerson(container, luis.ref, "contact_me"))?.message).toMatch(/will follow up with you/);
+    expect((await conversationPerson(container, luis.ref, "contact_me"))?.message).toBe("Understood. The hiring team at Unsent Dental has been told you asked for a person. Thank you for your patience.");
     await container.drain();
-    expect((await screenOf(luisId)).status).toBe("human_requested");
-    // the request ITS works from, and the team's alert, say nothing he typed
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, luisId));
-    expect(JSON.stringify(esc)).not.toContain("ZQXL");
-    expect((esc.contextSnapshot as { screens: Array<{ answersShared: boolean }> }).screens[0].answersShared).toBe(false);
+    expect((await screenOf(luis.applicationId)).status).toBe("human_requested");
+    // the team's alert says he asked, and nothing he typed
     const alert = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "screen.human_requested"))))[0];
+    expect(alert.title).toBe("Luis Ortega asked to talk to a person");
     expect(alert.body).toContain("Anything they typed before asking was not sent");
-    // an ITS recruiter who claims it: the request, and the candidate's page under the grant
-    const its = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-    expect((await request("POST", `/api/v1/escalations/${esc.id}/claim`, undefined, its)).status).toBe(200);
-    const opened = await get<{ full: { contextSnapshot: unknown } | null; accessGranted?: boolean }>(`/api/v1/escalations/${esc.id}`, its);
-    expect(opened.status).toBe(200);
-    expect(opened.text).not.toContain("ZQXL");
-    expect((await request("POST", "/api/v1/auth/switch", { companyId }, its)).status).toBe(200);
-    const asRecruiter = await get<Detail>(`/api/v1/applications/${luisId}`, its);
-    expect(asRecruiter.status).toBe(200);
-    expect(asRecruiter.text).not.toContain("ZQXL");
-    expect(asRecruiter.body.screens[0]).toMatchObject({ status: "human_requested", answersShared: false, answers: {}, transcript: [] });
-
-    // the recruiter's notes from the call finish it: the notes are shown, his own words still are not
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
-    const before = await assessRuns();
-    const res = await request("POST", `/api/v1/applications/${luisId}/screen/recruiter-notes`, { notes: [{ questionKey: packet.screening.questions[0].key, text: "NOTESL: called him, his RDH license is active in California." }, { text: "NOTESL: six years of perio maintenance; can start in two weeks." }] }, recruiter);
-    expect(res.status, await res.clone().text()).toBe(200);
-    await container.drain();
-    const scr = await screenOf(luisId);
-    expect(scr).toMatchObject({ status: "completed" });
-    expect(scr.progress.completedBy).toBe("recruiter_call");
-    // read from the notes alone (three readings, the middle answer kept: Wave S5)
-    expect(await assessRuns()).toBe(before + SCORECARD_READINGS);
-    const [card] = await screenAssessments(luisId);
-    expect(JSON.stringify(card.result)).not.toContain("ZQXL");
-    const seen = await teamSurfaces([luisId]);
+    const seen = await teamSurfaces([luis.applicationId]);
     expect(seen.all).not.toContain("ZQXL");
-    expect(seen.all).toContain("NOTESL");
-    const d = seen.detail(luisId);
-    expect(d.screens[0]).toMatchObject({ status: "completed", answersShared: false, answers: {} });
-    expect(d.screens[0].progress.completedBy).toBe("recruiter_call");
-    expect(d.screens[0].transcript.map((t) => [t.role, t.source])).toEqual([["recruiter", "recruiter_call"], ["recruiter", "recruiter_call"]]);
-    expect(d.assessments.some((a) => a.kind === "screen")).toBe(true);
-    // finished on a call, its scorecard is in his score (R20-9)
-    if (d.matchScore) expect(d.matchScore.interview).toBe("done");
-    // the conversation page tells him it was finished on a call, never that his answers were sent
+    expect(seen.detail(luis.applicationId).screens[0]).toMatchObject({ status: "human_requested", answersShared: false, answers: {}, transcript: [] });
+    // his own page says the team has been told, never that his answers were sent
     const page = await (await app.request(`/c/screen/${luis.ref.token}`)).text();
-    expect(page).toContain("went through the questions with you");
+    expect(page).toContain("The hiring team has been told");
     expect(page).not.toContain("your answers are sent");
   });
 
@@ -334,7 +296,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(d.timeline.find((e) => e.type === "screen.unfinished")?.payload).not.toHaveProperty("answered");
   });
 
-  let legacyId = "";
   const strongCount = (body: unknown) => Number(/(\d+) strong candidates? ready/.exec((body as { summary: string }).summary)?.[1] ?? Number.NaN);
 
   it("a reading written of an unsent conversation before this rule is never shown or counted: everything reads as before it, history and Today included", async () => {
@@ -357,7 +318,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     // her saying a must-have is not met, so reading it would take her out of Today's count and hold her score at 54
     const [maria0] = await screenAssessments(maria.applicationId);
     const [legacy] = await container.db.insert(assessments).values({ companyId, applicationId: priya.applicationId, kind: "screen", packetVersion: maria0.packetVersion, aiRunId: null, result: { ...maria0.result, summary: "ZQXP-legacy: read from what she said before she stopped.", recommendation: "strong_interview", requirementFindings: [{ requirementKey: packet.requirements.mustHaves[0].key, met: "no", evidence: { source: "resume", quote: "ZQXP-legacy: my license lapsed." } }], anomalies: [{ kind: "incomplete_screen", detail: "The candidate stopped part-way and did not come back: 1 of 5 questions answered." }] } as typeof maria0.result, overall: "strong", confidence: "high" }).returning();
-    legacyId = legacy.id;
     const priyaScreen = await screenOf(priya.applicationId);
     await container.db.update(screens).set({ assessmentId: legacy.id }).where(eq(screens.applicationId, priya.applicationId));
     await container.db.update(applications).set({ latestAssessmentId: legacy.id }).where(eq(applications.id, priya.applicationId));
@@ -387,37 +347,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect((after.out.today.body as { summary: string }).summary).toBe(beforeToday);
     expect(strongCount(after.out.today.body)).toBe(strongCount(baseline.out.today.body) + 1);
     expect(JSON.stringify(await briefFor(priya.applicationId, "Priya"))).not.toContain("ZQXP");
-    // and nobody can flag what they cannot see
-    expect((await request("POST", `/api/v1/applications/${priya.applicationId}/assessments/${legacy.id}/flag`, { kind: "wrong_evidence" })).status).toBe(404);
-  });
-
-  it("finishing that conversation on a recruiter's call writes a scorecard from the notes, and the older reading still never shows", async () => {
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
-    const before = await assessRuns();
-    const res = await request("POST", `/api/v1/applications/${priya.applicationId}/screen/recruiter-notes`, { notes: [{ text: "NOTESP: called her; her RDH license is active, four years of perio maintenance." }] }, recruiter);
-    expect(res.status, await res.clone().text()).toBe(200);
-    // at once, before the notes' scorecard is written: her latest reading is her résumé's again, never the old one
-    const [now] = await container.db.select().from(applications).where(eq(applications.id, priya.applicationId));
-    expect(now.latestAssessmentId).not.toBe(legacyId);
-    expect(now.latestAssessmentId).toBeTruthy();
-    await container.drain();
-    const scr = await screenOf(priya.applicationId);
-    expect(scr.status).toBe("completed");
-    expect(scr.progress.completedBy).toBe("recruiter_call");
-    expect(scr.assessmentId).toBeTruthy();
-    expect(scr.assessmentId).not.toBe(legacyId);
-    expect(await assessRuns()).toBe(before + SCORECARD_READINGS);
-    const seen = await teamSurfaces([priya.applicationId]);
-    expect(seen.all).not.toContain("ZQXP");
-    expect(seen.all).not.toContain(legacyId);
-    expect(seen.all).toContain("NOTESP");
-    const d = seen.detail(priya.applicationId);
-    expect(d.assessments.map((a) => a.id)).toContain(scr.assessmentId);
-    expect(d.latestAssessmentId).toBe(scr.assessmentId);
-    // the history says the notes' scorecard was written, and nothing about the old one
-    expect(d.timeline.some((e) => e.type === "assessment.created" && e.payload.assessmentId === scr.assessmentId)).toBe(true);
-    expect(JSON.stringify(await briefFor(priya.applicationId, "Priya"))).not.toContain("ZQXP");
-    expect((await request("POST", `/api/v1/applications/${priya.applicationId}/assessments/${legacyId}/flag`, { kind: "wrong_evidence" })).status).toBe(404);
   });
 
   it("a hand-over the assistant makes reads the same whatever it made of how the candidate sounded, and of an explicit ask", async () => {
@@ -431,16 +360,13 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
       container.fake!.clearScripts();
       await container.drain();
       expect((await screenOf(who.applicationId)).status).toBe("human_requested");
-      const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, who.applicationId));
-      expect(esc.question).toContain(`(${HANDED_TO_A_PERSON})`);
+      const [asked] = await container.db.select().from(events).where(and(eq(events.type, "screen.human_requested"), eq(events.subjectId, (await screenOf(who.applicationId)).id)));
+      expect(asked.payload).toEqual({ reason: HANDED_TO_A_PERSON });
     }
-    // Today's request cards, the history and the recruiter requests: never how the assistant read them
+    // Today's cards, the history and the team's notices: never how the assistant read them
     const seen = await teamSurfaces(ids);
     expect(seen.all).not.toMatch(/sounded|frustrated/);
     expect(seen.all).not.toContain("ZQXH");
-    const mine = await get("/api/v1/escalations/mine");
-    expect(mine.status).toBe(200);
-    expect(mine.text).not.toMatch(/sounded|frustrated|ZQXH/);
   });
 
   it("the ITS operations console never shows what an unsent conversation said either", async () => {

@@ -58,5 +58,5 @@ export function seatsFullWords(seats: SeatUsage, planKey?: string | null): strin
   return seatsFullLine(seats.limit ?? 0, planKey);
 }
 
-/** The request to ITS about choosing a plan, opened in the request form first (never sent in one click). */
-export const TRIAL_ASK = { kind: "ask" as const, about: "all" as const, topic: "plan" as const, question: "We would like to choose a plan to keep hiring after our trial." };
+/** Why ITS is asked to choose a plan: sent with the request, from the upgrade sheet (never in one click). */
+export const TRIAL_ASK = "We would like to choose a plan to keep hiring after our trial.";

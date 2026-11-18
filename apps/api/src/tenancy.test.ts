@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
+import { signInAdmin, signInAs, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder decision F1 through the HTTP layer: no request header selects a tenant; tenancy comes from the
@@ -35,7 +35,7 @@ describe("tenant selection and isolation at the API", () => {
     app = createApp(container);
     cookieA = await signIn("owner-a@example.test");
     cookieB = await signIn("owner-b@example.test");
-    cookieStaff = await signInStaff(app, container, "recruiter@its.test", "its_recruiter", "recruiter");
+    cookieStaff = await signInAdmin(app, container, "admin@its.test", "admin");
     const ca = (await (await json(cookieA, "POST", "/api/v1/companies", { name: "Company A", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     const cb = (await (await json(cookieB, "POST", "/api/v1/companies", { name: "Company B", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Denver", region: "CO", country: "US" }] })).json()) as { id: string };
     companyA = ca.id;
@@ -72,7 +72,7 @@ describe("tenant selection and isolation at the API", () => {
     expect((await json(cookieStaff, "GET", "/api/v1/roles", undefined, { "x-company-id": companyA })).status).toBe(403);
     expect((await json(cookieStaff, "POST", "/api/v1/auth/switch", { companyId: companyA })).status).toBe(403);
     const me = (await (await json(cookieStaff, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string | null; user: { platformRole: string } };
-    expect(me.user.platformRole).toBe("its_recruiter");
+    expect(me.user.platformRole).toBe("platform_admin");
     expect(me.activeCompanyId).toBeNull();
   });
 });
@@ -139,7 +139,7 @@ describe("a second company of one's own", () => {
   });
 
   it("lets a platform admin set companies up as before", async () => {
-    const admin = await signInStaff(app, container, "ada@its.test", "platform_admin", "Ada Admin");
+    const admin = await signInAdmin(app, container, "ada@its.test", "Ada Admin");
     expect((await create(admin, "Set Up One")).status).toBe(201);
     expect((await create(admin, "Set Up Two")).status).toBe(201);
   });

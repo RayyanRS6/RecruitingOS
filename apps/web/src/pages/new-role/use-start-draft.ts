@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { PlanRoom } from "@ros/contracts";
 import { api, ApiError, type IntakeStartResponse } from "../../api/client";
 import { useNavigate } from "../../nav";
-import { errorWords, startHireHref, type RecruiterAction } from "./rules";
+import { errorWords, problemAsk, startHireHref, type PlanAsk } from "./rules";
 
 /**
  * Starting a draft (plan C3, C4, C13, C14), shared by the job builder's first screen, Today's "Who are you hiring?" box
@@ -19,7 +19,7 @@ export function useStartDraft(opts: { replace?: boolean } = {}) {
   const [sent, setSent] = useState<string | null>(null);
   const [notARole, setNotARole] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [limit, setLimit] = useState<{ room: PlanRoom | null; ask: RecruiterAction | null } | null>(null);
+  const [limit, setLimit] = useState<{ room: PlanRoom | null; ask: PlanAsk | null } | null>(null);
   const m = useMutation({
     mutationFn: (input: { initialMessage?: string; fromRoleId?: string }) => api.post<IntakeStartResponse>("/api/v1/intake/sessions", input),
     onMutate: (input) => {
@@ -44,9 +44,7 @@ export function useStartDraft(opts: { replace?: boolean } = {}) {
     onError: (err) => {
       setSent(null);
       if (err instanceof ApiError && err.code === "limit_reached") {
-        const d = err.details as { room?: PlanRoom; actions?: Array<{ label: string; body?: Record<string, unknown> }> } | undefined;
-        const a = d?.actions?.[0];
-        setLimit({ room: d?.room ?? null, ask: a ? { label: a.label, body: a.body ?? {} } : null });
+        setLimit({ room: (err.details as { room?: PlanRoom } | undefined)?.room ?? null, ask: problemAsk(err) });
         return;
       }
       setProblem(errorWords(err));

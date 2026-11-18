@@ -17,15 +17,12 @@ export type Permission =
   | "scorecard.write"
   | "offer.manage"
   | "policy.manage"
-  | "escalation.create"
-  | "escalation.work"
-  | "workflow.control"
+  /** Ask ITS for a bigger plan (the Upgrade button). */
+  | "plan.request"
   | "events.read"
   | "billing.manage"
   /** Connect and disconnect external calendars and job boards for the company (correction 10). */
   | "integration.manage"
-  /** End an ITS recruiter's access to the company before it expires (customer owners and admins). */
-  | "staff_access.revoke"
   /** Record a hiring outcome that happened outside the platform, or close a role with its outcome (decision-makers only). */
   | "outcome.record"
   /** Approve an interview round for a candidate and pick the interviewers (the human click that starts scheduling). */
@@ -45,32 +42,25 @@ const MATRIX: Record<MembershipRole, ReadonlySet<Permission>> = {
   owner: new Set<Permission>([
     "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
     "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
-    "offer.manage", "policy.manage", "escalation.create", "events.read", "billing.manage", "integration.manage", "staff_access.revoke", "outcome.record",
+    "offer.manage", "policy.manage", "plan.request", "events.read", "billing.manage", "integration.manage", "outcome.record",
     "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   admin: new Set<Permission>([
     "company.read", "company.update", "members.manage", "role.create", "role.read", "role.approve", "role.manage", "packet.edit",
     "application.read", "application.act", "application.reject", "candidate.search", "compensation.read", "scorecard.write",
-    "offer.manage", "policy.manage", "escalation.create", "events.read", "billing.manage", "integration.manage", "staff_access.revoke", "outcome.record",
+    "offer.manage", "policy.manage", "plan.request", "events.read", "billing.manage", "integration.manage", "outcome.record",
     "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   hiring_manager: new Set<Permission>([
     "company.read", "role.create", "role.read", "role.approve", "packet.edit", "application.read", "application.act",
-    "application.reject", "compensation.read", "scorecard.write", "escalation.create", "events.read", "outcome.record",
+    "application.reject", "compensation.read", "scorecard.write", "plan.request", "events.read", "outcome.record",
     "interview.request", "interview.manage", "interview.decide", "note.read", "note.write",
   ]),
   hr: new Set<Permission>([
     "company.read", "role.read", "application.read", "application.act", "candidate.search", "compensation.read", "offer.manage",
-    "escalation.create", "events.read", "members.manage", "outcome.record", "note.read", "note.write",
+    "plan.request", "events.read", "members.manage", "outcome.record", "note.read", "note.write",
   ]),
   interviewer: new Set<Permission>(["company.read", "role.read", "scorecard.write"]),
-  // An ITS recruiter acts in this role while a grant gives them access (Q24: notes too, while they have access).
-  recruiter: new Set<Permission>([
-    "company.read", "role.create", "role.read", "role.manage", "packet.edit", "application.read", "application.act",
-    "application.reject", "candidate.search", "compensation.read", "scorecard.write", "offer.manage", "escalation.create",
-    "escalation.work", "workflow.control", "events.read", "interview.request", "interview.manage", "interview.decide",
-    "note.read", "note.write",
-  ]),
 };
 
 export function can(role: MembershipRole | null | undefined, permission: Permission): boolean {

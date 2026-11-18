@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { NOT_ASKED_NOTE, composeInterviewerBrief, renderInterviewerBriefText } from "@ros/agents";
 import { CHAT_WRAP_KEY, anonymizeCandidate, entitlements } from "@ros/core";
-import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, recruiterEscalations, rolePackets, screens, users, withTenant } from "@ros/db";
+import { applications, approvalRequests, assessments, auditRecords, communications, inboundEmails, interviews, notifications, rolePackets, screens, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -275,7 +275,7 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     expect(log).toMatchObject({ status: "matched", applicationId: a.id, companyId });
   });
 
-  it("HUMAN on the first line hands the conversation to a person and answers with the response time", async () => {
+  it("HUMAN on the first line stops the AI interview, tells the team, and is answered in words that say so", async () => {
     const cand = await apply("Omar", "Haddad");
     const a = await application(cand.id);
     const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
@@ -284,17 +284,13 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const r = await inbound({ From: cand.email, To: `reply-${a.replyToken}@intake.example.test`, Subject: "Re: Next step: a short screening conversation", TextBody: "human\n\nI would rather talk to someone, please.", MessageID: "msg-omar-1" });
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ matched: true, reply: true, humanRequested: true });
-    const esc = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id));
-    expect(esc.length).toBeGreaterThanOrEqual(1);
-    expect(esc[0].kind).toBe("candidate_issue");
     expect((await container.db.select().from(screens).where(eq(screens.id, scr.id)))[0].status).toBe("human_requested");
-    expect((await told("screen.human_requested")).some((x) => x.title === "Omar asked for a person")).toBe(true);
+    expect((await told("screen.human_requested")).map((x) => x.title)).toContain("Omar Haddad asked to talk to a person");
     await container.drain();
     const reply = outbox().slice(before).find((m) => m.to === cand.email);
     expect(reply).toBeTruthy();
     expect(reply!.subject).toBe("Re: Next step: a short screening conversation");
-    expect(reply!.text).toMatch(/A person from Harbor Dental Group will follow up with you/);
-    expect(reply!.text).toMatch(/business/);
+    expect(reply!.text).toContain("The hiring team at Harbor Dental Group has been told you asked for a person.");
     expect(reply!.replyTo).toBe(`reply-${a.replyToken}@intake.example.test`);
     const [sent] = await container.db.select().from(communications).where(and(eq(communications.applicationId, a.id), eq(communications.templateKey, "human_requested_reply")));
     expect(sent.status).toBe("sent");
@@ -323,14 +319,12 @@ describe("writing to a candidate, hearing back, the interviewer brief, the compa
     const count = async () => ({
       inbound: (await container.db.select().from(communications).where(and(eq(communications.applicationId, a.id), eq(communications.direction, "inbound")))).length,
       replies: (await container.db.select().from(communications).where(and(eq(communications.applicationId, a.id), eq(communications.templateKey, "human_requested_reply")))).length,
-      escalations: (await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id))).length,
       notices: (await told("message.received")).filter((x) => x.title === "Rae Burke wrote back").length,
       sent: outbox().filter((m) => m.to === cand.email && m.subject === "Re: Next step").length,
     });
     const once = await count();
     expect(once).toMatchObject({ inbound: 1, replies: 1, sent: 1 });
-    expect(once.escalations).toBeGreaterThanOrEqual(1);
-    // the redelivery after a timeout: acknowledged, nothing recorded, nobody told again, no second "a person will follow up"
+    // the redelivery after a timeout: acknowledged, nothing recorded, nobody told again, no second answer
     const again = await inbound(payload);
     expect(again.status).toBe(200);
     expect(await again.json()).toMatchObject({ ok: true, matched: true, reply: true, duplicate: true, applicationId: a.id });

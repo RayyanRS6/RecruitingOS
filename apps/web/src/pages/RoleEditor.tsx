@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MISSING_MUST_HAVE_CAP, PACKET_VISIBILITY_LABEL, type JobPreview } from "@ros/contracts";
 import { Alert, Button, cn, Drawer, Field, IconButton, IconLabel, Segmented } from "@ros/ui";
-import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket, type WhoPosts } from "../api/client";
+import { api, ApiError, type ClosingDateView, type EvidenceSource, type InterviewPlanView, type NewVersionResponse, type Requirement, type RolePacket } from "../api/client";
 import { ClosingDateField } from "../components/ClosingDate";
 import { liveEditWords, materialChangesOf, previewOfEdit, savedVersionToast, type MaterialChange } from "../publishing";
 import { CHECKED_IN, COUNTS_AS_MUST_HAVE, IMPORTANCE_CHOICES, IMPORTANCE_HINT, READ_FROM_NOW_ON, SCORE_WEIGHTS_LINE, SKILLS_MAX, SKILLS_MIN, applySkills, newSkillRow, removalWords, rowsCountedAsMustHaves, skillRowsFrom, skillUses, skillsProblem, type EditorFocus, type SkillRow } from "../skills-form";
@@ -21,7 +21,7 @@ import {
  * owner changes: the title, where, the kind of job and schedule, the pay and its basis, the description, must-haves and
  * nice-to-haves (each with why it matters and where it is checked), the screening questions (3 to 12, in order), the
  * application form's questions (only the kinds that may hold an application), deal-breakers, who has the final say and
- * the tone of messages. "Everything (advanced)" is the whole packet as JSON, for admins and recruiters only. Every save
+ * the tone of messages. "Everything (advanced)" is the whole packet as JSON, for admins only. Every save
  * is a new version; what happens to it (current at once, or waiting for approval) is the API's call.
  *
  * Wave F (plan F3, F12): the skills we look for are plain rows too, each with what it means, how much it counts in the
@@ -294,7 +294,7 @@ function problemWith(input: { form: PacketForm; description: string; mustHaves: 
  * When a version is saved elsewhere while the editor is open (`newerVersion`), it says so before anyone saves over it.
  * `focus` opens it at the must-haves or the skills (a link such as the role report's "stricter than needed" prompt), or at the pay ("Edit the pay" on the approval card).
  */
-export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, whoPosts = "its", closingDate = null, canManage = false, focus = null }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; whoPosts?: WhoPosts; closingDate?: ClosingDateView | null; canManage?: boolean; focus?: EditorFocus | null }) {
+export function EditPacket({ open, onClose, roleId, packet, version, proposed, currentVersion, newerVersion, advanced, roleStatus = "draft", mayApprove = false, closingDate = null, canManage = false, focus = null }: { open: boolean; onClose: () => void; roleId: string; packet: RolePacket; version: number; proposed: boolean; currentVersion: number | null; newerVersion: number | null; advanced: boolean; roleStatus?: string; mayApprove?: boolean; closingDate?: ClosingDateView | null; canManage?: boolean; focus?: EditorFocus | null }) {
   const qc = useQueryClient();
   // Opened at a section: it is scrolled into view and its first field takes the focus (after the drawer has taken it).
   useEffect(() => {
@@ -339,7 +339,7 @@ export function EditPacket({ open, onClose, roleId, packet, version, proposed, c
     onSuccess: async (r) => {
       // What the fairness and pay checks changed on their own (a must-have taken out, the ceiling raised) is said, never
       // done silently; so is why a change to a live job waits, and which boards still show the earlier version.
-      const t = savedVersionToast(r, whoPosts);
+      const t = savedVersionToast(r);
       toast(t.title, t.detail);
       // Closed first, so the editor never shows its own new version as "saved while this was open".
       onClose();

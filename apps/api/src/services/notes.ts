@@ -7,9 +7,9 @@ import type { Tenant } from "../middleware/session";
 import { interviewerNoteAccess } from "./interviewer-view";
 
 /**
- * Private team notes on a candidate (founder decision Q24; plan H3). Owners, admins, hiring managers, HR and an ITS
- * recruiter while a grant gives them access read every note and write their own (note.read, note.write); an
- * interviewer writes their own note on a candidate they interviewed and reads only that one. One note per person per
+ * Private team notes on a candidate (founder decision Q24; plan H3). Owners, admins, hiring managers and HR read every
+ * note and write their own (note.read, note.write); an interviewer writes their own note on a candidate they interviewed
+ * and reads only that one. One note per person per
  * candidate, changed only by the person who wrote it, with the words it replaced kept. The facts (`note.added`,
  * `note.updated`) never carry the words. Notes never reach the candidate's pages or any AI prompt: nothing in
  * packages/ai or packages/agents reads this table (hire-and-notes.test.ts checks it), and the privacy export leaves
@@ -36,7 +36,7 @@ const iso = (value: string) => new Date(value).toISOString();
 
 /**
  * Who wrote it, as the team reads it. The company's transactions see only its own members' accounts, so an author they
- * cannot see is the ITS recruiter who wrote it under a grant (`member` false).
+ * cannot see wrote it as an ITS recruiter (`member` false).
  */
 function authorName(author: { name: string | null; member: boolean }): string {
   if (!author.member) return "ITS recruiter";

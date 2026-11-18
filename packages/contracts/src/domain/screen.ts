@@ -263,14 +263,6 @@ export type TapAnswer = z.infer<typeof TapAnswer>;
 /** One line of the "check your answers" page (E10). */
 export type ReviewItem = { key: string; question: string; answer: string | null; status: AnswerStatus | "unanswered"; tap: TapFormat | null };
 
-/** POST /api/v1/applications/:id/screen/recruiter-notes (E3): a recruiter's notes from a call, per question where they fit. */
-export const RecruiterCallNotes = z.object({
-  notes: z.array(z.object({ questionKey: z.string().min(1).max(100).optional(), text: z.string().trim().min(1).max(4000) })).min(1).max(30),
-  /** Close the conversation as complete with these notes, so the scorecard is written. */
-  complete: z.boolean().default(true),
-}).strict();
-export type RecruiterCallNotes = z.infer<typeof RecruiterCallNotes>;
-
 /**
  * GET /api/v1/roles/:id/screening (E13): how the conversation goes for this role, from the screens alone. Nothing is
  * worked out from a conversation the candidate did not send (founder decision of 9 October 2026), so there is no "where

@@ -1,11 +1,10 @@
 import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { BOARD_COLUMN_LABEL, BoardColumn, MATCH_FIT_LABEL, type ActiveMark, type AiInterviewView, type BoardCard, type BoardPlacement, type BoardView, type InterviewInScore, type MatchFit, type MatchScore, type MustHaveSummary, type ReadingVersion, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry } from "@ros/contracts";
-import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, hiddenFrom, interviewInScore, isRecruiterNoteEntry, matchScore, mustHaveSummary, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, screenAnswersSent, unsentScreenReadings, visibleTo, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
+import { CLOSER_LOOK_LABEL, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, baseOwnerStage, boardPlacement, daysSince, evidenceView, interviewInScore, isRecruiterNoteEntry, lockedAndWaiting, matchScore, mustHaveSummary, notLocked, ownerStage, ownerStageLabel, poolSummary, readingPair, readingVersion, screenAnswersSent, unsentScreenReadings, type EvidenceView, type FollowUpView, type PoolPerson } from "@ros/core";
 import { withoutResumeShownConcerns } from "@ros/agents";
 import { applications, approvalRequests, assessments, candidates, documents, events, interviews, rolePackets, roles, screens, type Tx } from "@ros/db";
 import { interviewsLapsedOnAllowance } from "@ros/workflows";
 import { HttpError } from "../middleware/errors";
-import type { Tenant } from "../middleware/session";
 import { INTERVIEW_ACTIVE_STATUSES, SCREEN_OPEN_STATUSES } from "./application-actions";
 import { screensForScore } from "./screen-scorecards";
 import { aiInterviewsFor } from "./screens";
@@ -205,23 +204,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID.test(s);
 
 /**
- * Everything the board knows about a role's applicants, in one query per kind of fact. An ITS recruiter given one
- * candidate sees that candidate only (`tenant.staff`, or `scopeApplicationId` for Today's viewer). `onlyIds` narrows the
- * load to some applications (Review and apply). The one line the board, its summary, the questions, Review and apply, the
- * report's must-haves, Home's pool card and a recruiter's board snapshot all go through: nobody past the plan's candidates per
- * job is loaded (Rule 3), so a locked id in a body reads as someone who is not a candidate of this role.
+ * Everything the board knows about a role's applicants, in one query per kind of fact. `onlyIds` narrows the load to some
+ * applications (Review and apply). The one line the board, its summary, the questions, Review and apply, the report's
+ * must-haves and Home's pool card all go through: nobody past the plan's candidates per job is loaded (Rule 3), so a
+ * locked id in a body reads as someone who is not a candidate of this role.
  */
-export async function loadPool(tx: Tx, input: { roleId: string; tenant?: Pick<Tenant, "staff"> | null; scopeApplicationId?: string | null; onlyIds?: readonly string[]; now?: Date }): Promise<Pool> {
+export async function loadPool(tx: Tx, input: { roleId: string; onlyIds?: readonly string[]; now?: Date }): Promise<Pool> {
   const [role] = isUuid(input.roleId) ? await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1) : [];
   if (!role) throw new HttpError(404, "not_found", "Role not found.");
-  const scope = input.scopeApplicationId ?? input.tenant?.staff?.scope.applicationId ?? null;
-  const reader = input.tenant?.staff ? input.tenant : scope ? { staff: { kind: "escalation", scope: { applicationId: scope } } } : null;
   // An id that is not one names nobody (Postgres would refuse it for the column).
   const only = input.onlyIds?.filter(isUuid);
-  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"]), visibleTo(reader)) : and(eq(applications.roleId, role.id), visibleTo(reader));
-  const apps = (await tx.select().from(applications).where(where).orderBy(desc(applications.createdAt))).filter((a) => !scope || a.id === scope);
-  const pastTheLimit = only || scope ? null : hiddenFrom(reader);
-  const [lockedRow] = pastTheLimit ? await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), pastTheLimit)) : [];
+  const where = only ? and(eq(applications.roleId, role.id), inArray(applications.id, only.length ? only : ["00000000-0000-0000-0000-000000000000"]), notLocked()) : and(eq(applications.roleId, role.id), notLocked());
+  const apps = await tx.select().from(applications).where(where).orderBy(desc(applications.createdAt));
+  const [lockedRow] = only ? [] : await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), lockedAndWaiting()));
   const lockedCount = Number(lockedRow?.n ?? 0);
   const { byVersion, current, currentVersion } = await packetsOf(tx, role);
   if (!apps.length) return { role, packet: current, packets: byVersion, currentVersion, rows: [], lockedCount };

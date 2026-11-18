@@ -2,11 +2,11 @@
 
 import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PLAN_REQUEST_OPEN_LINE, UPGRADE_SHEET_LINE, planRequestQuestion, type PublicPlan, type PublicPlans } from "@ros/contracts";
+import { UPGRADE_SHEET_LINE, type PlanRequestSent, type PublicPlan, type PublicPlans } from "@ros/contracts";
 import { Alert, Button, Chip, Drawer, ErrorState, Field, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
 import { toast } from "../toast";
-import { firstChoice, planFacts, priceWords } from "../upgrade";
+import { firstChoice, planFacts, priceWords, requestSentWords } from "../upgrade";
 import { useAskRole } from "./use-ask-role";
 
 /** One plan in the sheet: its name, what it costs and what it includes. The kit's option row, stacked. */
@@ -26,9 +26,9 @@ function PlanWords({ plan }: { plan: PublicPlan }) {
 
 /**
  * The short sheet behind every Upgrade: the four plans side by side with the company's own marked, an optional note, one
- * button "Ask ITS to upgrade" and the one plain line that nothing is charged. It sends the same request as any other (POST
- * /escalations, `topic: "plan"`), which is never counted and gives ITS no access to the company's hiring, so nothing here
- * speaks of access. With a request already open it says so and asks nothing more.
+ * button "Ask ITS to upgrade" and the one plain line that nothing is charged. It sends one request to ITS (POST
+ * /api/v1/plans/request), which stays open until ITS changes the plan. With a request already open it says when it was
+ * sent and asks nothing more.
  */
 export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSent?: (message: string) => void }) {
   const qc = useQueryClient();
@@ -42,13 +42,13 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
   // On the last plan nothing is above theirs: the same sheet, and the same request, in words that say so.
   const nothingAbove = !!plans[plans.length - 1]?.current;
   const send = useMutation({
-    mutationFn: (plan: PublicPlan | null) => api.post<{ id: string; message: string; alreadyAsked?: boolean }>("/api/v1/escalations", { kind: "ask", scope: "company", topic: "plan", question: planRequestQuestion(plan?.name ?? null, { reason: props.reason, note }) }),
+    mutationFn: (plan: PublicPlan | null) => api.post<PlanRequestSent>("/api/v1/plans/request", { ...(plan ? { planKey: plan.key } : {}), ...(props.reason ? { reason: props.reason } : {}), ...(note.trim() ? { note: note.trim() } : {}) }),
     onSuccess: (r) => {
-      setDone(r.message);
+      const message = `${requestSentWords(r.requestedAt)}.`;
+      setDone(message);
       if (!r.alreadyAsked) toast("Sent to ITS.");
-      props.onSent?.(r.message);
+      props.onSent?.(message);
       qc.invalidateQueries({ queryKey: ["plans"] });
-      qc.invalidateQueries({ queryKey: ["escalations", "mine"] });
       qc.invalidateQueries({ queryKey: ["brief"] });
     },
   });
@@ -56,18 +56,18 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
     <Drawer open onClose={props.onClose} title={nothingAbove ? "Your plan" : "Upgrade"} size="lg">
       {done ? (
         <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]">
-          <Alert tone="info">{done} You can follow it under Your recruiter requests on Home.</Alert>
+          <Alert tone="info">{done} {UPGRADE_SHEET_LINE}</Alert>
           <div className="row"><Button onClick={props.onClose}>Done</Button></div>
         </div>
       ) : q.isLoading ? <Skeleton lines={6} /> : q.error || !q.data ? <ErrorState message="Could not load the plans." onRetry={() => q.refetch()} /> : (
         <div className="stack gap-5">
-          {q.data.requested ? <Alert tone="info">{PLAN_REQUEST_OPEN_LINE}</Alert> : null}
+          {q.data.requestedAt ? <Alert tone="info">{requestSentWords(q.data.requestedAt)}. {UPGRADE_SHEET_LINE}</Alert> : null}
           <fieldset className="min-w-0">
             <legend className="sr-only">Which plan</legend>
             {/* side by side once the sheet has room for four (a container query, so a phone stacks them) */}
             <div className="@container">
               <div className="grid gap-2.5 @lg:grid-cols-2 @xl:grid-cols-4">
-                {plans.map((p) => p.current || q.data.requested ? (
+                {plans.map((p) => p.current || q.data.requestedAt ? (
                   // the company's own plan, or a request already with ITS: nothing to choose, so no radio
                   <div key={p.key} className={`${PLAN} cursor-default`}>
                     <span className="flex flex-wrap items-center justify-between gap-1.5"><strong className="font-semibold text-ink">{p.name}</strong>{p.current ? <Chip tone="accent">Your plan</Chip> : null}</span>
@@ -82,7 +82,7 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
               </div>
             </div>
           </fieldset>
-          {q.data.requested ? null : (
+          {q.data.requestedAt ? null : (
             <>
               <Field label="A note for ITS (optional)" htmlFor={`${name}-note`}><textarea id={`${name}-note`} className="textarea" maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
               <div className="stack gap-3 border-t border-line pt-5">
@@ -100,13 +100,17 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
 
 /**
  * The one way to ask for a bigger plan (the plans of 5 November 2026, Rule 5), used by the room alert, the team card, Settings,
- * Home's rows and the locked card. `reason`: why the person got here, sent after the plan's name. Shown only to someone at
- * the company who may ask: ITS staff inside a customer ask nothing about its plan. When payments come, only this changes.
+ * Home's rows and the locked card. `reason`: why the person got here, sent with the request. Shown only to someone at
+ * the company who may ask. While a request is with ITS, the day it was sent stands in place of the button. When payments
+ * come, only this changes.
  */
 export function Upgrade(props: { label?: string; size?: "sm" | "md"; variant?: "primary" | "secondary"; reason?: string; onSent?: (message: string) => void }) {
   const who = useAskRole();
   const [open, setOpen] = useState(false);
-  if (!who.ready || !who.mayAsk || who.staff) return null;
+  const mayAsk = who.ready && who.mayAsk;
+  const plans = useQuery({ queryKey: ["plans"], queryFn: () => api.get<PublicPlans>("/api/v1/plans"), enabled: mayAsk });
+  if (!mayAsk) return null;
+  if (plans.data?.requestedAt && !open) return <span className="small muted">{requestSentWords(plans.data.requestedAt)}</span>;
   return (
     <>
       <Button variant={props.variant ?? "secondary"} size={props.size ?? "md"} icon="arrow-up-right" onClick={() => setOpen(true)}>{props.label ?? "Upgrade"}</Button>

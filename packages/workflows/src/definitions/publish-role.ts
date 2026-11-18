@@ -1,9 +1,8 @@
 import { and, desc, eq, gt } from "drizzle-orm";
 import { isCompanyVerified } from "@ros/contracts";
-import { queueCommunication } from "@ros/agents";
-import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, openPostingTask, publishChannelsFor, sourceForChannel, transitionPosting, whoPostsBoards, type PostingState } from "@ros/core";
+import { BOARD_NAME, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, applyLinkUrl, canTransitionPosting, createApplicationLink, emit, findPostingLink, isBoardChannel, jobUrlsFor, publishChannelsFor, sourceForChannel, transitionPosting, type PostingState } from "@ros/core";
 import { companies, events, postings, randomToken, rolePackets, roles, uuidv7, type Tx } from "@ros/db";
-import { intakeAddress, mailbox, type PublishResult } from "@ros/integrations";
+import { intakeAddress, type PublishResult } from "@ros/integrations";
 import type { StepContext, WorkflowDefinition } from "../types";
 
 /**
@@ -40,8 +39,7 @@ type PostingValues = Partial<typeof postings.$inferInsert>;
  *
  * Version 3 (plan D6, founder decision Q11): only the role's chosen channels are prepared. The careers page, Google and
  * email always; the boards a person ticked (`roles.publish_channels`), or else the ones the role plan names, with
- * ZipRecruiter only for a company with its own plan. When ITS posts for the company (the default, plan D3), each board
- * prepared here gets an ITS "post the job" task, and the ITS queue is told once per run.
+ * ZipRecruiter only for a company with its own plan.
  */
 export const COMPANY_CHECK_WAIT_REASON = "waiting for ITS to confirm the company before anything is public";
 
@@ -55,7 +53,6 @@ export const publishRole: WorkflowDefinition<State> = {
   version: 3,
   initialStep: "publish",
   maxAttempts: 3,
-  escalationKind: "stuck_role",
   steps: {
     async publish(ctx) {
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
@@ -77,8 +74,6 @@ export const publishRole: WorkflowDefinition<State> = {
       const attemptsByChannel = { ...(ctx.state.attemptsByChannel ?? {}) };
       const chosen = ctx.run.workflowVersion >= CHOSEN_BOARDS_SINCE_VERSION ? publishChannelsFor(role, pv.packet, company.settings) : CHANNEL_ORDER;
       const asked = new Set(ctx.state.prepare ?? []);
-      const itsPosts = (await whoPostsBoards(ctx.q, ctx.companyId, company.settings)) === "its";
-      const newTasks: string[] = [];
       for (const channel of CHANNEL_ORDER) {
         if (!(chosen as readonly string[]).includes(channel)) continue;
         const adapter = integrations.jobBoards[channel];
@@ -134,13 +129,7 @@ export const publishRole: WorkflowDefinition<State> = {
           await transitionPosting(ctx.q, { postingId: row.id, to: "posted_manually", actor: ctx.actor, now: ctx.now, patch: { publicUrlRecordedAt: ctx.now.toISOString() }, correlationId: ctx.run.id });
           await ctx.services.engine.enqueue(ctx.q, { kind: POSTING_VERIFY_JOB_KIND, payload: { postingId: row.id, companyId: ctx.companyId }, maxAttempts: POSTING_VERIFY_MAX_ATTEMPTS });
         }
-        // ITS posts the board from the company's own account (plan D3): one task per board waiting to be posted.
-        if (itsPosts && isBoardChannel(channel) && row.status === "ready_to_post") {
-          const task = await openPostingTask(ctx.q, { companyId: ctx.companyId, roleId: role.id, postingId: row.id, channel, board: BOARD_NAME[channel], kind: "post_job", roleTitle: role.title, companyName: company.name, vertical: company.vertical, actor: ctx.actor, now: ctx.now });
-          if (task.created) newTasks.push(BOARD_NAME[channel]);
-        }
       }
-      if (newTasks.length) await tellItsQueue(ctx, { companyName: company.name, roleTitle: role.title, boards: newTasks });
 
       const retryable = failed.filter((c) => (attemptsByChannel[c] ?? 0) < 3);
       if (retryable.length > 0) {
@@ -151,27 +140,6 @@ export const publishRole: WorkflowDefinition<State> = {
     },
   },
 };
-
-/**
- * One email to the ITS queue for the posting tasks a run opened: the company, the job and the boards, nothing more.
- * Through the outbox, so it leaves once, after the step commits.
- */
-async function tellItsQueue(ctx: StepContext<State>, input: { companyName: string; roleTitle: string; boards: string[] }): Promise<void> {
-  const { integrations, env } = ctx.services;
-  await queueCommunication(ctx.q, integrations, {
-    channel: "email",
-    companyId: ctx.companyId,
-    to: env.itsQueueEmail,
-    from: mailbox(integrations.env.productName, integrations.env.fromAddress),
-    subject: `[post_job] ${input.companyName}: post "${input.roleTitle}" on ${input.boards.join(", ")}`,
-    text: `${input.companyName} approved "${input.roleTitle}". It needs posting from the company's own account on: ${input.boards.join(", ")}. Each board is its own task in the queue, with the posting package and the board's apply link: ${env.appBaseUrl}/recruiter/queue`,
-    templateKey: "its_posting_tasks",
-    idempotencyKey: `its_posting_tasks:${ctx.run.id}:${input.boards.join(",")}`,
-    tags: { template: "its_posting_tasks" },
-    actor: ctx.actor,
-    correlationId: ctx.run.id,
-  }, ctx.now);
-}
 
 /**
  * Whether a closed posting may be prepared again: only when its role was closed after it (or with it) and has since

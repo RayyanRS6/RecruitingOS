@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Actor, CancelledView, MembershipRole, SendNewTimesBatch, SendNewTimesBatchResult, SendNewTimesResult } from "@ros/contracts";
-import { CANCEL_STAGES, PermissionError, activeFollowUpsFor, assertCan, cancelledView, emit, followUpParked, hiddenAmong, openFollowUpOf, setAutoState, type FollowUpRow } from "@ros/core";
+import { CANCEL_STAGES, PermissionError, activeFollowUpsFor, assertCan, cancelledView, emit, followUpParked, lockedAmong, openFollowUpOf, setAutoState, type FollowUpRow } from "@ros/core";
 import { companyConfirmed, interviewHasNoHours } from "@ros/agents";
 import { applications, candidates, companies, interviews, roles, withTenant, type Tx } from "@ros/db";
 import { activeInterviewersOf, cancelNewTimesRuns, reopenForNewTimes } from "@ros/workflows";
@@ -25,7 +25,6 @@ const COMPANY_NOT_CHECKED = "New times can go out once ITS confirms your company
 const NO_INTERVIEWERS = "Nobody who ran that interview is still on your team. Set a date and time from their page and choose the interviewers.";
 const CHANGED = "Something changed a moment ago. Refresh to see where they are now.";
 const NOTHING_DUE = "Nothing is due to go to them automatically.";
-const STAFF_SCOPE = "Your access covers one candidate, so you can send new times to them only.";
 
 type SendInput = { companyId: string; applicationId: string; actor: Actor; role: MembershipRole; approvedBy: string; via: "person" | "batch"; now: Date; /** the batch's role: an application of another role is refused */ roleId?: string };
 
@@ -111,35 +110,26 @@ export async function stopNewTimes(tx: Tx, container: Container, input: { compan
 
 /**
  * "Send new times" to several people under one role's Cancelled column, one transaction each: one refusal never stops
- * the rest, and each person's result says why in plain words. Recorded once on the role. An ITS recruiter whose access
- * covers one candidate reaches that candidate only (as with the decision messages): anyone else is refused, and their
- * name is never looked up. Nor is the name of someone past the plan's candidates per job (Rule 3): no path guard sees the
- * ids in this body, so they answer like an id that is not in the role, and nothing goes to them.
+ * the rest, and each person's result says why in plain words. Recorded once on the role. The name of someone past the
+ * plan's candidates per job (Rule 3) is never looked up: no path guard sees the ids in this body, so they answer like an
+ * id that is not in the role, and nothing goes to them.
  */
 export async function sendNewTimesBatch(container: Container, input: { roleId: string; tenant: Tenant; actor: Actor; body: SendNewTimesBatch }): Promise<SendNewTimesBatchResult> {
   const { tenant: t, actor } = input;
   assertCan(t.role, "interview.manage");
-  // The body's check lets capitals through, and the database writes none: said its way, so `hidden` and `inScope` below recognise the id.
+  // The body's check lets capitals through, and the database writes none: said its way, so `hidden` below recognises the id.
   const ids = [...new Set(input.body.applicationIds.map((id) => id.toLowerCase()))];
-  const only = t.staff?.scope.applicationId ?? null;
-  const inScope = (id: string) => !only || id === only;
   const { names, hidden } = await withTenant(container.db, t.companyId, async (tx) => {
     const [role] = isUuid(input.roleId) ? await tx.select({ id: roles.id }).from(roles).where(and(eq(roles.id, input.roleId), eq(roles.companyId, t.companyId))).limit(1) : [];
     if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    const hidden = await hiddenAmong(tx, t, ids);
-    const visible = ids.filter((id) => inScope(id) && !hidden.has(id));
+    const hidden = await lockedAmong(tx, ids);
+    const visible = ids.filter((id) => !hidden.has(id));
     const rows = visible.length ? await tx.select({ id: applications.id, first: candidates.firstName, last: candidates.lastName }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, visible))) : [];
     return { names: new Map(rows.map((r) => [r.id, `${r.first} ${r.last}`.trim()])), hidden };
   });
   const results: SendNewTimesBatchResult["results"] = [];
   for (const applicationId of ids) {
     const out: SendNewTimesBatchResult["results"][number] = { applicationId, name: names.get(applicationId) || "This candidate", ok: false };
-    if (!inScope(applicationId)) {
-      out.code = "staff_scope";
-      out.message = STAFF_SCOPE;
-      results.push(out);
-      continue;
-    }
     if (hidden.has(applicationId)) {
       out.code = "not_found";
       out.message = "Application not found.";

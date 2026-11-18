@@ -3,8 +3,8 @@ import { NOTIFY_ALWAYS, NOTIFY_GROUP_INFO, notifyGroupOf } from "./notify-groups
 
 /**
  * The words of alert emails and summaries (plan B3). An email says what kind of thing happened, at which company, for
- * which role, and links to it; nothing else. It never names a candidate or carries their details, an ITS recruiter's
- * answer, a ranking or a score: the update's own title and body (which do) stay in the app, behind sign-in. Pure
+ * which role, and links to it; nothing else. It never names a candidate or carries their details, a ranking or a
+ * score: the update's own title and body (which do) stay in the app, behind sign-in. Pure
  * functions, so the words can be checked without a database.
  */
 
@@ -56,21 +56,13 @@ const HEADLINES: Record<string, string> = {
   "stuck.hold_ended": "A hold you set has ended",
   "stuck.decisions_untold": "Some candidates have not been told your decision",
   "stuck.conversations_stuck": "Some applicants are stuck in the AI interview",
-  "stuck.offer_recruiter": "An ITS recruiter can help with a role",
   "stuck.closing_date_passed": "A role's closing date had passed when it opened",
   "stuck.closing_date_added": "A role was given a closing date",
   "stuck.boards_outdated": "A job board still shows an earlier version of a job",
-  "stuck.escalated": "An ITS recruiter is looking at a role",
   "volume.high": "A role had more applicants in a day than your limit",
   "entitlement.more_applied": "More people applied to a role",
   "applications.closed": "A role stopped taking new applications",
   "applications.reopened": "A role is taking applications again",
-  "recruiter.resolved": "Your ITS recruiter answered your request",
-  // Recruiting OS closed a request on its own (a stopped step ITS ran again finished): no recruiter answered it (17 November 2026).
-  "recruiter.request_closed": "A request to ITS was closed",
-  "recruiter.posting_not_done": "ITS could not finish a job board task",
-  "recruiter.claimed": "An ITS recruiter now has access to your hiring",
-  "recruiter.access_granted": "An ITS recruiter now has access to your hiring",
   "message.sent": "A message to a candidate was sent",
   "message.declined": "A message to a candidate was not sent",
   "candidate.unreachable": "A message to a candidate could not be delivered",
@@ -96,7 +88,6 @@ const GROUP_HEADLINES: Record<NotifyGroup, string> = {
   candidates: "There is news about a candidate",
   interviews: "There is news about an interview",
   stuck: "A role needs your attention",
-  recruiter: "There is news from your ITS recruiter",
   messages: "There is news about a message to a candidate",
   account: "There is news about your account",
 };

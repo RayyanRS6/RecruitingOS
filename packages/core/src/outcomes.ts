@@ -1,11 +1,10 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { RejectReason, type Actor, type ApplicationStage } from "@ros/contracts";
-import { applications, approvalRequests, entitlements, events, hiringOutcomes, offers, postings, recruiterEscalations, roles, type Queryable } from "@ros/db";
+import { applications, approvalRequests, entitlements, events, hiringOutcomes, offers, postings, roles, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { lockApplicants } from "./candidate-lock";
 import { ACTIVE_ROLES, roleRoom } from "./entitlements";
 import { emit } from "./events";
-import { POSTING_TASK_KINDS } from "./posting-tasks";
 import { BOARD_UP_STATES, isBoardChannel, transitionPosting, type PostingState } from "./postings";
 import { DECISION_STAGES, transition, withdrawQueuedDecision } from "./stages";
 
@@ -209,9 +208,9 @@ export async function correctOutcome(
       const previous = before === "pending_approval" ? "draft" : before;
       await q.update(roles).set({ status: previous, closedAt: null, closeReason: null }).where(eq(roles.id, original.roleId));
       await lockApplicants(q, original.roleId);
-      // Exactly the people locked the close moved: someone ITS moved to the talent pool under a grant before it is a decision
-      // of its own, which a void does not undo. A close recorded before that list was kept moves back, as it did, everyone locked
-      // and untold in the talent pool.
+      // Exactly the people locked the close moved: someone locked whose move to the talent pool was stored before the close
+      // keeps it, as a decision of its own, which a void does not undo. A close recorded before that list was kept moves back,
+      // as it did, everyone locked and untold in the talent pool.
       const kept = (original.details as { lockedMoved?: unknown }).lockedMoved;
       const only = Array.isArray(kept) ? kept.filter((id): id is string => typeof id === "string") : null;
       const waitingAgain = only?.length === 0 ? [] : await q.update(applications).set({ stage: "received", stageChangedAt: now.toISOString() }).where(and(eq(applications.roleId, original.roleId), eq(applications.stage, "talent_pool"), isNotNull(applications.lockedAt), eq(applications.toldState, "not_told"), ...(only ? [inArray(applications.id, only)] : []))).returning({ id: applications.id });
@@ -309,15 +308,4 @@ export async function listOutcomes(q: Queryable, where: { companyId: string; app
   if (where.applicationId) conds.push(eq(hiringOutcomes.applicationId, where.applicationId));
   if (where.roleId) conds.push(eq(hiringOutcomes.roleId, where.roleId));
   return q.select().from(hiringOutcomes).where(and(...conds)).orderBy(desc(hiringOutcomes.recordedAt)).limit(limit);
-}
-
-/**
- * Open or claimed recruiter requests about this role or candidate, so the ITS recruiter hears about the outcome. Job
- * board posting tasks are left out: they carry nothing about candidates and give no access, so whoever holds one is
- * not told about the team's decisions (founder decision B6), and a closed role already gives them a take-down task.
- */
-export async function openEscalationsFor(q: Queryable, companyId: string, roleId: string, applicationId?: string | null) {
-  const rows = await q.select({ id: recruiterEscalations.id, assignedToUserId: recruiterEscalations.assignedToUserId, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId }).from(recruiterEscalations).where(and(eq(recruiterEscalations.companyId, companyId), inArray(recruiterEscalations.status, ["open", "claimed"]), notInArray(recruiterEscalations.kind, [...POSTING_TASK_KINDS])));
-  const onRole = new Set((await q.select({ id: applications.id }).from(applications).where(eq(applications.roleId, roleId))).map((a) => a.id));
-  return rows.filter((e) => e.roleId === roleId || (applicationId && e.applicationId === applicationId) || (!applicationId && e.applicationId && onRole.has(e.applicationId)));
 }

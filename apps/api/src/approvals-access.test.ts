@@ -1,17 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { emit, entitlements } from "@ros/core";
-import { applications, approvalRequests, candidates, communications, companies, interviewParticipants, interviews, memberships, policies, randomToken, takeovers, users, withTenant } from "@ros/db";
+import { entitlements } from "@ros/core";
+import { applications, approvalRequests, candidates, communications, interviewParticipants, interviews, memberships, policies, randomToken, users, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAs } from "./test-helpers";
 
 /**
  * Approvals and who may see or decide them (final review, api area): a decline message held for approval goes out when
  * it is approved, including under a policy saved in Setup with no approver roles; the brief offers a decision only to
  * the people the decide route accepts, in plain words; an interviewer reads neither the requests (candidate names,
- * messages) nor any pay figure; ITS staff under a scoped grant see only the requests and interviews their grant covers.
+ * messages) nor any pay figure.
  */
 describe("approvals: sending the held decline, who sees and decides what", () => {
   let container: Container;
@@ -54,12 +54,6 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
       const [iv] = await tx.insert(interviews).values({ companyId, applicationId, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "scheduling", timezone: "America/Los_Angeles", createdBy: { kind: "user", id: ownerId } }).returning();
       await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: ownerId, role: "interviewer", status: "invited" });
       return iv.id;
-    });
-  /** An interview suggestion waiting for a recruiter's yes or no, straight into the table; the id. */
-  const askRecruiter = (roleId: string, applicationId: string) =>
-    withTenant(container.db, companyId, async (tx) => {
-      const [r] = await tx.insert(approvalRequests).values({ companyId, roleId, applicationId, actionType: "application.recommend_interview", subject: { type: "application", id: applicationId }, requestedBy: { kind: "agent", id: "orchestrator" }, requiredRoles: ["recruiter"] }).returning();
-      return r.id;
     });
   /** A decline is private (founder decision B6); its message is a person's later Send, which these settings hold for approval. */
   const decline = async (applicationId: string) => {
@@ -122,27 +116,15 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     await withTenant(container.db, companyId, (tx) => tx.delete(policies).where(and(eq(policies.companyId, companyId), eq(policies.actionType, "disposition.send"))));
   });
 
-  it("the brief's posting card opens the Posting tab, and a decision reserved for the takeover recruiter is not offered to the owner", async () => {
-    // the card goes to a company that posts on the boards itself; with ITS posting (the default) the boards are ITS's tasks (plan D3)
-    expect((await brief(owner)).some((c) => c.kind === "posting_action" && c.title.includes("post it on"))).toBe(false);
-    const [co] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
-    await container.db.update(companies).set({ settings: { ...co.settings, boardPosting: "self" } }).where(eq(companies.id, companyId));
+  it("the brief's posting card opens the Posting tab", async () => {
     const posting = (await brief(owner)).find((c) => c.kind === "posting_action" && c.title.includes("post it on"));
     expect(posting?.actions[0]).toMatchObject({ label: "See instructions", method: "GET", path: `/roles/${roleA}?tab=posting` });
-    // during a recruiter takeover every decision message waits for the recruiter; the owner's Approve would be refused, so no card
-    const [recruiterUser] = await container.db.insert(users).values({ email: "takeover@its.test", name: "Takeover Recruiter" }).returning();
-    const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId: roleA, recruiterUserId: recruiterUser.id, status: "active" }).returning();
-    const lou = await seedApplication(roleA, "Lou", "Park");
-    expect(await (await decline(lou)).json()).toMatchObject({ dispositionSent: false });
-    const req = await pendingFor(lou, "disposition.send");
-    expect(req!.requiredRoles).toEqual(["recruiter"]);
-    expect((await brief(owner)).some((c) => c.approvalRequestId === req!.id)).toBe(false);
-    expect((await json(owner, "POST", `/api/v1/approvals/${req!.id}/decide`, { decision: "approve" })).status).toBe(403);
-    await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
   });
 
   it("an interviewer reads neither the waiting requests nor any pay figure: not the range, the ceiling, the bonus or the sources that quote them", async () => {
-    // requests carry names and messages: the list needs application.read, and the role page leaves them out
+    // requests carry names and messages: the list needs application.read, and the role page leaves them out. One waits here: an interview suggestion.
+    const lou = await seedApplication(roleA, "Lou", "Park");
+    await withTenant(container.db, companyId, (tx) => tx.insert(approvalRequests).values({ companyId, roleId: roleA, applicationId: lou, actionType: "application.recommend_interview", subject: { type: "application", id: lou }, requestedBy: { kind: "agent", id: "orchestrator" }, requiredRoles: [] }));
     expect((await json(interviewer, "GET", "/api/v1/approvals")).status).toBe(403);
     const ownerView = (await (await json(owner, "GET", `/api/v1/roles/${roleA}`)).json()) as { pendingApprovals: unknown[] };
     expect(ownerView.pendingApprovals.length).toBeGreaterThan(0);
@@ -191,162 +173,6 @@ describe("approvals: sending the held decline, who sees and decides what", () =>
     await mine.remove();
     expect((await json(interviewer, "GET", `/api/v1/roles/${roleA}`)).status).toBe(404);
     expect((await json(interviewer, "GET", `/api/v1/roles/${roleA}/interviews`)).status).toBe(404);
-  });
-
-  it("ITS staff under a grant for one role see only that role's requests and interviews; another role's interview is refused", async () => {
-    const ada = await seedApplication(roleA, "Ada", "Nguyen");
-    const bea = await seedApplication(roleB, "Bea", "Stone");
-    const inA = await seedInterview(ada);
-    const inB = await seedInterview(bea);
-    const recruiter = await signInStaff(app, container, "sam@its.test", "its_recruiter", "Sam Recruiter");
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId: roleA, question: "Can you look at our hygienist candidates?" })).json()) as { id: string };
-    expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    // the interview of the role in scope opens; the other role's is refused on every route that takes an id
-    expect((await json(recruiter, "GET", `/api/v1/interviews/${inA}`)).status).toBe(200);
-    const denied = await json(recruiter, "GET", `/api/v1/interviews/${inB}`);
-    expect(denied.status).toBe(403);
-    expect(((await denied.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-    expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/cancel`, { reason: "no" })).status).toBe(403);
-    expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/reschedule`, {})).status).toBe(403);
-    // setting a date and time too, with a body that would book it, on an interview and on a new one
-    const setTime = { date: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10), time: "14:00", durationMinutes: 30, place: { kind: "phone" } };
-    expect((await json(recruiter, "POST", `/api/v1/interviews/${inB}/set-time`, setTime)).status).toBe(403);
-    expect((await json(recruiter, "POST", `/api/v1/applications/${bea}/interviews`, { roundKey: "r1", interviewerUserIds: [ownerId], setTime })).status).toBe(403);
-    expect((await container.db.select().from(interviews).where(eq(interviews.id, inB)))[0].status).toBe("scheduling");
-    const list = (await (await json(recruiter, "GET", "/api/v1/interviews")).json()) as Array<{ id: string }>;
-    expect(list.map((i) => i.id)).toContain(inA);
-    expect(list.map((i) => i.id)).not.toContain(inB);
-    // the approvals list: role A's waiting decline, not role B's packet approval
-    const approvals = (await (await json(recruiter, "GET", "/api/v1/approvals")).json()) as Array<{ roleId: string | null; actionType: string }>;
-    expect(approvals.length).toBeGreaterThan(0);
-    expect(approvals.every((a) => a.roleId === roleA || a.roleId === null)).toBe(true);
-    expect((await (await json(owner, "GET", "/api/v1/approvals")).json() as Array<{ roleId: string | null }>).some((a) => a.roleId === roleB)).toBe(true);
-    // deciding is held to the grant too: another role's request is refused and stays waiting; the grant's role's is decided
-    const asked = await askRecruiter(roleB, bea);
-    const refused = await json(recruiter, "POST", `/api/v1/approvals/${asked}/decide`, { decision: "reject", note: "Not this one." });
-    expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-    expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, asked)))[0].status).toBe("pending");
-    const own = await askRecruiter(roleA, ada);
-    expect((await json(recruiter, "POST", `/api/v1/approvals/${own}/decide`, { decision: "reject", note: "Not yet." })).status).toBe(200);
-    // the role's interviews: the grant's role only
-    expect((await json(recruiter, "GET", `/api/v1/roles/${roleB}/interviews`)).status).toBe(403);
-    expect(((await (await json(recruiter, "GET", `/api/v1/roles/${roleA}/interviews`)).json()) as Array<{ id: string }>).map((i) => i.id)).toContain(inA);
-  });
-
-  it("ITS staff under a grant for one candidate see that candidate alone: the role's interviews, its counts, its report; the screening chat's figures and other candidates' requests are refused", async () => {
-    const kim = await seedApplication(roleA, "Kim", "Lowe");
-    const leo = await seedApplication(roleA, "Leo", "Marsh");
-    const inKim = await seedInterview(kim);
-    const inLeo = await seedInterview(leo);
-    const leoAsk = await askRecruiter(roleA, leo);
-    const kimAsk = await askRecruiter(roleA, kim);
-    const rae = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "candidate_issue", applicationId: kim, question: "Kim asked for a call about the schedule." })).json()) as { id: string };
-    expect((await json(rae, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    expect((await json(rae, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    // the role's interviews: Kim's only, never Leo's name, decision or the team's emails
-    const ivs = (await (await json(rae, "GET", `/api/v1/roles/${roleA}/interviews`)).json()) as Array<{ id: string; applicationId: string }>;
-    expect(ivs.map((i) => i.id)).toContain(inKim);
-    expect(ivs.map((i) => i.id)).not.toContain(inLeo);
-    expect(ivs.every((i) => i.applicationId === kim)).toBe(true);
-    // the role page counts Kim alone
-    const detail = (await (await json(rae, "GET", `/api/v1/roles/${roleA}`)).json()) as { counts: Record<string, number> };
-    expect(Object.values(detail.counts).reduce((a, b) => a + b, 0)).toBe(1);
-    // the report counts Kim alone and names no other application
-    const report = (await (await json(rae, "GET", `/api/v1/roles/${roleA}/report`)).json()) as { applicants: { total: number }; stages: { total: number }; pendingDecisions: { list: Array<{ applicationId: string | null }> } };
-    expect(report.applicants.total).toBe(1);
-    expect(report.stages.total).toBe(1);
-    expect(report.pendingDecisions.list.every((p) => p.applicationId === kim || p.applicationId === null)).toBe(true);
-    expect(JSON.stringify(report)).not.toContain(leo);
-    const ownerReport = (await (await json(owner, "GET", `/api/v1/roles/${roleA}/report`)).json()) as { applicants: { total: number } };
-    expect(ownerReport.applicants.total).toBeGreaterThan(1);
-    // the screening chat's figures cover the role's whole group
-    const funnel = await json(rae, "GET", `/api/v1/roles/${roleA}/screening`);
-    expect(funnel.status).toBe(403);
-    expect(((await funnel.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-    // another candidate's request is not theirs to decide; Kim's is
-    expect((await json(rae, "POST", `/api/v1/approvals/${leoAsk}/decide`, { decision: "reject", note: "Not this one." })).status).toBe(403);
-    expect((await json(rae, "POST", `/api/v1/approvals/${kimAsk}/decide`, { decision: "reject", note: "Not yet." })).status).toBe(200);
-
-    // A request about the whole role names every applicant: the closing message waiting for approval (services/closing-messages.ts).
-    // Not listed for a grant about one candidate, not on the role page, no Home card: the same rule as deciding it.
-    const closing = await withTenant(container.db, companyId, async (tx) => {
-      const [r] = await tx.insert(approvalRequests).values({ companyId, roleId: roleA, applicationId: null, actionType: "disposition.send", subject: { type: "role", id: roleA }, proposal: { kind: "role_closed", applicationIds: [leo], count: 1 }, requestedBy: { kind: "agent", id: "orchestrator" }, requiredRoles: [] }).returning();
-      return r.id;
-    });
-    const listed = await (await json(rae, "GET", "/api/v1/approvals")).json() as Array<{ id: string }>;
-    expect(listed.map((r) => r.id)).not.toContain(closing);
-    expect(JSON.stringify(listed)).not.toContain(leo);
-    expect(((await (await json(owner, "GET", "/api/v1/approvals")).json()) as Array<{ id: string }>).map((r) => r.id)).toContain(closing);
-    const page = (await (await json(rae, "GET", `/api/v1/roles/${roleA}`)).json()) as { pendingApprovals: Array<{ id: string }> };
-    expect(page.pendingApprovals.map((p) => p.id)).not.toContain(closing);
-    expect(JSON.stringify(page.pendingApprovals)).not.toContain(leo);
-    expect(((await (await json(owner, "GET", `/api/v1/roles/${roleA}`)).json()) as { pendingApprovals: Array<{ id: string }> }).pendingApprovals.map((p) => p.id)).toContain(closing);
-    expect((await brief(rae)).some((c) => c.approvalRequestId === closing)).toBe(false);
-    expect((await json(rae, "POST", `/api/v1/approvals/${closing}/decide`, { decision: "reject", note: "No." })).status).toBe(403);
-
-    // The Activity tab: the role's own events and Kim's, never Leo's application or its note
-    await withTenant(container.db, companyId, async (tx) => {
-      await emit(tx, { type: "application.received", companyId, actor: { kind: "system", id: "test" }, subject: { type: "application", id: leo }, payload: { roleId: roleA, applicationId: leo, source: "direct", note: "Leo's private note" } });
-      await emit(tx, { type: "application.received", companyId, actor: { kind: "system", id: "test" }, subject: { type: "application", id: kim }, payload: { roleId: roleA, applicationId: kim, source: "direct" } });
-    });
-    const ownerTimeline = JSON.stringify(await (await json(owner, "GET", `/api/v1/roles/${roleA}/timeline`)).json());
-    expect(ownerTimeline).toContain(leo);
-    const raeTimelineRes = await json(rae, "GET", `/api/v1/roles/${roleA}/timeline`);
-    expect(raeTimelineRes.status).toBe(200);
-    const raeTimeline = JSON.stringify(await raeTimelineRes.json());
-    expect(raeTimeline).toContain(kim);
-    expect(raeTimeline).not.toContain(leo);
-    expect(raeTimeline).not.toContain("Leo's private note");
-
-    // The Share tab's volume: Kim alone, the switch's state as it is
-    const volume = (await (await json(rae, "GET", `/api/v1/roles/${roleA}/volume`)).json()) as { totals: { total: number }; acceptingApplications: boolean };
-    const ownerVolume = (await (await json(owner, "GET", `/api/v1/roles/${roleA}/volume`)).json()) as { totals: { total: number }; acceptingApplications: boolean };
-    expect(volume.totals.total).toBe(1);
-    expect(ownerVolume.totals.total).toBeGreaterThan(1);
-    expect(volume.acceptingApplications).toBe(ownerVolume.acceptingApplications);
-    await container.db.update(approvalRequests).set({ status: "rejected" }).where(eq(approvalRequests.id, closing));
-  });
-
-  it("ITS staff under a grant for one role do not see a request about the whole company, which they could not decide", async () => {
-    const companyWide = await withTenant(container.db, companyId, async (tx) => {
-      const [r] = await tx.insert(approvalRequests).values({ companyId, roleId: null, applicationId: null, actionType: "disposition.send", subject: { type: "company", id: companyId }, proposal: {}, requestedBy: { kind: "agent", id: "orchestrator" }, requiredRoles: [] }).returning();
-      return r.id;
-    });
-    const tess = await signInStaff(app, container, "tess@its.test", "its_recruiter", "Tess Recruiter");
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId: roleA, question: "Another look at the hygienist candidates?" })).json()) as { id: string };
-    expect((await json(tess, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    expect((await json(tess, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    const listed = (await (await json(tess, "GET", "/api/v1/approvals")).json()) as Array<{ id: string }>;
-    expect(listed.map((r) => r.id)).not.toContain(companyWide);
-    expect(((await (await json(owner, "GET", "/api/v1/approvals")).json()) as Array<{ id: string }>).map((r) => r.id)).toContain(companyWide);
-    expect((await json(tess, "POST", `/api/v1/approvals/${companyWide}/decide`, { decision: "reject", note: "No." })).status).toBe(403);
-    await container.db.update(approvalRequests).set({ status: "rejected" }).where(eq(approvalRequests.id, companyWide));
-  });
-
-  it("ITS staff under a grant for all of the company's hiring keep everything: any role's request, interviews, report and screening figures", async () => {
-    const cy = await seedApplication(roleB, "Cy", "Dunn");
-    await seedInterview(cy);
-    const asked = await askRecruiter(roleB, cy);
-    const max = await signInStaff(app, container, "max@its.test", "its_recruiter", "Max Recruiter");
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", question: "Can you help with all our hiring this month?" })).json()) as { id: string };
-    expect((await json(max, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    expect((await json(max, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    expect((await json(max, "GET", "/api/v1/approvals")).status).toBe(200);
-    expect((await json(max, "POST", `/api/v1/approvals/${asked}/decide`, { decision: "reject", note: "Not yet." })).status).toBe(200);
-    for (const roleId of [roleA, roleB]) {
-      const ids = async (cookie: string) => ((await (await json(cookie, "GET", `/api/v1/roles/${roleId}/interviews`)).json()) as Array<{ id: string }>).map((i) => i.id).sort();
-      expect(await ids(max)).toEqual(await ids(owner));
-      const total = async (cookie: string) => ((await (await json(cookie, "GET", `/api/v1/roles/${roleId}/report`)).json()) as { applicants: { total: number } }).applicants.total;
-      expect(await total(max)).toBe(await total(owner));
-      expect((await json(max, "GET", `/api/v1/roles/${roleId}/screening`)).status).toBe(200);
-      const volumeTotal = async (cookie: string) => ((await (await json(cookie, "GET", `/api/v1/roles/${roleId}/volume`)).json()) as { totals: { total: number } }).totals.total;
-      expect(await volumeTotal(max)).toBe(await volumeTotal(owner));
-      const timelineLength = async (cookie: string) => ((await (await json(cookie, "GET", `/api/v1/roles/${roleId}/timeline`)).json()) as unknown[]).length;
-      expect(await timelineLength(max)).toBe(await timelineLength(owner));
-    }
   });
 
   it("the 'Approve the role' card goes only to people the approve route accepts: not the hiring manager who drafted it, not HR", async () => {

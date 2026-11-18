@@ -26,11 +26,11 @@ const { People } = await import("@ros/web/src/pages/People");
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
-const meAs = (role: string) => ({ user: { id: "u1", email: "ivy@bright.test", name: "Ivy Interviewer", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+const meAs = (role: string) => ({ user: { id: "u1", email: "ivy@bright.test", name: "Ivy Interviewer", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
 const job = {
   id: "r1", title: "Dental Hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null },
   packetVersions: [{ version: 1, status: "approved", source: "intake_session", createdAt: daysAgo(8), createdBy: { kind: "user", id: "u2", name: "Dana Whitfield" }, changeSummary: null }],
-  counts: {}, boardsStillUp: [], boardsShowingOldVersion: [], whoPosts: "its", decisionMaker: null, pendingApprovals: [],
+  counts: {}, boardsStillUp: [], boardsShowingOldVersion: [], decisionMaker: null, pendingApprovals: [],
   currentPacket: { version: 1, status: "approved", packet: { identity: { locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" }, compensation: { basis: "hourly", min: 0, max: 0, discloseRange: true } } },
 };
 

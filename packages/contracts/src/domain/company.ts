@@ -21,15 +21,12 @@ export function isCompanyVerified(settings: unknown): boolean {
 
 /**
  * Getting started (plan B2), on `companies.settings.onboarding`. `dismissedBy` holds, per person, when they hid the
- * card; `policiesReviewed*` is the owner's "I've reviewed them" on the AI rules; `jobBoardsConfirmed*` is set by ITS
- * once it can sign in to the company's job-board accounts.
+ * card; `policiesReviewed*` is the owner's "I've reviewed them" on the AI rules.
  */
 export type CompanyOnboarding = {
   dismissedBy?: Record<string, string>;
   policiesReviewedAt?: string;
   policiesReviewedBy?: Actor;
-  jobBoardsConfirmedAt?: string;
-  jobBoardsConfirmedBy?: Actor;
 };
 
 export function companyOnboarding(settings: unknown): CompanyOnboarding {
@@ -38,7 +35,7 @@ export function companyOnboarding(settings: unknown): CompanyOnboarding {
 }
 
 /** The steps of the getting-started card, in the order the card lists them. */
-export const GettingStartedStepKey = z.enum(["company_details", "team", "interview_hours", "first_role", "job_boards", "ai_rules"]);
+export const GettingStartedStepKey = z.enum(["company_details", "team", "interview_hours", "first_role", "ai_rules"]);
 export type GettingStartedStepKey = z.infer<typeof GettingStartedStepKey>;
 
 /** A button on the card: a page to open, or a request to send (its body exactly as given). */
@@ -71,10 +68,6 @@ export const CompanyVerificationChange = z.object({
   heldOnly: z.literal(true).optional(),
 }).strict();
 export type CompanyVerificationChange = z.infer<typeof CompanyVerificationChange>;
-
-/** POST /api/v1/admin/customers/:id/job-boards: ITS confirms it can sign in to the company's job-board accounts (or not any more). */
-export const JobBoardAccessChange = z.object({ confirmed: z.boolean(), note: z.string().trim().max(500).optional() }).strict();
-export type JobBoardAccessChange = z.infer<typeof JobBoardAccessChange>;
 
 /**
  * First sign-in asks for approval (the owner's request of 6 November 2026, SIGNUP_MODE=approval). A request is a company

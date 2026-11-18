@@ -21,7 +21,7 @@ import {
 } from "./quick-start";
 import { GENERAL_QUESTIONS } from "./quick-starts";
 import { SUGGESTING_QUESTIONS, SUGGESTING_SKILLS, adoptSuggestion, aiSuggestFor, fetchSuggestions, suggestBody, suggestKey, suggestQueryKey, suggestView, wantsAiSuggestions, type AiSuggest, type SuggestView } from "./quick-suggest";
-import { NEW_ROLE_FRESH_HREF, errorWords, startHireHref, type RecruiterAction } from "./rules";
+import { NEW_ROLE_FRESH_HREF, errorWords, problemAsk, startHireHref, type PlanAsk } from "./rules";
 import { RoomAlert } from "./StartView";
 
 /** The company's business type, for the suggestions (GET /companies/current, the query Setup reads too). */
@@ -71,7 +71,7 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
 
   const [problem, setProblem] = useState<string | null>(null);
   const [notARole, setNotARole] = useState<string | null>(null);
-  const [limit, setLimit] = useState<{ room: PlanRoom | null; ask: RecruiterAction | null } | null>(null);
+  const [limit, setLimit] = useState<{ room: PlanRoom | null; ask: PlanAsk | null } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const moved = useRef(false);
 
@@ -186,9 +186,7 @@ export function QuickStart({ scope }: { scope: QuickScope | null }) {
     },
     onError: (err) => {
       if (err instanceof ApiError && err.code === "limit_reached") {
-        const d = err.details as { room?: PlanRoom; actions?: Array<{ label: string; body?: Record<string, unknown> }> } | undefined;
-        const act = d?.actions?.[0];
-        setLimit({ room: d?.room ?? null, ask: act ? { label: act.label, body: act.body ?? {} } : null });
+        setLimit({ room: (err.details as { room?: PlanRoom } | undefined)?.room ?? null, ask: problemAsk(err) });
         return;
       }
       setProblem(errorWords(err));

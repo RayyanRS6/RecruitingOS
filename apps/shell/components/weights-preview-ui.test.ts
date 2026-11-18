@@ -147,13 +147,12 @@ describe("the Scoring tab of the job page", () => {
   const job = {
     id: "r1", title: "Dental Assistant", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null },
     packetVersions: [{ version: 3, status: "approved", source: "editor", createdAt: daysAgo(2), createdBy: { kind: "user", id: "u2", name: "Dana Whitfield" }, changeSummary: null }],
-    counts: { new: 3, longlist: 1 }, boardsStillUp: [], boardsShowingOldVersion: [], whoPosts: "its", decisionMaker: null, pendingApprovals: [], postings: [],
+    counts: { new: 3, longlist: 1 }, boardsStillUp: [], boardsShowingOldVersion: [], decisionMaker: null, pendingApprovals: [], postings: [],
     currentPacket: { version: 3, status: "approved", packet },
   };
-  const me = (memberships: Array<{ role: string }>, applicationId: string | null = null) => ({
+  const me = (memberships: Array<{ role: string }>) => ({
     user: { id: "u1", email: "dana@harbor.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null },
     memberships: memberships.map((m) => ({ companyId: "co1", companyName: "Harbor Dental", companySlug: "harbor-dental", role: m.role })), activeCompanyId: "co1",
-    staffAccess: applicationId ? { grantId: "g1", kind: "review", purpose: "A recruiter request", expiresAt: daysAgo(-1), companyName: "Harbor Dental", scope: { escalationId: "e1", roleId: null, applicationId } } : null,
     ai: { provider: "fake" },
   });
   const page = (who: ReturnType<typeof me>) => text(render(client([[["me"], who], [["company"], { settings: { verifiedAt: "2026-10-01T00:00:00.000Z" } }], [["role", "r1"], job]]), createElement(RoleDetail)));
@@ -164,13 +163,8 @@ describe("the Scoring tab of the job page", () => {
     expect(t).toContain("Try different weights");
   });
 
-  it("never to HR (who cannot edit the job), nor to an ITS recruiter given one candidate", () => {
+  it("never to HR (who cannot edit the job)", () => {
     expect(page(me([{ role: "hr" }]))).not.toContain("Try different weights");
-    expect(page(me([], "app-7"))).not.toContain("Try different weights");
-    // even holding a recruiter's rights in the company, a grant about one candidate has no order to change
-    const scoped = page(me([{ role: "recruiter" }], "app-7"));
-    expect(scoped).toContain("Change the skills or how much each counts");
-    expect(scoped).not.toContain("Try different weights");
   });
 
   it("not before anyone has applied", () => {

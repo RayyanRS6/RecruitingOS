@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, EmptyState, ErrorState, Icon, numHead, OWNER_STAGES, PipelineBar, Pill, Skeleton, Stat, Table } from "@ros/ui";
 import { Link } from "../nav";
-import { ApiError, api, type Me, type ScreeningFunnel } from "../api/client";
+import { api, type ScreeningFunnel } from "../api/client";
 import { zoneName } from "../company-setup";
 import { funnelLines } from "../screen-view";
 import { reportLockedLabel } from "../upgrade";
@@ -24,8 +24,7 @@ export type RoleReport = {
   interviews: { total: number; requested: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number; offerExpired: number; rescheduledByCandidate: number; awaitingDecision: number; byRound: Array<{ roundKey: string; title: string; total: number; scheduled: number; completed: number; noShow: number; noShowCandidate: number; noShowInterviewer: number; cancelled: number }> };
   pendingDecisions: { count: number; approvals: number; candidates: number; oldestDays: number | null; list: Array<{ kind: "approval" | "candidate"; label: string; days: number; applicationId: string | null; approvalRequestId: string | null }> };
   recommendationsVsDecisions: { assessed: number; rows: Array<{ recommendation: string; label: string; total: number; invited: number; interviewed: number; shortlisted?: number; declined: number; held: number; noActionYet: number }> };
-  overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; flaggedAssessments: number; byAction: Record<string, number> };
-  escalations: { total: number; open: number; resolved: number; overdue: number; medianResponseHours: number | null };
+  overrides: { eligibilityOverrides: number; reviewAnyway: number; holds: number; byAction: Record<string, number> };
   messages: { total: number; sent: number; failed: number; bounced: number; unknown: number; pending: number; candidatesAffected: number };
   outcomes: { statement: string; hired: number; withdrew: number; declinedByEmployer: number; declinedOffer: number; noHire: number; talentPool: number; corrections: number; role: { outcome: string; recordedAt: string } | null; rolesByOutcome: Record<string, number>; declineReasons: Array<{ reason: string; label: string; count: number }> };
   /**
@@ -44,34 +43,18 @@ const days = (n: number | null) => (n === null ? "none yet" : n === 1 ? "1 day" 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /**
- * What an ITS recruiter whose access covers one candidate sees on the Report tab, in plain words: the figures count that
- * candidate alone, and figures about the job's whole group (the AI interview's) are for the hiring team.
- */
-export const ONE_CANDIDATE_REPORT = "Your recruiter access covers one candidate on this job, so these figures count that candidate only. Figures about everyone who applied are for the hiring team.";
-export const ONE_CANDIDATE_SCREENING = "Your recruiter access covers one candidate, so how the AI interview goes for everyone on this job is not shown here. That candidate's own AI interview is on their page.";
-
-/** Whether a refusal is the one-candidate grant's limit (403 `staff_scope`), which is explained, never offered as a retry. */
-export function isOneCandidateLimit(err: unknown): boolean {
-  return err instanceof ApiError && err.code === "staff_scope";
-}
-
-/**
- * The Report tab: the ten figures for one role, and the two downloads. Fewer words (23 Oct 2026): what each figure
+ * The Report tab: the nine figures for one role, and the two downloads. Fewer words (23 Oct 2026): what each figure
  * means, and the definitions the cards once carried under their tables, are in one closed disclosure at the end; a card
  * keeps only its fairness and accountability lines ("People make every decision", "never read as a no",
  * "recorded with the person's name and reason", "Counts only; nobody is named here").
  */
 export function ReportTab({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "report"], queryFn: () => api.get<RoleReport>(`/api/v1/roles/${roleId}/report`) });
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const oneCandidate = !!me.data?.staffAccess?.scope.applicationId;
   if (q.isLoading) return <Skeleton lines={6} />;
-  if (isOneCandidateLimit(q.error)) return <Alert tone="info">{ONE_CANDIDATE_REPORT}</Alert>;
   if (q.error || !q.data) return <ErrorState message="Could not load the report." onRetry={() => q.refetch()} />;
   const r = q.data;
   return (
     <div className="stack gap-5">
-      {oneCandidate ? <Alert tone="info">{ONE_CANDIDATE_REPORT}</Alert> : null}
       <div className="row justify-between gap-3">
         <p className="small muted min-w-0 flex-[1_1_20rem]">Figures as of {new Date(r.generatedAt).toLocaleString()}.</p>
         <div className="row">
@@ -121,7 +104,6 @@ export function MustHavesCard({ mustHaves: m, links }: { mustHaves: NonNullable<
 export function ScreeningCard({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["role", roleId, "screening"], queryFn: () => api.get<ScreeningFunnel>(`/api/v1/roles/${roleId}/screening`) });
   if (q.isLoading) return <Card title="The AI interview"><Skeleton lines={3} /></Card>;
-  if (isOneCandidateLimit(q.error)) return <Card title="The AI interview"><p className="small muted">{ONE_CANDIDATE_SCREENING}</p></Card>;
   if (q.error || !q.data) return <Card title="The AI interview"><ErrorState message="Could not load how the AI interview is going." onRetry={() => q.refetch()} /></Card>;
   const f = q.data;
   const lines = funnelLines(f);
@@ -154,7 +136,7 @@ export function ScreeningCard({ roleId }: { roleId: string }) {
   );
 }
 
-/** The ten figures as plain-language cards. Used by the role page and by the administrator's customer view (no links there). */
+/** The nine figures as plain-language cards. Used by the role page and by the administrator's customer view (no links there). */
 export function ReportFigures({ report: r, talentHref }: { report: RoleReport; talentHref?: string }) {
   const maxDay = Math.max(0, ...r.applicants.byDay.map((d) => d.count));
   // the way to the people a figure counts: a plum text link with an arrow (screenshot 1's "All applicants")
@@ -283,19 +265,8 @@ export function ReportFigures({ report: r, talentHref }: { report: RoleReport; t
             <dt>Kept someone the eligibility rules would have held</dt><dd>{r.overrides.eligibilityOverrides}</dd>
             <dt>Reviewed someone anyway after an eligibility decline</dt><dd>{r.overrides.reviewAnyway}</dd>
             <dt>Put on hold (every hold, ended or not)</dt><dd>{r.overrides.holds}</dd>
-            <dt>Assessments you flagged as wrong</dt><dd>{r.overrides.flaggedAssessments}</dd>
           </dl>
           <p className="small muted mt-3">Every one of these is recorded with the person's name and reason, so the system can be checked and improved.</p>
-        </Card>
-
-        <Card title="Recruiter help">
-          <dl className="kv">
-            <dt>Requests for a recruiter</dt><dd>{r.escalations.total}</dd>
-            <dt>Still open</dt><dd>{r.escalations.open}</dd>
-            <dt>Resolved</dt><dd>{r.escalations.resolved}</dd>
-            <dt>Past the promised response time</dt><dd>{r.escalations.overdue}</dd>
-            <dt>Typical first response</dt><dd>{r.escalations.medianResponseHours === null ? "no response yet" : `${r.escalations.medianResponseHours} hours`}</dd>
-          </dl>
         </Card>
 
         <Card title="Messages to candidates" needsYou={r.messages.candidatesAffected > 0}>
@@ -351,7 +322,7 @@ export type ReportScope = "role" | "customer";
 /**
  * What each figure means, in the words the weekly summary uses (docs/16-admin.md keeps the same table), as one closed
  * disclosure at the end of the Report tab (fewer words, 23 Oct 2026). It also holds what the report counts at all and
- * the definitions the cards once carried under their tables ("typical", "average", a day, response time). `scope`
+ * the definitions the cards once carried under their tables ("typical", "average", a day). `scope`
  * "customer" (the admin console's customer report) says "across all roles" where a role's own tab says "this role", and
  * leaves out the must-haves and the AI interview, whose cards are on a role's own tab only.
  */
@@ -370,8 +341,7 @@ export function ReportDefinitions({ scope = "role" }: { scope?: ReportScope }) {
           <dt>Interviews</dt><dd>Interviews requested (times not yet picked), on the calendar, held, missed by the candidate, cancelled, rescheduled by the candidate, and held but not yet decided.</dd>
           <dt>Decisions waiting for you</dt><dd>Everything only a person can decide: candidates waiting on you, anyone held on an eligibility answer, and approvals nobody has answered.</dd>
           <dt>Suggestions and decisions</dt><dd>What the assistant suggested for each assessed candidate and the first thing a person did afterwards, putting them on the longlist or shortlist included. The assistant never decides.</dd>
-          <dt>Overruled</dt><dd>Times a person kept someone the rules would have held, reviewed someone anyway, put someone on hold, or flagged an assessment as wrong.</dd>
-          <dt>Recruiter help</dt><dd>{`Your requests for an ITS recruiter ${roles("on this role")}: open, resolved, past the promised response time, and the typical hours until a recruiter picked one up. Response time is clock hours from your request to a recruiter picking it up; the promised time counts business hours only.`}</dd>
+          <dt>Overruled</dt><dd>Times a person kept someone the rules would have held, reviewed someone anyway, or put someone on hold.</dd>
           <dt>Messages</dt><dd>{`Emails and texts to candidates ${roles("about this role")}: sent, could not be sent, bounced, delivery unknown, waiting to go out; and how many candidates were affected.`}</dd>
           <dt>Outcomes</dt><dd>What people recorded: hires, withdrawals, declines, offers declined, closed without a hire, and the reasons candidates were declined. Offers happen outside the platform.</dd>
           {/* one role's cards only: the console's customer report has neither, so it defines neither */}

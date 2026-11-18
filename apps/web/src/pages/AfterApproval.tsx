@@ -14,7 +14,7 @@ import { toast } from "../toast";
 const EDIT_SETTLE_MS = 30_000;
 
 /** What the screen says once getting the job ready has taken as long as the job page waits for the worker (`CATCH_UP_FOR_MS`). */
-export const OPENING_TAKES_LONGER = "This is taking longer than it should. The Share tab shows where it stands; if the job is not live in a few minutes, bring in a recruiter.";
+export const OPENING_TAKES_LONGER = "This is taking longer than it should. The Share tab shows where it stands.";
 
 function copy(text: string, what: string) {
   navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}.`), () => toast("Could not copy. Select the text and copy it by hand."));
@@ -101,7 +101,7 @@ export function AfterApproval(props: { open: boolean; onClose: () => void; roleI
   const note = d ? interviewersNote(d.interviewers) : null;
   // Not while it is being got ready: until the worker opens the role the server has no boards to name, and the line would be wrong for a moment.
   const noBoards = d && !preparing && !props.editWhileOpen ? noBoardsLine(d.boards) : null;
-  const outdated = props.editWhileOpen && d ? outdatedBoardsLine(d.postings.filter((p) => p.showsOldVersion).map((p) => p.channel), d.whoPosts) : null;
+  const outdated = props.editWhileOpen && d ? outdatedBoardsLine(d.postings.filter((p) => p.showsOldVersion).map((p) => p.channel)) : null;
   const goTo = (tab: "posting" | "plan") => { props.onClose(); props.onOpenTab(tab); };
   return (
     <Dialog

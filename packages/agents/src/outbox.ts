@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_PERSON_ROUTE_STATUSES, isCompanyVerified, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, autoTimesUnderTakeover, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, raiseAlertOnce, zonedParts } from "@ros/core";
+import { DECISION_STAGES, emit, errorForLog, lockedAmong, nextContactWindow, notify, raiseAlert, raiseAlertOnce, zonedParts } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviews, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -159,11 +159,6 @@ const LEFT_PROCESS = new Set(["withdrawn", "rejected", "declined", "talent_pool"
 const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_later", "screen_not_started_reminder", "screen_idle_reminder", "screen_review_reminder", "screen_resume"]);
 /** Messages whose link opens the interview-time picker: dead once the offer lapsed or a time was picked. */
 const SLOT_LINK_TEMPLATES = new Set(["interview_slots", "interview_slots_reminder"]);
-/**
- * Why the times email of an automatic set of new times did not go: an ITS recruiter took the role over while it waited
- * (`autoTimesUnderTakeover`). The set's run reads it to end the set for the takeover.
- */
-export const AUTO_TIMES_TAKEN_OVER = "an ITS recruiter is running the role now, so the automatic new times do not go";
 /** Why a confirmation or a reminder of a booked time did not go: that time no longer stands. */
 export const INTERVIEW_CHANGED_SINCE = "the interview changed since it was written";
 /** Why a reminder did not go: it waited past the moment its words are true for ("tomorrow", "in about two hours"). */
@@ -203,8 +198,8 @@ function bookedTimeStale(message: { attempt: number; which: string | null }, iv:
  * request, an invitation to a next step whose person has since left the process (a closing message, such as the
  * decision or a cancellation, still goes), a link to a step that has ended since (a screening conversation no longer
  * open, interview times no longer on offer: the closing note of the step still goes), a confirmation or reminder of a
- * time that no longer stands (`bookedTimeStale`; a retry of one after a soft bounce too), the times of an automatic set of new times for a role an ITS recruiter
- * took over meanwhile, a decision message whose decision no longer applies, or a close-out note to someone a change of
+ * time that no longer stands (`bookedTimeStale`; a retry of one after a soft bounce too), a decision message whose
+ * decision no longer applies, or a close-out note to someone a change of
  * plan has opened since: it says nobody has reviewed them, and the team can now. Read again just before a release and
  * just before a send, because a message can wait for days. The answer to a privacy request always goes.
  */
@@ -221,7 +216,6 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
   const slotApps = appsWith(SLOT_LINK_TEMPLATES);
   const openScreen = new Set((screenApps.length ? await q.select({ a: screens.applicationId }).from(screens).where(and(inArray(screens.applicationId, screenApps), inArray(screens.status, [...SCREEN_PERSON_ROUTE_STATUSES]))) : []).map((s) => s.a));
   const openOffer = new Set((slotApps.length ? await q.select({ a: interviews.applicationId }).from(interviews).where(and(inArray(interviews.applicationId, slotApps), eq(interviews.status, "scheduling"))) : []).map((i) => i.a));
-  const takenOver = await autoTimesUnderTakeover(q, relevant.filter((r) => r.templateKey === "interview_slots").map((r) => r.idempotencyKey).filter((k): k is string => !!k));
   const closeOuts = appsWith(new Set(["close_out"]));
   const stillLocked = await lockedAmong(q, closeOuts);
   // A retry of a confirmation or a reminder (a soft bounce tried again) is about the same booked time as the message it repeats,
@@ -240,7 +234,6 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
       : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && ((SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId)) || (SLOT_LINK_TEMPLATES.has(template) && !openOffer.has(r.applicationId))) ? "the step it invites to has ended since it was written"
       : time ? bookedTimeStale(time, booked.get(time.interviewId), now)
-      : r.idempotencyKey && takenOver.has(r.idempotencyKey) ? AUTO_TIMES_TAKEN_OVER
       : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
       : r.applicationId && template === "close_out" && !stillLocked.has(r.applicationId) ? "the team can read this application now"
       : null;
@@ -318,7 +311,7 @@ export function heldForUndo(templateKey: string | null | undefined): boolean {
 }
 
 /**
- * Undo (plan G9): a message a person sent (someone on the team, or an ITS recruiter working under a grant) is withdrawn
+ * Undo (plan G9): a message someone on the team sent is withdrawn
  * during its Undo window, while it still waits in the outbox. Only the messages a person's Send holds for that window
  * (`heldForUndo`), and only until the moment its Send set (`sendAt` on its `message.queued` fact): an invitation or a
  * note a workflow sent for them, a message an approver let go at once, or one saved for the ITS company check has no
@@ -328,7 +321,7 @@ export function heldForUndo(templateKey: string | null | undefined): boolean {
 export async function undoQueuedMessage(q: Queryable, input: { communicationId: string; applicationId: string; actor: Actor; now: Date }): Promise<{ templateKey: string | null }> {
   const [row] = await q.select().from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.applicationId, input.applicationId), eq(communications.direction, "outbound"))).limit(1);
   if (!row) throw new UndoError("not_found", "That message was not found.");
-  if ((row.sentBy.kind !== "user" && row.sentBy.kind !== "recruiter") || !heldForUndo(row.templateKey)) throw new UndoError("not_yours", "Only a message someone on the team sent can be undone; this one was sent by the product.");
+  if (row.sentBy.kind !== "user" || !heldForUndo(row.templateKey)) throw new UndoError("not_yours", "Only a message someone on the team sent can be undone; this one was sent by the product.");
   if (row.status === "cancelled") throw new UndoError("already_sent", "That message was already withdrawn.");
   if (row.status === HELD_STATUS) throw new UndoError("not_undoable", "This message is saved until ITS confirms your company, and Undo works only in the seconds after Send.");
   const [queued] = await q.select({ payload: events.payload }).from(events).where(and(eq(events.type, "message.queued"), eq(events.subjectId, row.id))).limit(1);

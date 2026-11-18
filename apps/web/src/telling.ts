@@ -163,32 +163,6 @@ export function safetyNetDate(decidedAt: string, days = SAFETY_NET_WORKING_DAYS,
   return companyDay ? namedDay(companyDay(new Date(t))) : new Date(t);
 }
 
-/** Days after applying from which someone locked hears by the date they were promised (packages/core `CLOSE_OUT_SENDS_FROM_DAYS`). */
-export const LOCKED_HEARS_FROM_DAYS = 29;
-
-/** The calendar day (YYYY-MM-DD) of a moment on the reader's own clock. */
-function readerDay(at: Date): string {
-  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
-}
-
-/**
- * The safety net's day for someone locked (the plans of 5 November 2026, Rule 2), who was promised a date when they
- * applied: the earlier of `on` (five working days, `safetyNetDate`) and the day before that date, or today once that day has
- * passed, as the daily check counts it (packages/agents `untoldFallbackDay`); on the company's calendar when its `timeZone`
- * is known, else the reader's. `on` itself for anyone else (the second look at the safety-net day fix, 12 November 2026:
- * the message went up to a week before the day named).
- */
-export function lockedSafetyNetDay(on: Date | null, person: { lockedAt?: string | null; createdAt?: string | null }, now: Date = new Date(), timeZone?: string | null): Date | null {
-  const applied = person.lockedAt && person.createdAt ? Date.parse(person.createdAt) : Number.NaN;
-  if (!on || Number.isNaN(on.getTime()) || Number.isNaN(applied)) return on;
-  const dayOf = (timeZone ? dayIn(timeZone) : null) ?? readerDay;
-  const promised = dayOf(new Date(applied + LOCKED_HEARS_FROM_DAYS * DAY));
-  const today = dayOf(now);
-  const by = promised > today ? promised : today;
-  // `on` reads as its day on the reader's clock: noon of the company's day (`namedDay`), or the reader's own count
-  return by < readerDay(on) ? namedDay(by) : on;
-}
-
 /**
  * The note under a message or an invitation that uses the line the assistant suggested (Q28). Once kept, the assistant
  * helped, however the line was changed afterwards: the email says so until the person takes the line out (while it is
@@ -203,13 +177,13 @@ export function suggestedLineNote(whole: boolean, where: "footer" | "invitation"
 /**
  * The safety net (Q27) said at the moment a decision is filed, for lines that would otherwise read as "nothing is ever
  * sent until a person sends it". With the company's setting known: "sends" means the standard message goes by itself;
- * otherwise a recruiter is brought in and nothing is sent. Without it, both are said. `what` names the message.
+ * otherwise the team is reminded and nothing is sent. Without it, both are said. `what` names the message.
  */
 export function safetyNetPromise(policy?: DeclineMessagePolicy | null, what = "the standard message"): string {
   const within = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days`;
   if (policy === "sends") return `${within}, ${what} goes to them by itself.`;
-  if (policy === "needs_approval" || policy === "not_sent") return `Nothing is sent by itself: ${within.charAt(0).toLowerCase()}${within.slice(1)}, an ITS recruiter is brought in to make sure they are told.`;
-  return `${within}, ${what} goes by itself (if your settings ask for approval or keep these messages with a person, an ITS recruiter is brought in instead and nothing is sent).`;
+  if (policy === "needs_approval" || policy === "not_sent") return `Nothing is sent by itself: ${within.charAt(0).toLowerCase()}${within.slice(1)}, your team is reminded.`;
+  return `${within}, ${what} goes by itself (if your settings ask for approval or keep these messages with a person, your team is reminded instead and nothing is sent).`;
 }
 
 /** "Tuesday, October 14". */
@@ -218,51 +192,41 @@ export function dayWords(d: Date): string {
 }
 
 /**
- * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself or not at all (`tellOneLocked`): with no email
- * address on file nothing goes to them and nobody is brought in, whatever the day (17 November 2026). Only ITS reads it.
- */
-export const LOCKED_NO_EMAIL_LINE = "No message goes: no email address on file.";
-
-/**
  * The safety net in one short line (founder decision D-03 A, 14 Oct 2026), said wherever a decision is called private:
  * the day the standard message goes by itself if nobody tells them first or, under settings that keep these messages
- * with a person (or with no address on file), the day an ITS recruiter is brought in instead. `on` is that day when it
- * is known (`safetyNetDate`, or the day the API names); without it the line says "after 5 working days". With the
- * setting unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message. Someone
- * `locked` with no address reads `LOCKED_NO_EMAIL_LINE`.
+ * with a person (or with no address on file), the day the team is reminded instead. `on` is that day when it is known
+ * (`safetyNetDate`, or the day the API names); without it the line says "after 5 working days". With the setting
+ * unknown, both ways are said. `who` names the candidate ("them" by default); `what` names the message.
  */
-export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string; locked?: boolean }): string {
-  if (input.locked && input.hasEmail === false) return LOCKED_NO_EMAIL_LINE;
+export function safetyNetShort(input: { policy?: DeclineMessagePolicy | null; hasEmail?: boolean | null; on?: Date | null; who?: string | null; what?: string }): string {
   const who = input.who?.trim() || "them";
   const what = input.what ?? "the standard message";
   const when = input.on && !Number.isNaN(input.on.getTime()) ? `on ${dayWords(input.on)}` : `after ${SAFETY_NET_WORKING_DAYS} working days`;
   if (input.policy === "sends" && input.hasEmail !== false) return `If nobody tells ${who} first, ${what} goes by itself ${when}.`;
-  if (input.policy || input.hasEmail === false) return `If nobody tells ${who} first, an ITS recruiter is brought in ${when}. Nothing is sent by itself.`;
-  return `If nobody tells ${who} first, ${what} goes by itself ${when} (or an ITS recruiter is brought in, if your settings say so).`;
+  if (input.policy || input.hasEmail === false) return `If nobody tells ${who} first, your team is reminded ${when}. Nothing is sent by itself.`;
+  return `If nobody tells ${who} first, ${what} goes by itself ${when} (or your team is reminded, if your settings say so).`;
 }
 
 /** What the safety net already did about this decision, from the history (`application.untold_fallback`). */
-export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "sent" | "recruiter"; at: string } | null {
+export function safetyNetActed(timeline: readonly TimelineEvent[]): { action: "sent" | "reminded"; at: string } | null {
   const e = [...timeline].filter((x) => x.type === "application.untold_fallback").sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt))[0];
   if (!e) return null;
-  // Locked when their job closed (Rule 2), with nobody to send it to: nothing went, and no recruiter was brought in either.
+  // Locked when their job closed (Rule 2), with nobody to send it to: nothing went, and nobody was reminded either.
   if (e.payload.locked && e.payload.action !== "sent") return null;
-  return { action: e.payload.action === "sent" ? "sent" : "recruiter", at: e.occurredAt };
+  return { action: e.payload.action === "sent" ? "sent" : "reminded", at: e.occurredAt };
 }
 
 /**
  * The safety net, in one short sentence on the "not told yet" card (Q27; founder decision D-03 A): on which day the
  * standard message goes by itself if nobody tells them first; or, when the settings ask for approval, keep messages with
- * a person, or there is no address, that a recruiter is brought in that day and nothing is sent. Null when nothing waits
+ * a person, or there is no address, that the team is reminded that day and nothing is sent. Null when nothing waits
  * on it (told already, or a message waits for an approver). With the company's `timeZone`, the day the API names has
- * come when the company's today reaches it, as the daily check counts it, and the day a recruiter was brought in is the
+ * come when the company's today reaches it, as the daily check counts it, and the day the team was reminded is the
  * company's; without it, the reader's own calendar (the second review of the live-test fixes, 12 November 2026: a reader
- * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles). For
- * someone locked the day can come sooner, by the date they were promised (`untoldFallbackDay`), so the line says only
- * that the message goes with the next daily check; with no address on file, that no message goes (`LOCKED_NO_EMAIL_LINE`).
+ * in Pakistan read "5 working days have passed" at noon on the named day there, the evening before in Los Angeles).
  */
 export function safetyNetLine(input: {
-  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null; lockedAt?: string | null };
+  a: Pick<ApplicationDetail, "stage" | "toldState" | "stageChangedAt" | "timeline" | "candidate" | "declineMessage"> & { rejectedAt?: string | null; untoldFallbackOn?: string | null };
   waitingApproval: boolean;
   now?: Date;
   timeZone?: string | null;
@@ -272,8 +236,7 @@ export function safetyNetLine(input: {
   const name = a.candidate.firstName?.trim() || null;
   const companyDay = input.timeZone ? dayIn(input.timeZone) : null;
   const acted = safetyNetActed(a.timeline);
-  if (acted?.action === "recruiter") return `An ITS recruiter was brought in on ${dayWords(companyDay ? namedDay(companyDay(new Date(acted.at))) : new Date(acted.at))} to make sure ${name ?? "they"} ${name ? "is" : "are"} told. You can still send the message or record it.`;
-  if (a.lockedAt && !a.candidate.email) return LOCKED_NO_EMAIL_LINE;
+  if (acted?.action === "reminded") return `Your team was reminded on ${dayWords(companyDay ? namedDay(companyDay(new Date(acted.at))) : new Date(acted.at))} that ${name ?? "they"} ${name ? "has" : "have"} not been told. You can still send the message or record it.`;
   const decided = a.rejectedAt ?? a.stageChangedAt;
   const on = a.untoldFallbackOn ? namedDay(a.untoldFallbackOn) : safetyNetDate(decided);
   if (!on || Number.isNaN(on.getTime())) return null;
@@ -281,10 +244,9 @@ export function safetyNetLine(input: {
   const now = input.now ?? new Date();
   const come = a.untoldFallbackOn && companyDay ? companyDay(now) >= a.untoldFallbackOn.slice(0, 10) : on.getTime() <= now.getTime();
   if (come) {
-    if (sends && a.lockedAt) return `The standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`;
     return sends
       ? `${SAFETY_NET_WORKING_DAYS} working days have passed: the standard message goes to ${name ?? "them"} with the next daily check, unless you act now.`
-      : `${SAFETY_NET_WORKING_DAYS} working days have passed: an ITS recruiter is brought in with the next daily check. Nothing is sent by itself.`;
+      : `${SAFETY_NET_WORKING_DAYS} working days have passed: your team is reminded with the next daily check. Nothing is sent by itself.`;
   }
   return safetyNetShort({ policy: a.declineMessage, hasEmail: !!a.candidate.email, on, who: name });
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { CHAT_CAP_CLOSING, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, chatClosingMessage, chatNextLine, chatPacket, modelTurnCap } from "@ros/agents";
-import { applications, assessments, communications, companies, events, recruiterEscalations, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
+import { applications, assessments, communications, companies, events, notifications, rolePackets, roles, screens, unconfirmedScreens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -33,6 +33,8 @@ describe("a repeat submission's conversation is detached until the address owner
   const reload = async (id: string) => (await container.db.select().from(applications).where(eq(applications.id, id)))[0];
   const screensOf = async (applicationId: string) => container.db.select().from(screens).where(eq(screens.applicationId, applicationId));
   const eventsOn = async (applicationId: string) => container.db.select().from(events).where(eq(events.subjectId, applicationId));
+  /** The team's notices that this applicant asked to talk to a person. */
+  const toldTheyAsked = async (applicationId: string) => (await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).filter((n) => (n.action?.href ?? "").includes(applicationId));
   const confirmLink = (to: string) => mail().filter((m) => m.to === to && /^Please confirm/.test(m.subject)).at(-1)?.text.match(/\/c\/confirm-answers\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
 
   /**
@@ -227,10 +229,10 @@ describe("a repeat submission's conversation is detached until the address owner
     const first = await applyNow({ first: "Ivy", email: "ivy@repeat.test" });
     const again = await applyNow({ first: "Ivy", email: "ivy@repeat.test" });
     const ref = await refOf(again.outcome);
-    expect(await conversationPerson(container, ref, "contact_me")).toMatchObject({ message: expect.stringMatching(/A person from Repeat Dental will follow up with you/) });
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, first.applicationId))).toHaveLength(0);
+    expect(await conversationPerson(container, ref, "contact_me")).toMatchObject({ message: "Understood. The hiring team at Repeat Dental has been told you asked for a person. Thank you for your patience." });
+    expect(await toldTheyAsked(first.applicationId)).toHaveLength(0);
     expect(await confirmRepeat(container, confirmLink("ivy@repeat.test")!)).toMatchObject({ state: "person" });
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, first.applicationId))).toHaveLength(1);
+    expect((await toldTheyAsked(first.applicationId)).map((n) => n.title)).toEqual(["Ivy Applicant asked to talk to a person"]);
   });
 
   it("'Do this later' in a repeat submission's copy is worded for what it is, and repeat submissions cannot fill someone's mailbox: three such emails a day at most, the page the same", async () => {
@@ -287,7 +289,7 @@ describe("a repeat submission's conversation is detached until the address owner
     expect(await confirmRepeat(container, token)).toMatchObject({ state: "person" });
     // once confirmed, the line under the heading names the employer and the job, so no eyebrow repeats them
     expect(await (await app.request(`/c/confirm-answers/${token}`)).text()).toMatch(/<main><h1>A person will be in touch<\/h1><div class="card" role="status"><p>We have asked the hiring team at Repeat Dental to contact you about your application for [^<]+\./);
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, first.applicationId))).toHaveLength(1);
+    expect(await toldTheyAsked(first.applicationId)).toHaveLength(1);
     container.fake!.clearScripts();
   });
 

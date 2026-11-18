@@ -1,11 +1,11 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { MembershipRole } from "@ros/contracts";
-import { computeSlots, createEscalation, emit, freshSchedulingWindow, holidaysBetween, loadBusinessCalendar, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, roleTakenOver, slotStillAhead, slotStillFree, transition, zoneShortName } from "@ros/core";
-import { applications, candidates, communications, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
-import { AUTO_TIMES_TAKEN_OVER, HELD_REASON, briefForReader, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsLapsed, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
+import { computeSlots, emit, freshSchedulingWindow, holidaysBetween, loadBusinessCalendar, missingAvailability, newTimesOffered, noCommonTimesNoticeKey, notify, openFollowUpOf, slotStillAhead, slotStillFree, transition, zoneShortName } from "@ros/core";
+import { applications, candidates, companies, interviewFollowups, interviewParticipants, interviews, memberships, rolePackets, roles } from "@ros/db";
+import { HELD_REASON, briefForReader, composeInterviewerBrief, constraintsFor, createInterviewEvents, participantsOf, queueCommunication, renderInterviewerBriefText, sendInterviewConfirmation, sendInterviewReminder, sendSlotsLapsed, sendSlotsOffered, sendSlotsReminder, type InvitationNote } from "@ros/agents";
 import { randomToken } from "@ros/db";
 import { mailbox } from "@ros/integrations";
-import { newTimesStoppedByTakeover, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia } from "../new-times-reopen";
+import { withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia } from "../new-times-reopen";
 import type { StepContext, WorkflowDefinition } from "../types";
 
 /**
@@ -23,11 +23,9 @@ import type { StepContext, WorkflowDefinition } from "../types";
  *   these work"): over a fresh window from tomorrow, as long as the old one, never the old dates.
  * - `otherTimes`: the candidate said none of the offered times work; times that differ go out as a new attempt, so the
  *   candidate gets a new email (`variant` "other_times").
- * - `collisions`: chosen times that were taken by booking time, in this run; the third brings in a recruiter.
+ * - `collisions`: chosen times that were taken by booking time, in this run; at the third the team is told to set a time itself.
  * - `bookPick`: a time was picked (by the candidate, or for them) while no run waited for a pick; this run books it.
  * - `rejected`: the start times the candidate said none of worked; never offered to them again as "other times".
- * - `availabilityWaits`, `availabilityEscalated`: how many 48-hour waits passed with a required interviewer's hours
- *   still missing (the owner is reminded at each), and whether a recruiter was brought in (after the second).
  * - `noNewTimesTold`: the owner was told once that no time other than the rejected ones is free yet.
  * - `noCommonTimesKey`: the key (core `noCommonTimesNoticeKey`) the last "No common times" notice went out under; the
  *   notice goes again only when the key changes (audit 06-interviews, bug 105).
@@ -48,13 +46,13 @@ import type { StepContext, WorkflowDefinition } from "../types";
  * - `bookedAt`: when the person pressed. Reminder moments already past by then are skipped, so a time set for this
  *   afternoon never gets "Your interview is tomorrow".
  */
-type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; availabilityWaits?: number; availabilityEscalated?: boolean; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean; setByPerson?: boolean; moved?: { reason: string | null }; changed?: { reason: string | null }; wasBooked?: boolean; sameTime?: boolean; bookedAt?: string };
+type State = { interviewId: string; applicationId: string; roleId: string; roundKey: string; attempt: number; remindedAt?: string; offeredAt?: string; invitationNote?: InvitationNote | null; offerKind?: NewTimesOfferKind; followUpId?: string; via?: NewTimesVia; rescheduled?: boolean; freshWindow?: boolean; otherTimes?: boolean; variant?: "other_times"; collisions?: number; bookPick?: boolean; rejected?: string[]; noNewTimesTold?: boolean; noCommonTimesKey?: string; heldForCheck?: boolean; setByPerson?: boolean; moved?: { reason: string | null }; changed?: { reason: string | null }; wasBooked?: boolean; sameTime?: boolean; bookedAt?: string };
 
 const OFFER_WAIT_HOURS = 48;
 const REMIND_WAIT_HOURS = 48;
 const TOKEN_DAYS = 14;
 const AVAILABILITY_WAIT_HOURS = 48;
-/** Chosen times taken by booking time before a recruiter is asked to arrange it (real collisions only, never reschedules). */
+/** Chosen times taken by booking time before the team is told to set a time itself (real collisions only, never reschedules). */
 const MAX_COLLISIONS = 3;
 
 /**
@@ -128,30 +126,19 @@ async function stillOursAfterLock(ctx: StepContext<State>, b: Bundle): Promise<b
 }
 
 /**
- * The one automatic set of new times, checked again just before its email is written (founder questions 7 and 8), under
- * the application's and the follow-up's locks (the order every path takes them). A set stopped while it was being
- * prepared (the candidate replied asking for a person or saying no) sends nothing; an ITS recruiter who took the role over
- * since stops it here, and the team is told and the recruiter brought in. That includes a takeover that began while its
- * email waited for the ITS check: the outbox withdrew the email when ITS confirmed the company (`AUTO_TIMES_TAKEN_OVER`).
- * Either way the interview goes back to cancelled and this run ends; so does an interview that changed while this step
- * waited for the lock. False when the email goes as usual, which includes a set already sent being offered again (after
- * "none of these work", or a picked time that was taken) and a times email already on its way.
+ * The one automatic set of new times, checked again just before its email is written (founder question 8), under the
+ * application's and the follow-up's locks (the order every path takes them). A set stopped while it was being prepared
+ * (the candidate replied asking for a person or saying no) sends nothing: the interview goes back to cancelled and this
+ * run ends; so does an interview that changed while this step waited for the lock. False when the email goes as usual,
+ * which includes a set already sent being offered again (after "none of these work", or a picked time that was taken)
+ * and a times email already on its way.
  */
 async function automaticSetStops(ctx: StepContext<State>, b: Bundle): Promise<boolean> {
   if (!(await stillOursAfterLock(ctx, b))) return true;
   const [f] = await ctx.q.select().from(interviewFollowups).where(eq(interviewFollowups.id, ctx.state.followUpId!)).limit(1).for("update");
   if (!f || f.resolvedAt || f.currentInterviewId !== b.iv.id) return false;
-  if (f.autoState === "not_sent" && (f.autoReason === "candidate_replied" || f.autoReason === "takeover")) {
-    await withdrawNewTimesInterview(ctx.q, { followUp: f, reason: f.autoReason, actor: ctx.actor });
-    return true;
-  }
-  if (f.autoState !== "preparing") return false;
-  const [email] = await ctx.q.select({ status: communications.status, error: communications.error }).from(communications).where(eq(communications.idempotencyKey, `slots:${b.iv.id}:${b.iv.attempt}`)).limit(1);
-  const withdrawnForTakeover = email?.status === "cancelled" && email.error === AUTO_TIMES_TAKEN_OVER;
-  if (!withdrawnForTakeover && !(await roleTakenOver(ctx.q, ctx.companyId, b.role.id))) return false;
-  const stopped = await stopPreparedNewTimes(ctx.q, { followUp: f, reason: "takeover", actor: ctx.actor, now: ctx.now });
-  if (!stopped) return false;
-  await newTimesStoppedByTakeover(ctx.q, { followUp: stopped, actor: ctx.actor, now: ctx.now, workflowRunId: ctx.run.id });
+  if (f.autoState !== "not_sent" || f.autoReason !== "candidate_replied") return false;
+  await withdrawNewTimesInterview(ctx.q, { followUp: f, actor: ctx.actor });
   return true;
 }
 
@@ -200,7 +187,6 @@ export const scheduleInterview: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "prepare",
   maxAttempts: 5,
-  escalationKind: "candidate_issue",
   steps: {
     async prepare(ctx) {
       const b = await load(ctx);
@@ -217,24 +203,17 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       // none is left out of the merge; for anyone else the owner is asked, and the interviewer too.
       const missing = missingAvailability(constraints);
       if (missing.length) {
-        // Asked once at first; reminded at each 48-hour wait that passes with the hours still missing (never more often);
-        // after the second, a recruiter is brought in, once, so the interview is never stuck with nobody hearing of it.
+        // Asked once at first; reminded at each 48-hour wait that passes with the hours still missing (never more often).
         const timerWake = ctx.wake?.kind === "timer";
-        const waits = (ctx.state.availabilityWaits ?? 0) + (timerWake ? 1 : 0);
         const who = b.participants.filter((p) => missing.some((m) => m.userId === p.userId));
         if (!(await ctx.alreadyDone("prepare")) || timerWake) {
           const all = missing.length === constraints.length;
           await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.no_availability", title: all ? `Nobody's availability is known for ${b.candidate.firstName}'s interview` : `${who.map((p) => p.firstName).join(" and ")} ${who.length === 1 ? "has" : "have"} no availability for ${b.candidate.firstName}'s interview`, body: `${timerWake ? "Still waiting: " : ""}${who.map((p) => p.firstName).join(", ")} need to connect a calendar or declare hours before times can be offered.${all ? "" : " The other interviewers are ready."}${newTimesSentence(b, ctx)}`, action: { label: "Set a date and time", href: `/interviews/${b.iv.id}` } });
           await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.declare_availability", title: "Tell us when you can interview", body: `${b.candidate.firstName} ${b.candidate.lastName} is waiting for interview times for ${b.role.title}. Connect your calendar or declare your hours.`, action: { label: "My availability", href: "/setup#setup-availability" }, userIds: who.map((p) => p.userId) });
         }
-        let escalated = !!ctx.state.availabilityEscalated;
-        if (timerWake && waits >= 2 && !escalated) {
-          await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: b.role.id, applicationId: b.app.id, kind: "candidate_issue", question: `${b.candidate.firstName} ${b.candidate.lastName} has been waiting four days for interview times for ${b.role.title}: ${who.map((p) => p.firstName).join(" and ")} ${who.length === 1 ? "has" : "have"} not added any hours or connected a calendar. Please help the team arrange a time.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, summaryOrigin: "system" });
-          escalated = true;
-        }
-        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated"], until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "waiting for an interviewer's availability" }, state: { freshWindow: true, availabilityWaits: waits, availabilityEscalated: escalated }, resumeStep: "prepare" };
+        return { kind: "wait", wait: { kind: "event", eventTypes: ["availability.updated"], until: hoursFromNow(ctx, AVAILABILITY_WAIT_HOURS), reason: "waiting for an interviewer's availability" }, state: { freshWindow: true }, resumeStep: "prepare" };
       }
-      return { kind: "next", step: "propose_slots", ...(ctx.state.availabilityWaits ? { state: { availabilityWaits: 0 } } : {}) };
+      return { kind: "next", step: "propose_slots" };
     },
 
     async propose_slots(ctx) {
@@ -371,7 +350,7 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       await sendSlotsLapsed(ctx.q, ctx.services.integrations, messageInput(b, ctx));
       // New times for someone under Cancelled that lapsed: they stay there, and only a person sends again (one automatic set, ever).
       const followUp = await openFollowUpOf(ctx.q, b.app.id);
-      const body = followUp?.currentInterviewId === b.iv.id ? "Four days passed with a reminder. They stay under Cancelled: send new times again, or decide." : "Four days passed with a reminder. Set a date and time, decide, or bring in a recruiter.";
+      const body = followUp?.currentInterviewId === b.iv.id ? "Four days passed with a reminder. They stay under Cancelled: send new times again, or decide." : "Four days passed with a reminder. Set a date and time, or decide.";
       await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.offer_expired", title: `${b.candidate.firstName} ${b.candidate.lastName} did not pick an interview time`, body, action: { label: "Set a date and time", href: `/interviews/${b.iv.id}` } });
       return { kind: "complete" };
     },
@@ -398,15 +377,14 @@ export const scheduleInterview: WorkflowDefinition<State> = {
       if (!slotStillFree(slot, constraints)) {
         await emit(ctx.q, { type: "interview.slot_taken", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "interview", id: b.iv.id }, payload: { slotId: slot.id, attempt: ctx.state.attempt }, correlationId: ctx.run.id });
         const nextAttempt = b.iv.attempt + 1;
-        // Only real collisions count toward bringing in a recruiter; reschedules, cancels and reopens move the attempt too.
+        // Only real collisions count toward the limit; reschedules, cancels and reopens move the attempt too.
         const collisions = (ctx.state.collisions ?? 0) + 1;
         // Guarded: a team reschedule committed meanwhile already moved the attempt; this run then ends instead of taking
         // the same attempt number as the new run.
         const [moved] = await ctx.q.update(interviews).set({ selectedSlot: null, attempt: nextAttempt }).where(and(eq(interviews.id, b.iv.id), eq(interviews.attempt, ctx.state.attempt), eq(interviews.status, "scheduling"))).returning({ id: interviews.id });
         if (!moved) return { kind: "complete" };
         if (collisions >= MAX_COLLISIONS) {
-          await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.stuck", title: `Times keep colliding for ${b.candidate.firstName}'s interview`, body: "Three chosen times were taken by the time we booked them. A recruiter has been asked to sort it out with the candidate.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
-          await createEscalation(ctx.q, { companyId: ctx.companyId, roleId: b.role.id, applicationId: b.app.id, kind: "candidate_issue", question: `${b.candidate.firstName} ${b.candidate.lastName} chose three interview times that were each taken by booking time (${b.role.title}). Please arrange a time directly.`, requestedBy: ctx.actor, workflowRunId: ctx.run.id, summaryOrigin: "system" });
+          await notify(ctx.q, { companyId: ctx.companyId, about: b.app.id, kind: "interview.stuck", title: `Times keep colliding for ${b.candidate.firstName}'s interview`, body: "Three chosen times were taken by the time we booked them. Set a date and time with the candidate yourself.", action: { label: "Open the interview", href: `/interviews/${b.iv.id}` } });
           return { kind: "complete" };
         }
         // a fresh window too: the re-proposal never uses days that have passed

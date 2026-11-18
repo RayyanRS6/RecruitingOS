@@ -1,6 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { isCompanyVerified, type AutoActionLine, type AutoActionsOnOpen, type BoardChoice, type BoardChoiceView, type ClosingDateView, type PostingTaskKind, type PostingTaskView, type PublishingState, type RolePacket, type SharePlace, type ShareView } from "@ros/contracts";
-import { BOARD_CHANNELS, BOARD_NAME, SHARE_PLACES, chosenBoards, closingDateRequired, closingDateView, isPostingTask, postingTaskLabel, publishChannelsFor, zipRecruiterOffered, type ApplicationLinkRow, type PostingRow, type PostingTaskRow } from "@ros/core";
+import { isCompanyVerified, type AutoActionLine, type AutoActionsOnOpen, type BoardChoice, type BoardChoiceView, type ClosingDateView, type PublishingState, type RolePacket, type SharePlace, type ShareView } from "@ros/contracts";
+import { BOARD_CHANNELS, BOARD_NAME, SHARE_PLACES, chosenBoards, closingDateRequired, closingDateView, publishChannelsFor, zipRecruiterOffered, type ApplicationLinkRow, type PostingRow } from "@ros/core";
 import { approvalRequests, companies, workflowRuns, type Tx } from "@ros/db";
 
 /**
@@ -70,19 +70,6 @@ export async function publishingState(tx: Tx, input: { role: RoleRow; company: C
   const [running] = await tx.select({ id: workflowRuns.id }).from(workflowRuns).where(and(eq(workflowRuns.companyId, role.companyId), eq(workflowRuns.workflowKey, "publish_role"), eq(workflowRuns.status, "running"), sql`${workflowRuns.subject}->>'id' = ${role.id}`)).limit(1);
   if (missing.length || running) return { state: "preparing", pollAfterSeconds: 2, message: "Getting the job ready on its channels. This takes a moment.", checksPending: 0 };
   return { state: "ready", pollAfterSeconds: checksPending ? 10 : null, message: "Everything is prepared. Each channel shows where it stands; nothing is called live until its address has been checked.", checksPending };
-}
-
-/** The latest posting task of each posting, with the name of the recruiter who has it (a name only). */
-export function postingTaskViews(rows: PostingTaskRow[], channelOf: (postingId: string) => string | null): Map<string, PostingTaskView> {
-  const latest = new Map<string, PostingTaskRow>();
-  for (const r of rows) if (r.postingId && !latest.has(r.postingId) && isPostingTask(r.kind)) latest.set(r.postingId, r);
-  const out = new Map<string, PostingTaskView>();
-  for (const [postingId, r] of latest) {
-    const channel = channelOf(postingId);
-    const board = channel && channel in BOARD_NAME ? BOARD_NAME[channel as keyof typeof BOARD_NAME] : "the board";
-    out.set(postingId, { id: r.id, kind: r.kind as PostingTaskKind, status: r.status, label: postingTaskLabel(r.kind as PostingTaskKind, board), recruiterName: r.recruiterName, createdAt: r.createdAt, resolvedAt: r.resolvedAt, notDone: r.notDone, note: r.note });
-  }
-  return out;
 }
 
 /** "Bookkeeper in Irvine, CA". */

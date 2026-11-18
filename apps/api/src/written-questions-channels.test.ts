@@ -9,7 +9,7 @@ import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { roleScreeningFunnel } from "./services/screens";
-import { signInAs, useLaterApplyFlow } from "./test-helpers";
+import { useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave S8, slice A (spec-s8-followups.md section A): the chats without a plan, by text and on the web from an emailed
@@ -215,19 +215,12 @@ describe("the company's written questions in chats by text and from an emailed l
     }
   });
 
-  it("a recruiter's notes from a call on such a chat are filed under the written questions it asks, the ones the panel lists", async () => {
+  it("the panel's view of such a chat before it is sent: none of their words, but which list it asks, and those questions by name", async () => {
     const { application } = await apply({ first: "Quinn" });
     expect((await screenOf(application.id)).progress.asks).toBe("written");
-    // the panel's view of the unsent chat: none of their words, but which list it asks, and those questions by name
     const detail = (await (await json("GET", `/api/v1/applications/${application.id}`)).json()) as { screens: Array<{ answersShared: boolean; progress: { asks?: string } }>; packetLabels: { written: Array<{ key: string }> } };
     expect(detail.screens[0]).toMatchObject({ answersShared: false, progress: { asks: "written" } });
     expect(detail.packetLabels.written.map((w) => w.key)).toEqual(written.map((w) => w.key));
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
-    const notes = { notes: [{ questionKey: "wq_calm", text: "Called her: she talks nervous patients through each step." }, { questionKey: screening[0].key, text: "A note under a question this chat does not ask." }], complete: false };
-    const res = await app.request(`/api/v1/applications/${application.id}/screen/recruiter-notes`, { method: "POST", headers: { "content-type": "application/json", cookie: recruiter }, body: JSON.stringify(notes) });
-    expect(res.status, await res.clone().text()).toBe(200);
-    const filed = (await screenOf(application.id)).transcript.filter((t) => t.role === "recruiter");
-    expect(filed.map((t) => t.questionKey)).toEqual(["wq_calm", undefined]);
   });
 
   it("the interviewer brief and the role's figures name those answers in the company's words, never by key, never with the note", async () => {

@@ -5,7 +5,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv, signupModeOf } from "./env";
 import { maySignUp } from "./services/companies";
-import { signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
+import { signInAdmin, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
  * Invitation-only sign-up (GATE-V2, GAP3-2, GAP3-6). Open sign-up (founder decision B7) lets anyone signed in with
@@ -78,10 +78,8 @@ describe("who may create a company (maySignUp)", () => {
     for (const email of ["rae@mail.second-partner.test", "rae@evil-second-partner.test", "rae@second-partner.test.evil.test", "second-partner.test", "@second-partner.test"]) expect(maySignUp(byInvitation, person(email)), email).toBe(false);
   });
 
-  it("a platform administrator, listed or not; an ITS recruiter or anyone else only when listed", () => {
+  it("a platform administrator, listed or not; anyone else only when listed", () => {
     expect(maySignUp(byInvitation, person("ada@its.test", "platform_admin"))).toBe(true);
-    expect(maySignUp(byInvitation, person("rita@its.test", "its_recruiter"))).toBe(false);
-    expect(maySignUp(byInvitation, person("rita@second-partner.test", "its_recruiter"))).toBe(true);
     expect(maySignUp(byInvitation, person("sam@stranger.test"))).toBe(false);
     // no list: platform administrators only
     const nobody = loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "invite" });
@@ -148,7 +146,7 @@ describe("by invitation over HTTP (SIGNUP_MODE=invite)", () => {
   });
 
   it("a platform administrator sets companies up as before, more than one", async () => {
-    const ada = await signInStaff(app, container, "ada@its.test", "platform_admin", "Ada Admin");
+    const ada = await signInAdmin(app, container, "ada@its.test", "Ada Admin");
     expect((await create(ada, "Set Up One")).status).toBe(201);
     expect((await create(ada, "Set Up Two")).status).toBe(201);
   });
@@ -159,7 +157,7 @@ describe("by invitation over HTTP (SIGNUP_MODE=invite)", () => {
     expect(await signupFor(await google("sam@stranger.test"))).toEqual({ mode: "invite", allowed: false, contact: "recruiting@its.example" });
     const listed = await signupFor(await google("quinn@second-partner.test"));
     expect(listed).toEqual({ mode: "invite", allowed: true, contact: "recruiting@its.example" });
-    expect((await signupFor(await signInStaff(app, container, "ada@its.test", "platform_admin", "Ada Admin"))).allowed).toBe(true);
+    expect((await signupFor(await signInAdmin(app, container, "ada@its.test", "Ada Admin"))).allowed).toBe(true);
     expect(JSON.stringify([anonymous, listed])).not.toMatch(/pilot-partner|second-partner/i);
   });
 

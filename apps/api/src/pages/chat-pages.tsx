@@ -242,17 +242,8 @@ function closedWords(view: ConversationView): { title: string; lines: string[] }
       if (view.finishedOnACall) return { title: "This conversation is closed", lines: [`Someone working with the hiring team at ${co} went through the questions with you. People on the team make every decision, and you will hear from them either way.`, "Nothing else is needed from you here."] };
       // The same words for a first application and a repeat one: never the application's own link (a repeat's copy must not reveal it).
       return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, view.scoreComes ? SENT_RECORD_LINE : SENT_RECORD_NO_SCORE_LINE, "If anything else is needed from you, we will email you."] };
-    case "human_requested": {
-      // The time promised when they asked, never a new one each visit. Past it, the page cannot tell whether someone
-      // already called (the status stays the same), so it says how to chase it rather than that nobody did.
-      const asked = view.personAsked;
-      const when = !asked
-        ? `Someone working with the hiring team at ${co} will contact you. If nobody has been in touch, reply to any of our emails.`
-        : asked.overdue
-          ? `Someone working with the hiring team at ${co} was due to contact you by ${asked.dueWords}. If nobody has been in touch yet, reply to any of our emails and we will follow it up.`
-          : `Someone working with the hiring team at ${co} aims to contact you by ${asked.dueWords}.`;
-      return { title: "A person will be in touch", lines: [when, "Anything you answered here was not sent to the hiring team. Nothing else is needed from you here."] };
-    }
+    case "human_requested":
+      return { title: "The hiring team has been told", lines: [`The hiring team at ${co} has been told you asked to talk to a person. If nobody has been in touch, reply to any of our emails.`, "Anything you answered here was not sent to the hiring team. Nothing else is needed from you here."] };
     case "declined_by_candidate":
       return { title: "Your application is with the hiring team", lines: [`It went to the hiring team at ${co} without the conversation. People on the team review it, and you will hear from them either way.`] };
     case "paused":
@@ -313,7 +304,7 @@ function PersonPage(props: { view: ConversationView }) {
         </section>
         <section class="card" aria-labelledby="path-person">
           <h2 id="path-person">Have a person contact me</h2>
-          <p>A recruiter working with the hiring team at {view.companyName} will get in touch {view.personExpectation}, to go through the questions with you or answer yours.</p>
+          <p>The hiring team at {view.companyName} is told you asked to talk to a person, to go through the questions with you or answer yours.</p>
           <form method="post" action={`${base}/person`}>
             <input type="hidden" name="choice" value="contact_me" />
             <button class="btn secondary" type="submit">Have a person contact me</button>
@@ -421,8 +412,8 @@ candidatePages.get("/c/screen/:token/person", async (c) => {
 });
 
 /**
- * The choice (Q16): `send_without` sends the application on without the conversation; `contact_me` asks a recruiter to
- * get in touch within four business hours. Both are counted. The page then says what happens next.
+ * The choice (Q16): `send_without` sends the application on without the conversation; `contact_me` tells the hiring
+ * team they asked to talk to a person. Both are counted. The page then says what happens next.
  */
 candidatePages.post("/c/screen/:token/person", rateLimit(POLICIES.screenHuman), async (c) => {
   const container = c.get("container");

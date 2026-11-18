@@ -16,7 +16,7 @@ import { SAFETY_NET_WORKING_DAYS } from "./telling";
  * neither each person's day nor the company's message setting: the "Not told yet" list, the pool board's Review and
  * apply. The candidate's own page says the day (telling.ts safetyNetLine).
  */
-export const SAFETY_NET_NOTE = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).`;
+export const SAFETY_NET_NOTE = `If nobody tells them within ${SAFETY_NET_WORKING_DAYS} working days, the standard message goes by itself (or your team is reminded, if your settings say so).`;
 
 /** The one verdict word: the chip on each row and the Match filter. */
 export type Reading = MatchFit | "closer_look" | "none";

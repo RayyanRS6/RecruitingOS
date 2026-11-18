@@ -29,13 +29,13 @@ const { Home } = await import("@ros/web/src/pages/Home");
 const { roleStatus } = await import("@ros/web/src/role-status");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-const me = (role: string) => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "openai" } });
+const me = (role: string) => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "openai" } });
 const decide = (id: string, decision: string) => ({ label: decision === "approve" ? "Yes, interview" : "Not now", method: "POST" as const, path: `/api/v1/approvals/${id}/decide`, body: { decision } });
 
 const cards = [
   { kind: "decision", title: "Interview? Dental Hygienist", body: "Maria shows every must-have. Her license is active in California.", roleId: "r1", applicationId: "a1", approvalRequestId: "p1", actions: [decide("p1", "approve"), decide("p1", "reject"), { label: "Review first", method: "GET", path: "/roles/r1/talent?open=a1" }] },
   { kind: "decision", title: "Send this message to Ben Ortiz?", body: "Sam wrote to Ben Ortiz about Dental Hygienist (\"Friday\"):\n\nHi Ben, could you come in on Friday?", roleId: "r1", applicationId: "a2", approvalRequestId: "p2", actions: [{ label: "Yes, send it", method: "POST", path: "/api/v1/approvals/p2/decide", body: { decision: "approve" } }, { label: "Do not send", method: "POST", path: "/api/v1/approvals/p2/decide", body: { decision: "reject" } }, { label: "Open the candidate", method: "GET", path: "/roles/r1/talent?open=a2" }] },
-  { kind: "stuck", title: "3 candidates have waited over 5 days (Dental Hygienist)", body: "People are waiting. Ana Diaz has waited longest, 7 days; 2 more are waiting too. Decide what comes next, put them on hold until a date, or send them a note in your own words.", roleId: "r1", applicationId: "a3", actions: [{ label: "Decide", method: "GET", path: "/roles/r1/talent?open=a3" }, { label: "Hold until a date", method: "GET", path: "/roles/r1/talent?open=a3&step=hold" }, { label: "Send a note", method: "GET", path: "/roles/r1/talent?open=a3&message=1" }, { label: "See everyone waiting", method: "GET", path: "/roles/r1/talent" }, { label: "Have a recruiter review", method: "POST", path: "/api/v1/escalations", body: { kind: "review", roleId: "r1" } }] },
+  { kind: "stuck", title: "3 candidates have waited over 5 days (Dental Hygienist)", body: "People are waiting. Ana Diaz has waited longest, 7 days; 2 more are waiting too. Decide what comes next, put them on hold until a date, or send them a note in your own words.", roleId: "r1", applicationId: "a3", actions: [{ label: "Decide", method: "GET", path: "/roles/r1/talent?open=a3" }, { label: "Hold until a date", method: "GET", path: "/roles/r1/talent?open=a3&step=hold" }, { label: "Send a note", method: "GET", path: "/roles/r1/talent?open=a3&message=1" }, { label: "See everyone waiting", method: "GET", path: "/roles/r1/talent" }] },
   { kind: "screening", title: "Screening for Dental Hygienist: 2 invited", body: "Candidates answer in their own time; you will see the scorecard when they finish.", roleId: "r1", actions: [{ label: "See people", method: "GET", path: "/roles/r1/talent" }] },
   { kind: "draft", title: "Draft in progress: Front Desk Lead", body: "Pick up where you left off; nothing has been sent to anyone.", actions: [{ label: "Continue", method: "GET", path: "/roles/new?session=s1" }, { label: "Discard", method: "POST", path: "/api/v1/intake/sessions/s1/abandon" }] },
   { kind: "share", title: "Dental Hygienist is live. Share it now", body: "Send it to people you know, a school or a local group. Each place gets its own link.", roleId: "r1", actions: [{ label: "Share the job", method: "GET", path: "/roles/r1?tab=posting#share" }] },
@@ -64,19 +64,17 @@ function render(seed: { role?: string; cards?: unknown[] | null; summary?: strin
   if (seed.cards !== null) qc.setQueryData(["brief"], { generatedAt: "2026-10-14T09:00:00Z", summary: seed.summary ?? "4 things need you · 1 strong candidate ready · 1 at risk · 12 handled for you since yesterday.", cards: seed.cards ?? [setup, ...cards] });
   qc.setQueryData(["notifications", "unread"], seed.notifications ?? updates);
   qc.setQueryData(["roles"], seed.roles ?? roles);
-  qc.setQueryData(["escalations", "mine"], []);
   qc.setQueryData(["company"], { settings: {}, planKey: seed.trial ? "trial" : "starter", timezone: "America/Los_Angeles", usage: seed.usage ?? {}, trial: seed.trial ?? null });
   return renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Home)));
 }
 
 describe("Home's top", () => {
-  it("greets by first name, says in one line how many things need you, and keeps Start a hire and Bring in a recruiter", () => {
+  it("greets by first name, says in one line how many things need you, and keeps Start a hire", () => {
     const html = render();
     expect(html).toMatch(/<h1>Good (morning|afternoon|evening), Dana<\/h1>/);
     // two decisions, the long wait, the draft, the share and the closing date (not the screening chat), plus getting started
     expect(html).toContain('<p class="page-header-sub">7 things need you</p>');
     expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg[\s\S]*?<\/svg>Start a hire<\/a>/);
-    expect(html).toContain(">Bring in a recruiter</button>");
     expect(html).not.toContain("Today");
     // no eyebrow over the greeting (founder, 23 October 2026: fewer words); the greeting at the kit's hero size
     // (PageHeader hero), its h1 still bare, and no margin of its own (the page's gap spaces it)
@@ -102,7 +100,6 @@ describe("someone whose own company asked for access, at work in another company
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
     qc.setQueryData(["me"], me("interviewer"));
     qc.setQueryData(["brief"], { generatedAt: "2026-10-14T09:00:00Z", summary: "", cards: [] });
-    qc.setQueryData(["escalations", "mine"], []);
     qc.setQueryData(["auth", "config", "own request"], config);
     return { qc, html: renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, createElement(Home))) };
   };

@@ -28,7 +28,7 @@ export function payShownLabel(packet: { payShown?: boolean; payRequiredByLaw?: b
 }
 
 /** A team role as a person ("a hiring manager"), for sentences such as "planned: an owner, a hiring manager". */
-const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "someone from HR", interviewer: "an interviewer", recruiter: "a recruiter" };
+const ROLE_WORDS: Record<string, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "someone from HR", interviewer: "an interviewer" };
 export function roleWords(roles: string[]): string {
   return roles.map((r) => ROLE_WORDS[r] ?? r.replace(/_/g, " ")).join(", ");
 }
@@ -136,12 +136,6 @@ export function describeRoleEvent(e: RoleEvent): string {
     // read as if the candidates asked, and never "sent" for someone it did not go to
     "interview.new_times_batch": `New times for ${Number(p.requested ?? 0) === 1 ? "1 person" : `${Number(p.requested ?? 0)} people`} under Cancelled: ${Number(p.sent ?? 0)} going ahead${Number(p.notSent ?? 0) ? `, ${Number(p.notSent)} not sent` : ""}`,
     "outcome.recorded": "An outcome was recorded",
-    "recruiter.requested": "A recruiter was asked for help",
-    "recruiter.claimed": "An ITS recruiter picked it up",
-    "recruiter.resolved": "The ITS recruiter responded",
-    "recruiter.replied": "The ITS recruiter wrote about a request",
-    "customer.replied": "Someone on the team added a note to a recruiter request",
-    "recruiter.reopened": "A recruiter request was reopened",
   };
   return known[e.type] ?? e.type.replace(/[._]/g, " ");
 }

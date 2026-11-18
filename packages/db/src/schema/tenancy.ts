@@ -46,11 +46,6 @@ export type CompanySettings = {
   accessRequestEmailedAt?: string;
   /** Getting started (plan B2): who hid the card, the AI rules reviewed, job-board access confirmed by ITS. */
   onboarding?: CompanyOnboarding;
-  /**
-   * Who posts the job on the boards (plan D3): "its" (the default) gives an ITS recruiter a posting task per board,
-   * posted from the company's own board accounts; "self" leaves the posting package and the steps to the team.
-   */
-  boardPosting?: "its" | "self";
   /** The company has its own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered and prepared. */
   zipRecruiterPlan?: boolean;
   /**
@@ -139,7 +134,7 @@ export const sessions = pgTable(
     lastSeenAt: ts("last_seen_at"),
     ip: text("ip"),
     userAgent: text("user_agent"),
-    /** How the session was opened (magic_link, azure, google, email) and its assurance level; a second factor unlocks break-glass (D25). */
+    /** How the session was opened (magic_link, azure, google, email) and its assurance level; ITS staff need a second factor (D25). */
     identityProvider: text("identity_provider"),
     aal: text("aal"),
     mfaVerifiedAt: ts("mfa_verified_at"),

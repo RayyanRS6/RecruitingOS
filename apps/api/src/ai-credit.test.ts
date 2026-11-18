@@ -5,7 +5,7 @@ import { AI_CREDIT_USED_UP, creditHoldUsd, estimateCostUsd, outOfCredit, runProm
 import { INTAKE_COMPILE_MAX_TOKENS, runIntakeTurn, runScreenTurn, startIntakeSession } from "@ros/agents";
 import { AI_CREDIT_AVAILABLE, AI_HELP_BUSY_LINE, AI_HELP_LINE, AI_HELP_UPGRADE_QUESTION } from "@ros/contracts";
 import { AI_CREDIT_DRAFT_HOLD_USD, AI_CREDIT_SLACK_USD, aiCreditRoomForJob, aiCreditRoomSoon, aiCreditStanding, entitlements as allowance, holdAiCreditRows, reserveAiCredit } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, recruiterEscalations, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, applications, assessments, candidates, companies, entitlements, events, intakeSessions, notifications, screens, unconfirmedScreens, withPlatform, withTenant, workflowRuns, workflowSteps, type Tx } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider, FakeSmsAdapter } from "@ros/integrations";
 import { AI_OUTAGE_ALERT_KIND } from "@ros/workflows";
 import { createApp } from "./app";
@@ -185,7 +185,7 @@ describe("the AI credit", () => {
     expect(steps).toEqual([]);
     const notes = await container.db.select().from(notifications).where(eq(notifications.companyId, companyId));
     expect(notes.filter((n) => n.kind === "application.assessment_unavailable")).toEqual([]);
-    if (applicationIds.length) expect(await container.db.select().from(recruiterEscalations).where(inArray(recruiterEscalations.applicationId, applicationIds))).toEqual([]);
+    for (const id of applicationIds) expect(notes.filter((n) => n.kind === "screen.human_requested" && (n.action?.href ?? "").includes(id))).toEqual([]);
   };
 
   beforeAll(async () => {
@@ -513,13 +513,13 @@ describe("the AI credit", () => {
         expect(r.status, path).toBe(402);
         const error = await errorOf(r);
         expect(error).toMatchObject({ code: "limit_reached", message: AI_HELP_LINE.newJob, details: { upgrade: true } });
-        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/escalations", body: { topic: "plan", question: AI_HELP_UPGRADE_QUESTION } });
+        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } });
       }
       expect(await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, id))).toEqual([]);
       expect(await runsOf(id)).toEqual([]);
     });
 
-    it("a turn keeps the owner's words, offers an upgrade and no recruiter, and records no failure", async () => {
+    it("a turn keeps the owner's words, offers an upgrade and nothing else, and records no failure", async () => {
       const { cookie, id } = await newCompany();
       const sessionId = await draftOf(cookie);
       await spend(id, "9.950000");
@@ -529,7 +529,7 @@ describe("the AI credit", () => {
       const { reply, session } = await read<{ reply: { error: string; recovery: string; upgrade: boolean; proposedActions: Array<{ label: string; body: Record<string, unknown> }> }; session: { messages: Array<{ role: string; content: string }> } }>(r);
       expect(reply).toMatchObject({ error: AI_CREDIT_USED_UP, recovery: AI_HELP_LINE.turn, upgrade: true });
       expect(reply.proposedActions).toHaveLength(1);
-      expect(reply.proposedActions[0]).toMatchObject({ label: "Upgrade", body: { question: AI_HELP_UPGRADE_QUESTION } });
+      expect(reply.proposedActions[0]).toMatchObject({ label: "Upgrade", body: { reason: AI_HELP_UPGRADE_QUESTION } });
       expect(session.messages.at(-1)).toMatchObject({ role: "owner", content: "We also need Saturdays covered." });
       // the same through the answers and the wrapper
       const answers = await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/answers`, { answers: [], note: "And Sundays.", reply: true });
@@ -568,7 +568,7 @@ describe("the AI credit", () => {
         expect(r.status, path).toBe(402);
         const error = await errorOf(r);
         expect(error).toMatchObject({ code: "ai_credit_used_up", message: AI_HELP_LINE.draft, details: { upgrade: true } });
-        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", body: { question: AI_HELP_UPGRADE_QUESTION } });
+        expect(error.details.actions[0]).toMatchObject({ label: "Upgrade", body: { reason: AI_HELP_UPGRADE_QUESTION } });
       }
       const { session } = await read<{ session: { progress: unknown; messages: unknown[] } }>(await json(cookie, "GET", `/api/v1/intake/sessions/${sessionId}`));
       expect(session.progress).toBeNull();
@@ -747,7 +747,7 @@ describe("the AI credit", () => {
       // the same request about the plan as the Upgrade's, which opens the same sheet: only its label is different
       const talksToIts = (actions: Array<{ label: string; path: string; body: Record<string, unknown> }>) => {
         expect(actions).toHaveLength(1);
-        expect(actions[0]).toMatchObject({ label: "Talk to ITS", path: "/api/v1/escalations", body: { topic: "plan", question: AI_HELP_UPGRADE_QUESTION } });
+        expect(actions[0]).toMatchObject({ label: "Talk to ITS", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } });
       };
       const runs = (await runsOf(id)).length;
       const said: string[] = [];
@@ -1333,11 +1333,11 @@ describe("the AI credit", () => {
       const human = await conversationTurn(container, ref, { message: "HUMAN" });
       expect(human).toMatchObject({ kind: "reply", humanRequested: true });
       expect((await screenOf(a.id)).status).toBe("human_requested");
-      // a person asked for reaches a person, whatever the credit says
-      expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id))).length).toBe(1);
+      // the team is told she asked, whatever the credit says
+      expect((await container.db.select().from(notifications).where(and(eq(notifications.companyId, job.id), eq(notifications.kind, "screen.human_requested")))).map((n) => n.title)).toEqual(["Fay Oren asked to talk to a person"]);
     });
 
-    it("a chat paused by an outage finishes the turn in code when its retry finds no credit: it opens again, the email goes, and no recruiter is brought in", async () => {
+    it("a chat paused by an outage finishes the turn in code when its retry finds no credit: it opens again, the email goes, and the team is not told a person is needed", async () => {
       const job = await openJob();
       const a = await apply(job, { first: "Gus", last: "Hale", email: "gus@ai-credit.test" });
       const ref = await interviewOf(a.id);
@@ -1363,7 +1363,7 @@ describe("the AI credit", () => {
       const mails = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "gus@ai-credit.test");
       expect(mails.length).toBe(mailsBefore + 1);
       expect(`${mails.at(-1)!.subject} ${mails.at(-1)!.text}`).toContain(`/c/screen/${scr.token}`);
-      expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, a.id))).toEqual([]);
+      expect(await container.db.select().from(notifications).where(and(eq(notifications.companyId, job.id), eq(notifications.kind, "screen.human_requested")))).toEqual([]);
       // the candidate finishes
       expect((await answerToTheEnd(ref)).phase).toBe("review");
       expect(await conversationSubmit(container, ref)).toBe(true);

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { NoticeKey, isCompanyVerified } from "@ros/contracts";
-import { DEFAULT_NOTICES, boardPostingOf, hashToken, maskTokenPath, nextContactWindow, openFollowUp, redactString, sealPayload, withinContactHours, zipRecruiterOffered } from "@ros/core";
+import { DEFAULT_NOTICES, hashToken, maskTokenPath, nextContactWindow, openFollowUp, redactString, sealPayload, withinContactHours, zipRecruiterOffered } from "@ros/core";
 import { applications, auditRecords, candidates, communications, companies, dataRequests, events, interviewFollowups, interviews, randomToken, sessions, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { armNewTimes } from "@ros/workflows";
@@ -126,32 +126,22 @@ describe("company preferences, audit history, sessions, re-authentication and th
       expect((await container.db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)))[0].name).toBe("Settings Dental Group");
     });
 
-    it("saves who posts on the job boards and the company's own ZipRecruiter plan (plan D3, Q11)", async () => {
+    it("saves the company's own ZipRecruiter plan (Q11)", async () => {
       const stored = async () => (await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)))[0].settings;
-      // on a plan with ITS staff time (Rule 6): the Free plan leaves no choice, and plan-upgrade.test.ts holds it to that
-      await usePlan(container, companyId, "pro");
-      expect(boardPostingOf(await stored())).toBe("its");
       expect(zipRecruiterOffered(await stored())).toBe(false);
-      const self = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "self" } });
-      expect(self.status).toBe(200);
-      expect(((await self.json()) as { changed: string[] }).changed).toEqual(["boardPosting"]);
-      expect(boardPostingOf(await stored())).toBe("self");
       const plan = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { zipRecruiterPlan: true } });
+      expect(plan.status).toBe(200);
       expect(((await plan.json()) as { changed: string[] }).changed).toEqual(["zipRecruiterPlan"]);
       expect(zipRecruiterOffered(await stored())).toBe(true);
       // the same choice again changes nothing
-      const same = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "self", zipRecruiterPlan: true } });
+      const same = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { zipRecruiterPlan: true } });
       expect(((await same.json()) as { changed: string[] }).changed).toEqual([]);
-      // and back: ITS posts, no plan (the key is dropped rather than kept as false)
-      const back = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "its", zipRecruiterPlan: false } });
-      expect(((await back.json()) as { changed: string[] }).changed.sort()).toEqual(["boardPosting", "zipRecruiterPlan"]);
-      const after = await stored();
-      expect(boardPostingOf(after)).toBe("its");
-      expect(after).not.toHaveProperty("zipRecruiterPlan");
+      // and back: no plan (the key is dropped rather than kept as false)
+      const back = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { zipRecruiterPlan: false } });
+      expect(((await back.json()) as { changed: string[] }).changed).toEqual(["zipRecruiterPlan"]);
+      expect(await stored()).not.toHaveProperty("zipRecruiterPlan");
       const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "company.updated"))).orderBy(desc(auditRecords.createdAt), desc(auditRecords.id));
-      expect((audited[0].details as { fields: string[] }).fields.sort()).toEqual(["boardPosting", "zipRecruiterPlan"]);
-      const bad = await json(owner, "PATCH", "/api/v1/companies/current", { settings: { boardPosting: "someone" } });
-      expect(bad.status).toBe(400);
+      expect((audited[0].details as { fields: string[] }).fields).toEqual(["zipRecruiterPlan"]);
     });
 
     it("rewords a notice with a new version (the date) that the job page and the apply form show from then on", async () => {
@@ -256,9 +246,6 @@ describe("company preferences, audit history, sessions, re-authentication and th
       // an interviewer has no events.read
       const interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
       expect((await json(interviewer, "GET", "/api/v1/companies/current/audit")).status).toBe(403);
-      // the older shape the recruiter-access card relies on still works
-      const access = (await (await json(owner, "GET", "/api/v1/companies/current/audit?actions=staff.access_granted,staff.access_ended,staff.access_revoked,admin.break_glass")).json()) as unknown[];
-      expect(access).toEqual([]);
     });
 
     it("downloads the same history as a spreadsheet and records the download", async () => {

@@ -1,12 +1,12 @@
-import { Hono, type Context, type MiddlewareHandler } from "hono";
+import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import { BookOnBehalf, CancelInterview, InterviewOutcome, InterviewerAvailabilityInput, NO_WORK_WHILE_LOCKED, RecordInterviewDecision, RequestInterviewWithLine, RescheduleInterview, SetInterviewTime, type Actor, type CandidateNotice, type HireFollowUp, type InterviewDraft, type InterviewFollowUpRef, type OfferedSlot } from "@ros/contracts";
 import { NEVER_LEFT, checkPersonalLine, clashesWithBookings, interviewHasNoHours, interviewReachedThem, interviewsThatReachedThem, onItsWay, participantsOf, sendInterviewMoved, type InvitationNote } from "@ros/agents";
-import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, canTransition, defaultSchedulingWindow, emit, endMarkOnMove, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, scopeAllows, slotStillAhead, transition, upsertAvailability, visibleTo, type FollowUpView } from "@ros/core";
+import { CANCEL_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, assertCan, audit, availabilityFor, calendarConnectionFor, can, canTransition, defaultSchedulingWindow, emit, endMarkOnMove, formatInZone, freshSchedulingWindow, inCancelled, interviewFollowUpRef, notLocked, notify, openFollowUp, openFollowUpOf, publicConnection, recordApplicationOutcome, resolveOpenFollowUp, slotStillAhead, transition, upsertAvailability, type FollowUpView } from "@ros/core";
 import { applications, candidates, communications, companies, events, interviewParticipants, interviews, jobs, memberships, rolePackets, roles, users, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { cancelNewTimesRuns } from "@ros/workflows";
-import { actorOf, applicationScopeGuard, isCanonicalId, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { TERMINAL_STAGES, untoldFallbackDayOf } from "../services/application-actions";
 import { cancelInterviewInTx, candidateHeardOf } from "../services/interview-cancel";
@@ -14,8 +14,7 @@ import { BOOKED_RUN_STARTS_AT, INTERVIEW_ALREADY_OPEN, INTERVIEW_FROM, NO_HOURS,
 import { exitCleanup } from "../services/exit-cleanup";
 import { interviewBriefFor } from "../services/interviewer-view";
 import { hireFollowUp } from "../services/hire-sheet";
-import { settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
-import { staffScopeOf } from "../services/staff-scope";
+import { settleOutsideOffer } from "../services/offers";
 
 /**
  * Interviews (docs/07 §Interviews and calendars; slice 5 step 9). A person approves every interview (policy
@@ -191,26 +190,7 @@ async function supersede(c: Context<Vars>, input: { interviewId: string; mode: "
   return result;
 }
 
-/**
- * ITS staff acting under a scoped grant reach only the interviews of the role or candidate the grant names, on every
- * route that takes an interview id (the detail carries the interviewer's brief: evidence, strengths, concerns, screen
- * answers). The same refusal as the application and role guards. Members are unaffected.
- */
-const interviewScopeGuard: MiddlewareHandler<Vars> = async (c, next) => {
-  const t = c.get("tenant");
-  const id = c.req.param("id");
-  if (t?.staff && id) {
-    if (!isCanonicalId(id)) throw new HttpError(404, "not_found", "Interview not found.");
-    const scope = { roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId };
-    const [row] = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select({ applicationId: interviews.applicationId, roleId: applications.roleId }).from(interviews).innerJoin(applications, eq(applications.id, interviews.applicationId)).where(and(eq(interviews.id, id), eq(interviews.companyId, t.companyId))).limit(1));
-    if (row && !scopeAllows(scope, { roleId: row.roleId, applicationId: row.applicationId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
-  }
-  await next();
-};
-
 export const interviewRoutes = new Hono<Vars>();
-interviewRoutes.use("/:id", interviewScopeGuard);
-interviewRoutes.use("/:id/*", interviewScopeGuard);
 
 interviewRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -220,19 +200,15 @@ interviewRoutes.get("/", requireTenant, async (c) => {
   const from = c.req.query("from");
   const to = c.req.query("to");
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    // Every limit is part of the query (audit 06, bug 100): an interviewer's own interviews and a grant's role or
-    // candidate are chosen by the database, never filtered from the newest few hundred, so none is missed.
+    // Every limit is part of the query (audit 06, bug 100): an interviewer's own interviews are chosen by the database,
+    // never filtered from the newest few hundred, so none is missed.
     const conds = [eq(interviews.companyId, t.companyId)];
     if (filter) conds.push(eq(interviews.status, filter));
     if (from) conds.push(gte(interviews.startsAt, from));
     if (to) conds.push(lte(interviews.startsAt, to));
     if (mine) conds.push(inArray(interviews.id, tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))));
-    if (t.staff?.scope.roleId) conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(eq(applications.roleId, t.staff.scope.roleId))));
-    // a grant about one candidate shows that candidate's interviews only, the same limit as the role's applications list
-    if (t.staff?.scope.applicationId) conds.push(eq(interviews.applicationId, t.staff.scope.applicationId));
     // Never someone past the plan's candidates per job (Rule 3): an interview on such a person can only be from before a change, and it names them.
-    const readable = visibleTo(t);
-    if (readable) conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(readable)));
+    conds.push(inArray(interviews.applicationId, tx.select({ id: applications.id }).from(applications).where(notLocked())));
     const list = await tx.select().from(interviews).where(and(...conds)).orderBy(desc(interviews.createdAt));
     return summaries(tx, list);
   });
@@ -377,7 +353,7 @@ export async function currentScheduleRun(tx: Tx, iv: Pick<typeof interviews.$inf
  * it, after the run was signalled. A time that has passed, or starts within the hour, is refused ("stale"). The current
  * attempt's run books it when it waits for the pick (the signal woke it) or is about to (its next step looks for a pick,
  * or it waits for the ITS check on new times); a wake of an older attempt's run counts for nothing. Otherwise nothing
- * would book it (after "none of these work", during "no common times", after the collisions escalation), so it is booked
+ * would book it (after "none of these work", during "no common times", after too many collisions), so it is booked
  * straight away (`bookPickNow`), unless the time clashes with another interview booked for one of the interviewers
  * since. A pick is never silently lost.
  */
@@ -438,8 +414,8 @@ interviewRoutes.post("/:id/book-on-behalf", requireTenant, async (c) => {
   const done = await withTenant(container.db, t.companyId, async (tx) => {
     // the application, then the interview itself, locked: a new set of times or a booking committed meanwhile is seen
     const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
-    // Someone locked, under a grant naming them or break glass, however the interview got there: the booking would give its
-    // interviewers their name by email and calendar, as setting one up would (`createApprovedInterview`).
+    // Someone locked, however the interview got there: the booking would give its interviewers their name by email and
+    // calendar, as setting one up would (`createApprovedInterview`).
     if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     if (iv.status !== "scheduling") throw new HttpError(409, "interview_not_schedulable", "Times are not being offered right now.");
     const slot = iv.offeredSlots.find((s) => s.id === body.slotId);
@@ -485,7 +461,7 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
   const done = await withTenant(container.db, t.companyId, async (tx) => {
     const { iv, app } = await lockedInterview(tx, { companyId: t.companyId, interviewId: c.req.param("id") });
     // Someone locked is refused first, as setting up an interview refuses them (`createApprovedInterview`): the booking would
-    // give its interviewers their name by email and calendar, under a grant naming them or break glass alike.
+    // give its interviewers their name by email and calendar.
     if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
     if (!["proposed", "scheduling", "scheduled", "offer_expired"].includes(iv.status)) throw notChangeable(iv.status);
     const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
@@ -551,7 +527,6 @@ interviewRoutes.post("/:id/set-time", requireTenant, async (c) => {
 
 /** Routes under /applications/:id that create interviews and record decisions. */
 export const applicationInterviewRoutes = new Hono<Vars>();
-applicationInterviewRoutes.use("/:id/*", applicationScopeGuard);
 
 applicationInterviewRoutes.post("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -674,7 +649,7 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
     let interviewsCancelled = 0;
     let interviewOffNotes = 0;
     let untoldFallbackOn: string | null = null;
-    let hired: { outcomeId: string; roleId: string; hire: HireFollowUp } | null = null;
+    let hired: { outcomeId: string; hire: HireFollowUp } | null = null;
     if (body.decision === "not_moving_forward") {
       if (!body.reason) throw new HttpError(400, "reason_required", "A reason is required to decline a candidate.");
       assertCan(t.role, "application.reject");
@@ -717,31 +692,28 @@ applicationInterviewRoutes.post("/:id/decision", requireTenant, async (c) => {
       await settleOutsideOffer(tx, { applicationId: app.id, companyId: t.companyId, outcome: "hired_externally", actor, now });
       // Their interviews still to come end with the hire, quietly (6 November 2026), as the hire sheet's do.
       interviewsCancelled = (await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: "outcome: hired_externally", actor, candidateEmail: "hired" })).interviewsCancelled;
-      hired = { outcomeId: r.row.id, roleId: r.roleId, hire: await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) };
+      hired = { outcomeId: r.row.id, hire: await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: app.id, startDate: r.row.hireDate, role: t.role }) };
       stage = "hired";
     }
     await emit(tx, { type: "interview.decision_recorded", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { decision: body.decision, interviewId: last.id, note: body.note ?? null, nextRoundKey } });
     await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "interview.decision", decision: body.decision } });
-    return { out: { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes, ...(untoldFallbackOn ? { untoldFallbackOn } : {}) }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT, ...(interviewsCancelled ? { interviewsEnded: interviewsCancelled } : {}) } : {}) }, hired };
+    return { ok: true, stage, nextRoundKey, ...(dispositionSent === undefined ? {} : { dispositionSent, candidateNotice, interviewsCancelled, interviewOffNotes, ...(untoldFallbackOn ? { untoldFallbackOn } : {}) }), ...(hired ? { outcomeId: hired.outcomeId, hire: hired.hire, statement: OUTCOME_STATEMENT, ...(interviewsCancelled ? { interviewsEnded: interviewsCancelled } : {}) } : {}) };
   });
-  if (result.hired) await tellRecruiterAboutOutcome(container, t.companyId, result.hired.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} recorded a hire (offer accepted outside the platform).`, `outcome:${result.hired.outcomeId}`);
   await container.kick();
-  return c.json(result.out);
+  return c.json(result);
 });
 
 /**
  * Interviews of one role, by the same limits as GET /interviews: an interviewer sees the interviews they are on (the
- * guard has already refused a role they do not interview for), and ITS staff under a grant about one candidate see that
- * candidate's interviews only (a grant for another role is refused by the guard).
+ * guard has already refused a role they do not interview for).
  */
 export const roleInterviewRoutes = new Hono<Vars>();
 roleInterviewRoutes.use("/:id/*", roleScopeGuard);
 roleInterviewRoutes.get("/:id/interviews", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const only = t.staff?.scope.applicationId ?? null;
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), visibleTo(t), ...(only ? [eq(applications.id, only)] : [])))).map((a) => a.id);
+    const appIds = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, c.req.param("id")), eq(applications.companyId, t.companyId), notLocked()))).map((a) => a.id);
     if (!appIds.length) return [];
     const conds = [inArray(interviews.applicationId, appIds)];
     if (t.role === "interviewer") conds.push(inArray(interviews.id, tx.select({ id: interviewParticipants.interviewId }).from(interviewParticipants).where(eq(interviewParticipants.userId, t.userId))));

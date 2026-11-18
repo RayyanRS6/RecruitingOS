@@ -1427,7 +1427,7 @@ export function sessionView(row: IntakeSessionRow, viewerUserId: string): Intake
   const state = stateOf(row);
   const facts = normalizeFacts(row.facts);
   const draft = row.draftPacket ?? null;
-  const owner = row.createdByUserId ?? (row.createdBy.kind === "user" || row.createdBy.kind === "recruiter" ? row.createdBy.id : null);
+  const owner = row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
   return {
     id: row.id,
     status: row.status,

@@ -2,11 +2,10 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, EvidenceChip, Field, Skeleton } from "@ros/ui";
-import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type SuggestedLine, type TimelineEvent } from "../../api/client";
+import { Alert, Button, Card, Chip, EvidenceChip, Field } from "@ros/ui";
+import { api, ApiError, type ApplicationDetail, type MessagePreview, type SendMessageResult, type SuggestedLine } from "../../api/client";
 import { Link } from "../../nav";
 import { toast } from "../../toast";
-import { AskRecruiter } from "../../components/AskRecruiter";
 import { InlineUndo } from "../../components/InlineUndo";
 import { useCompanyCheck } from "../../components/use-company-check";
 import { useCompanyTimeZone } from "../../components/use-company-time-zone";
@@ -14,14 +13,13 @@ import { interviewLine } from "../../interview-time";
 import { useTakeBack, useUndoToast } from "../../components/use-undo";
 import { openScreenOf } from "../../evidence";
 import { offerMadeOn, plainDayWords, recordedOutcomeLine } from "../../hiring";
-import { aiInterviewCard, callNotesState, noScreenWords, overviewScreenLine } from "../../screen-view";
+import { aiInterviewCard, noScreenWords, overviewScreenLine } from "../../screen-view";
 import { holdDay } from "../../talent-actions";
 import { HIDDEN_LINK_NOTE, sentWithUndoToast, suggestedLineNote, threadItems, threadWhen, undoMillisLeft, type ThreadPart } from "../../telling";
 import { AssessmentCard, NoAssessmentCard, ScorecardUnavailableCard, ScorecardWaitingCard, ScreenCard, StrengthsAndConcerns } from "./assessment";
-import { CallNotesCard } from "./call-notes";
 import { MatchVerdict, NextStepLine, ScoreBreakdown } from "./match";
 import type { NextStepAction } from "./match-view";
-import { eligibilityAnswerWords, historyItems, panelQuestions, recruiterEventsFor, resumeToShow, resumeView, suggestionAndDecision, writeupLines, writeupOverviewLine, type Compose, type HistoryItem } from "./helpers";
+import { eligibilityAnswerWords, historyItems, panelQuestions, resumeToShow, resumeView, suggestionAndDecision, writeupLines, writeupOverviewLine, type Compose, type HistoryItem } from "./helpers";
 import { CARD, QUOTE, SUGGESTED, Why } from "./why";
 
 export type { Compose } from "./helpers";
@@ -33,7 +31,7 @@ import { useCandidateAction, useRefreshCandidate } from "./hooks";
  * Overview, the Kanvis way (Wave S1; founder decision B2): the verdict first (the match score, its band and how sure the
  * AI was, one line on the must-haves), the suggested next step with its one button, the first strengths and concerns,
  * then where things stand. The full breakdown (how the score was worked out, the AI review with every finding and quote,
- * the open questions, the eligibility answers and "Something wrong?") is one click away; so are consent and source under
+ * the open questions and the eligibility answers) is one click away; so are consent and source under
  * the contact line, and everything that happened, on the History tab.
  */
 export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDetail; roleId: string; onHistory: () => void; onNext?: (action: NextStepAction) => void }) {
@@ -42,7 +40,7 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
     <div className="stack gap-4">
       <AiInterviewCard a={a} roleId={roleId} onDecline={() => onNext?.({ kind: "move", to: "not_moving_forward", label: "Not moving forward" })} />
       <NoAssessmentCard detail={a} />
-      <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardUnavailableCard detail={a} />
       <ScorecardWaitingCard detail={a} />
       <MatchVerdict a={a}>
         <NextStepLine a={a} onAction={onNext} />
@@ -60,10 +58,9 @@ export function OverviewTab({ a, roleId, onHistory, onNext }: { a: ApplicationDe
         </div>
       </details>
       <ContactLine a={a} />
-      {/* the panel's foot: everything that happened, and a recruiter */}
-      <div className="row justify-between border-t border-line pt-4">
+      {/* the panel's foot: everything that happened */}
+      <div className="row border-t border-line pt-4">
         <Button size="sm" variant="quiet" icon="clock" onClick={onHistory}>See all activity</Button>
-        <AskRecruiter roleId={roleId} applicationId={a.id} size="sm" />
       </div>
     </div>
   );
@@ -252,33 +249,23 @@ export function StopScreen({ a, roleId }: { a: ApplicationDetail; roleId: string
   );
 }
 
-/**
- * Screening chat: every screening chat, newest first, with its transcript open, and the AI reviews of them. A recruiter
- * can add notes from a call here (plan E3); when the candidate asked for a person, that form waits at the top of the
- * panel instead.
- */
-export function ScreenTab({ a, roleId, myRole = null }: { a: ApplicationDetail; roleId: string; myRole?: string | null }) {
+/** Screening chat: every screening chat, newest first, with its transcript open, and the AI reviews of them. */
+export function ScreenTab({ a, roleId }: { a: ApplicationDetail; roleId: string }) {
   const scorecards = a.assessments.filter((x) => x.kind === "screen");
-  const notes = callNotesState(a, myRole);
-  const notesCard = notes.show && !notes.prominent ? <CallNotesCard a={a} roleId={roleId} prominent={false} /> : null;
   if (!a.screens.length) {
     const none = noScreenWords(a);
     return (
-      <div className="stack gap-4">
-        <Card title="AI interview" className={CARD}>
-          <p className="small muted">{none.line}</p>
-          <Why label="What is an AI interview?">{none.why}</Why>
-        </Card>
-        {notesCard}
-      </div>
+      <Card title="AI interview" className={CARD}>
+        <p className="small muted">{none.line}</p>
+        <Why label="What is an AI interview?">{none.why}</Why>
+      </Card>
     );
   }
   return (
     <div className="stack gap-4">
       {/* The company's written questions name the answers too (Wave S7), with each one written up from the chat. */}
       {a.screens.map((s, i) => <ScreenCard key={s.id} screen={s} open={i === 0} questions={panelQuestions(a.packetLabels)} mustHaves={a.packetLabels.mustHaves} timeline={a.timeline} action={i === 0 ? <StopScreen a={a} roleId={roleId} /> : undefined} />)}
-      {notesCard}
-      <ScorecardUnavailableCard detail={a} roleId={roleId} />
+      <ScorecardUnavailableCard detail={a} />
       <ScorecardWaitingCard detail={a} />
       {scorecards.slice(a.assessments[0]?.kind === "screen" ? 1 : 0).map((s) => <AssessmentCard key={s.id} assessment={s} detail={a} roleId={roleId} labels={a.packetLabels} />)}
       {a.assessments[0]?.kind === "screen" ? <p className="small muted">The latest AI review of this chat is on the Overview, under Full breakdown.</p> : null}
@@ -410,8 +397,8 @@ export function ResumeTab({ a, roleId }: { a: ApplicationDetail; roleId: string 
 type KeptSuggestion = { line: string; runId: string | null };
 
 /**
- * The conversation as chat bubbles (screenshot 3, the coss look): the team, the assistant and an ITS recruiter on the
- * left on the surface with a hairline, the candidate's own words on the right in peach; each message rises in once,
+ * The conversation as chat bubbles (screenshot 3, the coss look): the team and the assistant (and, on earlier messages,
+ * an ITS recruiter) on the left on the surface with a hairline, the candidate's own words on the right in peach; each message rises in once,
  * the first few one after another. The items' classes are pinned (`msg-item <from>`), so the list styles them.
  */
 const THREAD = [
@@ -526,8 +513,7 @@ export function MessagesTab({ a, roleId, compose, setCompose }: { a: Application
           {preview.data ? <div className="small muted whitespace-pre-wrap border-t border-line pt-3">{aiHelped && preview.data.aiFooter ? preview.data.aiFooter : preview.data.footer}</div> : null}
           <div className="row">
             <Button size="sm" variant="primary" loading={send.isPending} disabled={!text.trim()} onClick={() => send.mutate()}>{preview.data?.needsApproval ? "Send for approval" : "Send"}</Button>
-            {/* no AI call on the company's credit for someone locked (the API refuses it too) */}
-            {!kept && !a.lockedAt ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
+            {!kept ? <Button size="sm" variant="secondary" icon="sparkle" loading={suggest.isPending} onClick={() => suggest.mutate()} title="The assistant suggests one opening line; if you keep it, the email says the assistant helped">Suggest an opening line</Button> : null}
             <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
           </div>
           {aiHelped ? (
@@ -554,16 +540,12 @@ function MessageBody({ parts }: { parts: ThreadPart[] }) {
   );
 }
 
-type EventRow = TimelineEvent & { subjectType?: string; subjectId?: string };
-
 /**
  * History: who did what (a person by name, the assistant, or "suggested by the assistant, approved by …"), the reasons
- * and notes, what the candidate was told, and recruiter help, which is recorded on the request rather than the
- * application and read with a second query.
+ * and notes, and what the candidate was told.
  */
-export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayReadActivity: boolean }) {
-  const recruiter = useQuery({ queryKey: ["events", "escalation"], queryFn: () => api.get<EventRow[]>("/api/v1/events?subjectType=escalation"), enabled: mayReadActivity });
-  const items = historyItems(a.timeline, recruiterEventsFor(a.id, recruiter.data ?? []));
+export function HistoryTab({ a }: { a: ApplicationDetail }) {
+  const items = historyItems(a.timeline);
   const both = suggestionAndDecision(a.timeline);
   return (
     <div className="stack gap-4">
@@ -577,7 +559,6 @@ export function HistoryTab({ a, mayReadActivity }: { a: ApplicationDetail; mayRe
         </Card>
       ) : null}
       <Card title="What happened" className={CARD}>
-        {recruiter.isLoading ? <Skeleton lines={2} /> : null}
         {items.length ? <HistoryList items={items} /> : <p className="small muted">Nothing yet.</p>}
       </Card>
     </div>

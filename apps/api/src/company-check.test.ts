@@ -10,7 +10,7 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { resetPublicFeedCache } from "./pages/public-feeds";
 import { createApplication } from "./services/applications";
-import { signInAdmin, signInAs, usePlan, useTrial } from "./test-helpers";
+import { signInAdmin, signInAs, useTrial } from "./test-helpers";
 
 /**
  * The one-time ITS check (founder decision B7; plan B1) and the getting-started card (plan B2). A company that signs
@@ -68,7 +68,7 @@ describe("the ITS company check and getting started", () => {
     expect(notice?.text).toContain("Only the email address is proved; the rest is what they typed.");
     expect(notice?.text).toContain("Website: checkdental.example");
     expect((await page(`/careers/${slug}`)).status).toBe(404);
-    for (const settings of [{ verifiedAt: "2026-10-08T00:00:00.000Z" }, { verifiedBy: { kind: "user", id: "me" } }, { onboarding: { jobBoardsConfirmedAt: "2026-10-08T00:00:00.000Z" } }]) {
+    for (const settings of [{ verifiedAt: "2026-10-08T00:00:00.000Z" }, { verifiedBy: { kind: "user", id: "me" } }, { onboarding: { policiesReviewedAt: "2026-10-08T00:00:00.000Z" } }]) {
       const refused = await json(owner, "PATCH", "/api/v1/companies/current", { settings });
       expect(refused.status).toBe(400);
       expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("not_yours_to_change");
@@ -93,7 +93,7 @@ describe("the ITS company check and getting started", () => {
     for (const path of ["/feeds/jobs.xml", "/feeds/jobs.json", "/feeds/linkedin.xml", "/sitemap.xml"]) expect(await (await page(path)).text(), path).not.toContain(roleId);
     const link = await withTenant(container.db, companyId, (tx) => createApplicationLink(tx, { companyId, roleId, source: "referral", label: "A friend", actor: { kind: "system", id: "test" } }));
     expect((await page(`/a/${link.token}`)).status).toBe(404);
-    // a role nobody can see yet is not "a role with no applicants": no advice to post it elsewhere, no recruiter offered
+    // a role nobody can see yet is not "a role with no applicants": no advice to post it elsewhere
     const later = new Date(Date.now() + 20 * 86_400_000);
     expect((await withTenant(container.db, companyId, (tx) => detectStuckRoles(tx, companyId, later))).map((d) => d.detector)).not.toContain("no_applicants");
   });
@@ -105,7 +105,7 @@ describe("the ITS company check and getting started", () => {
     expect(mine?.body).toContain("ITS is confirming your company");
     expect(mine?.body).toContain("emails to candidates wait");
     // no step for interview hours (6 November 2026): a person sets each interview's date and time, so hours are optional
-    expect(stepKeys(mine)).toEqual(["company_details", "team", "first_role", "job_boards", "ai_rules"]);
+    expect(stepKeys(mine)).toEqual(["company_details", "team", "first_role", "ai_rules"]);
     // derived from the record: the website was given at sign-up; a role exists; nothing else is done yet
     expect(step(mine, "company_details")).toMatchObject({ done: false, detail: "Still to add: a careers-page introduction, a benefits summary. A logo is optional." });
     expect(step(mine, "first_role")?.done).toBe(true);
@@ -207,11 +207,6 @@ describe("the ITS company check and getting started", () => {
     expect(await (await verify(admin, { verified: true, reason: "Checked again, still fine.", confirm: true })).json()).toMatchObject({ changed: false, releasedMessages: 0 });
     // Today: no notice any more; a candidate is waiting on a decision, so no steps either
     expect(await setupCard(owner)).toBeUndefined();
-    // the open request's card leads to the request itself
-    const asked = await json(owner, "POST", "/api/v1/escalations", { kind: "ask", roleId, question: "Is the pay range right?" });
-    const { id: requestId } = (await asked.json()) as { id: string };
-    const requestCard = (await cards(owner)).find((c) => c.kind === "escalation");
-    expect(requestCard?.actions).toEqual([{ label: "See the request", method: "GET", path: `/?request=${requestId}` }]);
   });
 
   it("confirming again repairs a message that was held as the first confirmation committed", async () => {
@@ -484,10 +479,10 @@ describe("releasing held messages", () => {
 });
 
 /**
- * The getting-started steps after the check: ITS confirms job-board access, an owner or admin marks the AI rules as
- * reviewed (audited), anyone may hide the steps for themselves only, and "Draft it with an ITS recruiter" asks once.
+ * The getting-started steps after the check: an owner or admin marks the AI rules as reviewed (audited), and anyone may
+ * hide the steps for themselves only.
  */
-describe("getting started: ticks, hiding, and drafting the first role with ITS", () => {
+describe("getting started: ticks and hiding", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
@@ -517,28 +512,12 @@ describe("getting started: ticks, hiding, and drafting the first role with ITS",
     expect((await setupCard(owner))?.gettingStarted?.verified).toBe(true);
   });
 
-  it("asks an ITS recruiter to draft the first role once, and says so on the step", async () => {
+  it("the first-job step offers one way to start: Start a hire", async () => {
     const first = (await setupCard(owner))?.gettingStarted?.steps.find((s) => s.key === "first_role");
-    expect(first?.actions.map((a) => a.label)).toEqual(["Start a hire", "Draft it with an ITS recruiter"]);
-    const ask = first!.actions[1];
-    const r = await json(owner, ask.method, ask.path, ask.body);
-    expect(r.status).toBe(201);
-    expect(((await r.json()) as { message: string }).message).toContain("all of your hiring");
-    const after = (await setupCard(owner))?.gettingStarted?.steps.find((s) => s.key === "first_role");
-    expect(after?.actions.map((a) => a.label)).toEqual(["Start a hire"]);
-    expect(after?.detail).toContain("You asked an ITS recruiter");
+    expect(first?.actions.map((a) => a.label)).toEqual(["Start a hire"]);
   });
 
-  it("ticks job-board access when ITS confirms it, and the AI rules when an owner or admin has reviewed them", async () => {
-    // the step is there only while ITS posts for the company: on the Free plan its team does, and it never shows
-    const keys = async () => (await setupCard(owner))?.gettingStarted?.steps.map((s) => s.key);
-    expect(await keys()).not.toContain("job_boards");
-    await usePlan(container, companyId, "pro");
-    expect(await keys()).toContain("job_boards");
-    const admin = await signInAdmin(app, container, "ben.admin@identifiedtalent.com", "Ben Admin");
-    expect((await json(owner, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(403);
-    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: true })).status).toBe(200);
-    expect((await setupCard(owner))?.gettingStarted?.steps.find((s) => s.key === "job_boards")?.done).toBe(true);
+  it("ticks the AI rules when an owner or admin has reviewed them, on the record", async () => {
     const hm = await signInAs(container, app, { companyId, role: "hiring_manager" });
     expect((await json(hm, "POST", "/api/v1/companies/current/getting-started", { action: "policies_reviewed" })).status).toBe(403);
     expect((await json(owner, "POST", "/api/v1/companies/current/getting-started", { action: "something_else" })).status).toBe(400);
@@ -548,10 +527,7 @@ describe("getting started: ticks, hiding, and drafting the first role with ITS",
     expect((await json(owner, reviewed.method, reviewed.path, reviewed.body)).status).toBe(200);
     expect((await setupCard(owner))?.gettingStarted?.steps.find((s) => s.key === "ai_rules")?.done).toBe(true);
     const history = (await (await json(owner, "GET", "/api/v1/companies/current/audit?actions=company.updated")).json()) as Array<{ description: string }>;
-    expect(history.map((h) => h.description)).toEqual(expect.arrayContaining([expect.stringContaining("the AI rules marked as reviewed"), expect.stringContaining("job-board access, confirmed by ITS")]));
-    // taking job-board access back unticks it
-    expect((await json(admin, "POST", `/api/v1/admin/customers/${companyId}/job-boards`, { confirmed: false })).status).toBe(200);
-    expect((await setupCard(owner))?.gettingStarted?.steps.find((s) => s.key === "job_boards")?.done).toBe(false);
+    expect(history.map((h) => h.description)).toEqual(expect.arrayContaining([expect.stringContaining("the AI rules marked as reviewed")]));
   });
 
   it("hides the steps for the person who asked only", async () => {

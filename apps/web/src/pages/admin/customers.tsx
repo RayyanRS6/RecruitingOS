@@ -9,7 +9,6 @@ import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow"
 import { verticalWords, websiteHref } from "../../company-setup";
 import { focusLost } from "../../focus-after";
 import { useNavigate, useSearchParams } from "../../nav";
-import { RECRUITER_ASKS_OVER_CHIP } from "../../recruiter-requests";
 import { useSignInWhenSessionEnds } from "../../session-ended";
 import { toast } from "../../toast";
 import { TODAY_REFRESH } from "../../today";
@@ -418,8 +417,8 @@ const TINTED = "border-line-tint bg-tint shadow-none";
 /**
  * All customers: pills (All, Waiting for the ITS check, Running low, Quiet) with counts, a search box and a Sort chip
  * above a list of five columns; the companies waiting for the ITS check always on top (B7). A company's name or its
- * button opens the customer drawer, kept in the address (`?open=<id>&tab=…`) so a reload, a link from the Overview or
- * from the recruiter queue lands on it.
+ * button opens the customer drawer, kept in the address (`?open=<id>&tab=…`) so a reload or a link from the Overview
+ * lands on it.
  */
 export function Customers() {
   const [search] = useSearchParams();
@@ -441,7 +440,7 @@ export function Customers() {
   const openParam = search.get("open");
   const fromAddress = (): { id: string; tab: CustomerTab } | null => (openParam ? { id: openParam, tab: customerTabFrom(search.get("tab")) } : null);
   const [drawer, setDrawer] = useState(fromAddress);
-  // A link followed while this page is open (the Overview's "Review", the recruiter queue) changes only the address: follow it.
+  // A link followed while this page is open (the Overview's "Review") changes only the address: follow it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only a new `?open=` in the address re-reads it
   useEffect(() => {
     if (openParam && openParam !== drawer?.id) setDrawer(fromAddress());
@@ -674,14 +673,13 @@ function Fact(props: { children: ReactNode; action?: ReactNode }) {
 }
 
 /**
- * Everything the list knows about one customer, in plain words: the ITS check, job boards, plan and its screening chats
- * (with the running-low chip), how people apply, jobs and applicants, recruiter requests (with the "Past its recruiter
- * requests" chip, Q33), AI cost (the exact figure on hover), last activity and the messages held.
+ * Everything the list knows about one customer, in plain words: the ITS check, plan and its screening chats (with the
+ * running-low chip), how people apply, jobs and applicants, AI cost (the exact figure on hover), last activity and the
+ * messages held.
  */
 function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAlert | undefined; onTab: (tab: CustomerTab) => void }) {
   const verified = !!c.verifiedAt;
   const activity = activityWords(c.lastActivityAt);
-  const asks = c.recruiterAsks;
   // A request for access, waiting or declined: its one way on is the ITS check tab, and nothing else here can be changed.
   const access = c.accessRequest ?? null;
   return (
@@ -706,8 +704,6 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
               </Fact>
             )}
           </dd>
-          <dt>Job boards</dt>
-          <dd>{c.whoPosts === "self" ? "Their team posts them" : c.jobBoardsConfirmedAt ? "ITS can sign in" : "Not confirmed yet"}</dd>
           <dt>Plan</dt>
           <dd className={CELL}>
             <Fact action={access ? undefined : <Button size="sm" variant="secondary" onClick={() => onTab("plan")}>Change plan</Button>}>{planLine(c)}</Fact>
@@ -728,12 +724,6 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
           </dd>
           <dt>Jobs</dt>
           <dd>{plural(c.roles, "job", "jobs")} · {plural(c.applications, "applicant", "applicants")}</dd>
-          <dt>Recruiter requests</dt>
-          <dd className={CELL}>
-            <div>{asks ? `${asks.used}${asks.limit !== null ? ` of ${asks.limit}` : ""} this month` : "None recorded"} · {c.escalations} in all</div>
-            {/* Past the plan's recruiter requests (Q33): nothing was refused; ITS talks with the customer about billing. */}
-            {c.recruiterAsks?.over ? <Chip tone="caution">{RECRUITER_ASKS_OVER_CHIP}</Chip> : null}
-          </dd>
           <dt>AI cost</dt>
           <dd><span title={exactMoney(c.aiCostUsd)}>{money(c.aiCostUsd)}</span> in all</dd>
           <dt>Last activity</dt>
@@ -761,8 +751,8 @@ export type PlanOption = { key: string; name: string; prices?: Record<string, nu
 const dollars = (cents: number) => `$${(cents / 100).toLocaleString("en-US")}`;
 
 /**
- * What a plan includes, in one line, in dollars for ITS: "1 job ever · 5 candidates a job · $10 AI credit in all · 1 recruiter
- * request a month · 2 seats · the team posts its own boards". A key the plan does not name is left out, and so is a limit that
+ * What a plan includes, in one line, in dollars for ITS: "1 job ever · 5 candidates a job · $10 AI credit in all · 2
+ * seats". A key the plan does not name is left out, and so is a limit that
  * says nothing there: no limit of jobs ever or of candidates a job, the jobs at a time beside one job ever, and unlimited AI
  * interviews on a plan the AI credit meters.
  */
@@ -777,9 +767,7 @@ export function planLimitsLine(limits: Record<string, number | null>): string {
     typeof limits.candidates_per_job === "number" ? `${limits.candidates_per_job} candidates a job` : null,
     metered && limits.text_screens === null ? null : count("text_screens", "AI interview a month", "AI interviews a month"),
     typeof total === "number" ? `${dollars(total)} AI credit in all` : typeof monthly === "number" ? `${dollars(monthly)} AI credit a month` : null,
-    count("recruiter_asks", "recruiter request a month", "recruiter requests a month"),
     count("seats", "seat", "seats"),
-    limits.its_work === 0 ? "the team posts its own boards" : null,
   ].filter(Boolean).join(" · ");
 }
 
@@ -1059,8 +1047,7 @@ export function companyCheckToast(company: string, verified: boolean, r: { chang
 
 /**
  * The one-time ITS check of a company (founder decision B7): confirm it after checking it is real, or take a confirmation
- * back; both need a reason, which the customer sees in their own history, and a second press to confirm. Below, whether
- * ITS can sign in to the company's job boards, which ticks the owner's getting-started step.
+ * back; both need a reason, which the customer sees in their own history, and a second press to confirm.
  *
  * The question keeps what its first press asked for (`to`) and the confirmation it was asked on (`at`), the review of 9
  * November 2026: the list read again under it with another administrator's confirmation, or its taking back, takes the
@@ -1083,11 +1070,6 @@ export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
       qc.invalidateQueries({ queryKey: ["admin", "customers"] });
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "Could not change the check."),
-  });
-  const boards = useMutation({
-    mutationFn: (confirmed: boolean) => api.post(`/api/v1/admin/customers/${company.id}/job-boards`, { confirmed }, reason),
-    onSuccess: (_r, confirmed) => { toast(confirmed ? "Job-board access confirmed." : "Job-board access no longer confirmed."); qc.invalidateQueries({ queryKey: ["admin", "customers"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not record it."),
   });
   // A confirmed company with messages still held (one held while the confirmation was being made): confirming again sends them.
   // Only that (`heldOnly`, the review of 9 November 2026): once someone took the confirmation back, the API confirms nothing
@@ -1124,19 +1106,6 @@ export function CompanyCheckPanel({ company }: { company: CustomerRow }) {
           ) : <div className="row"><Button variant={verified ? "secondary" : "primary"} disabled={why.trim().length < 5} onClick={() => setAsked({ to: !verified, at })}>{verified ? "Take back the confirmation" : "Confirm the company"}</Button></div>}
         </div>
       </Card>
-      {/* no ITS staff time on the company's plan: its team posts, so there is nothing for ITS to sign in to */}
-      {company.whoPosts === "self" ? null : <Card title="Job-board access">
-        {/* the button says what it records; when to press it, and what it ticks for the owner, folds */}
-        <details className="more">
-          <summary>How this works</summary>
-          <p className="small text-ink-2">The owner adds the ITS recruiter as a user on the company's LinkedIn, Indeed and ZipRecruiter accounts. Record here once ITS can sign in to each; it ticks the owner's getting-started step.</p>
-        </details>
-        <div className="row mt-3">
-          {company.jobBoardsConfirmedAt
-            ? <><Chip tone="good">ITS can sign in</Chip><Button size="sm" variant="secondary" loading={boards.isPending} onClick={() => boards.mutate(false)}>No longer confirmed</Button></>
-            : <Button size="sm" variant="primary" loading={boards.isPending} onClick={() => boards.mutate(true)}>ITS can sign in to the job boards</Button>}
-        </div>
-      </Card>}
       <TakeAwayAccess company={company} />
     </div>
   );

@@ -20,8 +20,8 @@ import { LEAD, STEP } from "./why";
  * Telling the candidate a decision (founder decisions B6, Q27, Q28; plan Wave G). The decision was private; this card
  * waits until someone tells them: "Send message" opens the Send screen (one of the approved wordings, an optional
  * personal line checked before anything goes, the exact message shown first), and Send gives 30 seconds to Undo. "I told
- * them myself" records it. The safety net says on which day the standard message goes by itself, or a recruiter is
- * brought in, if nobody does.
+ * them myself" records it. The safety net says on which day the standard message goes by itself, or the team is
+ * reminded, if nobody does.
  */
 
 /** A value that settles once it has not changed for `ms` (the personal line is checked when typing pauses). */

@@ -25,9 +25,9 @@ export const APPLY_MODE_HELP: Record<ApplyMode, string> = {
 /** Always said beside the control: when the later path applies whatever is chosen, and that people already applying are untouched. */
 export const APPLY_MODE_NOTE = "A role whose rule for screening invitations is \"Ask me first\" or \"Only a person\" always uses the later path. A change applies to new applicants only; nobody who already applied is moved.";
 
-/** ITS staff (a platform administrator or an ITS recruiter): the only people who see these controls. */
+/** ITS staff (a platform administrator): the only people who see these controls. */
 export function isItsStaff(me: Pick<Me, "user"> | null | undefined): boolean {
-  return !!me && ["platform_admin", "its_recruiter"].includes(me.user.platformRole);
+  return me?.user.platformRole === "platform_admin";
 }
 
 /** The role's choice in the form: its own setting, or "default" to follow the company. */

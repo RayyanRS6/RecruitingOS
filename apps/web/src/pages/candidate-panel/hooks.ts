@@ -6,7 +6,7 @@ import type { MarkKind } from "@ros/contracts";
 import { api, ApiError, type ActionResult, type Me } from "../../api/client";
 import { toast } from "../../toast";
 import { activeCompanyOf } from "../../rail";
-import { actionToast, type LockedPerson } from "../../talent-actions";
+import { actionToast } from "../../talent-actions";
 
 /** What POST /applications/:id/actions takes. */
 export type ActionBody = { action: string; reason?: string; note?: string; channel?: string; mark?: MarkKind; remindAt?: string; focus?: "unknowns" };
@@ -30,16 +30,13 @@ export function useRefreshCandidate(id: string, roleId: string): () => Promise<v
   }, [qc, id, roleId]);
 }
 
-/**
- * One choice about the candidate, with the toast that says exactly what happened (and whether they were told). A decline
- * passes the `person` it is about, so the toast says what the line before the click said for someone locked.
- */
-export function useCandidateAction(id: string, roleId: string, onDone?: (body: ActionBody, r: ActionResult) => void, person?: LockedPerson) {
+/** One choice about the candidate, with the toast that says exactly what happened (and whether they were told). */
+export function useCandidateAction(id: string, roleId: string, onDone?: (body: ActionBody, r: ActionResult) => void) {
   const refresh = useRefreshCandidate(id, roleId);
   return useMutation({
     mutationFn: (body: ActionBody) => api.post<ActionResult>(`/api/v1/applications/${id}/actions`, body),
     onSuccess: async (r, body) => {
-      const t = actionToast(body.action, r, undefined, person);
+      const t = actionToast(body.action, r);
       toast(t.title, t.detail);
       onDone?.(body, r);
       await refresh();
@@ -48,11 +45,10 @@ export function useCandidateAction(id: string, roleId: string, onDone?: (body: A
   });
 }
 
-/** The signed-in person's role in this company; an ITS recruiter working under a grant acts with a recruiter's rights. */
+/** The signed-in person's role in this company. */
 export function useViewer(): { role: string | null; userId: string | null } {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  const company = activeCompanyOf(me.data);
-  return { role: company.role ?? (me.data?.staffAccess ? "recruiter" : null), userId: me.data?.user.id ?? null };
+  return { role: activeCompanyOf(me.data).role, userId: me.data?.user.id ?? null };
 }
 
 /**

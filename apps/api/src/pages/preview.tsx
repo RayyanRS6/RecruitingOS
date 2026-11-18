@@ -3,7 +3,7 @@
 import { Hono, type Context, type Next } from "hono";
 import { desc, eq } from "drizzle-orm";
 import type { DraftRolePacket } from "@ros/contracts";
-import { PermissionError, applyByLabel, assertCan, benefitsDescriptionFor, jobNoticesFor, scopeAllows } from "@ros/core";
+import { PermissionError, applyByLabel, assertCan, benefitsDescriptionFor, jobNoticesFor } from "@ros/core";
 import { companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError, PERMISSION_MESSAGE } from "../middleware/errors";
@@ -56,12 +56,11 @@ function problemPage(c: Context<Vars>, err: unknown) {
   );
 }
 
-/** Signed in, in a company, and for ITS staff under a grant, inside the grant's role. */
-function tenantFor(c: Context<Vars>, roleId?: string): Tenant {
+/** Signed in, and in a company. */
+function tenantFor(c: Context<Vars>): Tenant {
   if (!c.get("session")) throw new HttpError(401, "unauthorized", "Sign in to see this preview, then open it again.");
   const t = c.get("tenant");
   if (!t) throw new HttpError(403, "no_company", "Create or join a company first.");
-  if (t.staff && roleId && !scopeAllows({ roleId: t.staff.scope.roleId, applicationId: t.staff.scope.applicationId }, { roleId })) throw new HttpError(403, "staff_scope", "Your access is limited to the role and candidate of the escalation you accepted.");
   return t;
 }
 
@@ -109,7 +108,7 @@ function hrefs(c: Context<Vars>, params: Record<string, string>): { jobHref: str
 async function rolePreview(c: Context<Vars>) {
   try {
     const roleId = c.req.param("id") ?? "";
-    const t = tenantFor(c, roleId);
+    const t = tenantFor(c);
     const container = c.get("container");
     // An interviewer reads only the roles they interview for (roleScopeGuard's rule): any other answers as one that does
     // not exist, on this page as on the data route.

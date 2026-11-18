@@ -12,7 +12,6 @@ import { VERTICALS, zoneName } from "../company-setup";
 import { candidateEmailRow, type CandidateEmailHealth } from "../email-health";
 import { ABOUT_MAX, LOGO_TYPES, aboutCheckOf, aboutDraftOf, aboutProblem, logoProblem, logoUrlOf } from "../publishing";
 import { LEVELS, allowedLevels, type PolicyLevel } from "../policy-levels";
-import { ACCESS_DAYS, accessChip } from "../recruiter-access";
 import { canChangeCompany, canSeeActivity, canStartHire } from "../roles";
 import { SETTINGS_TABS, type SettingsTab, defaultTab, leadAndRest, settingsHref, settingsLanding, setupSections, tabFrom } from "../setup-sections";
 import { browserStorage, SHORTCUT_CHANGED_EVENT, START_HIRE_KEY, setStartHireShortcut, startHireShortcutOn } from "../start-hire";
@@ -21,16 +20,16 @@ import { trialDate, trialPlanLine, trialRow } from "../trial";
 import { Upgrade } from "../components/Upgrade";
 import { NotificationsCard } from "./NotificationsCard";
 import { TeamCard } from "./TeamCard";
-import { ITS_POSTING_UPGRADE_QUESTION, isAiCreditKey, mayOfferUpgrade, type AiCreditLevel, type AiCreditView, type TrialStanding } from "@ros/contracts";
+import { isAiCreditKey, mayOfferUpgrade, type AiCreditLevel, type AiCreditView, type TrialStanding } from "@ros/contracts";
 
 type BusinessHours = { days: number[]; start: string; end: string };
 /**
  * `about`: the short "about the company" text candidates read on the careers page and every job page, once a person
- * approved it (founder decision Q13); `boardPosting`: who posts on the job boards (plan D3); `zipRecruiterPlan`: the
+ * approved it (founder decision Q13); `zipRecruiterPlan`: the
  * company has its own paid ZipRecruiter plan, the only way ZipRecruiter is offered (Q11); `newTimesAfterCancel`: the one
  * automatic set of new times for candidates who cancel and ask for them, on or off, after how many working days (3A).
  */
-type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
+type CompanySettings = { website?: string; logoUrl?: string; benefitsSummary?: string; careersPage?: { enabled: boolean; intro?: string }; businessHours?: BusinessHours; notices?: Record<string, { version: string; text: string }>; pilot?: { startedAt: string; endsAt: string; extendedUntil?: string }; about?: CompanyAbout | null; zipRecruiterPlan?: boolean; newTimesAfterCancel?: { auto: boolean; workingDays: number } };
 type CompanyAbout = { text: string; approvedAt: string; approvedBy?: { id?: string; name?: string | null } | null };
 /** One allowance as GET /companies/current sends it; `unit: "percent"` is the AI credit, which customers read as a percentage. */
 type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
@@ -40,9 +39,7 @@ type UsageRow = { used: number; limit: number | null; resetsAt?: string | null; 
  * purpose rather than a development stand-in (Connected services). `candidateEmail`: the last week's emails to candidates,
  * left and not arrived, which the email row reads (6 November 2026); older answers leave it out.
  */
-type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; aiCredit?: Pick<AiCreditView, "level"> | null; trial?: TrialStanding | null; /** Who really posts on the boards, and whether the plan leaves that to the company (the plans of 5 November 2026, Rule 6); older answers leave them out. */ whoPosts?: "its" | "self"; itsPosting?: boolean; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean; candidateEmail?: CandidateEmailHealth | null };
-/** Who posts on the boards as the API reads it, plan first; an older answer has only the company's own setting. */
-const whoPostsOf = (c: Pick<Company, "whoPosts" | "settings">): "its" | "self" => c.whoPosts ?? (c.settings.boardPosting === "self" ? "self" : "its");
+type Company ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone: string; planKey: string; status: string; plan?: { key: string; name: string; limits: Record<string, number | null> } | null; usage?: Record<string, UsageRow>; aiCredit?: Pick<AiCreditView, "level"> | null; trial?: TrialStanding | null; locations: Array<{ city?: string; region?: string; country?: string }>; settings: CompanySettings; integrations: Array<{ kind: string; provider: string; status: string }>; ai: { provider: string }; production?: boolean; candidateEmail?: CandidateEmailHealth | null };
 /**
  * minLevel and maxLevel: the floor and ceiling the API holds the action to; only the levels between them are offered.
  * available: whether the product does this today (plan B7); the rest are listed under "Coming later" with no choice.
@@ -239,7 +236,6 @@ export function Setup() {
 
         {panel("security", <>
           <Section id="setup-sessions"><YourSessions /></Section>
-          <Section id="setup-recruiters"><RecruiterAccess canRevoke={["owner", "admin"].includes(myRole)} /></Section>
           <Section id="setup-services">
             <Card title="Connected services">
               <Table head={["What", "Provider", "Status", "What it takes"]} empty="No services connected yet.">
@@ -251,7 +247,7 @@ export function Setup() {
                       <td>{cells.provider}</td>
                       {/* a long state wraps inside its pill, so the explanations keep room and the table never scrolls sideways */}
                       <td><Pill size="sm" tone={cells.tone} className="wrap">{cells.state}</Pill></td>
-                      <td className="small muted">{explainStatus(i, whoPostsOf(c), c.production === true, c.candidateEmail)}</td>
+                      <td className="small muted">{explainStatus(i, c.production === true, c.candidateEmail)}</td>
                     </tr>
                   );
                 })}
@@ -343,18 +339,17 @@ function serviceCells(i: { kind: string; provider: string; status: string }, pro
 }
 
 /**
- * What each connected service takes, in a line. The job boards are not connected to the product: ITS posts on them from
- * the company's own accounts (plan D3), or the team does when it chose to post itself (`whoPosts`). Texting is off
+ * What each connected service takes, in a line. The job boards are not connected to the product: the team posts on them
+ * from the company's own accounts. Texting is off
  * whichever provider is loaded, the stand-in included. Another stand-in says in development that nothing leaves the
  * app; in production only email has more to say than its state.
  */
-function explainStatus(i: { kind: string; provider: string; status: string }, whoPosts: "its" | "self" = "its", production = false, email?: CandidateEmailHealth | null): string {
+function explainStatus(i: { kind: string; provider: string; status: string }, production = false, email?: CandidateEmailHealth | null): string {
   if (i.provider === "twilio" || i.provider === "fake-sms") return "Text messaging is off until carrier registration and counsel review are complete. The AI interview runs on the web from an email link.";
   if (i.status === "fake") return production ? (i.kind === "email" ? "Candidate email is not being sent." : "") : "Nothing leaves the app.";
   if (i.provider === "careers_page") return "Served by the product; every open job has a public page and apply form.";
   if (i.provider === "google_jobs") return "Every job page carries the details Google reads. Google lists jobs on its own schedule; a job is marked found once someone sees it in a Google search.";
   if (i.provider === "email_in") return i.status === "live" ? "Forward application emails to each job's intake address." : "The inbound mail domain is not configured yet, so forwarded applications cannot arrive. Share the apply link directly.";
-  if (["indeed", "ziprecruiter", "linkedin_basic"].includes(i.provider) && whoPosts === "its") return "Not connected to the product: ITS posts your jobs here from your company's own account, with each job's own apply link, and nothing is called up until its address is checked.";
   if (i.provider === "indeed") return "Not connected to Indeed. Post from your own Indeed account with the apply link, or forward applications to the intake address once email-in is connected.";
   if (i.provider === "ziprecruiter") return "Not connected to ZipRecruiter. Post from your own account with the apply link.";
   if (i.provider === "linkedin_basic") return "Not connected to LinkedIn. Post a free listing from your company page with the apply link.";
@@ -382,7 +377,7 @@ function actionLabel(a: string): string {
     "debrief.recommend": "Recommend a finalist", "candidate.hire_decision": "Decide who to hire", "offer.draft": "Draft an offer", "offer.send": "Send an offer",
     "offer.negotiate": "Negotiate an offer", "offer.revise": "Revise an offer", "reference.request": "Request references", "background_check.order": "Order a background check",
     "background_check.adverse_action": "Act on a background check", "employee.create_in_hris": "Create the new hire in payroll/HR", "welcome.send": "Send welcome and start reminders",
-    "checkin.request": "Ask how the hire is going at 30/60/90 days", "intervention.nudge": "Nudge when a job is stuck", "intervention.offer_recruiter": "Offer a recruiter when stuck",
+    "checkin.request": "Ask how the hire is going at 30/60/90 days", "intervention.nudge": "Nudge when a job is stuck",
     "sourcing.search_internal": "Search your own talent pool", "sourcing.enrich_external": "Look up outside candidates (uses credits)", "outreach.send": "Reach out to outside candidates",
     "policy.change": "Change these rules", "knockout_rule.change": "Change eligibility rules", "notice_text.change": "Change candidate notices", "data.delete": "Delete candidate data", "data.export": "Export data",
   } as Record<string, string>)[a] ?? a;
@@ -400,7 +395,7 @@ const ACTION_NOTE: Record<string, string> = {
  */
 const ACTION_MORE: Record<string, string> = {
   "application.recommend_interview": "Only a person: nobody moves after the AI interview. They stay in New, you hear about each one once, and you decide. Ask me first: the assistant's suggestion waits on a card for your yes or no. Do it and tell me: the assistant moves the ones it likes to Interviewing and tells you. Do it: the same, without telling you.",
-  "disposition.send": "Declining never sends anything by itself. Do it: the message goes when someone presses Send, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told. Ask me first: a second person approves it, and a recruiter is brought in instead of the message going by itself. Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days a recruiter is brought in to make sure they hear from you.",
+  "disposition.send": "Declining never sends anything by itself. Do it: the message goes when someone presses Send, and if nobody has told someone five working days after a decision, the standard message goes by itself and you are told. Ask me first: a second person approves it, and if nobody has told someone after five working days you are reminded instead of the message going by itself. Only a person: the app sends none and you tell candidates yourself, and if nobody has after five working days you are reminded.",
 };
 
 /**
@@ -496,90 +491,23 @@ function MyAvailability() {
   );
 }
 
-type Grant = { id: string; kind: string; purpose: string; escalationId: string | null; roleId: string | null; roleTitle: string | null; applicationId: string | null; oneCandidate?: boolean; startsAt: string; expiresAt: string; endedAt: string | null; revokedAt: string | null; revokeReason: string | null; recruiterName: string | null; recruiterEmail: string; active: boolean };
-
-/** ITS recruiter access (founder decision F10; item 1 of 21 Sep): visible to everyone on the team; owners and admins can end it now. */
-function RecruiterAccess({ canRevoke }: { canRevoke: boolean }) {
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["staff-access"], queryFn: () => api.get<Grant[]>("/api/v1/companies/current/staff-access"), refetchInterval: 20000 });
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
-  const revoke = useMutation({
-    mutationFn: (id: string) => api.post<{ recruiterNotified: boolean }>(`/api/v1/companies/current/staff-access/${id}/revoke`, { reason, confirm: true }),
-    onSuccess: async (r) => { toast(r.recruiterNotified ? "Access ended. The recruiter has been told and your activity log records it." : "Access ended and recorded. The email to the recruiter failed; ITS has been alerted to tell them another way."); setConfirming(null); setReason(""); await qc.invalidateQueries({ queryKey: ["staff-access"] }); await qc.invalidateQueries({ queryKey: ["staff-audit"] }); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not end the access."),
-  });
-  const active = (q.data ?? []).filter((g) => g.active);
-  const past = (q.data ?? []).filter((g) => !g.active).slice(0, 10);
-  return (
-    <Card title="ITS recruiter access">
-      <details className="more">
-        <summary>How this works</summary>
-        <p className="small muted">A recruiter gets access when your team asks for one, and also when the system brings one in on its own: a candidate asks for a person, or something gets stuck. A request about one candidate or one job gives access to that alone; all of your hiring only when someone on your team chose that. Access ends a day after the request is resolved, or after {ACCESS_DAYS} days at most, and you are told when a recruiter starts. Reopening an answered request gives fresh access, listed here like any other. Every page they open is recorded in your activity. {canRevoke ? "You can end it at any time." : "Owners and admins can end it at any time."}</p>
-      </details>
-      {q.isLoading ? <Skeleton lines={2} /> : active.length === 0 ? <p className="small muted mt-3 rounded-xl border border-dashed border-line-2 px-4 py-3">No recruiter has access right now.</p> : (
-        <div className="mt-3 grid divide-y divide-line rounded-xl border border-line">
-          {active.map((g) => (
-            <div key={g.id} className="stack gap-2 px-4 py-3.5">
-              <div className="row justify-between gap-3">
-                <span className="min-w-0"><strong className="text-ink">{g.recruiterName ?? g.recruiterEmail}</strong> <span className="small muted">· {g.purpose}</span></span>
-                <Chip tone="accent">{accessChip(g)}</Chip>
-              </div>
-              <span className="small muted">Ends {new Date(g.expiresAt).toLocaleString()}{g.escalationId ? ", or a day after the request is resolved if that is sooner" : ""}.</span>
-              {canRevoke ? (
-                confirming === g.id ? (
-                  <div className="stack gap-2.5 rounded-xl border border-line bg-surface-2/50 p-3.5">
-                    <Field label="Why you are ending it (the recruiter sees this)" htmlFor={`rv-${g.id}`}><input id={`rv-${g.id}`} className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-                    <div className="row"><Button size="sm" variant="destructive" disabled={reason.trim().length < 5} loading={revoke.isPending} onClick={() => revoke.mutate(g.id)}>End access now</Button><Button size="sm" variant="quiet" onClick={() => { setConfirming(null); setReason(""); }}>Keep it</Button></div>
-                  </div>
-                ) : <div className="row"><Button size="sm" variant="secondary" onClick={() => { setConfirming(g.id); setReason(""); }}>End this recruiter's access</Button></div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
-      <AccessHistory />
-      {past.length ? <details className="more mt-3"><summary className="small">Past access ({past.length})</summary><ul className="small list-disc pl-[18px] text-ink-2">{past.map((g) => <li key={g.id}>{g.recruiterName ?? g.recruiterEmail} · {g.purpose} · {g.revokedAt ? `ended early: ${g.revokeReason ?? "released"}` : `ended ${g.endedAt ? new Date(g.endedAt).toLocaleDateString() : "at expiry"}`}</li>)}</ul></details> : null}
-    </Card>
-  );
-}
-
 type AuditRow = { id: string; action: string; description: string; actor: { kind: string; name: string | null }; reason: string | null; at: string; details: Record<string, unknown> };
-const ACTION_LABEL: Record<string, string> = { "staff.access_granted": "Access granted", "staff.access_ended": "Access ended", "staff.access_revoked": "Access ended by your team", "admin.break_glass": "Emergency access by an ITS administrator" };
-const ACCESS_ACTIONS = "staff.access_granted,staff.access_ended,staff.access_revoked,admin.break_glass";
-
-/** The customer's own record of recruiter access: who acted, when, and why. */
-function AccessHistory() {
-  const q = useQuery({ queryKey: ["staff-audit"], queryFn: () => api.get<AuditRow[]>(`/api/v1/companies/current/audit?limit=20&actions=${ACCESS_ACTIONS}`), retry: false });
-  if (q.error || !q.data?.length) return null;
-  return (
-    <details className="more mt-3">
-      <summary className="small">Access history ({q.data.length})</summary>
-      <ul className="small list-disc pl-[18px] text-ink-2">
-        {q.data.map((r) => <li key={r.id}>{new Date(r.at).toLocaleString()} · {ACTION_LABEL[r.action] ?? r.action} · by {r.actor.name ?? r.actor.kind}{r.reason ? ` · ${r.reason}` : ""}</li>)}
-      </ul>
-    </details>
-  );
-}
 
 /**
- * Everything the team may see of the audit ledger (A9): recruiter access, team changes, rule and company changes,
+ * Everything the team may see of the audit ledger (A9): team changes, rule and company changes,
  * candidate views, outcomes, exports; in plain words, newest first, and as a spreadsheet. Hidden for roles without
  * events.read (the API answers 403).
  */
 function AuditHistory() {
-  const [everyPage, setEveryPage] = useState(false);
-  const path = `/api/v1/companies/current/audit?limit=50${everyPage ? "" : "&exclude=staff.tenant_accessed"}`;
-  const q = useQuery({ queryKey: ["audit-history", everyPage], queryFn: () => api.get<AuditRow[]>(path), retry: false });
+  const q = useQuery({ queryKey: ["audit-history"], queryFn: () => api.get<AuditRow[]>("/api/v1/companies/current/audit?limit=50"), retry: false });
   const s = useTableSort<"when" | "who">({ key: "when", dir: "descending" });
   if (q.error) return null;
   return (
     <Card title="Audit history" aside={<a className="btn secondary sm" href="/api/v1/companies/current/audit.csv">Download as a spreadsheet</a>}>
       <details className="more">
         <summary>How this works</summary>
-        <p className="small muted">It lists recruiter access, team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
+        <p className="small muted">It lists team changes, rule changes, company changes, candidate records opened, outcomes and downloads. The last 50 are shown; the spreadsheet has everything, and downloading it is recorded too.</p>
       </details>
-      <label className="small my-3 flex min-h-10 w-fit cursor-pointer items-center gap-2.5 text-ink-2"><input type="checkbox" checked={everyPage} onChange={(e) => setEveryPage(e.target.checked)} /> Include every page an ITS recruiter opened</label>
       {!q.isLoading && !q.data?.length ? <p className="small muted">Nothing recorded yet.</p> : (
         <Table head={[s.col("when", "When", "date"), "What happened", s.col("who", "Who", "text")]} label="Audit history" scroll loading={q.isLoading ? 5 : undefined} announce={s.announce}>
           {s.apply(q.data ?? [], { when: (r) => Date.parse(r.at), who: (r) => r.actor.name ?? r.actor.kind }).map((r) => <tr key={r.id}><td className="small nowrap">{new Date(r.at).toLocaleString()}</td><td>{r.description}</td><td className="small">{r.actor.name ?? r.actor.kind}</td></tr>)}
@@ -646,8 +574,8 @@ const NOTICE_LABEL: Record<string, string> = { ai_use: "How we use AI (shown on 
 /** The same notices named briefly, for the read view's one-line summary. */
 const NOTICE_SHORT: Record<string, string> = { ai_use: "AI notice", privacy: "privacy notice", pay_transparency: "pay range notice", adverse_decision_explanation: "decision review notice" };
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
-/** The plan's allowances in the company card's words (recruiter_asks counts the team's own requests, founder decision Q33). */
-const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", recruiter_asks: "recruiter requests", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
+/** The plan's allowances in the company card's words. */
+const USAGE_LABEL: Record<string, string> = { active_roles: "active jobs", jobs_total: "jobs", text_screens: "AI interviews this month", screen_person_requests: "requests for a person instead of the AI interview", seats: "people (invitations not yet answered count too)", ai_credit_total_cents: "AI help", ai_credit_monthly_cents: "AI help this month" };
 /** Limits for what was never built: nothing is used of them, and a company moved off an older plan still has their rows (a change of plan clears no key). */
 const NEVER_BUILT: ReadonlySet<string> = new Set(["voice_minutes", "sourcing_contacts"]);
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -750,7 +678,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
             <dt>Benefits</dt><dd>{c.settings.benefitsSummary || <span className="muted">not set</span>}</dd>
             <dt>Locations</dt><dd>{c.locations.map((l) => [l.city, l.region].filter(Boolean).join(", ")).join("; ")}</dd>
             <dt>Plan</dt><dd><Chip tone="accent">{c.plan?.name ?? c.planKey}</Chip>{trialLine ? <span className="small muted"> · {trialLine}</span> : null}{c.status === "design_partner" && c.settings.pilot ? <span className="small muted"> · pilot until {new Date(c.settings.pilot.extendedUntil ?? c.settings.pilot.endsAt).toLocaleDateString()}; jobs in progress are never cut off</span> : null}{mayOfferUpgrade(c.planKey) ? <span className="ms-2 inline-block align-middle"><Upgrade size="sm" /></span> : null}</dd>
-            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage, c.timezone, c.aiCredit?.level).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}{c.usage.recruiter_asks ?<span className="muted"> Recruiter requests count only what your team asks for. Going over never holds a request up; ITS will talk with you about the extra.</span> : null}</dd></> : null}
+            {c.usage ? <><dt>Usage</dt><dd className="small">{usageLines(c.usage, c.timezone, c.aiCredit?.level).join(" · ")}{usageResets(c.usage) ? <span> {usageResets(c.usage)}</span> : null}</dd></> : null}
           </dl>
           {/* The rest of the company's details, one click away. The plan and its usage stay on view: "See usage" links land here. */}
           <details className="more mt-4">
@@ -812,7 +740,7 @@ function CompanyCard({ company: c, canEdit, onReauthRequired }: { company: Compa
 }
 
 function fieldLabel(f: string): string {
-  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", boardPosting: "who posts on job boards", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company", newTimesAfterCancel: "automatic new times after a cancellation" } as Record<string, string>)[f] ?? f;
+  return ({ name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", zipRecruiterPlan: "ZipRecruiter plan", about: "about the company", newTimesAfterCancel: "automatic new times after a cancellation" } as Record<string, string>)[f] ?? f;
 }
 
 /*
@@ -1040,15 +968,14 @@ function AboutText({ company: c, canEdit }: { company: Company; canEdit: boolean
 }
 
 /**
- * Job boards (plan D3, founder decision Q11): who posts the company's jobs on LinkedIn, Indeed and ZipRecruiter (ITS by
- * default, from the company's own accounts, or the team itself), and whether the company has its own paid ZipRecruiter
- * plan, the only way ZipRecruiter is offered. Each role's boards are ticked on the role itself.
+ * Job boards (founder decision Q11): whether the company has its own paid ZipRecruiter plan, the only way ZipRecruiter
+ * is offered. The team posts on the boards from the company's own accounts; each role's boards are ticked on the role
+ * itself.
  */
 function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boolean }) {
   const qc = useQueryClient();
-  const whoPosts = whoPostsOf(c);
   const save = useMutation({
-    mutationFn: (settings: { boardPosting?: "its" | "self"; zipRecruiterPlan?: boolean }) => api.patch<{ changed: string[] }>("/api/v1/companies/current", { settings }),
+    mutationFn: (settings: { zipRecruiterPlan?: boolean }) => api.patch<{ changed: string[] }>("/api/v1/companies/current", { settings }),
     onSuccess: async (r) => {
       toast(r.changed?.length ? `Saved: ${r.changed.map(fieldLabel).join(", ")}.` : "Nothing changed.");
       await qc.invalidateQueries({ queryKey: ["company"] });
@@ -1059,25 +986,17 @@ function JobBoardsCard({ company: c, canEdit }: { company: Company; canEdit: boo
   return (
     <Card title="Job boards">
       <div className="stack gap-4">
-        <Field label="Who posts your jobs on the boards">
-          {/* a plan with no ITS staff time leaves no choice (Rule 6): the team posts, and the way to ITS is a bigger plan */}
-          {c.itsPosting === false ? (
-            <div className="row"><Chip>Your team posts them</Chip><Upgrade size="sm" reason={ITS_POSTING_UPGRADE_QUESTION} /></div>
-          ) : canEdit ? (
-            <Segmented value={whoPosts} onChange={(v) => save.mutate({ boardPosting: v })} ariaLabel="Who posts your jobs on the boards" options={[{ value: "its", label: "ITS posts them for us" }, { value: "self", label: "Our team posts them" }]} />
-          ) : <Chip>{whoPosts === "its" ? "ITS posts them for you" : "Your team posts them"}</Chip>}
-        </Field>
         <label className="check w-fit">
           <input type="checkbox" checked={!!c.settings.zipRecruiterPlan} disabled={!canEdit || save.isPending} onChange={(e) => save.mutate({ zipRecruiterPlan: e.target.checked })} />
           We have our own paid ZipRecruiter plan
         </label>
-        {!canEdit ? <p className="small muted">Only owners and admins change these.</p> : null}
+        {!canEdit ? <p className="small muted">Only owners and admins change this.</p> : null}
         <details className="more">
           <summary>How this works</summary>
           <div className="stack small muted gap-1.5">
             <p>Every job goes on your careers page and Google.</p>
             <p>LinkedIn, Indeed and ZipRecruiter are ticked on each job, and nothing is called up on a board until its address has been checked.</p>
-            <p>{whoPosts === "its" ? "An ITS recruiter posts each job from your company's own board accounts and takes it down when the job closes. You see who has it on the job's Share tab." : "Each job's Share tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up."}</p>
+            <p>Each job's Share tab has the words to paste, the board's own apply link and the steps. You record the listing's address there once it is up.</p>
             <p>Posting on ZipRecruiter needs a paid plan of your own, so it is offered on a job only once you say you have one.</p>
           </div>
         </details>

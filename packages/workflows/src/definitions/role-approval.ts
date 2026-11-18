@@ -34,7 +34,6 @@ export const roleApproval: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "request_approval",
   maxAttempts: 3,
-  escalationKind: "ask",
   steps: {
     async request_approval(ctx) {
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
@@ -152,7 +151,7 @@ export const roleApproval: WorkflowDefinition<State> = {
         await ctx.q.update(roles).set({ currentPacketVersion: ctx.state.packetVersion, ...(approved ? { title: approved.packet.identity.title } : {}) }).where(eq(roles.id, role.id));
         await emit(ctx.q, { type: "role_packet.approved", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role_packet", id: `${role.id}:${ctx.state.packetVersion}` }, payload: { version: ctx.state.packetVersion, via: "edit_while_open" }, correlationId: ctx.run.id });
         // The careers page and Google show the new version at once; the boards posted by hand still show the old one (plan D4).
-        await markBoardsOutdated(ctx.q, { companyId: ctx.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: ctx.state.packetVersion, actor: ctx.actor, now: ctx.now });
+        await markBoardsOutdated(ctx.q, { companyId: ctx.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: ctx.state.packetVersion, actor: ctx.actor });
         // A new place can bring Colorado's closing date with it.
         if (approved) await ensureClosingDate(ctx, role, approved.packet, false);
         return { kind: "complete" };
@@ -182,7 +181,7 @@ export const roleApproval: WorkflowDefinition<State> = {
 };
 
 /** The approver roles of a request, in the words the notice uses: "Any owner, admin or hiring manager can decide." */
-const ROLE_WORD: Record<string, string> = { owner: "owner", admin: "admin", hiring_manager: "hiring manager", hr: "HR team member", recruiter: "recruiter", interviewer: "interviewer" };
+const ROLE_WORD: Record<string, string> = { owner: "owner", admin: "admin", hiring_manager: "hiring manager", hr: "HR team member", interviewer: "interviewer" };
 export function decidersInWords(roles: readonly string[]): string {
   const words = [...new Set(roles)].map((r) => ROLE_WORD[r] ?? r.replace(/_/g, " "));
   if (!words.length) return "An owner can decide.";

@@ -285,7 +285,7 @@ schedulePages.post("/c/schedule/:token", rateLimit(POLICIES.schedule), async (c)
   const parsed = SelectSlot.safeParse({ slotId: form.slotId, timezone: form.timezone || undefined, accessibilityNote: form.accessibilityNote || undefined });
   if (!parsed.success) return c.redirect(`/c/schedule/${b.iv.scheduleToken}?error=slot_unknown`);
   // Booked by the run waiting for a pick, or straight away when none waits (after "none of these work", during "no
-  // common times", after the collisions escalation): never silently lost. A time booked for an interviewer since is
+  // common times", after too many collisions): never silently lost. A time booked for an interviewer since is
   // refused with a plain line, and they choose another; so is a time that has passed, or one no longer on offer.
   const actor = { kind: "candidate" as const, id: b.candidate.id };
   const route = await withTenant(container.db, b.company.id, async (tx) => {
@@ -373,7 +373,7 @@ schedulePages.get("/c/schedule/:token/confirmed", async (c) => {
   const now = container.engine.clock();
   // Once the interview has started it can no longer be moved or cancelled from here (audit 06, bug 96).
   const ahead = Date.parse(start) > now.getTime();
-  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, interviewId: b.iv.id })) : null;
+  const plan = !b.closed && ahead ? await withTenant(container.db, b.company.id, (tx) => autoNewTimesPlan(tx, { companyId: b.company.id, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, interviewId: b.iv.id })) : null;
   const missing = c.req.query("error") === "cancel";
   const setByPerson = setByAPerson(b);
   return c.html(
@@ -572,8 +572,6 @@ function teamCancelNote(next: CancelNext, plan: AutoPlan | { arm: false; reason:
       return "They asked for new times. They already had their one automatic set, so nothing more goes automatically: send new times or decide.";
     case "reschedules_used":
       return "They asked for new times after asking twice for a different time, so a person should arrange the time with them. Nothing goes to them automatically.";
-    case "takeover":
-      return "They asked for new times. An ITS recruiter is running this role, so nothing goes automatically: you or the recruiter decide.";
     case "was_on_hold":
       return "They asked for new times. You had put them on hold; that hold has ended and nothing goes automatically: send new times or decide.";
     case "company_not_checked":
@@ -623,7 +621,7 @@ schedulePages.post("/c/schedule/:token/cancel", rateLimit(POLICIES.cancelIntervi
     const underCancelled = !!app && CANCEL_STAGES.includes(app.stage);
     // Read before the row is written, so it says what was true when they chose (a hold still counts).
     // Under a share lock on the company row: switching automatic times off waits for this cancel, or this cancel reads it off.
-    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, roleId: b.app.roleId, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true, interviewId: b.iv.id }) : { arm: false, reason: "not_asked" };
+    const plan: AutoPlan | { arm: false; reason: "not_asked" } = next === "new_times" && underCancelled ? await autoNewTimesPlan(tx, { companyId: b.company.id, applicationId: b.app.id, rescheduleCount: b.iv.rescheduleCountCandidate, now, lock: true, interviewId: b.iv.id }) : { arm: false, reason: "not_asked" };
     if (underCancelled) {
       const { row } = await openFollowUp(tx, { companyId: b.company.id, applicationId: b.app.id, interviewId: b.iv.id, interviewAttempt: b.iv.attempt + 1, kind: "candidate_cancelled", choice: next, auto: plan.arm ? { state: "waiting", dueAt: plan.dueAt, workingDays: plan.workingDays, day: plan.day } : { state: "none", reason: plan.reason }, actor, now });
       if (plan.arm) await armNewTimes(tx, container.engine, { companyId: b.company.id, followUpId: row.id, applicationId: b.app.id, roleId: b.app.roleId, interviewId: b.iv.id, actor });

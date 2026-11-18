@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_BUSY_LINE, AI_HELP_LINE, FREE_PLAN_KEY, aiHelpLine, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestQuestion, publicPlanView } from "./plans";
+import { AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, AI_HELP_BUSY_LINE, AI_HELP_LINE, FREE_PLAN_KEY, aiHelpLine, MORE_CANDIDATES_UPGRADE_QUESTION, PLAN_LIMIT_KEYS, PUBLIC_PLAN_KEYS, aiCreditNoticeWords, isAiCreditKey, isPublicPlanKey, jobsTotalLine, limitsForCustomers, mayOfferUpgrade, planChangedWords, planRequestWords, publicPlanView } from "./plans";
 
 describe("asking for a bigger plan", () => {
   it("offers an upgrade on every plan but the last public one and the private pilot, read from the list", () => {
@@ -7,16 +7,16 @@ describe("asking for a bigger plan", () => {
     for (const key of ["ultra", "design_partner"]) expect(mayOfferUpgrade(key), key).toBe(false);
   });
 
-  it("the question names the plan, then why, then the person's own note", () => {
-    expect(planRequestQuestion("Pro")).toBe("We would like to move to the Pro plan.");
-    expect(planRequestQuestion("Pro", { reason: MORE_CANDIDATES_UPGRADE_QUESTION, note: "  From next month.  " })).toBe("We would like to move to the Pro plan. We would like to view more candidates. From next month.");
-    expect(planRequestQuestion("Ultra", { note: "   " })).toBe("We would like to move to the Ultra plan.");
+  it("the request names the plan, then why, then the person's own note", () => {
+    expect(planRequestWords("Pro")).toBe("We would like to move to the Pro plan.");
+    expect(planRequestWords("Pro", { reason: MORE_CANDIDATES_UPGRADE_QUESTION, note: "  From next month.  " })).toBe("We would like to move to the Pro plan. We would like to view more candidates. From next month.");
+    expect(planRequestWords("Ultra", { note: "   " })).toBe("We would like to move to the Ultra plan.");
     // nothing above theirs to name, and they can still talk with ITS
-    expect(planRequestQuestion(null, { reason: "We would like more AI help." })).toBe("We would like to talk about our plan. We would like more AI help.");
+    expect(planRequestWords(null, { reason: "We would like more AI help." })).toBe("We would like to talk about our plan. We would like more AI help.");
   });
 
   it("what the team is told when ITS changes the plan: no dollars, and how many it opened", () => {
-    expect(planChangedWords("Pro")).toEqual({ title: "Your plan is now Pro", body: "Your company is on the Pro plan now. The new limits apply at once.", answer: "Your company is on the Pro plan now." });
+    expect(planChangedWords("Pro")).toEqual({ title: "Your plan is now Pro", body: "Your company is on the Pro plan now. The new limits apply at once." });
     expect(planChangedWords("Pro", 1).body).toContain("1 candidate who was locked is open now.");
     expect(planChangedWords("Pro", 3).body).toContain("3 candidates who were locked are open now.");
   });
@@ -42,7 +42,7 @@ describe("the public plans", () => {
 });
 
 describe("what a customer may read about a plan", () => {
-  const free = { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, recruiter_asks: 1, seats: 2, its_work: 0 } };
+  const free = { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, seats: 2 } };
 
   it("takes the AI credit out of the limits, because it is money", () => {
     const limits = limitsForCustomers(free.limits);
@@ -69,11 +69,11 @@ describe("what a customer may read about a plan", () => {
     expect(jobsTotalLine(null, 1)).toBe("Your plan includes one job. Upgrade to post more.");
   });
 
-  it("says the AI credit in words, never in money, and never tells anyone to try again or to bring in a recruiter", () => {
+  it("says the AI credit in words, never in money, and never tells anyone to try again", () => {
     const lines = [...Object.values(AI_HELP_LINE), ...(["warning", "used_up"] as const).flatMap((level) => Object.values(aiCreditNoticeWords(level, { resetsOn: "Friday, December 4" })))];
     for (const line of lines) {
       expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b/i);
-      expect(line).not.toMatch(/try again|recruiter/i);
+      expect(line).not.toMatch(/try again/i);
     }
     expect(AI_HELP_LINE.turn).toBe("Your plan's AI help is used up. Your draft is saved. Upgrade to keep going.");
     expect(AI_HELP_LINE.draft).toBe("Your plan's AI help is used up. Everything you confirmed is kept. Upgrade to write the draft.");
@@ -87,7 +87,7 @@ describe("what a customer may read about a plan", () => {
     for (const line of Object.values(AI_HELP_BUSY_LINE)) {
       expect(line).toMatch(/^Your plan's AI help is finishing other work\. /);
       expect(line).toMatch(/try again in a few minutes/i);
-      expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b|used up|upgrade|recruiter/i);
+      expect(line).not.toMatch(/\$|\bdollars?\b|\bcents?\b|\bcredit\b|used up|upgrade/i);
     }
     expect(AI_HELP_BUSY_LINE.revise).toBe("Your plan's AI help is finishing other work. Nothing was changed. Try again in a few minutes, or make the change in the editor.");
     expect(AI_HELP_BUSY_LINE.reviseDraft).toBe("Your plan's AI help is finishing other work. Nothing was changed. Try again in a few minutes.");
@@ -126,7 +126,7 @@ describe("what a customer may read about a plan", () => {
     expect(aiHelpLine("newJob", { planKey: "ultra" })).toBe("Your plan's AI help is used up. Talk with ITS about your plan.");
     for (const key of Object.keys(AI_HELP_LINE) as Array<keyof typeof AI_HELP_LINE>) {
       const line = aiHelpLine(key, ultra);
-      expect(line, key).not.toMatch(/upgrade|\$|\bdollars?\b|\bcents?\b|\bcredit\b|try again|recruiter/i);
+      expect(line, key).not.toMatch(/upgrade|\$|\bdollars?\b|\bcents?\b|\bcredit\b|try again/i);
       // every other plan has somewhere to go, and a plan not given reads as one
       for (const planKey of ["free", "basic", "pro", "trial", undefined]) expect(aiHelpLine(key, { planKey, resetsOn: "Friday, December 4" }), `${key} ${planKey}`).toBe(AI_HELP_LINE[key]);
     }

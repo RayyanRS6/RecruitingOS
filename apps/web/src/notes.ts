@@ -115,5 +115,5 @@ export function noteExcerpt(body: string, max = 160): string {
 
 /** Who may read whose notes, in one line under the list. */
 export function whoReadsLine(canRead: NotesView["canRead"]): string {
-  return canRead === "own" ? "You see your own note only. The hiring team reads every note; nobody else's note is shown to you." : "Owners, admins, hiring managers, HR and an ITS recruiter with access read every note. An interviewer sees only their own.";
+  return canRead === "own" ? "You see your own note only. The hiring team reads every note; nobody else's note is shown to you." : "Owners, admins, hiring managers and HR read every note. An interviewer sees only their own.";
 }

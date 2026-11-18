@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CHOICE_OPTIONS_MAX, COMPANY_QUESTIONS_LABEL, PACKET_VISIBILITY_LABEL, QUICK_QUESTIONS_LABEL, QUICK_QUESTIONS_MAX, WRITTEN_QUESTIONS_LABEL, WRITTEN_QUESTIONS_MAX } from "@ros/contracts";
 import { Alert, Button, Card, Chip, Field, IconButton, IconLabel } from "@ros/ui";
-import { api, ApiError, type NewVersionResponse, type WhoPosts } from "../../api/client";
+import { api, ApiError, type NewVersionResponse } from "../../api/client";
 import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { moveRow } from "../new-role/packet-form";
@@ -27,7 +27,6 @@ export function ApplicantQuestions(props: {
   packet: PacketWithQuestions;
   /** The newest version, which a change starts from; null when the job cannot be changed here. */
   editBase: { version: number; packet: PacketWithQuestions } | null;
-  whoPosts: WhoPosts;
   onEditEligibility?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -44,7 +43,7 @@ export function ApplicantQuestions(props: {
       <div className="stack gap-5">
         <p className="small muted max-w-[80ch]">{APPLICANT_QUESTIONS_LEDE}</p>
         {editing && base ? (
-          <QuestionsEditor key={base.version} roleId={props.roleId} baseVersion={base.version} packet={base.packet} whoPosts={props.whoPosts} onDone={() => setEditing(false)} />
+          <QuestionsEditor key={base.version} roleId={props.roleId} baseVersion={base.version} packet={base.packet} onDone={() => setEditing(false)} />
         ) : (
           <>
             <div className="stack gap-2">
@@ -104,7 +103,7 @@ export function ApplicantQuestions(props: {
  * The two lists as rows, seeded once from the newest version (mounted only while editing, keyed by that version). Only a
  * list that was touched is sent, so saving the quick questions never turns the screening questions into written ones.
  */
-export function QuestionsEditor(props: { roleId: string; baseVersion: number; packet: PacketWithQuestions; whoPosts: WhoPosts; onDone: () => void }) {
+export function QuestionsEditor(props: { roleId: string; baseVersion: number; packet: PacketWithQuestions; onDone: () => void }) {
   const qc = useQueryClient();
   const [quick, setQuickRows] = useState<QuickRow[]>(() => quickRowsFrom(props.packet));
   const [written, setWrittenRows] = useState<WrittenRow[]>(() => writtenRowsFrom(props.packet));
@@ -115,7 +114,7 @@ export function QuestionsEditor(props: { roleId: string; baseVersion: number; pa
   const save = useMutation({
     mutationFn: () => api.put<NewVersionResponse>(`/api/v1/roles/${props.roleId}/company-questions`, questionsPayload({ baseVersion: props.baseVersion, quick, written, quickChanged: changed.quick, writtenChanged: changed.written })),
     onSuccess: async (r) => {
-      const t = savedVersionToast(r, props.whoPosts);
+      const t = savedVersionToast(r);
       toast(t.title, t.detail);
       props.onDone();
       await qc.invalidateQueries({ queryKey: ["role", props.roleId] });

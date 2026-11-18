@@ -40,7 +40,6 @@ const page = await import("../app/(session)/setup/company/page");
 const appLayout = await import("../app/(app)/layout");
 const companyLayout = await import("../app/(app)/(company)/layout");
 const adminLayout = await import("../app/(app)/admin/layout");
-const recruiterLayout = await import("../app/(app)/recruiter/layout");
 const login = await import("../app/(public)/login/page");
 
 const draw = (node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() }, node));
@@ -208,7 +207,6 @@ describe("a person with a request lands on the same screen from any signed-in ad
   const everyDoor = async () => ({
     company: await landsOn(() => companyLayout.default({ children: null })),
     admin: await landsOn(() => adminLayout.default({ children: null })),
-    recruiter: await landsOn(() => recruiterLayout.default({ children: null })),
     login: await landsOn(() => login.default({ searchParams: Promise.resolve({}) })),
     setup: await landsOn(() => page.default()),
   });
@@ -236,12 +234,11 @@ describe("a person with a request lands on the same screen from any signed-in ad
     expect(sent.status, await sent.clone().text()).toBe(201);
     const company = (await sent.json()) as { id: string };
 
-    // waiting: signed in, with no active company, every address lands on the company step (the admin's by way of the
-    // recruiter queue, whose own layout sends them on) and the frame around them holds no error
+    // waiting: signed in, with no active company, every address lands on the company step and the frame around them holds no error
     const waiting = await open();
     expect(waiting.props.signup.request).toMatchObject({ status: "requested", companyName: "Harbor Dental", email: "sam@stranger.test" });
     expect(title(draw(waiting))).toBe("Your request has been sent");
-    expect(await everyDoor()).toEqual({ company: "redirect to /setup/company", admin: "redirect to /recruiter/queue", recruiter: "redirect to /setup/company", login: "redirect to /setup/company", setup: "stays" });
+    expect(await everyDoor()).toEqual({ company: "redirect to /setup/company", admin: "redirect to /setup/company", login: "redirect to /setup/company", setup: "stays" });
     expect(await landsOn(() => appLayout.default({ children: null }))).toBe("stays");
 
     // signing out and in again: a new session, the same screen
@@ -252,15 +249,15 @@ describe("a person with a request lands on the same screen from any signed-in ad
     const admin = await signInAdmin(app, container, "ada@identifiedtalent.com", "Ada Admin");
     expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "decline", from: "requested", confirm: true })).status).toBe(200);
     expect(title(draw(await open()))).toBe("We can't offer access right now");
-    expect(await everyDoor()).toEqual({ company: "redirect to /setup/company", admin: "redirect to /recruiter/queue", recruiter: "redirect to /setup/company", login: "redirect to /setup/company", setup: "stays" });
+    expect(await everyDoor()).toEqual({ company: "redirect to /setup/company", admin: "redirect to /setup/company", login: "redirect to /setup/company", setup: "stays" });
 
     // accepting later is the undo: Home, from the company step and from sign-in, and owner routes draw
     expect((await send(admin, `/api/v1/admin/customers/${company.id}/access`, { decision: "accept", from: "declined", confirm: true })).status).toBe(200);
-    expect(await everyDoor()).toEqual({ company: "stays", admin: "redirect to /", recruiter: "redirect to /", login: "redirect to /", setup: "redirect to /" });
+    expect(await everyDoor()).toEqual({ company: "stays", admin: "redirect to /", login: "redirect to /", setup: "redirect to /" });
   });
 
   it("someone with no session is sent to sign in, and an expired one does not loop", async () => {
     jar.cookie = "ros_session=not-a-session";
-    expect(await everyDoor()).toEqual({ company: "redirect to /login", admin: "redirect to /login", recruiter: "redirect to /login", login: "stays", setup: "redirect to /login" });
+    expect(await everyDoor()).toEqual({ company: "redirect to /login", admin: "redirect to /login", login: "stays", setup: "redirect to /login" });
   });
 });

@@ -17,7 +17,7 @@ import type { Services, StepContext, WorkflowDefinition } from "../types";
  *   person one summary of the updates in their daily groups (and on Monday their weekly groups) that they have not seen
  *   or been emailed yet, counted by group and role, then sleeps until the next morning.
  *
- * Neither ever names a candidate or carries their details, a recruiter's answer or a ranking (packages/core
+ * Neither ever names a candidate or carries their details or a ranking (packages/core
  * notify-email.ts writes the words). Started beside the stuck-role check; idempotent by company.
  */
 export const NOTIFICATION_DIGEST_KEY = "notification_digest";

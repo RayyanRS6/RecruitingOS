@@ -1,10 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Actor, ApplicationStage, MembershipRole, OfferMadeResult, RecordOfferMade } from "@ros/contracts";
-import { audit, companyToday, emit, openEscalationsFor, transition } from "@ros/core";
-import { type applications, companies, offers, roles, users, withPlatform, type Tx } from "@ros/db";
-import { mailbox } from "@ros/integrations";
+import { audit, companyToday, emit, transition } from "@ros/core";
+import { type applications, companies, offers, type Tx } from "@ros/db";
 import { HttpError } from "../middleware/errors";
-import type { Container } from "../container";
 
 /**
  * "Offer made" (founder decision Q29; plan H2). A person records that an offer was made to a finalist outside the app:
@@ -84,26 +82,4 @@ export async function settleOutsideOffer(tx: Tx, input: { applicationId: string;
   if (!row) return null;
   await emit(tx, { type: status === "accepted" ? "offer.accepted" : status === "declined" ? "offer.declined" : "offer.rescinded", companyId: input.companyId, actor: input.actor, subject: { type: "application", id: input.applicationId }, payload: { offerId: row.id, madeOutside: true, recordedOutsidePlatform: true, outcome: input.outcome } });
   return { status, madeOn: row.madeOn };
-}
-
-/** Tells the ITS recruiter working on this role or candidate about an outcome. Names the role, never the candidate. */
-export async function tellRecruiterAboutOutcome(container: Container, companyId: string, roleId: string, applicationId: string | null, what: string, key: string) {
-  const escalations = await openEscalationsFor(container.db, companyId, roleId, applicationId);
-  if (!escalations.length) return;
-  // the assigned recruiter is ITS staff, not a member of the company, so their address is read on the platform side
-  const assigned = [...new Set(escalations.map((e) => e.assignedToUserId).filter((id): id is string => !!id))];
-  const { company, role, emailOf } = await withPlatform(container.db, async (tx) => {
-    const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1);
-    const [role] = await tx.select({ title: roles.title }).from(roles).where(and(eq(roles.id, roleId), eq(roles.companyId, companyId))).limit(1);
-    const people = assigned.length ? await tx.select({ id: users.id, email: users.email }).from(users).where(inArray(users.id, assigned)) : [];
-    return { company, role, emailOf: new Map(people.map((p) => [p.id, p.email])) };
-  });
-  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
-  const told = new Set<string>();
-  for (const e of escalations) {
-    const to = e.assignedToUserId ? emailOf.get(e.assignedToUserId) : container.env.ITS_QUEUE_EMAIL;
-    if (!to || told.has(to)) continue;
-    told.add(to);
-    await container.integrations.email.send({ to, from, subject: `${company?.name ?? "A customer"} recorded an outcome for ${role?.title ?? "a role"}`, text: `${what}\n\nThe customer recorded this themselves; the decision was made outside Recruiting OS. Your open request: ${container.env.APP_BASE_URL}/recruiter/queue/${e.id}`, idempotencyKey: `${key}:${to}`, tags: { template: "outcome_recorded" } });
-  }
 }

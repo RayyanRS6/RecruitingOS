@@ -82,7 +82,7 @@ describe("the interviewer's brief in words", () => {
     expect(theirs.concerns.map((s) => [s.claim, s.quote])).toEqual([["A gap in 2023", null]]);
     expect(theirs).toMatchObject({ pay: null, includesPay: false });
     expect(renderInterviewerBriefText(theirs)).not.toMatch(/Elm St|92618|example\.com|linkedin|555-0142/);
-    for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter"] as const) expect(briefForReader(full, role), role).toEqual(full);
+    for (const role of ["owner", "admin", "hiring_manager", "hr"] as const) expect(briefForReader(full, role), role).toEqual(full);
   });
 });
 

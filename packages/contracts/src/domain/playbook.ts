@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EligibilityRuleType, CompensationBasis } from "./role-packet";
 
-/** A vertical playbook: one versioned document per vertical, authored by ITS recruiters. */
+/** A vertical playbook: one versioned document per vertical, authored by ITS. */
 
 export const PlaybookRole = z.object({
   key: z.string(),

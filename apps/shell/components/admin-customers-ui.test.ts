@@ -1,5 +1,4 @@
 import * as React from "react";
-import { readFileSync } from "node:fs";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -44,7 +43,7 @@ const Customers = (search = "") => {
   return createElement(CustomersSection, { view: null, onView: () => undefined });
 };
 
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
 const admin = { ...owner, user: { ...owner.user, id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
@@ -68,21 +67,20 @@ const report = {
   interviews: { total: 1, requested: 0, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0, byRound: [{ roundKey: "working", title: "Working interview", total: 1, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0 }] },
   pendingDecisions: { count: 3, approvals: 0, candidates: 3, oldestDays: 2, list: [] },
   recommendationsVsDecisions: { assessed: 2, rows: [{ recommendation: "advance", label: "Invite to a screen", total: 2, invited: 1, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 }] },
-  overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: {} },
-  escalations: { total: 0, open: 0, resolved: 0, overdue: 0, medianResponseHours: null },
+  overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, byAction: {} },
   messages: { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 },
   outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 1, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [{ reason: "not_a_match_skills", label: "Skills not a match", count: 1 }] },
 };
 
 const company = (id: string, name: string, over: Record<string, unknown> = {}) => ({
-  id, name, slug: id, vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 0, aiCostUsd: 0, lastActivityAt: daysAgo(1), escalations: 0, createdAt: daysAgo(30),
-  settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", ...over,
+  id, name, slug: id, vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 0, aiCostUsd: 0, lastActivityAt: daysAgo(1), createdAt: daysAgo(30),
+  settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, applyFlowDefault: "form_then_screen", ...over,
 });
 type Row = Parameters<typeof CUSTOMER_SORT.company>[0];
 
 // Cara Dental waits for the check but comes second in the answer: only the B7 rule can put it first
 const three = () => [
-  company("co1", "Bright Dental", { roles: 2, applications: 3, aiCostUsd: 0.04, recruiterAsks: { used: 12, limit: 10, over: true }, escalations: 14, screeningConversations: { used: 122, limit: 150, resetsAt: "2026-10-30T12:00:00.000Z" } }),
+  company("co1", "Bright Dental", { roles: 2, applications: 3, aiCostUsd: 0.04, screeningConversations: { used: 122, limit: 150, resetsAt: "2026-10-30T12:00:00.000Z" } }),
   company("co2", "Cara Dental", { verifiedAt: null, createdAt: daysAgo(3), roles: 0, heldMessages: 2, lastActivityAt: daysAgo(0) }),
   company("co3", "Avon Dental", { applications: 7, aiCostUsd: 0.1, lastActivityAt: daysAgo(9), planKey: "growth" }),
 ];
@@ -272,9 +270,6 @@ describe("the customer drawer", () => {
     expect(words).toContain("dental · 20-49 employees · no website given · signed up");
     // AI cost in plain money, the exact figure on hover
     expect(html).toContain('<span title="$0.0400">$0.04</span> in all');
-    // the recruiter requests this month and in all, and the billing chip past the plan's number (Q33)
-    expect(words).toContain("12 of 10 this month · 14 in all");
-    expect(words).toContain("Past its recruiter requests: talk about billing");
     // the plan, its screening chats with the reset date, the running-low chip, and the way to change it
     expect(words).toContain("Starter · Active Change plan");
     expect(words).toContain("122 of 150 AI interviews this month, resets October 30");
@@ -283,7 +278,6 @@ describe("the customer drawer", () => {
     expect(words).toContain("How people apply The same for everyone: the form, then the AI interview");
     expect(html).not.toContain('aria-label="Change how people apply"');
     expect(words).toContain("2 jobs · 3 applicants");
-    expect(words).toContain("Job boards Not confirmed yet");
     expect(words).toContain("Messages held None");
     expect(words).toContain("See the report");
     // the facts are the kit's glance rows
@@ -299,13 +293,10 @@ describe("the customer drawer", () => {
     expect(words).toContain("Confirm only after checking the company is real: the kick-off call, its website, a phone number.");
     expect(words).toContain("2 messages to candidates are held and will go out when you confirm.");
     expect(html).toContain('<label for="co-check-why">How you checked the company</label>');
-    expect(words).toContain("ITS can sign in to the job boards");
     // the company's facts are the drawer's header, not said again in "The company" (founder's fewer-words rule)
     expect(html).toMatch(/<p class="drawer-sub">[^<]*no website given[^<]*<\/p>/);
     expect(html.split("no website given")).toHaveLength(2);
     expect(words).toContain("Not confirmed yet: its careers page, job pages and Google listing are offline");
-    // when to record job-board access folds under "How this works"
-    expect(html).toMatch(/<summary>How this works<\/summary><p[^>]*>The owner adds the ITS recruiter as a user/);
   });
 
   it("holds the plan and how people apply on their own tabs", () => {
@@ -328,14 +319,13 @@ describe("the customer drawer", () => {
     expect(html).toMatch(/<td>Dental Hygienist<\/td><td><span class="pill good sm">.*?open<\/span><\/td><td class="num">3<\/td><td class="num">2<\/td><td class="num">0<\/td>/);
     expect(html).toContain('<div class="daybars" role="img"');
     expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
-    // what the figures mean ("typical", response time) is the role page's closed disclosure, here too
+    // what the figures mean ("typical", "average") is the role page's closed disclosure, here too
     expect(html).toMatch(/<details class="more"><summary>What these figures mean<\/summary>/);
     expect(html).not.toMatch(/<details class="more" open/);
-    expect(text(html)).toContain("Response time is clock hours from your request to a recruiter picking it up");
+    expect(text(html)).toContain('"Typical" is the middle value; "average" adds every stay up and divides.');
     expect(text(html)).toContain("Counts and days only; no candidate is named here.");
     // the definitions speak of every role of the customer, never of "this role"
     expect(text(html)).toContain("Every application across all roles, by where the person came from");
-    expect(text(html)).toContain("Your requests for an ITS recruiter across all roles:");
     expect(text(html)).toContain("Emails and texts to candidates across all roles:");
     expect(text(html)).not.toMatch(/(to|on|about) this role/);
     // it defines only the figures on this panel: the must-haves and the AI interview are one role's cards
@@ -380,7 +370,7 @@ describe("the customer drawer", () => {
 
 describe("first sign-in asks for approval, on the Customers page", () => {
   const person = { name: "Sam Asker", email: "sam@stranger.test" };
-  const asking = (id: string, name: string, over: Record<string, unknown> = {}) => company(id, name, { verifiedAt: null, createdAt: daysAgo(2), planKey: "free", roles: 0, whoPosts: "self", locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person, declined: null }, ...over });
+  const asking = (id: string, name: string, over: Record<string, unknown> = {}) => company(id, name, { verifiedAt: null, createdAt: daysAgo(2), planKey: "free", roles: 0, locations: [{ city: "Austin", region: "TX", country: "US" }], settings: { website: "https://asker.example" }, accessRequest: { status: "requested", person, declined: null }, ...over });
   // 3:10 PM on 5 November on the reader's own clock, which is how the console shows a time, wherever the test runs
   const refused = (id: string, name: string, over: Record<string, unknown> = {}) => asking(id, name, { createdAt: daysAgo(9), accessRequest: { status: "declined", person, declined: { at: new Date(2026, 10, 5, 15, 10).toISOString(), by: "Ada Admin" } }, ...over });
   const rows = () => [...three(), asking("co8", "Harbor Dental"), refused("co9", "Gone Dental")];
@@ -470,7 +460,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     expect(html).toContain('<button type="button" class="btn primary sm" aria-label="Accept Harbor Dental">Accept</button>');
     expect(html).toContain('<button type="button" class="btn quiet sm" aria-label="Decline Harbor Dental">Decline</button>');
     expect(html).toMatch(/<summary>How this works<\/summary><p[^>]*>Accept lets them in on the Free plan and counts as the ITS check\. Decline keeps them out, and you can still accept later\.<\/p>/);
-    for (const gone of ["Confirm the company", "How you checked the company", "Job-board access", "It can draft and approve roles", "Take back the confirmation", "The owners are told", "The owners were told"]) expect(words, gone).not.toContain(gone);
+    for (const gone of ["Confirm the company", "How you checked the company", "It can draft and approve roles", "Take back the confirmation", "The owners are told", "The owners were told"]) expect(words, gone).not.toContain(gone);
     expect(html).not.toContain('id="co-check-why"');
   });
 
@@ -632,17 +622,12 @@ describe("the hiring outcomes", () => {
   });
 });
 
-describe("the plan and the recruiter requests on the console", () => {
+describe("the plan on the console", () => {
   it("says what a plan includes and when the AI interviews start again", () => {
-    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 AI interviews a month · 10 recruiter requests a month · unlimited seats");
+    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, seats: null })).toBe("3 active jobs · 300 AI interviews a month · unlimited seats");
     expect(screeningLine({ used: 25, limit: 25, resetsAt: "2026-10-30T12:00:00.000Z" })).toBe("25 of 25 AI interviews this month, resets October 30");
     expect(screeningLine({ used: 4, limit: null })).toBe("4 AI interviews this month");
     expect(planChangedToast("Bright Dental", "Design Partner")).toEqual({ title: "Bright Dental is on Design Partner now.", detail: "The new limits apply at once. This month's usage stays; the reset date does not move." });
-  });
-
-  it("flags a company past its recruiter requests, for a billing conversation", () => {
-    const customers = readFileSync(new URL("../../web/src/pages/admin/customers.tsx", import.meta.url), "utf8");
-    expect(customers).toContain("c.recruiterAsks?.over ? <Chip tone=\"caution\">{RECRUITER_ASKS_OVER_CHIP}</Chip>");
   });
 });
 

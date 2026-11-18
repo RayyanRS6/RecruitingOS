@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq, inArray, isNull, like } from "drizzle-orm";
 import type { ApplicationStage, ClosingMessagePreview, ClosingMessageResult, DecisionMessagePreview, RolePacket } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, anonymizeCandidate, correctOutcome, entitlements, grantStaffAccess } from "@ros/core";
+import { ADVERSE_DECISION_LINE, anonymizeCandidate, correctOutcome, entitlements } from "@ros/core";
 import { TURN_CAP_CLOSE_MESSAGE, detectStuckRoles, modelTurnCap, queueDecisionMessage, runInterventionLadder, runUntoldSafetyNet, sendStillReviewingNotes } from "@ros/agents";
-import { aiRuns, applications, approvalRequests, candidates, communications, companies, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, recruiterEscalations, roles, screens, takeovers, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, candidates, communications, companies, dataRequests, entitlements as entitlementRows, events, hiringOutcomes, notifications, policies, randomToken, roles, screens, users, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { untoldFallbackDayOf } from "./services/application-actions";
-import { signInAs, signInStaff } from "./test-helpers";
+import { signInAs } from "./test-helpers";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -253,25 +253,6 @@ describe("telling candidates", () => {
       await pass(31_000);
     });
 
-    it("an ITS recruiter working under a grant can take back their own Send, in its window only", async () => {
-      const id = await seed("Gia");
-      await decline(id);
-      const recruiter = await signInStaff(app, container, "rae@its.telling.test", "its_recruiter", "Rae Recruiter");
-      const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", applicationId: id, question: "Could you tell this candidate our decision?" })).json()) as { id: string };
-      expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-      const r = (await (await act(recruiter, id, { action: "send_decision" })).json()) as { candidateNotice: string; communicationId: string; undoUntil: string };
-      expect(r.candidateNotice).toBe("queued");
-      expect((await decisionRows(id))[0].sentBy).toMatchObject({ kind: "recruiter" });
-      const undo = await json(recruiter, "POST", `/api/v1/applications/${id}/messages/${r.communicationId}/undo`, {});
-      expect(undo.status, await undo.clone().text()).toBe(200);
-      expect((await application(id)).toldState).toBe("not_told");
-      // a written message too; once its window has passed, it is too late
-      const sent = (await (await json(recruiter, "POST", `/api/v1/applications/${id}/messages`, { text: "Hi Gia, a quick note from the recruiter." })).json()) as { communicationId: string };
-      await pass(31_000);
-      expect((await errorOf(await json(recruiter, "POST", `/api/v1/applications/${id}/messages/${sent.communicationId}/undo`, {}))).code).toBe("already_sent");
-    });
-
     it("Undo is only for a person's own Send in its window: never an invitation a workflow sent for them, nor one the approver let go at once", async () => {
       const id = await seed("Hux");
       // an interview invitation written by a workflow running as a person: not a message Undo is for
@@ -315,36 +296,25 @@ describe("telling candidates", () => {
       expect(await decisionRows(fresh)).toHaveLength(0);
     });
 
-    it("when the settings ask for approval or keep it with a person, or a recruiter runs the role, nothing is sent and a recruiter is brought in, once", async () => {
+    it("when the settings ask for approval or keep it with a person, nothing is sent and the team is told who still waits and why, once", async () => {
       for (const level of ["approval", "human_only"] as const) {
         await setPolicy("disposition.send", level);
         const id = await seed(level === "approval" ? "Jo" : "Kit");
         await decline(id);
         await age(id, 12);
-        expect(await safetyNet()).toContainEqual({ applicationId: id, action: "recruiter" });
+        expect(await safetyNet()).toContainEqual({ applicationId: id, action: "not_sent" });
         expect(await decisionRows(id)).toHaveLength(0);
         expect(await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.applicationId, id), eq(approvalRequests.actionType, "disposition.send")))).toHaveLength(0);
         const [e] = await container.db.select().from(events).where(and(eq(events.type, "application.untold_fallback"), eq(events.subjectId, id)));
-        expect(e.payload).toMatchObject({ action: "recruiter", why: level === "approval" ? "the settings ask for approval before a decision message goes" : "the settings keep decision messages with a person" });
-        const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, String(e.payload.escalationId)));
-        expect(esc).toMatchObject({ kind: "candidate_issue", roleId, status: "open" });
-        expect(esc.question).toMatch(/not been told the team's decision/);
+        const why = level === "approval" ? "the settings ask for approval before a decision message goes" : "the settings keep decision messages with a person";
+        expect(e.payload).toMatchObject({ action: "not_sent", why });
+        expect((await told("message.untold_not_sent")).some((n) => n.body.includes(level === "approval" ? "Jo Reyes" : "Kit Reyes") && n.body.includes(`Nothing was sent, because ${why}.`))).toBe(true);
         expect((await safetyNet()).some((x) => x.applicationId === id)).toBe(false);
       }
       await setPolicy("disposition.send", null);
-      expect((await told("recruiter.untold_brought_in")).length).toBeGreaterThan(0);
-      // an ITS recruiter running the role: the same, nothing sent
-      const [t] = await withTenant(container.db, companyId, (tx) => tx.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning());
-      const id = await seed("Lou");
-      await decline(id);
-      await age(id, 12);
-      expect(await safetyNet()).toContainEqual({ applicationId: id, action: "recruiter" });
-      expect((await container.db.select().from(events).where(and(eq(events.type, "application.untold_fallback"), eq(events.subjectId, id))))[0].payload).toMatchObject({ why: "an ITS recruiter is running this role" });
-      expect(await decisionRows(id)).toHaveLength(0);
-      await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, t.id));
     });
 
-    it("someone whose details were deleted at their request is never written to, chased on Today, or handed to a recruiter; their messages waiting for approval lose the team's words", async () => {
+    it("someone whose details were deleted at their request is never written to or chased on Today; their messages waiting for approval lose the team's words", async () => {
       const anonymize = async (id: string) => anonymizeCandidate(container.db, { companyId, candidateId: (await application(id)).candidateId, actor: { kind: "user", id: ownerId, name: "Dana Whitfield" }, deleteFile: async () => {} });
       const eve = await seed("Eve");
       await decline(eve);
@@ -619,30 +589,6 @@ describe("telling candidates", () => {
       expect((await json(owner, "POST", `/api/v1/roles/${role}/closing-message`, {})).status).toBe(400);
     });
 
-    it("an ITS recruiter given one candidate sees nobody else the closed role left in the pool; a grant for the whole role does", async () => {
-      const role = await openRole();
-      const olu = await seed("Olu", { role });
-      await seed("Pam", { role });
-      expect((await json(owner, "POST", `/api/v1/roles/${role}/outcome`, { outcome: "no_hire", confirm: true })).status).toBe(200);
-      const underGrant = async (email: string, scope: { roleId: string; applicationId?: string }) => {
-        const cookie = await signInStaff(app, container, email, "its_recruiter", "Sky Recruiter");
-        const [u] = await container.db.select().from(users).where(eq(users.email, email));
-        await withPlatform(container.db, (tx) => grantStaffAccess(tx, { userId: u.id, userName: "Sky Recruiter", companyId, kind: "escalation", scope, purpose: "test: a request about this role", grantedBy: { kind: "system", id: "test" }, expiresAt: new Date(Date.now() + 24 * HOUR) }));
-        expect((await json(cookie, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-        return cookie;
-      };
-      const oneCandidate = await underGrant("sky@its.telling.test", { roleId: role, applicationId: olu });
-      const refused = await json(oneCandidate, "GET", `/api/v1/roles/${role}/closing-message`);
-      expect(refused.status).toBe(403);
-      const error = await errorOf(refused);
-      expect(error.code).toBe("staff_scope");
-      expect(error.message).not.toContain("Pam");
-      const wholeRole = await underGrant("tor@its.telling.test", { roleId: role });
-      const seen = await json(wholeRole, "GET", `/api/v1/roles/${role}/closing-message`);
-      expect(seen.status, await seen.clone().text()).toBe(200);
-      expect(((await seen.json()) as ClosingMessagePreview).count).toBe(2);
-    });
-
     it("'no hire' and a move to the talent pool keep them in the pool unless they opted out, and answer with the message a Send would write", async () => {
       const kai = await seed("Kai");
       const r = (await (await json(owner, "POST", `/api/v1/applications/${kai}/outcome`, { outcome: "no_hire", confirm: true })).json()) as { decisionMessage: DecisionMessagePreview; talentPoolOptOut?: boolean };
@@ -714,15 +660,16 @@ describe("telling candidates", () => {
       expect(await (await inbound({ From: "ola@telling.test", To: `reply-${b.replyToken}@intake.telling.test`, Subject: "Re", TextBody: "explain", MessageID: "ola-2" })).json()).toHaveProperty("explanationRequestId");
     });
 
-    it("an emailed HUMAN gets an answer with the reply time and the AI disclosure", async () => {
+    it("an emailed HUMAN tells the team, and gets an answer that says so, with the AI disclosure", async () => {
       const id = await seed("Pia");
       const a = await application(id);
       await inbound({ From: "pia@telling.test", To: `reply-${a.replyToken}@intake.telling.test`, Subject: "Re: Your application", TextBody: "HUMAN", MessageID: "pia-1" });
       await container.drain();
       const [row] = await container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "human_requested_reply")));
       expect(row.disclosureIncluded).toBe(true);
-      expect(row.bodyText).toMatch(/will follow up with you (within four business hours|on the next business day)/);
+      expect(row.bodyText).toMatch(/The hiring team at .+ has been told you asked for a person\./);
       expect(row.bodyText).toMatch(/with help from an AI recruiting assistant/);
+      expect((await told("screen.human_requested")).map((n) => n.title)).toContain("Pia Reyes asked to talk to a person");
     });
   });
 
@@ -767,7 +714,7 @@ describe("telling candidates", () => {
   });
 
   describe("asking for a person in the conversation (plan G8)", () => {
-    it("emails the candidate when a person will contact them", async () => {
+    it("emails the candidate that the hiring team has been told", async () => {
       const id = await seed("Quinn", { stage: "screen_invited" });
       const token = randomToken(24);
       await withTenant(container.db, companyId, (tx) => tx.insert(screens).values({ companyId, applicationId: id, channel: "web", status: "invited", token, invitedAt: new Date().toISOString() }));
@@ -776,7 +723,7 @@ describe("telling candidates", () => {
       await container.drain();
       const [row] = await container.db.select().from(communications).where(and(eq(communications.applicationId, id), eq(communications.templateKey, "person_requested")));
       expect(row.status).toBe("sent");
-      expect(row.bodyText).toMatch(/A person working with the hiring team will contact you (within four business hours|on the next business day)/);
+      expect(row.bodyText).toMatch(/The hiring team at .+ has been told\. Nothing else is needed from you; you can also reply to this email\./);
       expect(row.disclosureIncluded).toBe(true);
     });
 
@@ -918,7 +865,7 @@ describe("telling candidates", () => {
       await container.drain();
     });
 
-    it("finalists waiting on the team and offers with no answer recorded are named, the offers on Today with no recruiter", async () => {
+    it("finalists waiting on the team and offers with no answer recorded are named, the offers on Today", async () => {
       const role = await openRole();
       const uma = await seed("Uma", { role, stage: "finalist", stageChangedAt: new Date(Date.now() - 4 * DAY).toISOString() });
       const vic = await seed("Vic", { role, stage: "offer_sent", stageChangedAt: new Date(Date.now() - 6 * DAY).toISOString() });
@@ -932,12 +879,11 @@ describe("telling candidates", () => {
       const offers = found.find((d) => d.detector === "offers_waiting")!;
       expect(offers.applicationIds).toEqual([vic]);
       expect(offers.body).toMatch(/Vic Reyes/);
-      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", itsQueueEmail: "queue@its.test", now: new Date(), actor: { kind: "system" as const, id: "test" } };
+      const deps = { integrations: container.integrations, appBaseUrl: "http://localhost:3000", now: new Date(), actor: { kind: "system" as const, id: "test" } };
       expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps, companyId, [offers]))).toContainEqual(expect.objectContaining({ detector: "offers_waiting", level: "brief" }));
       const brief = (await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string; roleId?: string; title: string; actions: Array<{ label: string }> }> };
       const card = brief.cards.find((c) => c.roleId === role && /offer has had no answer recorded/.test(c.title));
       expect(card?.kind).toBe("needs_review");
-      expect(card?.actions.some((a) => /recruiter/i.test(a.label))).toBe(false);
     });
   });
 });

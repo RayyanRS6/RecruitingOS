@@ -30,7 +30,7 @@ const from = (html: string, start: string | RegExp) => {
   return html.slice(at);
 };
 const headings = (html: string) => [...from(html, "<thead>").split("</thead>")[0].matchAll(/<th scope="col"[^>]*>(.*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, ""));
-const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, staffAccess: null, ai: { provider: "fake" } };
+const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = admin) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -40,7 +40,7 @@ function client(data: Array<[unknown[], unknown]> = [], me: unknown = admin) {
 }
 
 type Req = ReturnType<typeof request>;
-const request = (id: string, companyName: string, createdAt: string, slaDueAt: string, status = "received", extra: Record<string, unknown> = {}) => ({ id, companyId: "co1", companyName, candidateId: null as string | null, applicationId: null, kind: "access", details: null as string | null, requesterEmail: "maria@example.com", channel: "email", verificationStatus: "pending", verificationNote: null, status, slaDueAt, assignedTo: null as string | null, notes: [] as Array<{ at: string; by: string; text: string }>, counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null as string | null, resolvedAt: status === "fulfilled" || status === "declined" ? daysAgo(1) : null, confirmationSentAt: null as string | null, escalationId: null, createdAt, ...extra });
+const request = (id: string, companyName: string, createdAt: string, slaDueAt: string, status = "received", extra: Record<string, unknown> = {}) => ({ id, companyId: "co1", companyName, candidateId: null as string | null, applicationId: null, kind: "access", details: null as string | null, requesterEmail: "maria@example.com", channel: "email", verificationStatus: "pending", verificationNote: null, status, slaDueAt, assignedTo: null as string | null, notes: [] as Array<{ at: string; by: string; text: string }>, counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null as string | null, resolvedAt: status === "fulfilled" || status === "declined" ? daysAgo(1) : null, confirmationSentAt: null as string | null, createdAt, ...extra });
 // d1 came in last (the API lists newest first) and is due last; d2 is overdue; d3 is done
 const data = (): Req[] => [request("d1", "Avon Dental", daysAgo(5), daysAgo(-10)), request("d2", "Cara Dental", daysAgo(40), daysAgo(1)), request("d3", "Bright Dental", daysAgo(9), daysAgo(-3), "fulfilled")];
 const section = (view: string | null) => createElement(PrivacySection, { view, onView: () => undefined });

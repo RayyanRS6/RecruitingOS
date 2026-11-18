@@ -12,7 +12,6 @@ import { applyBootstrapAdmin } from "./platform-roles";
 export type IdentityLike = { subject: string; email: string; emailVerified: boolean; name: string | null; provider: string; /** Every provider linked to the account at the identity service, its first (`provider`) included. */ providers?: string[]; aal: "aal1" | "aal2"; mfaVerifiedAt: string | null };
 export type SignInPolicy = { staffDomains: string[]; staffProvider: string; requireStaffMfa: boolean; /** One-time bootstrap list (BOOTSTRAP_ADMIN_EMAILS): honoured only while no administrator exists; never a standing grant. */ bootstrapAdmins?: string[]; /** The providers the deployment offers (AUTH_SIGNIN_PROVIDERS): a session opens through these only. */ allowedProviders?: string[] };
 export const DEFAULT_SIGN_IN_POLICY: SignInPolicy = { staffDomains: ["identifiedtalent.com"], staffProvider: "azure", requireStaffMfa: true, bootstrapAdmins: [], allowedProviders: ["azure", "google"] };
-export const STAFF_ROLES = ["its_recruiter", "platform_admin"] as const;
 const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 
 export type SignInDecision = { ok: true; staff: boolean } | { ok: false; staff: boolean; code: "email_unverified" | "staff_provider_required" | "staff_provider_linked" | "mfa_required"; message: string };
@@ -45,7 +44,7 @@ export function linkedToAnotherSubject(account: { authProvider: string | null; a
 }
 
 export function isStaffAccount(email: string, platformRole: string | null | undefined, policy: SignInPolicy): boolean {
-  if (platformRole && (STAFF_ROLES as readonly string[]).includes(platformRole)) return true;
+  if (platformRole === "platform_admin") return true;
   const domain = normalizeEmail(email).split("@")[1] ?? "";
   return policy.staffDomains.includes(domain);
 }

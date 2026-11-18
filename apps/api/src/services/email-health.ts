@@ -27,9 +27,8 @@ export type UnreachedPerson = { applicationId: string; roleId: string; roleTitle
 /**
  * The people whose email did not arrive in the last `UNREACHED_DAYS`, newest first, each once. A failure is left out once
  * a later email to the same application left us: they have a working address again, and later mail carries their link.
- * `inScope`: an ITS recruiter's grant (staff-scope.ts); everyone else reads the whole company.
  */
-export async function unreachedCandidates(tx: Tx, input: { companyId: string; now: Date; inScope?: (x: { roleId: string; applicationId: string }) => boolean }): Promise<UnreachedPerson[]> {
+export async function unreachedCandidates(tx: Tx, input: { companyId: string; now: Date }): Promise<UnreachedPerson[]> {
   const since = new Date(input.now.getTime() - UNREACHED_DAYS * 86_400_000).toISOString();
   const failed = await tx
     .select({ applicationId: applications.id, roleId: applications.roleId, at: communications.createdAt, firstName: candidates.firstName, lastName: candidates.lastName, email: candidates.email, phone: candidates.phone })
@@ -38,13 +37,12 @@ export async function unreachedCandidates(tx: Tx, input: { companyId: string; no
     .innerJoin(candidates, eq(candidates.id, applications.candidateId))
     .where(and(eq(communications.companyId, input.companyId), eq(communications.direction, "outbound"), eq(communications.channel, "email"), inArray(communications.status, [...DID_NOT_ARRIVE]), gte(communications.createdAt, since), notLike(sql`coalesce(${communications.templateKey}, '')`, "disposition:%"), notLocked(), isNull(candidates.anonymizedAt)))
     .orderBy(desc(communications.createdAt));
-  const shown = failed.filter((f) => !input.inScope || input.inScope({ roleId: f.roleId, applicationId: f.applicationId }));
-  if (!shown.length) return [];
-  const ids = [...new Set(shown.map((f) => f.applicationId))];
+  if (!failed.length) return [];
+  const ids = [...new Set(failed.map((f) => f.applicationId))];
   // The newest email to each of them that left us: a failure older than it is behind them.
   const left = await tx.select({ applicationId: communications.applicationId, at: sql<string>`max(${communications.createdAt})` }).from(communications).where(and(inArray(communications.applicationId, ids), eq(communications.direction, "outbound"), eq(communications.channel, "email"), inArray(communications.status, [...LEFT_US]))).groupBy(communications.applicationId);
   const lastLeft = new Map(left.map((l) => [l.applicationId, instant(l.at)]));
-  const still = shown.filter((f) => !(instant(f.at) < (lastLeft.get(f.applicationId) ?? Number.NEGATIVE_INFINITY)));
+  const still = failed.filter((f) => !(instant(f.at) < (lastLeft.get(f.applicationId) ?? Number.NEGATIVE_INFINITY)));
   if (!still.length) return [];
   const titles = new Map((await tx.select({ id: roles.id, title: roles.title }).from(roles).where(inArray(roles.id, [...new Set(still.map((f) => f.roleId))]))).map((r) => [r.id, r.title]));
   const people = new Map<string, UnreachedPerson>();

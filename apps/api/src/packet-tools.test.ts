@@ -185,14 +185,14 @@ describe("packet tools: change by chat, diff, requirements check, plain fields, 
       const applied = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions/${proposal.revisionId}/apply`);
       expect(applied.status).toBe(201);
       expect((await read<{ draft: DraftRolePacket }>(applied)).draft.communication.tone).toBe("direct");
-      // twice: nothing changed, and the way on is to try again or bring in a recruiter (the builder's button), never the editor
+      // twice: nothing changed, and the way on is to try again, never the editor
       container.fake!.failNext("packet.revise", "unusable");
       container.fake!.failNext("packet.revise", "unusable");
       const twice = "Make the messages warmer";
       const failed = await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/revisions`, { message: twice });
       expect(failed.status).toBe(502);
       const error = await errorOf(failed);
-      expect(error).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again, or bring in a recruiter." });
+      expect(error).toMatchObject({ code: "ai_failed", message: "The assistant could not work out that change. Nothing was changed. Try again." });
       expect(error.message).not.toMatch(/editor/);
       // asked twice and no more
       const both = await triesOf(twice);

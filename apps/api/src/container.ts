@@ -5,7 +5,7 @@ import { communications, createDb, inspectConnectionRole, migrate, migrationStat
 import { POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, SYSTEM_ACTOR, countActiveAdmins, createAiCreditGate, createRateLimitStore, emit, raiseAlert, transitionPosting, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
 import { AI_HOLD_CHECK_JOB_KIND, aiNoticeSentSignal, createEngine, type WorkflowEngine } from "@ros/workflows";
-import { ALERT_EMAIL_JOB_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEscalationQueueEmails, setEventSink, setNotifyClock } from "@ros/core";
+import { ALERT_EMAIL_JOB_KIND, REVOKE_JOB_KIND, checkPrivacyRequestDeadlines, emailCriticalAlert, listSuppressions, onSuppressionChange, revokeAndDeleteCredentials, setAlertEmails, setEventSink, setNotifyClock } from "@ros/core";
 import { SEND_JOB_KIND, retryCommunication, sendFallbackSms, sendQueuedCommunication } from "@ros/agents";
 import { guardEmailAdapter } from "@ros/integrations";
 import type { Actor } from "@ros/contracts";
@@ -14,7 +14,6 @@ import { loadEnv, type Env } from "./env";
 import { errorForLog, registerSecretValue } from "@ros/core";
 import { UploadGrants } from "./uploads";
 import { HEALTH_CHECK_JOB_KIND, HOURLY_MS, MAINTENANCE_JOB_KIND, runHourlyChecks, runMaintenance } from "./maintenance";
-import { emailQueueAboutRequest } from "./services/escalation-queue";
 import { checkScannerForProduction } from "./scanner-gate";
 import { checkEmailForProduction } from "./email-gate";
 import { reportError } from "./observability";
@@ -132,7 +131,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     const engine = createEngine(
       {
         db: handle.db,
-        services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, jobsBaseUrl: env.JOBS_BASE_URL, itsQueueEmail: env.ITS_QUEUE_EMAIL, smsEnabled: env.SMS_ENABLED } },
+        services: { ai, integrations, env: { appBaseUrl: env.APP_BASE_URL, jobsBaseUrl: env.JOBS_BASE_URL, smsEnabled: env.SMS_ENABLED } },
         // Failures that used up their attempts reach the error reporter with kinds and ids (H2) and the last error scrubbed and cut (failure-reports.ts); the payload and the run's state never leave the database.
         onJobFailed: (info) => { const report = jobFailureReport(info); reportError(report.err, report.context); },
         onStepFailed: (info) => { const report = stepFailureReport(info); reportError(report.err, report.context); },
@@ -186,24 +185,15 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       await runMaintenance(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical, deleteStored: (key) => integrations.storage.delete(key), cancelRun: (q, runId, reason) => engine.cancel(q, runId, SYSTEM_ACTOR, reason) });
     }));
 
-    // The hourly checks, not only with the daily sweep (H3; Wave S5 C2): interrupted sends, recruiter requests past their
-    // reply-by time, the stale queue. A worker that stopped is noticed by the app's /healthz instead (maintenance.ts,
-    // appHealthWatch): a job cannot report that the process meant to run it is gone.
+    // The hourly checks, not only with the daily sweep (H3; Wave S5 C2): interrupted sends, the stale queue. A worker
+    // that stopped is noticed by the app's /healthz instead (maintenance.ts, appHealthWatch): a job cannot report that
+    // the process meant to run it is gone.
     engine.registerJob(HEALTH_CHECK_JOB_KIND, recurring(engine, handle.db, HEALTH_CHECK_JOB_KIND, HOURLY_MS, async (ctx) => {
       await runHourlyChecks(handle.db, ctx.now, { workerInline: env.WORKER_INLINE, emailCritical });
       // Runs held for the AI provider always have a check on its way, even after one gave up for good (the database was
       // down when it tried to arm the next): re-armed here every hour while anything is held.
       if ((await engine.heldRuns()).length) await engine.ensureQueued(handle.db, { kind: AI_HOLD_CHECK_JOB_KIND });
     }));
-
-    // A recruiter request the system raised (or a candidate, through the product) is emailed to the ITS queue mailbox
-    // like one a customer raised (Wave S5 C2): the job is written with the request, the email goes through the outbox.
-    engine.registerJob(ESCALATION_QUEUE_EMAIL_JOB_KIND, async (payload) => {
-      const escalationId = String(payload.escalationId ?? "");
-      const companyId = String(payload.companyId ?? "");
-      if (!escalationId || !companyId) return;
-      await emailQueueAboutRequest({ db: handle.db, integrations, env, clock: () => engine.clock() }, { escalationId, companyId });
-    });
 
     // Critical alerts go to the platform administrators by email (Wave S2 F1): a job queued with the alert (raiseAlert),
     // and, from the app's health watch, straight after the commit (the job would wait for a worker that is down). Both
@@ -217,7 +207,6 @@ export async function createContainer(opts: { env?: Record<string, string | unde
     });
     if (env.NODE_ENV !== "test") {
       setAlertEmails(() => engine.clock());
-      setEscalationQueueEmails(() => engine.clock());
     }
 
     // The outbox: every email and text queued inside a transaction is sent here, after that transaction committed, once.
@@ -308,10 +297,10 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       if (retry) throw new Error(`verification of posting ${postingId} failed (${result.ok ? "" : result.reason}); retrying`);
     });
 
-    // Roles already open when the publishing rules arrived (plan Wave D): their missing ITS posting tasks and Colorado
-    // closing dates. Queued once per boot; a run changes only what is still missing (services/publishing-backfill.ts).
+    // Roles already open when the publishing rules arrived (plan Wave D): their missing Colorado closing dates. Queued
+    // once per boot; a run changes only what is still missing (services/publishing-backfill.ts).
     engine.registerJob(PUBLISHING_BACKFILL_JOB_KIND, async () => {
-      await backfillPublishing({ db: handle.db, integrations, env, engine });
+      await backfillPublishing({ db: handle.db, engine });
     });
 
     // The recurring jobs exist from the first boot of any process; tests arm them explicitly so a moved clock never runs a sweep by surprise.

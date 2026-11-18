@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { WITHDRAW_CONFIRM_KEY } from "@ros/agents";
-import { applications, candidates, events, notifications, recruiterEscalations, screens } from "@ros/db";
+import { applications, candidates, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { useOneVisitApplyFlow } from "./test-helpers";
@@ -27,6 +27,8 @@ describe("screening keywords: whole-message commands and a confirmed withdrawal"
   const form = (path: string, fields: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields) });
   const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId)).orderBy(desc(screens.createdAt)))[0];
   const applicationOf = async (id: string) => (await container.db.select().from(applications).where(eq(applications.id, id)))[0];
+  /** The team's notices that this applicant asked to talk to a person. */
+  const toldTheyAsked = async (applicationId: string) => (await container.db.select().from(notifications).where(eq(notifications.kind, "screen.human_requested"))).filter((x) => (x.action?.href ?? "").includes(applicationId));
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 
   async function apply(first: string, phone: string) {
@@ -83,14 +85,14 @@ describe("screening keywords: whole-message commands and a confirmed withdrawal"
     expect(scr.status).not.toBe("abandoned");
     expect(Object.values(scr.answers)).toContain("Withdraw cash from the till at closing and balance the drawer every night.");
     expect((await applicationOf(application.id)).stage).not.toBe("withdrawn");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id))).toHaveLength(0);
+    expect(await toldTheyAsked(application.id)).toHaveLength(0);
   });
 
-  it("HUMAN on its own hands the conversation to a person", async () => {
+  it("HUMAN on its own stops the conversation and tells the team", async () => {
     const { application, token } = await apply("Hugo", "(949) 555-0142");
     expect((await form(`/c/screen/${token}`, { message: "HUMAN" })).status).toBe(302);
     expect((await screenOf(application.id)).status).toBe("human_requested");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, application.id))).toHaveLength(1);
+    expect((await toldTheyAsked(application.id)).map((n) => n.title)).toEqual(["Hugo Tester asked to talk to a person"]);
   });
 
   it("WITHDRAW on the web asks first; 'No, keep my application' carries on; the confirm button withdraws", async () => {

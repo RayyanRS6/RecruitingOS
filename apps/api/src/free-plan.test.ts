@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { entitlements as allowance, correctOutcome } from "@ros/core";
-import type { PlanRoom } from "@ros/contracts";
-import { aiRuns, approvalRequests, auditRecords, companies, entitlements, events, hiringOutcomes, intakeSessions, invitations, memberships, notifications, recruiterEscalations, roles, rowsOf, users, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
+import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type PlanRoom } from "@ros/contracts";
+import { adminAlerts, aiRuns, approvalRequests, auditRecords, companies, entitlements, events, hiringOutcomes, intakeSessions, invitations, memberships, notifications, roles, rowsOf, users, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -97,7 +97,7 @@ describe("the Free plan's one job", () => {
       expect(co.settings.trial).toBeUndefined();
       expect(await container.db.select().from(events).where(and(eq(events.companyId, id), eq(events.type, "trial.started")))).toHaveLength(0);
       const rows = await container.db.select().from(entitlements).where(eq(entitlements.companyId, id));
-      expect(rows.map((r) => r.key).sort()).toEqual(["active_roles", "ai_credit_monthly_cents", "ai_credit_total_cents", "candidates_per_job", "its_work", "jobs_total", "recruiter_asks", "seats", "text_screens"]);
+      expect(rows.map((r) => r.key).sort()).toEqual(["active_roles", "ai_credit_monthly_cents", "ai_credit_total_cents", "candidates_per_job", "jobs_total", "seats", "text_screens"]);
       expect(rows.every((r) => r.used === 0 && r.source === "plan")).toBe(true);
     });
 
@@ -108,7 +108,7 @@ describe("the Free plan's one job", () => {
       expect(co.usage.active_roles).toEqual({ used: 0, limit: 1 });
       expect(co.usage.seats).toEqual({ used: 1, limit: 2 });
       expect(co.usage.ai_credit_total_cents).toEqual({ used: 0, limit: 100, unit: "percent" });
-      for (const key of ["candidates_per_job", "its_work", "ai_credit_monthly_cents"]) expect(co.usage, key).not.toHaveProperty(key);
+      for (const key of ["candidates_per_job", "ai_credit_monthly_cents"]) expect(co.usage, key).not.toHaveProperty(key);
       // and the plan's own limits carry no credit in money
       expect(co.plan.limits).toMatchObject({ jobs_total: 1, candidates_per_job: 5, seats: 2 });
       expect(co.plan.limits).not.toHaveProperty("ai_credit_total_cents");
@@ -120,12 +120,10 @@ describe("the Free plan's one job", () => {
       await withTenant(container.db, id, async (tx) => {
         expect(await allowance.limitOf(tx, id, allowance.CANDIDATES_PER_JOB)).toBe(5);
         expect(await allowance.limitOf(tx, id, "no_such_limit")).toBeNull();
-        expect(await allowance.check(tx, id, allowance.ITS_WORK)).toEqual({ ok: false, limit: 0, used: 0 });
       });
       await usePlan(container, id, "pro");
       await withTenant(container.db, id, async (tx) => {
         expect(await allowance.limitOf(tx, id, allowance.CANDIDATES_PER_JOB)).toBe(100);
-        expect(await allowance.check(tx, id, allowance.ITS_WORK)).toEqual({ ok: true, limit: null, used: 0 });
       });
     });
   });
@@ -143,15 +141,14 @@ describe("the Free plan's one job", () => {
       expect(err).toMatchObject({ code: "limit_reached", message: ONE_JOB, details: { upgrade: true, room: { ok: false, upgrade: true, holding: [] } } });
       expect(err.message).not.toMatch(/clos/i);
       expect(err.details.actions).toHaveLength(1);
-      expect(err.details.actions[0]).toMatchObject({ label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan" } });
+      expect(err.details.actions[0]).toEqual({ label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: MORE_JOBS_UPGRADE_QUESTION } });
       expect(await runCount()).toBe(runs);
       expect((await container.db.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, id), eq(intakeSessions.status, "active"))))).toHaveLength(0);
-      // pressing it is a talk about the plan, never counted as one of the plan's recruiter requests
+      // pressing it sends ITS one request about the plan, with why
       const asked = await json(cookie, err.details.actions[0].method, err.details.actions[0].path, err.details.actions[0].body);
       expect(asked.status, await asked.clone().text()).toBe(201);
-      const [row] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, id));
-      expect((row.billing as { topic?: string }).topic).toBe("plan");
-      expect((await current(cookie)).usage.recruiter_asks.used).toBe(0);
+      const requests = await container.db.select().from(adminAlerts).where(and(eq(adminAlerts.companyId, id), eq(adminAlerts.kind, PLAN_REQUEST_ALERT_KIND)));
+      expect(requests.map((a) => (a.details as { reason?: string }).reason)).toEqual([MORE_JOBS_UPGRADE_QUESTION]);
       // and the job itself is untouched
       expect((await roleOf(roleId)).status).toBe("pending_approval");
     });

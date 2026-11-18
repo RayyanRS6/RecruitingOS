@@ -8,7 +8,7 @@ import type { FakeEmailAdapter } from "@ros/integrations";
 import { ALERT_TEMPLATE, DIGEST_TEMPLATE } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, usePlan } from "./test-helpers";
+import { signInAs } from "./test-helpers";
 
 /**
  * Email alerts and the full history of updates (plan B3). An update someone wants as it happens becomes a short email
@@ -80,9 +80,9 @@ describe("email alerts and the history of updates", () => {
     const view = await prefs(owner);
     expect(view.email).toBe("dana@harbor.test");
     expect(view.digest).toEqual({ timezone: NY, hour: 8, weekday: "Monday" });
-    expect(view.groups.map((g) => `${g.group}:${g.cadence}`)).toEqual(["approvals:immediate", "candidates:daily", "interviews:immediate", "stuck:daily", "recruiter:immediate", "messages:daily", "account:immediate"]);
+    expect(view.groups.map((g) => `${g.group}:${g.cadence}`)).toEqual(["approvals:immediate", "candidates:daily", "interviews:immediate", "stuck:daily", "messages:daily", "account:immediate"]);
     expect(view.groups.every((g) => g.cadence === g.defaultCadence && g.label && g.description)).toBe(true);
-    expect(view.alwaysSent.map((a) => a.label)).toEqual(["An ITS recruiter is given access to your hiring", "ITS confirms your company, or takes the confirmation back", "A candidate asks to talk to a person", "Someone waits for your eligibility decision"]);
+    expect(view.alwaysSent.map((a) => a.label)).toEqual(["ITS confirms your company, or takes the confirmation back", "A candidate asks to talk to a person", "Someone waits for your eligibility decision"]);
   });
 
   it("emails an update wanted as it happens with the role's name and a link only, once, through the outbox", async () => {
@@ -150,15 +150,14 @@ describe("email alerts and the history of updates", () => {
   });
 
   it("always emails the updates nobody can turn off, even with everything off", async () => {
-    const everything = ["approvals", "candidates", "interviews", "stuck", "recruiter", "messages", "account"].map((group) => ({ group, cadence: "off" }));
+    const everything = ["approvals", "candidates", "interviews", "stuck", "messages", "account"].map((group) => ({ group, cadence: "off" }));
     expect((await json(manager, "PUT", "/api/v1/notifications/preferences", { preferences: everything })).status).toBe(200);
     const before = (await alertsTo(managerId)).length;
-    await tell({ companyId, kind: "screen.human_requested", title: "Luis Ortega asked for a person", body: "During the Dental Hygienist screening.", action: { label: "Open the candidate", href: `/roles/${roleA}/talent?open=0192f6b0-1c2d-7e3f-8a9b-0c1d2e3f4a7d` } });
-    await tell({ companyId, kind: "recruiter.claimed", title: "Sam (ITS recruiter) picked up your request", body: "They can see this role until Friday.", action: { label: "Recruiter access", href: "/setup" } });
+    await tell({ companyId, kind: "screen.human_requested", title: "Luis Ortega asked to talk to a person", body: "During the Dental Hygienist screening.", action: { label: "Open the candidate", href: `/roles/${roleA}/talent?open=0192f6b0-1c2d-7e3f-8a9b-0c1d2e3f4a7d` } });
     await tell({ companyId, kind: "candidate.withdrawn", title: "Priya Shah withdrew", body: "From Front Desk Coordinator.", action: { label: "Open", href: `/roles/${roleB}/talent` } });
     await container.drain();
     const mine = (await alertsTo(managerId)).slice(before);
-    expect(mine.map((m) => m.subject)).toEqual(["A candidate asked to talk to a person: Dental Hygienist", "An ITS recruiter now has access to your hiring"]);
+    expect(mine.map((m) => m.subject)).toEqual(["A candidate asked to talk to a person: Dental Hygienist"]);
     for (const m of mine) {
       expect(m.text).toContain("This email is always sent");
       expectNoLeaks(m);
@@ -286,7 +285,7 @@ describe("email alerts and the history of updates", () => {
     expect((await json(owner, "PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
     expect((await json(manager, "PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "daily" }] })).status).toBe(200);
     const found: Detection[] = [{ detector: "approval_pending", roleId: roleA, roleTitle: "Dental Hygienist", title: "A decision has been waiting 3 days (Dental Hygienist)", body: "Invite Maria Reyes to a screen; decline Luis Ortega", action: { label: "Decide", href: "/" }, days: 3 }];
-    const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, itsQueueEmail: container.env.ITS_QUEUE_EMAIL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });
+    const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });
     const t = new Date();
     // the first rung is a line in the app; the second, two days on, is an email to the team
     expect(await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps(t), companyId, found))).toEqual([expect.objectContaining({ level: "brief" })]);
@@ -332,33 +331,5 @@ describe("email alerts and the history of updates", () => {
     // a live run is found, not doubled
     expect((await json(owner, "PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "messages", cadence: "weekly" }] })).status).toBe(200);
     expect(await digestRuns()).toHaveLength(2);
-  });
-
-  it("the ITS queue's email when the ladder reaches a recruiter names the role and links the queue, never a candidate", async () => {
-    // the ladder reaches ITS only on a plan with ITS staff time (Rule 6 of the plans; a new company is on Free)
-    await usePlan(container, companyId, "pro");
-    // a detection whose body names people (a conversation stuck open, the team never acting)
-    const found: Detection[] = [{ detector: "conversations_stuck", roleId: roleB, roleTitle: "Front Desk Coordinator", title: "2 applicants are stuck in the screening chat (Front Desk Coordinator)", body: "Priya Shah, Maria Reyes. Their screening chat should have closed by itself and did not.", action: { label: "See who", href: `/roles/${roleB}/talent` }, days: 6, applicationIds: [] }];
-    const deps = (now: Date) => ({ integrations: container.integrations, appBaseUrl: container.env.APP_BASE_URL, itsQueueEmail: container.env.ITS_QUEUE_EMAIL, now, actor: { kind: "system" as const, id: "stuck_role_detector" } });
-    const t = new Date();
-    const levels: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const at = new Date(t.getTime() + i * 49 * 3_600_000);
-      const r = await withTenant(container.db, companyId, (tx) => runInterventionLadder(tx, deps(at), companyId, found));
-      levels.push(...r.filter((x) => x.detector === "conversations_stuck").map((x) => x.level));
-    }
-    expect(levels).toEqual(["brief", "message", "offer_recruiter", "escalation"]);
-    setClock(new Date(t.getTime() + 3 * 49 * 3_600_000));
-    await container.drain();
-    setClock(new Date());
-    const toQueue = mail().sent.filter((m) => m.to === container.env.ITS_QUEUE_EMAIL && m.tags?.template === "escalation");
-    expect(toQueue).toHaveLength(1);
-    expect(toQueue[0].text).toContain("2 applicants are stuck in the screening chat (Front Desk Coordinator)");
-    expect(toQueue[0].text).toContain("/recruiter/queue/");
-    expectNoLeaks(toQueue[0]);
-    // nor is the name kept in the stored copy of that email
-    const stored = await container.db.select({ bodyText: communications.bodyText }).from(communications).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "escalation")));
-    expect(stored.length).toBeGreaterThan(0);
-    for (const s of stored) expect(s.bodyText ?? "").not.toContain("Priya Shah");
   });
 });

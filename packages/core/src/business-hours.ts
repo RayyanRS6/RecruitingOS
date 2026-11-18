@@ -1,11 +1,11 @@
 /**
- * ITS business hours (founder decision F12; correction 12 of 18 September 2026 makes them an editable calendar).
- * Service-level clocks count only open hours; candidate-facing copy sets expectations from them.
+ * ITS business hours (founder decision F12; correction 12 of 18 September 2026 makes them an editable calendar): the
+ * open hours of each day, and the holidays and closures the working-day counts leave out.
  *
  * Every function takes a calendar source. Without one it uses the built-in default (Monday to Friday, 9:00 to 17:00
  * Pacific, US federal holidays), which is also what the product falls back to before an administrator has published a
  * calendar version. A source may resolve a different calendar per day so that a version with a future effective date
- * applies exactly from that date, even inside one deadline computation.
+ * applies exactly from that date.
  */
 
 export type HoursWindow = { start: string; end: string }; // "HH:MM" wall-clock, end exclusive
@@ -152,55 +152,6 @@ export function nextBusinessOpen(date: Date, src: CalendarSource = DEFAULT_BUSIN
   return date; // a calendar with no open day in 400 days is misconfigured; do not spin
 }
 
-/** Adds business hours to an instant, counting only open minutes. */
-export function addBusinessHours(from: Date, hours: number, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): Date {
-  let remaining = Math.round(hours * 60);
-  let cursor = nextBusinessOpen(from, src);
-  for (let guard = 0; guard < 4000 && remaining > 0; guard++) {
-    const end = windowEndContaining(cursor, src);
-    if (!end) return cursor; // never open (misconfigured calendar)
-    const minutesLeft = Math.round((end.getTime() - cursor.getTime()) / 60_000);
-    if (remaining <= minutesLeft) return new Date(cursor.getTime() + remaining * 60_000);
-    remaining -= minutesLeft;
-    cursor = nextBusinessOpen(end, src);
-  }
-  return cursor;
-}
-
-/** Open minutes between two instants; negative when `b` is before `a`. */
-export function businessMinutesBetween(a: Date, b: Date, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): number {
-  if (b.getTime() < a.getTime()) return -businessMinutesBetween(b, a, src);
-  let total = 0;
-  let cursor = nextBusinessOpen(a, src);
-  for (let guard = 0; guard < 4000 && cursor.getTime() < b.getTime(); guard++) {
-    const end = windowEndContaining(cursor, src);
-    if (!end) break;
-    const segmentEnd = Math.min(end.getTime(), b.getTime());
-    total += (segmentEnd - cursor.getTime()) / 60_000;
-    cursor = nextBusinessOpen(end, src);
-  }
-  return Math.round(total);
-}
-
-/**
- * Business hours per escalation kind (decision D26). One business day is eight business hours. Urgency never changes
- * them (founder decision Q32, option A): an urgent request goes to the front of the ITS queue with the same reply-by time.
- */
-export function slaBusinessHours(kind: string): number {
-  switch (kind) {
-    case "candidate_issue": return 4;
-    case "negotiation": return 2;
-    case "platform_blocking": return 2;
-    case "ask": case "review": case "search_support": case "stuck_role": case "takeover": case "data_request": return 8;
-    default: return 8;
-  }
-}
-
-/** When a recruiter request of this kind, raised (or reopened) at `from`, is due an answer. The form shows it before sending. */
-export function escalationReplyBy(kind: string, from: Date, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): Date {
-  return addBusinessHours(from, slaBusinessHours(kind), src);
-}
-
 const ZONE_NAMES: Record<string, string> = {
   "America/Los_Angeles": "Pacific", "America/Denver": "Mountain", "America/Phoenix": "Arizona", "America/Chicago": "Central", "America/New_York": "Eastern",
   "America/Anchorage": "Alaska", "Pacific/Honolulu": "Hawaii", UTC: "UTC",
@@ -249,19 +200,6 @@ export function describeHours(src: CalendarSource = DEFAULT_BUSINESS_CALENDAR, a
   const open = WEEKDAY_KEYS.filter((d) => (cal.hours[d] ?? []).length > 0);
   if (!open.length) return `by appointment (${zone})`;
   return `${open.map((d) => `${DAY_NAMES[d]} ${windowsText(cal.hours[d])}`).join(", ")} ${zone}`;
-}
-
-/** A deadline in words for the people waiting on it, in the calendar's own zone: "Tuesday, October 13 at 2:00 PM Pacific". */
-export function deadlineWords(due: Date, src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): string {
-  const zone = ZONE_NAMES[src.timeZone] ?? src.timeZone;
-  return `${due.toLocaleString("en-US", { timeZone: src.timeZone, weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} ${zone}`;
-}
-
-/** Candidate-facing expectation that is true at the moment it is written (founder decision F12). */
-export function humanResponseExpectation(now: Date = new Date(), src: CalendarSource = DEFAULT_BUSINESS_CALENDAR): string {
-  return isBusinessTime(now, src)
-    ? `within four business hours (we are available ${describeHours(src, now)})`
-    : `on the next business day (we are available ${describeHours(src, now)})`;
 }
 
 /** A day-by-day view for administrators: what is open, and why a day is closed or different. */

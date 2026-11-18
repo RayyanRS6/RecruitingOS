@@ -30,9 +30,9 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 const DAY = 86_400_000;
 const daysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString();
 const daysAhead = (n: number) => new Date(Date.now() + n * DAY).toISOString();
-const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, staffAccess: null, ai: { provider: "fake" } };
+const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 
-const customer = (id: string, called: string, extra: Record<string, unknown> = {}) => ({ id, name: called, slug: called.toLowerCase().replace(/\s+/g, "-"), vertical: "dental", sizeBand: "20-49", planKey: "core", status: "active", roles: 1, applications: 2, aiCostUsd: 0.04, lastActivityAt: daysAgo(1), escalations: 0, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: { id: "s1", name: "Ada" }, heldMessages: 0, jobBoardsConfirmedAt: null, ...extra });
+const customer = (id: string, called: string, extra: Record<string, unknown> = {}) => ({ id, name: called, slug: called.toLowerCase().replace(/\s+/g, "-"), vertical: "dental", sizeBand: "20-49", planKey: "core", status: "active", roles: 1, applications: 2, aiCostUsd: 0.04, lastActivityAt: daysAgo(1), createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: { id: "s1", name: "Ada" }, heldMessages: 0, ...extra });
 const customers = [
   customer("co-bright", "Bright Dental"),
   customer("co-avon", "Avon Dental", { lastActivityAt: daysAgo(9) }),
@@ -47,10 +47,9 @@ const alerts = [
   alertRow("al3", "billing.screens_warning", "warning", "AI interviews at 80%", "open", "co-bright", { used: 122, limit: 150 }),
 ];
 const failures = { failedRuns: [{ id: "r1" }, { id: "r2" }, { id: "r3" }], failedJobs: [], failedAi: [], alerts: [], pendingDeletions: [] };
-const request = (id: string, companyName: string, slaDueAt: string, state = "received") => ({ id, companyId: "co-avon", companyName, candidateId: null, applicationId: null, kind: "access", details: null, requesterEmail: "p@x.test", channel: "email", verificationStatus: "pending", verificationNote: null, status: state, slaDueAt, assignedTo: null, notes: [], counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null, resolvedAt: null, confirmationSentAt: null, escalationId: null, createdAt: daysAgo(10) });
+const request = (id: string, companyName: string, slaDueAt: string, state = "received") => ({ id, companyId: "co-avon", companyName, candidateId: null, applicationId: null, kind: "access", details: null, requesterEmail: "p@x.test", channel: "email", verificationStatus: "pending", verificationNote: null, status: state, slaDueAt, assignedTo: null, notes: [], counselEscalatedAt: null, counselDecision: null, counselNote: null, resolution: null, resolvedAt: null, confirmationSentAt: null, createdAt: daysAgo(10) });
 const privacy = [request("dr1", "Avon Dental", daysAhead(1.5)), request("dr2", "Bright Dental", daysAhead(20)), request("dr3", "Cara Dental", daysAgo(2), "fulfilled")];
 const csp = { mode: "report", reports: [{ id: "c1", reviewedAt: null }, { id: "c2", reviewedAt: daysAgo(1) }] };
-const escalations = [{ id: "e1", status: "open", overdue: true, companyName: "Bright Dental" }, { id: "e2", status: "open", overdue: false, companyName: "Avon Dental" }];
 const calendar = { version: 3, current: { timeZone: "America/Los_Angeles" } };
 const queue = { queued: 0, failed: 0, oldestQueuedAt: null, waitingRuns: 2, definitions: ["screen"] };
 const since = monthStart("America/Los_Angeles");
@@ -64,7 +63,6 @@ const ALL: Array<[unknown[], unknown]> = [
   [["admin", "privacy"], privacy],
   [["admin", "failed-email-applications"], [{ id: "m1" }]],
   [["admin", "csp"], csp],
-  [["escalations"], escalations],
   [["admin", "calendar"], calendar],
   [["admin", "queue"], queue],
   [["admin", "costs", "since", since], costs],
@@ -76,7 +74,6 @@ const NOTHING: Array<[unknown[], unknown]> = [
   [["admin", "privacy"], []],
   [["admin", "failed-email-applications"], []],
   [["admin", "csp"], { mode: "report", reports: [] }],
-  [["escalations"], []],
   [["admin", "calendar"], calendar],
   [["admin", "queue"], queue],
   [["admin", "costs", "since", since], []],
@@ -103,17 +100,16 @@ function failedAgain(qc: QueryClient, queryKey: unknown[], error: Error) {
 const render = (qc: QueryClient, node: ReactNode = createElement(Overview)) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 
 describe("the console's Overview", () => {
-  it("greets the administrator, says how many things need them and keeps the recruiter queue one click away", () => {
+  it("greets the administrator and says how many things need them", () => {
     const html = render(client(ALL));
     // no eyebrow over the greeting (founder's fewer-words rule, 23 Oct 2026): the rail already says this is the console
     expect(html).not.toContain("ITS · Console");
     expect(html).toMatch(/<h1>Good (morning|afternoon|evening), Ada\.<\/h1>/);
-    expect(html).toContain("8 things need you.");
-    expect(html).toContain('<a href="/recruiter/queue" class="btn secondary">Open the recruiter queue</a>');
+    expect(html).toContain("7 things need you.");
     // the count is said once, in the stat strip; the list's heading under it carries none
-    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">8</span>');
+    expect(html).toContain('<span class="stat-cell-label">Needs attention</span><span class="stat-cell-value">7</span>');
     expect(html).toContain("<h2>Needs attention</h2>");
-    expect(html).not.toContain("Needs attention (8)");
+    expect(html).not.toContain("Needs attention (7)");
     // the console's audit rule, once, in the strip's tinted cell
     expect(html.split("Every read in the console is recorded with a reason.")).toHaveLength(2);
   });
@@ -127,7 +123,6 @@ describe("the console's Overview", () => {
       ["3 workflow runs failed", "Open", "/admin/problems?view=failed"],
       ["1 security report is not reviewed yet", "Open", "/admin/problems?view=security"],
       ["1 email application could not be imported", "Open", "/admin/problems?view=email"],
-      ["1 recruiter request is overdue", "Open", "/recruiter/queue/e1"],
       ["Bright Dental has used 80% of its AI interviews", "Open", "/admin/customers?show=low&amp;open=co-bright"],
     ];
     const html = render(client(ALL));
@@ -164,19 +159,19 @@ describe("the console's Overview", () => {
     expect(t).toContain("2 companies wait for the ITS check");
     expect(t).toContain("1 alert needs a person");
     expect(t).not.toContain("Nothing needs you right now.");
-    expect(t).toContain("7 things need you.");
+    expect(t).toContain("6 things need you.");
   });
 
   it("counts a source whose latest look failed as failed while it still holds an earlier answer, so 'Nothing needs you right now.' never stands over it (the review of 9 November 2026)", () => {
     // left open overnight with nothing waiting: this morning's looks failed, and each source kept yesterday's answer
     const qc = client(NOTHING);
     failedAgain(qc, ["admin", "customers"], new ApiError(500, "error", "Something went wrong. It has been logged."));
-    failedAgain(qc, ["escalations"], new TypeError("Failed to fetch"));
+    failedAgain(qc, ["admin", "privacy"], new TypeError("Failed to fetch"));
     const html = render(qc);
     const t = text(html);
     expect(t).toContain("Could not check the companies waiting for the ITS check.");
     expect(html).toContain('aria-label="Try again: the companies waiting for the ITS check">Try again</button>');
-    expect(t).toContain("Could not check recruiter requests.");
+    expect(t).toContain("Could not check privacy requests.");
     expect(t).not.toContain("Nothing needs you right now.");
     // the other sources, which answered, add no row of their own
     expect(t).not.toContain("Could not check alerts.");
@@ -253,7 +248,7 @@ describe("the console's Overview", () => {
     expect(html).toContain('<a href="/admin/system?view=costs" class="console-more">See all costs</a>');
   });
 
-  it("a tab left open stays true: every source behind Needs attention is asked again on focus and every minute while visible, never in a hidden tab; the recruiter requests less often", () => {
+  it("a tab left open stays true: every source behind Needs attention is asked again on focus and every minute while visible, never in a hidden tab", () => {
     // the review of 6 November 2026: left open at 9:00, it said "Nothing needs you right now." at 15:00 with someone waiting
     const qc = client(ALL);
     render(qc);
@@ -261,8 +256,6 @@ describe("the console's Overview", () => {
     for (const key of [["admin", "customers"], ["admin", "alerts"], ["admin", "failures"], ["admin", "privacy"], ["admin", "failed-email-applications"], ["admin", "csp"]]) {
       expect(options(key), key.join(" ")).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: false });
     }
-    // each read of the recruiter requests is recorded per customer: every five minutes, and on focus only once two have passed
-    expect(options(["escalations"])).toMatchObject({ refetchOnWindowFocus: true, refetchInterval: 300_000, refetchIntervalInBackground: false, staleTime: 120_000 });
   });
 
   it("sums up the system in one line, and says when it could not check the queue", () => {

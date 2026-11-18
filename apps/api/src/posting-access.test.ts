@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { companies, memberships, roles, users } from "@ros/db";
+import { memberships, roles, users } from "@ros/db";
 import type { FakeUrlVerifier } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PERMISSION_MESSAGE } from "./middleware/errors";
 
 /**
- * Posting work belongs to role.manage (owner, admin, recruiter; docs/12-api-contracts.md). A hiring manager and HR are
+ * Posting work belongs to role.manage (owner, admin; docs/12-api-contracts.md). A hiring manager and HR are
  * refused every posting change, so they must not be sent posting work either: Today leaves out the "post it on the
  * board" and "still posted on" cards for them, and a refusal reads in plain words, never "role.manage". HR may still
  * close the role (outcome.record); the boards left up then go to the people who can take them down.
@@ -58,10 +58,6 @@ describe("posting work goes only to the roles that can do it", () => {
     companyId = co.id;
     const s = (await (await post(owner, "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $30 an hour, full time. It's growth. Ceiling $32. I decide. Must-haves: x-ray certificate. Just draft it." })).json()) as { session: { id: string } };
     roleId = ((await (await post(owner, `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    // A company that posts on the boards itself (plan D3): the posting work is the team's. With ITS posting (the
-    // default) it is ITS's task instead, and no team member gets these cards (publishing.test.ts).
-    const [co0] = await container.db.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId));
-    await container.db.update(companies).set({ settings: { ...co0.settings, boardPosting: "self" } }).where(eq(companies.id, companyId));
     expect((await post(owner, `/api/v1/roles/${roleId}/channels`, { channels: ["linkedin_basic", "indeed"] })).status).toBe(200);
     expect((await post(owner, `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
     await container.drain();

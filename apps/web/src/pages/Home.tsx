@@ -3,14 +3,12 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "../nav";
-import { Alert, Button, Card, cn, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, SectionHeader, Skeleton, type Tone } from "@ros/ui";
+import { Button, Card, cn, ErrorState, Icon, IconChip, Menu, PageHeader, Pill, SectionHeader, Skeleton, type Tone } from "@ros/ui";
 import { AI_HELP_UPGRADE_QUESTION, mayOfferUpgrade, type AiCreditView, type GettingStartedAction, type TrialStanding } from "@ros/contracts";
 import { api, ApiError, type Brief, type BriefCard, type ClosingDateResponse, type InterviewDraft, type Me, type Notification, type RoleSummary } from "../api/client";
 import { ALLOWANCE_ASK, screeningAllowanceWarning, type AllowanceWarning, type UsageLine } from "../allowance";
 import { toast } from "../toast";
-import { AskRecruiter } from "../components/AskRecruiter";
 import { OwnRequest } from "../components/OwnRequest";
-import { RecruiterRequests } from "../components/RecruiterRequests";
 import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
 import { interviewDraftPath } from "../hiring";
@@ -20,7 +18,6 @@ import { railListsRoles } from "../rail";
 import { roleStatus } from "../role-status";
 import { canChangeCompany, canStartHire } from "../roles";
 import { useSignInWhenSessionEnds } from "../session-ended";
-import { presetOf, requestSentText } from "../recruiter-access";
 import { START_HIRE_HREF } from "../start-hire";
 import { briefDecisionToast } from "../talent-actions";
 import { TRIAL_ASK, trialRow, type TrialRowWords } from "../trial";
@@ -40,11 +37,10 @@ const stagger = (i: number): CSSProperties | undefined => (i ? { animationDelay:
 
 /**
  * Home (docs/07; the simple, Kanvis-like Home of 14 October 2026), top to bottom: the greeting with one line on how
- * many things need you, Start a hire and Bring in a recruiter; getting started while the company is being set up;
+ * many things need you and Start a hire; getting started while the company is being set up;
  * "Needs you", one short row per card of the morning brief (its first sentence and its buttons, the rest behind "Why",
  * five at a time); "Your jobs", each opening on its Candidates once live; the "Who are you hiring?" box, which hands
- * over to the job builder at /roles/new (plan C4, founder decision Q5); your recruiter requests; and the assistant's
- * recent activity, folded. The conversation that drafts a job lives in the job builder; Home keeps none of its own.
+ * over to the job builder at /roles/new (plan C4, founder decision Q5); and the assistant's recent activity, folded. The conversation that drafts a job lives in the job builder; Home keeps none of its own.
  */
 export function Home() {
   const nav = useNavigate();
@@ -54,7 +50,6 @@ export function Home() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const myRole = me.data?.memberships.find((m) => m.companyId === me.data?.activeCompanyId)?.role ?? null;
   const mayStartHire = canStartHire(myRole);
-  const [sentToRecruiter, setSentToRecruiter] = useState<string | null>(null);
   // The plan's screening conversations at 80% or used up (Q17): owners and admins, who can talk to ITS about the plan.
   const seesAllowance = canChangeCompany(myRole);
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<{ planKey?: string; timezone?: string; usage?: Record<string, UsageLine>; trial?: TrialStanding | null; aiCredit?: AiCreditView | null }>("/api/v1/companies/current"), enabled: seesAllowance, ...TODAY_REFRESH });
@@ -63,7 +58,7 @@ export function Home() {
   const trial = seesAllowance ? trialRow(company.data?.trial, company.data?.timezone) : null;
   // The plan's AI help at 80% or used up (the plans of 5 November 2026, Rule 4): in words or a percentage, never dollars.
   const aiCredit = seesAllowance && company.data?.aiCredit?.notice ? company.data.aiCredit : null;
-  // "Your jobs" is the rail's list (the same request, shared): members only, never an ITS recruiter under a grant.
+  // "Your jobs" is the rail's list (the same request, shared): members only.
   const listsRoles = railListsRoles(me.data);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listsRoles });
   // The browser may have read that list before it takes this page over; the server never has it. Until the page is the
@@ -93,13 +88,13 @@ export function Home() {
   // The trial and allowance rows do not wait for the brief: they come from the company's own plan and usage.
   const needsBlock = rows.length || allowance || trial || aiCredit ? (
     <NeedsYou title={needs > 0 ? "Needs you" : "Good to know"} items={[
-      ...(trial ? [{ key: "trial", node: <TrialRow row={trial} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-      ...(aiCredit ? [{ key: "ai-credit", node: <AiCreditRow credit={aiCredit} planKey={company.data?.planKey} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-      ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} onSentToRecruiter={setSentToRecruiter} /> }] : []),
-      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : card.kind === "unreached" && card.unreached?.length ? <UnreachedRow card={card} /> : <CardRow card={card} onSentToRecruiter={setSentToRecruiter} /> })),
+      ...(trial ? [{ key: "trial", node: <TrialRow row={trial} /> }] : []),
+      ...(aiCredit ? [{ key: "ai-credit", node: <AiCreditRow credit={aiCredit} planKey={company.data?.planKey} /> }] : []),
+      ...(allowance ? [{ key: "allowance", node: <AllowanceRow warning={allowance} /> }] : []),
+      ...rowKeys(rows).map(({ key, card }) => ({ key, node: card.kind === "pool_ready" && card.pool && card.roleId ? <PoolRow card={card} /> : card.kind === "unreached" && card.unreached?.length ? <UnreachedRow card={card} /> : <CardRow card={card} /> })),
     ]} />
   ) : empty ? (
-    <Card><CardRow card={empty} level={2} onSentToRecruiter={setSentToRecruiter} /></Card>
+    <Card><CardRow card={empty} level={2} /></Card>
   ) : null;
   // "Your jobs" sits beside Needs you on a wide screen (screenshot 1's "Open roles"), and after it for the keyboard and
   // screen readers; on smaller screens it comes under it. The column is decided from what the first draw already knows
@@ -118,20 +113,13 @@ export function Home() {
         className="mb-0"
         title={`Good ${greeting(isClient)}${name ? `, ${name}` : ""}`}
         sub={brief.data && !brief.error ? homeHeadline(needs, { firstRun }) : undefined}
-        actions={
-          <>
-            {mayStartHire ? <Link to={START_HIRE_HREF} className="btn primary"><Icon name="plus" />Start a hire</Link> : null}
-            <AskRecruiter />
-          </>
-        }
+        actions={mayStartHire ? <Link to={START_HIRE_HREF} className="btn primary"><Icon name="plus" />Start a hire</Link> : null}
       />
 
       {/* Where this person's own company's request for access stands, while they work in another company (OwnRequest.tsx). */}
       <OwnRequest />
 
-      {/* A row's one-click request says what the recruiter will see and until when, and stays until read (the row itself may go). */}
-      {sentToRecruiter ? <Alert tone="info"><div className="row justify-between"><span>{sentToRecruiter}</span><Button size="sm" variant="quiet" onClick={() => setSentToRecruiter(null)}>Got it</Button></div></Alert> : null}
-      {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load what needs you." onRetry={() => brief.refetch()} /> : setup ? <GettingStartedCard card={setup} onSentToRecruiter={setSentToRecruiter} /> : null}
+      {brief.isLoading ? <Skeleton lines={3} /> : brief.error ? <ErrorState message="Could not load what needs you." onRetry={() => brief.refetch()} /> : setup ? <GettingStartedCard card={setup} /> : null}
 
       {needsBlock || showJobs ? (
         <div className={cn("grid min-w-0 items-start gap-6", beside && "xl:grid-cols-[minmax(0,1fr)_320px]")}>
@@ -141,8 +129,6 @@ export function Home() {
       ) : null}
 
       {mayStartHire ? <TodayStart /> : null}
-
-      <RecruiterRequests />
 
       <RecentActivity summary={brief.data?.summary ?? null} />
     </div>
@@ -231,14 +217,13 @@ const restText = (text: string) => <p className="small whitespace-pre-wrap text-
 /**
  * The month's screening conversations at 80% of the plan's allowance, or used up (founder decision Q17). Nothing stops
  * either way: applications keep coming in, and once the allowance is used up new applicants get the conversation link
- * by email when more are added. The one button opens the request to ITS about the plan, filled in, never sent in one
- * click; talking about the plan never uses one of the plan's recruiter requests.
+ * by email when more are added. The one button opens the request to ITS about the plan, never sent in one click.
  */
-function AllowanceRow({ warning, onSentToRecruiter }: { warning: AllowanceWarning; onSentToRecruiter: (message: string) => void }) {
+function AllowanceRow({ warning }: { warning: AllowanceWarning }) {
   const { line, rest } = cardLine(warning.body);
   return (
     <Row title={warning.title} pill={<Pill size="sm" tone="caution">{warning.level === "used_up" ? "Used up" : "80% used"}</Pill>} line={line} rest={rest ? restText(rest) : null}>
-      <AskRecruiter label="Ask ITS about adding more" size="sm" variant="secondary" preset={ALLOWANCE_ASK} onSent={onSentToRecruiter} />
+      <Upgrade label="Ask ITS about adding more" size="sm" reason={ALLOWANCE_ASK} />
       <Link to="/setup" className="btn quiet sm">See usage</Link>
     </Row>
   );
@@ -249,11 +234,11 @@ function AllowanceRow({ warning, onSentToRecruiter }: { warning: AllowanceWarnin
  * a percentage beside them and never dollars, and the way on. Applications keep coming in and candidates can still finish.
  * Always a way to ITS: with no plan above theirs the sheet asks to talk about the plan, so that is what the button says.
  */
-function AiCreditRow({ credit, planKey, onSentToRecruiter }: { credit: AiCreditView; planKey?: string; onSentToRecruiter: (message: string) => void }) {
+function AiCreditRow({ credit, planKey }: { credit: AiCreditView; planKey?: string }) {
   const { line, rest } = cardLine(credit.notice?.body ?? "");
   return (
     <Row title={credit.notice?.title ?? ""} pill={<Pill size="sm" tone="caution">{credit.level === "used_up" ? "Used up" : `${credit.percent}% used`}</Pill>} line={line} rest={rest ? restText(rest) : null}>
-      <Upgrade size="sm" label={mayOfferUpgrade(planKey) ? undefined : "Talk to ITS"} reason={AI_HELP_UPGRADE_QUESTION} onSent={onSentToRecruiter} />
+      <Upgrade size="sm" label={mayOfferUpgrade(planKey) ? undefined : "Talk to ITS"} reason={AI_HELP_UPGRADE_QUESTION} />
       <Link to="/setup" className="btn quiet sm">See usage</Link>
     </Row>
   );
@@ -262,19 +247,19 @@ function AiCreditRow({ credit, planKey, onSentToRecruiter }: { credit: AiCreditV
 /**
  * The Trial plan's last 7 days, and its end (founder decision L-02 B): "Your trial ends on <date>", then "Your trial has
  * ended" with the one line on what is paused. Choosing a plan is done by ITS, so the button opens the request about the
- * plan, filled in, never sent in one click; "See plan" opens Settings, where the plan and its dates are.
+ * plan, never sent in one click; "See plan" opens Settings, where the plan and its dates are.
  */
-function TrialRow({ row, onSentToRecruiter }: { row: TrialRowWords; onSentToRecruiter: (message: string) => void }) {
+function TrialRow({ row }: { row: TrialRowWords }) {
   return (
     <Row title={row.title} pill={<Pill size="sm" tone="caution">{row.level === "ended" ? "Trial ended" : "Trial ends soon"}</Pill>} line={row.body}>
-      <AskRecruiter label="Ask ITS to choose a plan" size="sm" variant="secondary" preset={TRIAL_ASK} onSent={onSentToRecruiter} />
+      <Upgrade label="Ask ITS to choose a plan" size="sm" reason={TRIAL_ASK} />
       <Link to="/setup" className="btn quiet sm">See plan</Link>
     </Row>
   );
 }
 
 /** One card of the brief as a row: its buttons answer it from here, or open the page it is about. */
-function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 2 | 3; onSentToRecruiter: (message: string) => void }) {
+function CardRow({ card, level }: { card: BriefCard; level?: 2 | 3 }) {
   const qc = useQueryClient();
   const nav = useNavigate();
   const needsYou = ["decision", "needs_review", "stuck"].includes(card.kind);
@@ -284,13 +269,11 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
   const [discarding, setDiscarding] = useState<BriefCard["actions"][number] | null>(null);
   const act = useMutation({
     // A closing-date card's "Extend" posts the new date exactly as the card has it (plan D7); nothing else is added.
-    mutationFn: (a: BriefCard["actions"][number]) => api.post<unknown>(a.path, isDiscardDraft(a) ? {} : isClosingDateAction(a) ? a.body ?? {} : { ...(a.body ?? {}), question: (a.body as { question?: string } | undefined)?.question ?? `Please review: ${card.title}` }),
-    // A request to a recruiter answers with what they will see and until when (Q31); the page keeps those words on screen.
+    mutationFn: (a: BriefCard["actions"][number]) => api.post<unknown>(a.path, isDiscardDraft(a) ? {} : a.body ?? {}),
     // An answer to an approval ("Yes", "Not now", "Do not send") says exactly what it did.
     onSuccess: (r, a) => {
       if (isDiscardDraft(a)) { toast("Draft discarded.", "Nothing was sent to anyone."); setDiscarding(null); qc.invalidateQueries({ queryKey: ["intake", "mine"] }); }
       else if (isClosingDateAction(a)) { const t = closingDateToast(r as ClosingDateResponse); toast(t.title, t.detail); if (card.roleId) { qc.invalidateQueries({ queryKey: ["role", card.roleId] }); qc.invalidateQueries({ queryKey: ["postings", card.roleId] }); } }
-      else if (a.path.includes("/escalations")) { toast("Sent to a recruiter."); onSentToRecruiter(requestSentText(r)); qc.invalidateQueries({ queryKey: ["escalations", "mine"] }); }
       else { const t = briefDecisionToast(a, r); toast(t.title, t.detail); }
       qc.invalidateQueries({ queryKey: ["brief"] }); qc.invalidateQueries({ queryKey: ["notifications"] });
       if (card.roleId) { qc.invalidateQueries({ queryKey: ["applications", card.roleId] }); qc.invalidateQueries({ queryKey: ["roles"] }); }
@@ -316,7 +299,7 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
   const button = (a: BriefCard["actions"][number], i: number) => {
     const variant = i === 0 ? "secondary" : "quiet";
     // A request about the plan opens the one upgrade sheet, never goes in one click.
-    if (isPlanAsk(a)) return <Upgrade key={i} label={a.label} size="sm" reason={reasonOf(a.body)} onSent={onSentToRecruiter} />;
+    if (isPlanAsk(a)) return <Upgrade key={i} label={a.label} size="sm" reason={reasonOf(a.body)} />;
     return a.method === "GET"
       ? <Link key={i} to={a.path} className={`btn ${variant} sm`}>{a.label}</Link>
       : <Button key={i} size="sm" variant={variant} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => run(a)}>{a.label}</Button>;
@@ -340,17 +323,17 @@ function CardRow({ card, level, onSentToRecruiter }: { card: BriefCard; level?: 
 }
 
 /**
- * A row's word: amber when it waits on you, ink when a recruiter is involved, green when there is nothing waiting or a
- * job just went live (the day to share it), amber for a closing date that is about to stop applications or did.
+ * A row's word: amber when it waits on you, green when there is nothing waiting or a job just went live (the day to
+ * share it), amber for a closing date that is about to stop applications or did.
  */
 function cardTone(kind: string, needsYou: boolean): Tone {
   if (needsYou || kind === "closing_date") return "caution";
-  return kind === "escalation" ? "accent" : kind === "empty" || kind === "share" || kind === "hire" ? "good" : "neutral";
+  return kind === "empty" || kind === "share" || kind === "hire" ? "good" : "neutral";
 }
 
 /** `hire`: "keep your backups warm" until a new hire starts (plan H1). `unreached`: emails to candidates that did not arrive. */
 function label(kind: string): string {
-  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", escalation: "Recruiter", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire", unreached: "Email failed" }[kind] ?? kind;
+  return { new_applicants: "New applicants", needs_review: "Needs you", decision: "Decision", posting_action: "One step", stuck: "Stuck", screening: "AI interview", interviews: "Your interviews", empty: "Nothing waiting", getting_started: "Getting started", draft: "Draft", closing_date: "Closing date", share: "Live today", pool_ready: "Ready to sort", hire: "New hire", unreached: "Email failed" }[kind] ?? kind;
 }
 
 /**
@@ -415,10 +398,10 @@ function PoolRow({ card }: { card: BriefCard }) {
 /**
  * Getting started (plans B1 and B2): while ITS confirms the company, what waits until then (nobody can hide that; one
  * line shows, the rest one click away); then the steps still to do, each with its buttons and why it matters behind
- * "Why", and the steps already done folded underneath. Its buttons send exactly what the card says, except a request to
- * ITS, which opens in the request form first; hiding the steps hides them for this person only.
+ * "Why", and the steps already done folded underneath. Its buttons send exactly what the card says; hiding the steps
+ * hides them for this person only.
  */
-function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSentToRecruiter: (message: string) => void }) {
+function GettingStartedCard({ card }: { card: BriefCard }) {
   const qc = useQueryClient();
   const setup = card.gettingStarted;
   const steps = setup?.steps ?? [];
@@ -431,13 +414,9 @@ function GettingStartedCard({ card, onSentToRecruiter }: { card: BriefCard; onSe
     },
     onError: (err) => toast(err instanceof ApiError ? err.message : "That didn't work."),
   });
-  // A request to ITS opens in the request form, filled in: what the recruiter would see, the reply-by time and the plan's
-  // recruiter requests are on screen before anything is sent (Q31). Every other button sends exactly what it says.
   const button = (a: GettingStartedAction, primary: boolean) => a.method === "GET"
     ? <Link key={a.label} to={a.path} className={`btn ${primary ? "primary" : "secondary"} sm`}>{a.label}</Link>
-    : a.path.includes("/escalations")
-      ? <AskRecruiter key={a.label} label={a.label} size="sm" variant={primary ? "primary" : "secondary"} preset={presetOf(a.body)} onSent={onSentToRecruiter} />
-      : <Button key={a.label} size="sm" variant={primary ? "primary" : "secondary"} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => act.mutate(a)}>{a.label}</Button>;
+    : <Button key={a.label} size="sm" variant={primary ? "primary" : "secondary"} loading={act.isPending && act.variables === a} disabled={act.isPending} onClick={() => act.mutate(a)}>{a.label}</Button>;
   const next = nextStep(steps);
   const todo = steps.filter((s) => !s.done);
   const done = steps.filter((s) => s.done);

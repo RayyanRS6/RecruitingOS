@@ -288,7 +288,7 @@ describe("compliance", () => {
 });
 
 describe("business hours (founder decision F12)", async () => {
-  const { addBusinessHours, humanResponseExpectation, isBusinessTime, nextBusinessOpen, slaBusinessHours } = await import("./business-hours");
+  const { isBusinessTime, nextBusinessOpen } = await import("./business-hours");
   // 2026-09-18 is a Friday. 16:30 Pacific (PDT, UTC-7) = 23:30Z.
   const fridayLate = new Date("2026-09-18T23:30:00Z");
   it("knows when the business is open", () => {
@@ -298,59 +298,43 @@ describe("business hours (founder decision F12)", async () => {
     expect(isBusinessTime(new Date("2026-09-16T15:30:00Z"))).toBe(false); // Wednesday 8:30 Pacific
     expect(isBusinessTime(new Date("2026-09-16T16:00:00Z"))).toBe(true); // Wednesday 9:00 Pacific
   });
-  it("carries a four-hour SLA over a weekend", () => {
-    // Friday 16:30 + 4 business hours = Monday 12:30 Pacific = 19:30Z
-    expect(addBusinessHours(fridayLate, 4).toISOString()).toBe("2026-09-21T19:30:00.000Z");
-  });
-  it("skips holidays and starts the clock at the next opening", () => {
-    // Friday 2026-09-04 16:00 Pacific + 8 business hours: 1h Friday, then Labor Day is skipped, then 7h on Tuesday → 16:00 Tuesday
-    expect(addBusinessHours(new Date("2026-09-04T23:00:00Z"), 8).toISOString()).toBe("2026-09-08T23:00:00.000Z");
-    // A request at 2:00 on a Sunday starts counting Monday at 9:00
+  it("finds the next opening over a weekend and a holiday", () => {
+    // 2:00 on a Sunday: Monday at 9:00
     expect(nextBusinessOpen(new Date("2026-09-20T09:00:00Z")).toISOString()).toBe("2026-09-21T16:00:00.000Z");
-  });
-  it("maps escalation kinds to the approved SLAs", () => {
-    expect(slaBusinessHours("candidate_issue")).toBe(4);
-    expect(slaBusinessHours("negotiation")).toBe(2);
-    expect(slaBusinessHours("review")).toBe(8);
-    expect(slaBusinessHours("unknown_kind")).toBe(8);
-  });
-  it("tells candidates an expectation that is true when written", () => {
-    expect(humanResponseExpectation(fridayLate)).toMatch(/four business hours/);
-    expect(humanResponseExpectation(new Date("2026-09-19T17:00:00Z"))).toMatch(/next business day/);
+    // Friday 2026-09-04 at 17:00 Pacific: Labor Day is skipped, so Tuesday at 9:00
+    expect(nextBusinessOpen(new Date("2026-09-05T00:00:00Z")).toISOString()).toBe("2026-09-08T16:00:00.000Z");
   });
 });
 
 describe("editable business calendar (correction 12 of 18 September 2026)", async () => {
-  const { DEFAULT_BUSINESS_CALENDAR, addBusinessHours, businessMinutesBetween, describeHours, humanResponseExpectation, isBusinessDay, isBusinessTime, nextBusinessOpen } = await import("./business-hours");
+  const { DEFAULT_BUSINESS_CALENDAR, describeHours, isBusinessDay, isBusinessTime, nextBusinessOpen } = await import("./business-hours");
   const { calendarSourceFromVersions } = await import("./business-calendar");
   const cal = (over: Partial<import("./business-hours").BusinessCalendar>) => ({ ...DEFAULT_BUSINESS_CALENDAR, ...over });
   it("skips weekends", () => {
-    // Saturday 2026-09-19 10:00 Pacific + 1 business hour = Monday 10:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-19T17:00:00Z"), 1).toISOString()).toBe("2026-09-21T17:00:00.000Z");
+    // Saturday 2026-09-19 10:00 Pacific: Monday 9:00 Pacific
+    expect(nextBusinessOpen(new Date("2026-09-19T17:00:00Z")).toISOString()).toBe("2026-09-21T16:00:00.000Z");
   });
   it("skips observed holidays", () => {
-    // Thursday 2026-07-02 16:00 Pacific + 2h: 1h Thursday, Friday 3 July is the observed holiday, 1h Monday 6 July → 10:00 Pacific
+    // Friday 3 July 2026 is the observed holiday: the next opening is Monday 6 July at 9:00 Pacific
     expect(isBusinessDay(new Date("2026-07-03T17:00:00Z"))).toBe(false);
-    expect(addBusinessHours(new Date("2026-07-02T23:00:00Z"), 2).toISOString()).toBe("2026-07-06T17:00:00.000Z");
+    expect(nextBusinessOpen(new Date("2026-07-03T17:00:00Z")).toISOString()).toBe("2026-07-06T16:00:00.000Z");
   });
   it("keeps wall-clock hours across the fall-back and spring-forward daylight-saving changes", () => {
-    // Friday 2026-10-30 16:00 PDT (23:00Z) + 8h: 1h Friday, then Monday 2 November (PST) 09:00 → 16:00 PST = 00:00Z Tuesday
-    expect(addBusinessHours(new Date("2026-10-30T23:00:00Z"), 8).toISOString()).toBe("2026-11-03T00:00:00.000Z");
-    // Friday 2027-03-12 16:00 PST (00:00Z) + 8h: 1h Friday, then Monday 15 March (PDT) → 16:00 PDT = 23:00Z
-    expect(addBusinessHours(new Date("2027-03-13T00:00:00Z"), 8).toISOString()).toBe("2027-03-15T23:00:00.000Z");
+    // Friday 2026-10-30 17:00 PDT (00:00Z Saturday): Monday 2 November opens at 9:00 PST = 17:00Z
+    expect(nextBusinessOpen(new Date("2026-10-31T00:00:00Z")).toISOString()).toBe("2026-11-02T17:00:00.000Z");
+    // Friday 2027-03-12 17:00 PST (01:00Z Saturday): Monday 15 March opens at 9:00 PDT = 16:00Z
+    expect(nextBusinessOpen(new Date("2027-03-13T01:00:00Z")).toISOString()).toBe("2027-03-15T16:00:00.000Z");
   });
-  it("starts an outside-hours request at the next opening", () => {
-    // Wednesday 2026-09-16 20:00 Pacific + 4h → Thursday 13:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-17T03:00:00Z"), 4).toISOString()).toBe("2026-09-17T20:00:00.000Z");
-  });
-  it("spreads multi-day deadlines over open hours only", () => {
-    // Monday 2026-09-14 09:00 Pacific + 24 business hours = three full days → Wednesday 17:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-14T16:00:00Z"), 24).toISOString()).toBe("2026-09-17T00:00:00.000Z");
+  it("moves a time outside opening hours to the next opening, and leaves an open one where it is", () => {
+    // Wednesday 2026-09-16 20:00 Pacific: Thursday 9:00 Pacific
+    expect(nextBusinessOpen(new Date("2026-09-17T03:00:00Z")).toISOString()).toBe("2026-09-17T16:00:00.000Z");
+    // Monday 2026-09-14 10:00 Pacific is open
+    expect(nextBusinessOpen(new Date("2026-09-14T17:00:00Z")).toISOString()).toBe("2026-09-14T17:00:00.000Z");
   });
   it("honours ITS closures and temporary coverage changes", () => {
     const closed = cal({ closures: [{ from: "2026-09-21", to: "2026-09-25", name: "Team offsite" }] });
-    // Friday 2026-09-18 16:00 Pacific + 2h: 1h Friday, the whole next week closed, 1h Monday 28 September → 10:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-18T23:00:00Z"), 2, closed).toISOString()).toBe("2026-09-28T17:00:00.000Z");
+    // Friday 2026-09-18 17:00 Pacific, the whole next week closed: Monday 28 September at 9:00 Pacific
+    expect(nextBusinessOpen(new Date("2026-09-19T00:00:00Z"), closed).toISOString()).toBe("2026-09-28T16:00:00.000Z");
     const half = cal({ coverageChanges: [{ from: "2026-09-16", to: "2026-09-16", reason: "half day", hours: [{ start: "13:00", end: "17:00" }] }] });
     expect(isBusinessTime(new Date("2026-09-16T16:30:00Z"), half)).toBe(false); // 09:30 Pacific on the half day
     expect(nextBusinessOpen(new Date("2026-09-16T16:30:00Z"), half).toISOString()).toBe("2026-09-16T20:00:00.000Z");
@@ -362,26 +346,22 @@ describe("editable business calendar (correction 12 of 18 September 2026)", asyn
     const eastern = cal({ timeZone: "America/New_York" });
     expect(isBusinessTime(new Date("2026-09-14T13:00:00Z"), eastern)).toBe(true); // 09:00 Eastern
     expect(isBusinessTime(new Date("2026-09-14T13:00:00Z"))).toBe(false); // 06:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-14T13:00:00Z"), 8, eastern).toISOString()).toBe("2026-09-14T21:00:00.000Z");
     expect(describeHours(eastern)).toBe("Monday to Friday, 9 to 5 Eastern");
   });
-  it("applies a version exactly from its effective date, even inside one deadline", () => {
+  it("applies a version exactly from its effective date", () => {
     const row = (version: number, effectiveFrom: string, hours: import("./business-hours").WeeklyHours) => ({ id: String(version), calendarKey: "its", version, effectiveFrom, timeZone: "America/Los_Angeles", hours, holidays: [], closures: [], coverageChanges: [], note: "", createdBy: { kind: "system" as const, id: "t" }, createdAt: "2026-09-01T00:00:00Z" });
     const mornings = { ...DEFAULT_BUSINESS_CALENDAR.hours, thu: [{ start: "09:00", end: "12:00" }], fri: [{ start: "09:00", end: "12:00" }] };
     const src = calendarSourceFromVersions([row(1, "2026-09-01", DEFAULT_BUSINESS_CALENDAR.hours), row(2, "2026-09-17", mornings)], new Date("2026-09-16T20:00:00Z"));
     expect(src.version).toBe(1);
-    // Wednesday 16 September 16:00 Pacific + 5h: 1h Wednesday (v1), 3h Thursday morning (v2), 1h Friday → Friday 10:00 Pacific
-    expect(addBusinessHours(new Date("2026-09-16T23:00:00Z"), 5, src).toISOString()).toBe("2026-09-18T17:00:00.000Z");
-    expect(addBusinessHours(new Date("2026-09-16T23:00:00Z"), 5).toISOString()).toBe("2026-09-17T20:00:00.000Z");
+    // Wednesday 16 September at 4:00 PM Pacific: version 1's hours, open
+    expect(isBusinessTime(new Date("2026-09-16T23:00:00Z"), src)).toBe(true);
+    // Thursday 17 September at 1:00 PM Pacific: version 2's mornings only, so closed until Friday at 9:00
+    expect(isBusinessTime(new Date("2026-09-17T20:00:00Z"), src)).toBe(false);
+    expect(nextBusinessOpen(new Date("2026-09-17T20:00:00Z"), src).toISOString()).toBe("2026-09-18T16:00:00.000Z");
+    expect(isBusinessTime(new Date("2026-09-17T20:00:00Z"))).toBe(true);
     const later = calendarSourceFromVersions(src.versions, new Date("2026-09-17T20:00:00Z"));
     expect(later.version).toBe(2);
     expect(describeHours(later, new Date("2026-09-17T20:00:00Z"))).toMatch(/Thursday 9 to 12/);
-  });
-  it("measures remaining business time in both directions", () => {
-    // Friday 2026-09-18 16:00 Pacific → Monday 10:00 Pacific = 60 + 60 minutes
-    expect(businessMinutesBetween(new Date("2026-09-18T23:00:00Z"), new Date("2026-09-21T17:00:00Z"))).toBe(120);
-    expect(businessMinutesBetween(new Date("2026-09-21T17:00:00Z"), new Date("2026-09-18T23:00:00Z"))).toBe(-120);
-    expect(businessMinutesBetween(new Date("2026-09-19T17:00:00Z"), new Date("2026-09-20T17:00:00Z"))).toBe(0); // weekend
   });
   // Review of the live-test fixes, 12 November 2026 (#61): the team's booking notice and email printed "(America/Los_Angeles)"
   it("names a zone beside a time in the sign-up form's short words, any other as Intl does, never by its id", async () => {
@@ -399,6 +379,5 @@ describe("editable business calendar (correction 12 of 18 September 2026)", asyn
   it("writes customer copy from the calendar in force", () => {
     expect(describeHours()).toBe("Monday to Friday, 9 to 5 Pacific");
     expect(describeHours(cal({ hours: { ...DEFAULT_BUSINESS_CALENDAR.hours, mon: [{ start: "09:00", end: "12:00" }, { start: "13:00", end: "17:30" }] } }))).toBe("Monday 9 to 12 and 1 to 5:30, Tuesday 9 to 5, Wednesday 9 to 5, Thursday 9 to 5, Friday 9 to 5 Pacific");
-    expect(humanResponseExpectation(new Date("2026-09-19T17:00:00Z"), cal({ hours: { ...DEFAULT_BUSINESS_CALENDAR.hours, sat: [{ start: "10:00", end: "14:00" }] } }))).toMatch(/^within four business hours/);
   });
 });

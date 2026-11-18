@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { entitlements } from "@ros/core";
-import { approvalRequests, auditRecords, companies, entitlements as entitlementRows, events, postings, recruiterEscalations, rolePackets, roles, withPlatform } from "@ros/db";
+import { approvalRequests, auditRecords, companies, entitlements as entitlementRows, events, postings, rolePackets, roles, withPlatform } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { signInAs, useTrial } from "./test-helpers";
@@ -42,7 +42,6 @@ describe("approving with the boards ticked on the approval card", () => {
   const roleRow = async (roleId: string) => (await container.db.select().from(roles).where(eq(roles.id, roleId)))[0];
   const channelsOf = async (roleId: string) => (await container.db.select().from(postings).where(eq(postings.roleId, roleId))).map((p) => p.channel).sort();
   const posting = async (roleId: string, channel: string) => (await container.db.select().from(postings).where(and(eq(postings.roleId, roleId), eq(postings.channel, channel))))[0];
-  const tasksOf = (roleId: string) => container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.roleId, roleId));
   const boardEvents = (roleId: string) => container.db.select().from(events).where(and(eq(events.type, "role.boards_chosen"), eq(events.subjectId, roleId)));
   const approvalsOf = (roleId: string) => container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.actionType, "role_packet.approve")));
   const settings = async (patch: Record<string, unknown>, id = companyId) => {
@@ -71,7 +70,7 @@ describe("approving with the boards ticked on the approval card", () => {
     await container.close();
   });
 
-  it("applies the boards with the approval: the job goes only where they say, ITS gets a task for each, and the record says who chose them", async () => {
+  it("applies the boards with the approval: the job goes only where they say, each board is prepared for the team to post, and the record says who chose them", async () => {
     const roleId = await newRole(owner);
     expect((await approve(owner, roleId, { version: 1, channels: ["linkedin_basic"] })).status).toBe(200);
     await container.drain();
@@ -79,7 +78,7 @@ describe("approving with the boards ticked on the approval card", () => {
     expect(role).toMatchObject({ status: "open", currentPacketVersion: 1, publishChannels: ["linkedin_basic"] });
     expect((await approvalsOf(roleId)).map((a) => a.status)).toEqual(["approved"]);
     expect(await channelsOf(roleId)).toEqual(["careers_page", "email_in", "google_jobs", "linkedin_basic"]);
-    expect((await tasksOf(roleId)).map((t) => [t.kind, t.postingId])).toEqual([["post_job", (await posting(roleId, "linkedin_basic")).id]]);
+    expect((await posting(roleId, "linkedin_basic")).status).toBe("ready_to_post");
     const [chosen, ...others] = await boardEvents(roleId);
     expect(others).toEqual([]);
     expect(chosen.payload).toEqual({ channels: ["linkedin_basic"], before: ["indeed"] });
@@ -96,7 +95,6 @@ describe("approving with the boards ticked on the approval card", () => {
     await container.drain();
     expect((await roleRow(roleId)).publishChannels).toEqual([]);
     expect(await channelsOf(roleId)).toEqual(["careers_page", "email_in", "google_jobs"]);
-    expect(await tasksOf(roleId)).toEqual([]);
     expect((await boardEvents(roleId))[0].payload).toEqual({ channels: [], before: ["indeed"] });
   });
 
@@ -145,7 +143,6 @@ describe("approving with the boards ticked on the approval card", () => {
     expect((await errorOf(stale)).code).toBe("nothing_pending");
     expect((await roleRow(roleId)).publishChannels).toBeNull();
     expect(await posting(roleId, "indeed")).toMatchObject({ status: "live_verified", closureRequired: false });
-    expect((await tasksOf(roleId)).filter((t) => t.kind === "take_down_job")).toEqual([]);
     expect(await boardEvents(roleId)).toEqual([]);
   });
 

@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
-import { AI_HELP_BUSY_LINE, AI_HELP_LINE, GettingStartedRequest, ITS_POSTING_UPGRADE_LINE, ITS_POSTING_UPGRADE_QUESTION, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
+import { AI_HELP_BUSY_LINE, AI_HELP_LINE, GettingStartedRequest, UpdateCompany, isCompanyVerified, type Actor, type NewTimesSettingView } from "@ros/contracts";
 import { outOfCredit } from "@ros/ai";
-import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, boardPostingOf, can, emit, newTimesSettingOf, pendingNewTimesRows, planIncludesItsPosting, revokeSessionsForCompany, setAutoState, withdrawPostingTasks, zipRecruiterOffered } from "@ros/core";
+import { DEFAULT_NOTICES, applyNoticeOverrides, assertCan, audit, emit, newTimesSettingOf, pendingNewTimesRows, revokeSessionsForCompany, setAutoState, zipRecruiterOffered } from "@ros/core";
 import { auditRecords, companies, memberships, uuidv7, withPlatform, withTenant, type Tx } from "@ros/db";
 import { LOGO_MAX_BYTES, inspectLogo, logoFileName, logoKey } from "@ros/integrations";
 import { cancelNewTimesRuns } from "@ros/workflows";
@@ -13,12 +13,11 @@ import { aiCreditAnswer } from "../services/ai-credit";
 import { CUSTOMER_AUDIT_ACTIONS, auditCsv, customerAuditRow, isoTime } from "../services/audit-history";
 import { AboutApproval, AboutDraftRequest, HiringContactInput, aboutWordingProblem, draftAbout, logoMemberPath, logoResponse, profileOf, publicProfileView, type SettingsWithProfile } from "../services/company-settings-profile";
 import { dismissGettingStarted, markPoliciesReviewed } from "../services/company-trust";
-import { openMissingTasksAndTell } from "../services/publishing-backfill";
 
 /**
  * Company preferences, what the job pages say about the company (plan D10), the customer's audit history and member
  * sign-out (audit findings A8, A9, A11, J16). Mounted under /api/v1/companies next to routes/companies.ts, which keeps
- * the company itself, the team and recruiter access.
+ * the company itself and the team.
  */
 export const companySettingsRoutes = new Hono<Vars>();
 
@@ -27,9 +26,6 @@ const ADMIN_ONLY_COMPANY_KEYS: Record<string, string> = {
   planKey: "the plan", plan: "the plan", status: "the account status", slug: "the careers page address", vertical: "the kind of business", id: "the company id", entitlements: "the allowances", usage: "the allowances",
 };
 const ADMIN_ONLY_SETTINGS_KEYS: Record<string, string> = { pilot: "the pilot term", retention: "the retention periods", brief: "the daily brief settings", entitlements: "the allowances", plan: "the plan", verifiedAt: "the ITS company check", verifiedBy: "the ITS company check", onboarding: "the getting-started checklist", candidateScoreShown: "whether candidates see their match score", candidateScoreSetBy: "whether candidates see their match score", trial: "the trial dates", accessRequestEmailedAt: "the record of your request for access" };
-
-/** The way on when a plan with no ITS staff time asks ITS to post: the request about the plan, as every Upgrade is. */
-const askForItsPosting = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: ITS_POSTING_UPGRADE_QUESTION } };
 
 /** Settings with their own routes below (plan D10): named here so a PATCH that sends them gets a plain answer. */
 const PROFILE_SETTINGS_KEYS: Record<string, string> = {
@@ -82,7 +78,6 @@ type NewTimesChange = { before: { auto: boolean; workingDays: number }; after: {
 companySettingsRoutes.patch("/current", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.update");
-  if (t.staff) throw new HttpError(403, "forbidden", "Recruiters cannot change a customer's company settings.");
   const raw = await c.req.json().catch(() => { throw new HttpError(400, "invalid_request", "Send the changes as JSON."); });
   refuseAdminOnlyKeys(raw);
   const container = c.get("container");
@@ -118,11 +113,6 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
       fields.push("logoUrl");
     }
     if (s.benefitsSummary !== undefined && (s.benefitsSummary || "") !== (existing.settings.benefitsSummary ?? "")) { if (s.benefitsSummary) settings.benefitsSummary = s.benefitsSummary; else delete settings.benefitsSummary; fields.push("benefitsSummary"); }
-    // Who posts on the job boards (plan D3): ITS unless the company says its own team does. Boards already waiting keep
-    // the tasks or cards they have; the choice applies to what is posted, updated or taken down from now on. On a plan with
-    // no ITS staff time (Rule 6) the team posts, so asking for ITS is refused, with the way on.
-    if (s.boardPosting === "its" && !(await planIncludesItsPosting(tx, t.companyId))) throw new HttpError(402, "plan_has_no_its_posting", ITS_POSTING_UPGRADE_LINE, { upgrade: true, actions: can(t.role, "escalation.create") ? [askForItsPosting] : [] });
-    if (s.boardPosting !== undefined && s.boardPosting !== boardPostingOf(existing.settings)) { settings.boardPosting = s.boardPosting; fields.push("boardPosting"); }
     // The company's own paid ZipRecruiter plan (Q11): only then is ZipRecruiter offered as a board.
     if (s.zipRecruiterPlan !== undefined && s.zipRecruiterPlan !== zipRecruiterOffered(existing.settings)) { if (s.zipRecruiterPlan) settings.zipRecruiterPlan = true; else delete settings.zipRecruiterPlan; fields.push("zipRecruiterPlan"); }
     // The automatic new times after a candidate cancels (founder decision 3A). Changing the days never moves anyone
@@ -166,12 +156,6 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
     const pendingNewTimes = async () => (await pendingNewTimesRows(tx, t.companyId)).length;
     if (!fields.length) return { row: existing, fields, noticeChanges, pendingNewTimes: await pendingNewTimes() };
     const [updated] = await tx.update(companies).set(patch).where(eq(companies.id, t.companyId)).returning();
-    // Handing the boards to ITS gives it a task for every board already waiting on someone; taking them back withdraws
-    // ITS's waiting tasks, and Today and the Posting tab show the team what to do instead.
-    if (fields.includes("boardPosting")) {
-      if (settings.boardPosting === "its") await openMissingTasksAndTell(tx, container, { companyId: t.companyId, actor, now, key: `handed_to_its:${t.companyId}:${now.getTime()}` });
-      else await withdrawPostingTasks(tx, { companyId: t.companyId, reason: "The company now posts on the job boards itself.", actor, now });
-    }
     // The new times' change is recorded with what it was before, after, the choice for people already told a day and how
     // many were stopped (no personal data).
     const newTimes = newTimesChange ? { newTimesAfterCancel: newTimesChange } : {};
@@ -181,8 +165,6 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
     return { row: updated, fields, noticeChanges, pendingNewTimes: await pendingNewTimes() };
   });
   if (removedLogo.key) await container.integrations.storage.delete(removedLogo.key).catch(() => undefined);
-  // The ITS queue's email about posting tasks handed over (above) leaves through the outbox.
-  if (result.fields.includes("boardPosting")) await container.kick();
   return c.json({ ...result.row, changed: result.fields, notices: noticesView(result.row.settings.notices), pendingNewTimes: result.pendingNewTimes });
 });
 
@@ -222,11 +204,10 @@ companySettingsRoutes.get("/current/notices", requireTenant, async (c) => {
 /* assistant and approved by a person; the logo, stored and served by us; the contact before applying.       */
 /* ---------------------------------------------------------------------------------------------------------- */
 
-/** Owners and admins of the company itself; never ITS staff under a grant (what the company says about itself is its own). */
+/** Owners and admins of the company itself (what the company says about itself is its own). */
 function assertMayEditProfile(c: Context<Vars>): Tenant {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.update");
-  if (t.staff) throw new HttpError(403, "forbidden", "Recruiters cannot change what a customer's job pages say about the company.");
   return t;
 }
 
@@ -413,12 +394,11 @@ companySettingsRoutes.put("/current/hiring-contact", requireTenant, async (c) =>
 
 /**
  * The getting-started card on Today (plan B2): anyone on the team hides it for themselves ("dismiss"); an owner or
- * admin records that the AI rules were reviewed ("policies_reviewed", audited). Never ITS staff under a grant.
+ * admin records that the AI rules were reviewed ("policies_reviewed", audited).
  */
 companySettingsRoutes.post("/current/getting-started", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
-  if (t.staff) throw new HttpError(403, "forbidden", "The getting-started card belongs to the company's own team.");
   const body = GettingStartedRequest.parse(await c.req.json().catch(() => ({})));
   if (body.action === "policies_reviewed") assertCan(t.role, "policy.manage");
   const container = c.get("container");
@@ -444,7 +424,7 @@ function parseWhen(value: string | undefined, name: string, endOfDay = false): s
 
 type AuditQuery = { actions: string[]; from: string | null; to: string | null; before: string | null; limit: number; exclude: string[] };
 
-/** actions= (exact names), prefix= (for example staff.), exclude=, from=, to=, before= (a cursor: the id of the last row seen; rows after it in this order), limit=. */
+/** actions= (exact names), prefix= (for example invitation.), exclude=, from=, to=, before= (a cursor: the id of the last row seen; rows after it in this order), limit=. */
 function auditQueryOf(c: Context<Vars>, maxLimit: number, defaultLimit: number): AuditQuery {
   const list = (v: string | undefined) => (v ?? "").split(",").map((a) => a.trim()).filter(Boolean);
   const prefix = (c.req.query("prefix") ?? "").trim();
@@ -464,7 +444,6 @@ function auditQueryOf(c: Context<Vars>, maxLimit: number, defaultLimit: number):
 
 async function customerAudit(c: Context<Vars>, q: AuditQuery) {
   const t = c.get("tenant")!;
-  if (t.staff) throw new HttpError(403, "forbidden", "Staff cannot read the customer's audit history.");
   assertCan(t.role, "events.read");
   if (!q.actions.length) return [];
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
@@ -483,8 +462,8 @@ async function customerAudit(c: Context<Vars>, q: AuditQuery) {
 }
 
 /**
- * Everything a customer may see of the ledger, newest first: recruiter access, team changes, rule and company changes,
- * candidate views, outcomes and exports. Members with events.read; never ITS staff acting under a grant. Page with
+ * Everything a customer may see of the ledger, newest first: team changes, rule and company changes,
+ * candidate views, outcomes and exports. Members with events.read. Page with
  * `before=<id of the last row>`.
  */
 companySettingsRoutes.get("/current/audit", requireTenant, async (c) => c.json(await customerAudit(c, auditQueryOf(c, 200, 50))));
@@ -513,7 +492,6 @@ companySettingsRoutes.get("/current/audit.csv", requireTenant, async (c) => {
 companySettingsRoutes.post("/current/members/:userId/sign-out", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "members.manage");
-  if (t.staff) throw new HttpError(403, "forbidden", "Recruiters cannot sign a customer's team out.");
   if (t.role !== "owner" && t.role !== "admin") throw new HttpError(403, "admin_only", "Only an owner or an admin can sign a teammate out.");
   const userId = c.req.param("userId") ?? "";
   if (!UUID.test(userId)) throw new HttpError(404, "not_found", "That person is not an active member of your team.");

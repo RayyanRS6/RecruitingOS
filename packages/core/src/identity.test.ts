@@ -88,7 +88,7 @@ describe("a staff account holds Microsoft only", () => {
       expect(evaluateSignIn(staff({ providers }), null), providers.join(",")).toEqual({ ok: false, staff: true, code: "staff_provider_linked", message: "This ITS account is also linked to another sign-in method. Ask an ITS administrator to remove that link, then sign in with Microsoft 365." });
     }
     // a platform role makes an account staff whatever its address, and the first administrator on the bootstrap list too
-    expect(evaluateSignIn(staff({ email: "ivy@brightline.test", providers: ["azure", "google"] }), { platformRole: "its_recruiter" })).toMatchObject({ ok: false, code: "staff_provider_linked" });
+    expect(evaluateSignIn(staff({ email: "ivy@brightline.test", providers: ["azure", "google"] }), { platformRole: "platform_admin" })).toMatchObject({ ok: false, code: "staff_provider_linked" });
     expect(evaluateSignIn(staff({ email: "first@brightline.test", providers: ["azure", "google"] }), null, { ...DEFAULT_SIGN_IN_POLICY, bootstrapAdmins: ["first@brightline.test"] })).toMatchObject({ ok: false, code: "staff_provider_linked" });
     // through Google the older refusal still answers first
     expect(evaluateSignIn(staff({ provider: "google", providers: ["azure", "google"] }), null)).toMatchObject({ ok: false, code: "staff_provider_required" });

@@ -99,7 +99,7 @@ describe("interview_new_times", () => {
     handle = await createDb({ pgliteDir: "memory://" });
     await migrate(handle);
     const integrations = { ...createIntegrations({ NODE_ENV: "test", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory" }, { memoryStorage: true }), clock: () => now };
-    engine = createEngine({ db: handle.db, services: { ai: {} as never, integrations, env: { appBaseUrl: "https://app.example", jobsBaseUrl: "https://jobs.example", itsQueueEmail: "queue@example.com", smsEnabled: false } } }, { now: () => now });
+    engine = createEngine({ db: handle.db, services: { ai: {} as never, integrations, env: { appBaseUrl: "https://app.example", jobsBaseUrl: "https://jobs.example", smsEnabled: false } } }, { now: () => now });
     // Emails stay queued here: what matters is that they were written to leave.
     engine.registerJob(SEND_JOB_KIND, async () => {});
     setNotifyClock(() => now);
@@ -253,7 +253,6 @@ describe("interview_new_times", () => {
 
   it("checks everything again when it is due: a timer alone never sends anything", async () => {
     now = CANCELLED_AT;
-    const takeover = await person();
     const teamActed = await person();
     const nobody = await person();
     const closed = await person();
@@ -261,7 +260,6 @@ describe("interview_new_times", () => {
     const noEmail = await person();
     const changed = await person();
     await engine.runUntilIdle();
-    await handle.db.execute(sql`INSERT INTO takeovers (id, company_id, role_id, recruiter_user_id, status) VALUES (${randomUUID()}, ${takeover.companyId}, ${takeover.roleId}, ${takeover.ownerId}, 'active')`);
     await handle.db.execute(sql`INSERT INTO interviews (id, company_id, application_id, round_key, title, format, duration_minutes, status) VALUES (${randomUUID()}, ${teamActed.companyId}, ${teamActed.applicationId}, 'owner', 'Conversation with the dentist', 'video', 30, 'proposed')`);
     await handle.db.execute(sql`UPDATE memberships SET status = 'removed' WHERE user_id = ${nobody.interviewerIds[0]}`);
     await handle.db.execute(sql`UPDATE roles SET status = 'closed' WHERE id = ${closed.roleId}`);
@@ -269,7 +267,7 @@ describe("interview_new_times", () => {
     await handle.db.execute(sql`UPDATE candidates SET email = NULL WHERE id = ${noEmail.candidateId}`);
     await handle.db.execute(sql`UPDATE interviews SET attempt = 3 WHERE id = ${changed.interviewId}`);
     await runAt(DUE);
-    const expected: Array<[Person, string, boolean]> = [[takeover, "takeover", true], [teamActed, "team_acted", false], [nobody, "no_interviewers", true], [closed, "left_process", false], [deleted, "details_deleted", false], [noEmail, "no_email", true], [changed, "interview_changed", true]];
+    const expected: Array<[Person, string, boolean]> = [[teamActed, "team_acted", false], [nobody, "no_interviewers", true], [closed, "left_process", false], [deleted, "details_deleted", false], [noEmail, "no_email", true], [changed, "interview_changed", true]];
     for (const [p, reason, told] of expected) {
       expect(await followUp(p.applicationId), reason).toMatchObject({ auto_state: "not_sent", auto_reason: reason });
       expect((await interview(p.interviewId)).status, reason).toBe("cancelled");
@@ -277,7 +275,6 @@ describe("interview_new_times", () => {
       expect((await notices(p.companyId, "interview.new_times_not_sent")).length, reason).toBe(told ? 1 : 0);
       expect((await eventsOf(p.applicationId, "interview.new_times_not_sent")).at(-1)?.payload, reason).toMatchObject({ reason, from: "waiting" });
     }
-    expect((await notices(takeover.companyId, "interview.new_times_not_sent"))[0].body).toContain("An ITS recruiter is running this role, so nothing was sent automatically.");
   });
 
   it("completes without writing for someone no longer under Cancelled, and sends on the day after a decision taken back", async () => {

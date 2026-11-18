@@ -46,7 +46,7 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, 
 
 describe("the questions card on the Scoring tab", () => {
   it("before the company sets any: the yes/no questions on the form, and the chat asking the screening questions", () => {
-    const html = render(createElement(ApplicantQuestions, { roleId: "r1", packet: plain, editBase: { version: 3, packet: plain }, whoPosts: "its", onEditEligibility: () => undefined }));
+    const html = render(createElement(ApplicantQuestions, { roleId: "r1", packet: plain, editBase: { version: 3, packet: plain }, onEditEligibility: () => undefined }));
     const t = text(html);
     expect(t).toContain("Questions every applicant answers");
     expect(t).toContain("Candidates are asked this");
@@ -67,7 +67,7 @@ describe("the questions card on the Scoring tab", () => {
   });
 
   it("with the company's own: each quick question with what may be answered, and the written ones with what a good answer shows, for the team only", () => {
-    const t = text(render(createElement(ApplicantQuestions, { roleId: "r1", packet: withQuestions, editBase: null, whoPosts: "its" })));
+    const t = text(render(createElement(ApplicantQuestions, { roleId: "r1", packet: withQuestions, editBase: null })));
     expect(t).toContain("How will you get to work? Choose one: My own car · Public transport · Bike or on foot");
     expect(t).toContain("We open at 7am.");
     expect(t).toContain("Can you work one Saturday a month? Yes or no");
@@ -83,7 +83,7 @@ describe("the questions card on the Scoring tab", () => {
   });
 
   it("the editor: a row per question, with its kind, its answers, whether it must be answered, and the fairness line", () => {
-    const html = render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: withQuestions, whoPosts: "its", onDone: () => undefined }));
+    const html = render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: withQuestions, onDone: () => undefined }));
     const t = text(html);
     // that the chat reads the team's note is the field's tooltip and accessible description (fewer words, 23 Oct 2026)
     expect(html).toContain(`id="wq-look-0" class="input" title="${aq.LOOK_FOR_USE}"`);
@@ -100,7 +100,7 @@ describe("the questions card on the Scoring tab", () => {
     expect(t).toContain(aq.FAIRNESS_LINE);
     expect(t).toContain("Save as a new version");
     // started from the screening questions when the company has none of its own, said so
-    expect(text(render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: plain, whoPosts: "its", onDone: () => undefined })))).toContain(aq.SCREENING_FALLBACK_LINE);
+    expect(text(render(createElement(QuestionsEditor, { roleId: "r1", baseVersion: 3, packet: plain, onDone: () => undefined })))).toContain(aq.SCREENING_FALLBACK_LINE);
   });
 });
 

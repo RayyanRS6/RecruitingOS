@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { TRIAL_PLAN_KEY, isCompanyVerified, newTrialTerm, type MembershipRole } from "@ros/contracts";
-import { entitlements, grantPlatformRole, type PlatformRole } from "@ros/core";
+import { entitlements, grantPlatformRole } from "@ros/core";
 import { applications, candidates, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
@@ -20,15 +20,13 @@ export async function signInWithIdentity(app: ReturnType<typeof createApp>, cont
   return r.headers.get("set-cookie")!.split(";")[0];
 }
 
-/** Seeds a platform role through the ledger (as the console would), then opens a Microsoft + second-factor session. */
-export async function signInStaff(app: ReturnType<typeof createApp>, container: Container, email: string, role: PlatformRole = "platform_admin", name?: string): Promise<string> {
+/** Seeds the platform administrator role through the ledger (as the console would), then opens a Microsoft + second-factor session. */
+export async function signInAdmin(app: ReturnType<typeof createApp>, container: Container, email: string, name?: string): Promise<string> {
   let [user] = await container.db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
   if (!user) [user] = await container.db.insert(users).values({ email: email.toLowerCase(), name: name ?? email.split("@")[0], authProvider: "azure", authSubject: `seed-${email}` }).returning();
-  if (user.platformRole !== role) await grantPlatformRole(container.db, { userId: user.id, role, actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
+  if (user.platformRole !== "platform_admin") await grantPlatformRole(container.db, { userId: user.id, role: "platform_admin", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
   return signInWithIdentity(app, container, { email, name: name ?? user.name ?? undefined, provider: "azure", aal2: true, subject: user.authProvider === "azure" && user.authSubject ? user.authSubject : undefined });
 }
-
-export const signInAdmin = (app: ReturnType<typeof createApp>, container: Container, email: string, name?: string) => signInStaff(app, container, email, "platform_admin", name);
 
 /**
  * Where a suite's database lives (docs/readiness/03 section 2). By default the in-memory PGlite every suite has always

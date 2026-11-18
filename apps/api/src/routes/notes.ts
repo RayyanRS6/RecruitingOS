@@ -2,17 +2,15 @@ import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { WriteNote } from "@ros/contracts";
 import { applications, withTenant, type Tx } from "@ros/db";
-import { actorOf, applicationScopeGuard, requireTenant, type Vars } from "../middleware/session";
+import { actorOf, requireTenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { notesView, removeOwnNote, writeOwnNote } from "../services/notes";
 
 /**
  * Private team notes on a candidate (founder decision Q24; plan H3), under /applications/:id. Who may read and write is
- * decided in services/notes.ts: the note permissions, or an interviewer's own note on someone they interviewed. An ITS
- * recruiter under a grant reaches only the candidates the grant names (applicationScopeGuard).
+ * decided in services/notes.ts: the note permissions, or an interviewer's own note on someone they interviewed.
  */
 export const noteRoutes = new Hono<Vars>();
-noteRoutes.use("/:id/*", applicationScopeGuard);
 
 async function applicationIn(tx: Tx, companyId: string, id: string) {
   const [app] = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? await tx.select({ id: applications.id, companyId: applications.companyId }).from(applications).where(and(eq(applications.id, id), eq(applications.companyId, companyId))).limit(1) : [];

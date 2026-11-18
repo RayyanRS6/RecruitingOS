@@ -1,11 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, notLike, or, sql, type SQL } from "drizzle-orm";
 import { RejectReason, type Actor } from "@ros/contracts";
-import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, inboundEmails, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
+import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, events, hiringOutcomes, inboundEmails, interviewFollowups, interviewParticipants, interviews, jobs, notifications, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { SYSTEM_ACTOR, emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
-import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
 import { dedupeKey } from "./dedupe";
 import { notify } from "./notifications";
@@ -255,7 +254,7 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
  * transcripts and answers (the answers to a screen's opening questions included), message bodies and the team's private
- * notes are removed, and so is everything about them in a recruiter's copy and in requests and notices that name them;
+ * notes are removed, and so is what names them in the team's notices and emails;
  * the AI's readings of them and the AI run log about them keep only their bookkeeping (`scrubCandidateAiData`), and so do
  * the workflow engine's copies (`scrubCandidateWorkflowData`: run state and step records; a run still going is cancelled
  * first, through `cancelRun` when the caller has the engine); stage history, audit records and aggregate counts stay. The
@@ -302,14 +301,14 @@ export async function anonymizeCandidate(
   // Applications they emailed in that were never admitted (a failed or held email, Wave S5 review): no candidate row
   // links to them, so they are found by the application they became or by the address in them, and lose the file too.
   await purgeInboundEmailsOf(q, { companyId: input.companyId, email: cand.email, appIds, deleteFile: input.deleteFile });
-  const scrubbed = await scrubRecruiterCopies(q, { companyId: input.companyId, appIds, candidate: cand, now });
+  const scrubbed = await scrubTeamCopies(q, { companyId: input.companyId, candidate: cand });
   // The workflow engine's copies (run state, step records) lose every word too (Wave S3 G1); a run still going is
   // cancelled first, so nothing it does next can write them back or break on a scrubbed state.
   const wf = await scrubCandidateWorkflowData(q, { companyId: input.companyId, candidateId: cand.id, actor: input.actor, cancelRun: input.cancelRun });
   // The AI's readings of them and the AI run log about them lose every word (founder brief S2, F3): only the bookkeeping stays.
   const ai = await scrubCandidateAiData(q, { companyId: input.companyId, candidateId: cand.id });
   await q.update(candidates).set({ firstName: "Removed", lastName: token, email: null, phone: null, location: null, locationText: null, dedupeKey: `removed:${cand.id}`, tags: [], embedding: null, anonymizedAt: now.toISOString(), consent: {}, preferences: { smsOptOut: true } }).where(eq(candidates.id, cand.id));
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
   await emit(q, { type: "candidate.anonymized", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documents: docs.length } });
   return { documents: docs.length, screens: scrCount, communications: comms.length, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps };
 }
@@ -682,70 +681,12 @@ export function redactPerson(text: string, patterns: IdentifyingPatterns, nameWo
   return patterns.contact.reduce((t, p) => t.replace(p, "[removed]"), named);
 }
 
-type SnapshotRef = { applicationId?: unknown; name?: unknown };
-type SnapshotBoard = { people?: SnapshotRef[]; summary?: { longestWaiting?: SnapshotRef | null; nextSteps?: SnapshotRef[]; sentences?: unknown[] } & Record<string, unknown> } & Record<string, unknown>;
-
 /**
- * The pool board kept on a role review (`contextSnapshot.board`, plan F9) without the person: their row (name, score,
- * reason, what needed an eye) and their next step go, "longest waiting" no longer points at them, and the summary's
- * sentences lose their name. Counts stay, as numbers. `changed` is false when the snapshot never held them.
+ * A deletion reaches what the team was told too: any in-app notice or team email that names them has the name, email and
+ * phone replaced.
  */
-export function scrubBoardSnapshot(board: unknown, appIds: readonly string[], patterns: IdentifyingPatterns): { changed: boolean; value: unknown } {
-  if (!board || typeof board !== "object") return { changed: false, value: board };
-  const b = board as SnapshotBoard;
-  const theirs = (x: SnapshotRef | null | undefined) => typeof x?.applicationId === "string" && appIds.includes(x.applicationId);
-  const longest = b.summary?.longestWaiting ?? null;
-  const longestName = theirs(longest) && typeof longest?.name === "string" ? longest.name : null;
-  const people = Array.isArray(b.people) ? b.people.filter((p) => !theirs(p)) : b.people;
-  const summary = b.summary
-    ? {
-        ...b.summary,
-        longestWaiting: theirs(longest) ? null : longest,
-        nextSteps: Array.isArray(b.summary.nextSteps) ? b.summary.nextSteps.filter((s) => !theirs(s)) : b.summary.nextSteps,
-        sentences: Array.isArray(b.summary.sentences) ? b.summary.sentences.filter((s) => !(longestName && typeof s === "string" && s.startsWith(`${longestName} has waited longest`))).map((s) => (typeof s === "string" ? redactPerson(s, patterns, "a candidate") : s)) : b.summary.sentences,
-      }
-    : b.summary;
-  const value = { ...b, people, summary };
-  return { changed: JSON.stringify(value) !== JSON.stringify(board), value };
-}
-
-/**
- * A deletion reaches the recruiter's copy too (Q31 family, step 13): a request about one of the person's applications
- * keeps the company and role context but loses everything about the candidate, and its question is removed; any other
- * request, recruiter answer, in-app notice or team email that names them has the name, email and phone replaced, and a
- * role review's board snapshot loses them too (`scrubBoardSnapshot`).
- */
-async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; appIds: string[]; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null }; now: Date }): Promise<{ escalations: number; notifications: number }> {
+async function scrubTeamCopies(q: Queryable, input: { companyId: string; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null } }): Promise<{ notifications: number }> {
   const patterns = identifyingPatterns(input.candidate);
-  const removed = "[removed at the candidate's request]";
-  let escalationCount = 0;
-  const escs = await q.select({ id: recruiterEscalations.id, applicationId: recruiterEscalations.applicationId, question: recruiterEscalations.question, resolution: recruiterEscalations.resolution, contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.companyId, input.companyId));
-  for (const e of escs) {
-    if (e.applicationId && input.appIds.includes(e.applicationId)) {
-      const { company, role, packet } = e.contextSnapshot as { company?: unknown; role?: unknown; packet?: unknown };
-      await q.update(recruiterEscalations).set({ question: removed, resolution: e.resolution === null ? null : redactPerson(e.resolution, patterns, "the candidate"), contextSnapshot: { capturedAt: (e.contextSnapshot as { capturedAt?: string }).capturedAt ?? null, company: company ?? null, role: role ?? null, packet: packet ?? null, candidateRemovedAt: input.now.toISOString() } }).where(eq(recruiterEscalations.id, e.id));
-      escalationCount++;
-      continue;
-    }
-    // A review of a whole role carries the pool board as it stood (plan F9): the person's own row goes, and the summary
-    // loses their name wherever it named them.
-    const board = scrubBoardSnapshot((e.contextSnapshot as { board?: unknown } | null)?.board, input.appIds, patterns);
-    if (!board.changed && !patterns.name.length && !patterns.contact.length) continue;
-    const question = redactPerson(e.question, patterns, "a candidate");
-    const resolution = e.resolution === null ? null : redactPerson(e.resolution, patterns, "a candidate");
-    if (question !== e.question || resolution !== e.resolution || board.changed) {
-      await q.update(recruiterEscalations).set({ question, resolution, ...(board.changed ? { contextSnapshot: { ...e.contextSnapshot, board: board.value } } : {}) }).where(eq(recruiterEscalations.id, e.id));
-      escalationCount++;
-    }
-  }
-  // The threads on those requests (migration 0029): on a request about one of the person's applications the team's own
-  // notes go, like its question, and the recruiter's words lose what names them; elsewhere every message loses it.
-  const aboutThem = new Set(escs.filter((e) => e.applicationId && input.appIds.includes(e.applicationId)).map((e) => e.id));
-  for (const m of await q.select({ id: escalationMessages.id, escalationId: escalationMessages.escalationId, side: escalationMessages.side, body: escalationMessages.body }).from(escalationMessages).where(eq(escalationMessages.companyId, input.companyId))) {
-    const about = aboutThem.has(m.escalationId);
-    const body = about && m.side === "customer" ? removed : redactPerson(m.body, patterns, about ? "the candidate" : "a candidate");
-    if (body !== m.body) await q.update(escalationMessages).set({ body }).where(eq(escalationMessages.id, m.id));
-  }
   let notificationCount = 0;
   if (patterns.name.length || patterns.contact.length) {
     const notes = await q.select({ id: notifications.id, title: notifications.title, body: notifications.body }).from(notifications).where(eq(notifications.companyId, input.companyId));
@@ -756,7 +697,7 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       await q.update(notifications).set({ title, body }).where(eq(notifications.id, n.id));
       notificationCount++;
     }
-    // Mail kept with no candidate on it (the team's alerts and summaries, the ITS queue's notices) should never name
+    // Mail kept with no candidate on it (the team's alerts and summaries) should never name
     // anyone; any that did loses the name, email and phone here too. A copy already sent stays with the email provider.
     const teamMail = await q.select({ id: communications.id, subject: communications.subject, bodyText: communications.bodyText, bodyHtml: communications.bodyHtml }).from(communications).where(and(eq(communications.companyId, input.companyId), isNull(communications.candidateId)));
     for (const m of teamMail) {
@@ -767,7 +708,7 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       await q.update(communications).set({ subject, bodyText, bodyHtml }).where(eq(communications.id, m.id));
     }
   }
-  return { escalations: escalationCount, notifications: notificationCount };
+  return { notifications: notificationCount };
 }
 
 export class CounselDecisionRequired extends Error {
@@ -803,20 +744,14 @@ export async function fulfilSmsOptOut(q: Queryable, row: DataRequestRow, actor: 
 }
 
 /**
- * "Ask a person to review my application": a recruiter escalation carries it; the request closes when the escalation
- * resolves. A request that names no application and no role would give the recruiter the whole company, so it goes to
- * ITS administrators instead (Q31): an admin alert, and a note on the request, which the privacy console lists with its
- * deadline. Privacy requests are platform records, so this always runs in a platform transaction, where alerts can be
- * written.
+ * "Ask a person to review my application": the request stays with ITS administrators, who arrange the review with the
+ * company: an admin alert, and a note on the request, which the privacy console lists with its deadline. Privacy requests
+ * are platform records, so this always runs in a platform transaction, where alerts can be written.
  */
-export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { roleId: string | null; actor: Actor; now?: Date }): Promise<DataRequestRow> {
-  if (!input.roleId && !row.applicationId) {
-    await raiseAlert(q, { kind: "privacy_request.human_review", severity: "high", title: "A candidate asked for a person to review their application", body: "The request names no role or application, so no recruiter was brought in. Find the application from the privacy request and arrange the review.", companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id } });
-    const note = { at: (input.now ?? new Date()).toISOString(), by: "system", text: "Human review requested with no application attached: no recruiter was brought in; ITS administrators arrange it." };
-    return touch(q, row, { status: "in_progress", notes: [...row.notes, note] }, input.actor, "human review sent to ITS administrators");
-  }
-  const esc = await createEscalation(q, { companyId: row.companyId, roleId: input.roleId, applicationId: row.applicationId ?? null, kind: "candidate_issue", question: "A candidate asked for a person to review their application. Their words are on the privacy request in the ITS console, not here.", requestedBy: input.actor, summaryOrigin: "candidate" });
-  return touch(q, row, { escalationId: esc.id, status: "in_progress" }, input.actor, "human review escalated", { escalationId: esc.id });
+export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { actor: Actor; now?: Date }): Promise<DataRequestRow> {
+  await raiseAlert(q, { kind: "privacy_request.human_review", severity: "high", title: "A candidate asked for a person to review their application", body: "Open the privacy request, find the application and arrange the review with the company.", companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id } });
+  const note = { at: (input.now ?? new Date()).toISOString(), by: "system", text: "Human review requested: ITS administrators arrange it with the company." };
+  return touch(q, row, { status: "in_progress", notes: [...row.notes, note] }, input.actor, "human review sent to ITS administrators");
 }
 
 /** A withdrawal from the status page is applied at once and closed like any other request: resolution audit, event, confirmation. */
@@ -857,5 +792,5 @@ export async function checkPrivacyRequestDeadlines(q: Queryable, now: Date = new
 }
 
 export function publicDataRequest(row: DataRequestRow) {
-  return { id: row.id, companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, kind: row.kind, details: row.details, requesterEmail: row.requesterEmail, channel: row.channel, verificationStatus: row.verificationStatus, verificationNote: row.verificationNote, verifiedAt: row.verifiedAt, status: row.status, slaDueAt: row.slaDueAt, assignedTo: row.assignedTo, notes: row.notes, counselEscalatedAt: row.counselEscalatedAt, counselDecision: row.counselDecision, counselNote: row.counselNote, resolution: row.resolution, resolvedAt: row.resolvedAt, confirmationSentAt: row.confirmationSentAt, escalationId: row.escalationId, createdAt: row.createdAt };
+  return { id: row.id, companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, kind: row.kind, details: row.details, requesterEmail: row.requesterEmail, channel: row.channel, verificationStatus: row.verificationStatus, verificationNote: row.verificationNote, verifiedAt: row.verifiedAt, status: row.status, slaDueAt: row.slaDueAt, assignedTo: row.assignedTo, notes: row.notes, counselEscalatedAt: row.counselEscalatedAt, counselDecision: row.counselDecision, counselNote: row.counselNote, resolution: row.resolution, resolvedAt: row.resolvedAt, confirmationSentAt: row.confirmationSentAt, createdAt: row.createdAt };
 }

@@ -75,7 +75,7 @@ describe("the automatic set: when and whether", () => {
     await handle.db.execute(sql`INSERT INTO roles (id, company_id, title, status, created_by) VALUES (${roleId}, ${companyId}, 'Hygienist', 'open', ${sql`'{"kind":"user","id":"u1"}'::jsonb`})`);
     await handle.db.execute(sql`INSERT INTO candidates (id, company_id, first_name, last_name, email, first_source) VALUES (${candidateId}, ${companyId}, 'Ana', 'Lopez', ${`ana-${candidateId}@example.com`}, 'direct')`);
     await handle.db.execute(sql`INSERT INTO applications (id, company_id, role_id, candidate_id, packet_version, source, status_token, stage) VALUES (${applicationId}, ${companyId}, ${roleId}, ${candidateId}, 1, 'direct', ${`tok-${applicationId}`}, 'interview_scheduled')`);
-    const plan = (rescheduleCount = 0, now = FRIDAY_2PM) => tenant(companyId, (tx) => autoNewTimesPlan(tx, { companyId, roleId, applicationId, rescheduleCount, now }));
+    const plan = (rescheduleCount = 0, now = FRIDAY_2PM) => tenant(companyId, (tx) => autoNewTimesPlan(tx, { companyId, applicationId, rescheduleCount, now }));
     return { companyId, roleId, applicationId, plan };
   }
   /** An earlier automatic set of theirs, in the given state (one per person ever: `preparing` or `sent`). */
@@ -152,12 +152,6 @@ describe("the automatic set: when and whether", () => {
     expect(await p.plan(MAX_CANDIDATE_RESCHEDULES)).toEqual({ arm: false, reason: "reschedules_used" });
   });
 
-  it("arms nothing while an ITS recruiter is running the role", async () => {
-    const p = await person();
-    await handle.db.execute(sql`INSERT INTO takeovers (id, company_id, role_id, recruiter_user_id, status) VALUES (${randomUUID()}, ${p.companyId}, ${p.roleId}, ${ownerId}, 'active')`);
-    expect(await p.plan()).toEqual({ arm: false, reason: "takeover" });
-  });
-
   it("arms nothing for someone a person had put on hold", async () => {
     const p = await person();
     await tenant(p.companyId, (tx) => setMark(tx, { companyId: p.companyId, app: { id: p.applicationId, stage: "interview_scheduled" }, mark: "on_hold", actor: owner, now: FRIDAY_2PM }));
@@ -178,7 +172,7 @@ describe("the automatic set: when and whether", () => {
       const p = await person(settings);
       const interviewId = randomUUID();
       await handle.db.execute(sql`INSERT INTO interviews (id, company_id, application_id, round_key, title, format, duration_minutes, status, attempt) VALUES (${interviewId}, ${p.companyId}, ${p.applicationId}, 'first', 'First interview', 'video', 30, 'scheduled', 1)`);
-      const plan = () => tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, roleId: p.roleId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM, interviewId }));
+      const plan = () => tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM, interviewId }));
       return { ...p, interviewId, plan };
     }
 
@@ -191,7 +185,7 @@ describe("the automatic set: when and whether", () => {
       expect(plan).not.toHaveProperty("dueAt");
       expect(await tenant(p.companyId, (tx) => interviewHasNoHours(tx, { companyId: p.companyId, interviewId: p.interviewId }))).toBe(true);
       // asked with no interview, nothing is read about hours
-      expect((await tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, roleId: p.roleId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM }))).arm).toBe(true);
+      expect((await tenant(p.companyId, (tx) => autoNewTimesPlan(tx, { companyId: p.companyId, applicationId: p.applicationId, rescheduleCount: 0, now: FRIDAY_2PM }))).arm).toBe(true);
     });
 
     it("arms as usual where everyone required has hours (founder decision 3A stands): an optional interviewer and someone who left the team do not count", async () => {

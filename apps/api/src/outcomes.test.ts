@@ -5,7 +5,7 @@ import { applications, auditRecords, events, hiringOutcomes, roles, users } from
 import type { FakeAnalyticsAdapter, FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInStaff, testContainerOptions } from "./test-helpers";
+import { signInAdmin, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder instruction of 21 September 2026, item 4: people record hiring outcomes; the platform generates, approves and
@@ -26,7 +26,6 @@ describe("human-recorded hiring outcomes", () => {
   const analytics = () => container.integrations.analytics as FakeAnalyticsAdapter;
 
   let owner = "";
-  let recruiter = "";
   let admin = "";
   let companyId = "";
   let companySlug = "";
@@ -53,7 +52,6 @@ describe("human-recorded hiring outcomes", () => {
     container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" }));
     app = createApp(container);
     owner = await signIn("owner@ledger.test");
-    recruiter = await signInStaff(app, container, "sam@its.test", "its_recruiter", "Sam");
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
     const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Ledger & Co", vertical: "professional_services", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
     companyId = co.id; companySlug = co.slug;
@@ -74,7 +72,6 @@ describe("human-recorded hiring outcomes", () => {
     expect(can("hiring_manager", "outcome.record")).toBe(true);
     expect(can("hr", "outcome.record")).toBe(true);
     expect(can("interviewer", "outcome.record")).toBe(false);
-    expect(can("recruiter", "outcome.record")).toBe(false); // an ITS recruiter under a grant records nothing for the customer
     expect((await json(owner, "POST", `/api/v1/applications/${applicationIds[0]}/outcome`, { outcome: "hired_externally", hireDate: "2026-10-05" })).status).toBe(400); // no confirm
     expect((await json(owner, "POST", `/api/v1/applications/${applicationIds[0]}/outcome`, { outcome: "hired_externally", confirm: true })).status).toBe(400); // no hire date
     expect((await json(owner, "POST", `/api/v1/applications/${applicationIds[0]}/outcome`, { outcome: "employer_declined", confirm: true })).status).toBe(400); // no reason
@@ -84,11 +81,7 @@ describe("human-recorded hiring outcomes", () => {
     expect(await container.db.select().from(hiringOutcomes)).toHaveLength(0);
   });
 
-  it("a recorded hire moves the candidate, is audited with the actor, tells the ITS recruiter, feeds metrics without PII, and leaves the role open", async () => {
-    // an ITS recruiter is working on this role
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId, question: "Can you look at our shortlist?" })).json()) as { id: string };
-    expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    email().sent.length = 0;
+  it("a recorded hire moves the candidate, is audited with the actor, feeds metrics without PII, and leaves the role open", async () => {
     analytics().captured.length = 0;
     const r = await json(owner, "POST", `/api/v1/applications/${applicationIds[0]}/outcome`, { outcome: "hired_externally", confirm: true, hireDate: "2026-10-05", offerAcceptedAt: "2026-09-20", note: "Verbal acceptance on the phone." });
     expect(r.status).toBe(201);
@@ -114,12 +107,6 @@ describe("human-recorded hiring outcomes", () => {
     expect(evs).toHaveLength(1);
     expect(evs[0].payload).toMatchObject({ outcome: "hired_externally", level: "application" });
     expect((await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "human.override")))).length).toBeGreaterThanOrEqual(1);
-    // the assigned recruiter hears about it, by role, never by candidate name
-    const toSam = email().sent.find((m) => m.to === "sam@its.test")!;
-    expect(toSam).toBeTruthy();
-    expect(toSam.text).toMatch(/recorded a hire/);
-    expect(toSam.text).toMatch(/outside Recruiting OS/);
-    expect(toSam.text).not.toContain("Ana");
     // the approved metric, keyed and without personal data
     const hire = analytics().captured.find((e) => e.name === "hire_recorded")!;
     expect(hire).toBeTruthy();
@@ -174,7 +161,6 @@ describe("human-recorded hiring outcomes", () => {
 
   it("closing the role is a separate, confirmed decision with its own outcome; cancelled and filled-elsewhere work the same", async () => {
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "filled" })).status).toBe(400);
-    email().sent.length = 0;
     const r = await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "filled", confirm: true, reason: "Ana starts in October." });
     expect(r.status).toBe(200);
     const closedBody = (await r.json()) as { movedToTalentPool: number };
@@ -189,7 +175,6 @@ describe("human-recorded hiring outcomes", () => {
     const rows = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, roleId));
     expect(rows.some((o) => o.milestone === "role" && o.outcome === "filled" && o.applicationId === null)).toBe(true);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "role.outcome_recorded"))).length).toBe(1);
-    expect(email().sent.some((m) => m.to === "sam@its.test" && /closed the role as filled/.test(m.text))).toBe(true);
     expect(analytics().captured.some((e) => e.name === "role_outcome_recorded" && e.properties.outcome === "filled")).toBe(true);
     // closing twice is refused
     expect((await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true })).status).toBe(409);

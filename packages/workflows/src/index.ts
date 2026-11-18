@@ -20,7 +20,7 @@ export { decidersInWords } from "./definitions/role-approval";
 export { ROLE_CLOSING_DATE_KEY, armClosingDate } from "./definitions/closing-date";
 export { AI_NOTICE_SENT_EVENT, aiNoticeSentSignal, heldDecisionSignal } from "./definitions/application-intake";
 export { NEW_TIMES_KEY, armNewTimes, cancelNewTimesRuns } from "./definitions/new-times";
-export { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia, type PreparedStopReason, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
+export { activeInterviewersOf, reopenForNewTimes, stopPreparedNewTimes, withdrawNewTimesInterview, type NewTimesOfferKind, type NewTimesVia, type ReopenRefusal, type ReopenResult } from "./new-times-reopen";
 export { ALERT_TEMPLATE, DIGEST_TEMPLATE, NOTIFICATION_DIGEST_KEY, emailNotifications, startNotificationDigest } from "./definitions/notification-digest";
 export { DISCARD_OBJECT_JOB_KIND, discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination, type QuarantineOutcome } from "./documents";
 export { FORM_READING_KEEP_MS, FORM_READ_EVENT, FORM_READ_WAIT_MS, formReadSignal, formReadingNoteKey, formReadingOutcome, formReadingRun, linkFormReading } from "./form-reading";

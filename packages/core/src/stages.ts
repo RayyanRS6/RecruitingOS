@@ -8,45 +8,45 @@ import { CANCEL_STAGES, followUpInMotion, inCancelled, resolveOpenFollowUp, rest
  * The application state machine (docs/06). Each transition names who may perform it.
  * "system" means a workflow step; humans are tenant roles; "candidate" is the candidate.
  */
-type Mover = ActorKind | "owner" | "admin" | "hiring_manager" | "hr" | "recruiter" | "interviewer";
+type Mover = ActorKind | "owner" | "admin" | "hiring_manager" | "hr" | "interviewer";
 
 const T: Array<{ from: ApplicationStage[]; to: ApplicationStage; by: Mover[] }> = [
   { from: ["applied"], to: "received", by: ["system"] },
   { from: ["received"], to: "eligible", by: ["system"] },
   { from: ["received"], to: "ineligible", by: ["system"] },
-  { from: ["ineligible"], to: "rejected", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // never the system (founder decision, correction 6)
-  { from: ["ineligible"], to: "eligible", by: ["owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["rejected"], to: "eligible", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // "review anyway" after an eligibility-rule disposition; the route restricts it to that reason
+  { from: ["ineligible"], to: "rejected", by: ["owner", "admin", "hiring_manager"] }, // never the system (founder decision, correction 6)
+  { from: ["ineligible"], to: "eligible", by: ["owner", "admin", "hiring_manager"] },
+  { from: ["rejected"], to: "eligible", by: ["owner", "admin", "hiring_manager"] }, // "review anyway" after an eligibility-rule disposition; the route restricts it to that reason
   { from: ["eligible"], to: "triaged", by: ["system"] },
   { from: ["received"], to: "triaged", by: ["system"] }, // extraction failed; manual review path still triages
-  { from: ["triaged", "eligible", "received"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["screening"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] }, // re-invite after a hand-off to a person
-  { from: ["screen_invited"], to: "triaged", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // "Stop this screen invitation" before they start (plan A7): back to waiting on the team
+  { from: ["triaged", "eligible", "received"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager"] },
+  { from: ["screening"], to: "screen_invited", by: ["system", "owner", "admin", "hiring_manager"] }, // re-invite after a hand-off to a person
+  { from: ["screen_invited"], to: "triaged", by: ["owner", "admin", "hiring_manager"] }, // "Stop this screen invitation" before they start (plan A7): back to waiting on the team
   // the candidate sent the application without the conversation, or stopped part-way and it was closed after a reminder (plan E3, E4): their application goes on to the team
   { from: ["screen_invited", "screening"], to: "triaged", by: ["system"] },
   { from: ["screen_invited"], to: "screening", by: ["system"] },
   { from: ["screening", "screen_invited"], to: "screen_complete", by: ["system"] },
   // a person may decide to interview before or during a screen; the screen stays open and is simply superseded
-  { from: ["screen_complete", "triaged", "eligible", "screen_invited", "screening"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["triaged", "screen_complete", "interview_recommended", "screen_invited", "eligible"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
+  { from: ["screen_complete", "triaged", "eligible", "screen_invited", "screening"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager"] },
+  { from: ["triaged", "screen_complete", "interview_recommended", "screen_invited", "eligible"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager"] },
   // that an interview ended is a fact, not a hiring judgment: any member who sat on it may record it (the route checks they did)
-  { from: ["interview_scheduled"], to: "interview_complete", by: ["system", "owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] },
+  { from: ["interview_scheduled"], to: "interview_complete", by: ["system", "owner", "admin", "hiring_manager", "hr", "interviewer"] },
   // a cancelled or expired interview returns the candidate to "recommended" so the team can re-offer or decide
-  { from: ["interview_scheduled"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["interview_complete"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["interview_complete"], to: "debrief", by: ["system", "owner", "admin", "hiring_manager", "recruiter"] },
-  { from: ["debrief", "interview_complete"], to: "finalist", by: ["owner", "admin", "hiring_manager", "recruiter"] }, // the roles that hold interview.decide
-  { from: ["finalist"], to: "reference_check", by: ["owner", "admin", "hr", "recruiter"] },
+  { from: ["interview_scheduled"], to: "interview_recommended", by: ["system", "owner", "admin", "hiring_manager"] },
+  { from: ["interview_complete"], to: "interview_scheduled", by: ["system", "owner", "admin", "hiring_manager"] },
+  { from: ["interview_complete"], to: "debrief", by: ["system", "owner", "admin", "hiring_manager"] },
+  { from: ["debrief", "interview_complete"], to: "finalist", by: ["owner", "admin", "hiring_manager"] }, // the roles that hold interview.decide
+  { from: ["finalist"], to: "reference_check", by: ["owner", "admin", "hr"] },
   // "Offer made" (founder decision Q29; plan H2): a person records an offer made outside the app, by the roles that
   // record outcomes (outcome.record). Record-only: the app never drafts, approves or sends it.
   { from: ["finalist", "reference_check"], to: "offer_sent", by: ["owner", "admin", "hiring_manager", "hr"] },
-  { from: ["finalist", "reference_check"], to: "offer_draft", by: ["system", "owner", "admin", "hr", "recruiter"] },
+  { from: ["finalist", "reference_check"], to: "offer_draft", by: ["system", "owner", "admin", "hr"] },
   { from: ["offer_draft"], to: "offer_approval", by: ["system"] },
   { from: ["offer_approval"], to: "offer_sent", by: ["system"] },
   { from: ["offer_sent"], to: "negotiation", by: ["system"] },
   { from: ["negotiation"], to: "offer_sent", by: ["system"] },
-  { from: ["offer_sent", "negotiation"], to: "accepted", by: ["candidate", "system", "owner", "admin", "recruiter"] },
-  { from: ["offer_sent", "negotiation"], to: "declined", by: ["candidate", "system", "owner", "admin", "recruiter"] },
+  { from: ["offer_sent", "negotiation"], to: "accepted", by: ["candidate", "system", "owner", "admin"] },
+  { from: ["offer_sent", "negotiation"], to: "declined", by: ["candidate", "system", "owner", "admin"] },
   { from: ["accepted"], to: "onboarding", by: ["system"] },
   { from: ["onboarding"], to: "hired", by: ["system", "owner", "admin", "hiring_manager", "hr"] },
 ];
@@ -139,7 +139,7 @@ export function canTransition(from: ApplicationStage, to: ApplicationStage, by: 
 }
 
 function isHuman(by: Mover): boolean {
-  return ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer", "user"].includes(by);
+  return ["owner", "admin", "hiring_manager", "hr", "interviewer", "user"].includes(by);
 }
 
 export class TransitionError extends Error {

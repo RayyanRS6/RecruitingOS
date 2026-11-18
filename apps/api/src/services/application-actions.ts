@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, OWNER_STAGE_LABEL, OwnerStage, isTimeZone, type ActiveMark, type Actor, type AiInterviewView, type ApplicationAction, type ApplicationStage, type CandidateNotice, type DecisionMessagePreview, type DecisionWording, type MarkKind, type MembershipRole, type StageMove, type StageMoveVia, type ToldState } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, settleHoldRequests, stageBeforeDecision, takeBackOutcome, transition, unlockedAtFor, visibleTo, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type HoldDecidedNote, type Permission } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, MarkError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, baseOwnerStage, can, clearMark, emit, followUpParked, gate, markBlockedReason, notLocked, openFollowUpOf, ownerStage, reopenStage, resolvePolicy, setMark, stageBeforeDecision, takeBackOutcome, transition, unlockedAtFor, waitingSince, withdrawQueuedDecision, type FollowUpRow, type FollowUpStrip, type Permission } from "@ros/core";
 import { applications, approvalRequests, assessments, candidates, companies, interviewFollowups, interviews, roles, screens, type Tx } from "@ros/db";
 import { DecisionMessageError, checkPersonalLine, decisionMessageDraft, decisionsWaitingApproval, newTimesDayWords, queueDecisionMessage, untoldFallbackDay, workingDayRulesFor, type PersonalLine } from "@ros/agents";
 import { heldDecisionSignal, intakeOn, interviewsBeingPrepared, startInterviewAgain } from "@ros/workflows";
@@ -54,13 +54,10 @@ export type ApplicationFacts = { stage: string; rejectReason: string | null; has
 export type BlockedReasons = Partial<Record<ApplicationCapability, string>>;
 
 /**
- * Never for someone locked, even under a grant naming them or break glass: each spends the company's AI credit on them or
- * moves them to an interview, whose interviewers would then get their name by email and calendar. Writing to them stays allowed.
+ * Never for someone locked: each spends the company's AI credit on them or moves them to an interview, whose interviewers
+ * would then get their name by email and calendar.
  */
 const NOT_WHILE_LOCKED: readonly string[] = ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"];
-
-/** Recorded when ITS staff send something to someone locked with no approval: the company's rule asks for a reader it does not have. */
-export const NO_APPROVER_WHILE_LOCKED = "Nobody at the company may read someone locked, so nobody there can approve a message to them.";
 
 /** The permission each choice needs, and how the refusal names it. */
 const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: string }> = {
@@ -81,7 +78,7 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
   clear_mark: { permission: "application.act", what: "sort candidates into stages" },
   send_decision: { permission: "application.reject", what: "tell candidates about a decision" },
   told_in_person: { permission: "application.reject", what: "tell candidates about a decision" },
-  // The candidate is sent a note, so it sits with those who tell candidates decisions: owner, admin, hiring manager, recruiter.
+  // The candidate is sent a note, so it sits with those who tell candidates decisions: owner, admin, hiring manager.
   cancel_screen: { permission: "application.reject", what: "stop an AI interview invitation" },
   // Taking back a decision sits with those who make it.
   undo_decision: { permission: "application.reject", what: "take back a decision" },
@@ -93,8 +90,8 @@ const CAPABILITY: Record<ApplicationCapability, { permission: Permission; what: 
 };
 const CAPABILITIES = Object.keys(CAPABILITY) as ApplicationCapability[];
 
-const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"];
-const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", recruiter: "a recruiter", interviewer: "an interviewer" };
+const TEAM_ROLES: MembershipRole[] = ["owner", "admin", "hiring_manager", "hr", "interviewer"];
+const ROLE_WORDS: Record<MembershipRole, string> = { owner: "an owner", admin: "an admin", hiring_manager: "a hiring manager", hr: "HR", interviewer: "an interviewer" };
 const CHECK_ELIGIBILITY_FIRST = "Check their eligibility answer first: keep them in or decline.";
 /** Why "Send new times" is not offered with nobody's hours: the send's own refusal (`NO_HOURS` in interview-create.ts, which this file cannot import without a cycle). */
 const NO_HOURS = "Not everyone on this interview has hours to offer. Set a date and time instead.";
@@ -418,8 +415,8 @@ async function deliverDecision(tx: Tx, container: Container, input: { app: App; 
  * in one of the approved wordings (Q28: the default one unless they chose another; the eligibility wording after an
  * eligibility decline, always), with an optional personal line they wrote, checked first. The company's settings for
  * the role decide what the Send does: it goes (the default) after the Undo window, it waits for an approver ("ask me
- * first", and during a recruiter takeover, the recruiter) with the wording and line kept for them, or nothing is sent
- * ("only a person": the team tells candidates themselves).
+ * first") with the wording and line kept for them, or nothing is sent ("only a person": the team tells candidates
+ * themselves).
  */
 export async function sendDecisionMessage(tx: Tx, container: Container, input: { app: App; actor: Actor; wording?: DecisionWording | null; personalLine?: string | null }): Promise<DecisionMessageResult> {
   const { app, actor } = input;
@@ -430,11 +427,6 @@ export async function sendDecisionMessage(tx: Tx, container: Container, input: {
   // The wording is checked before the gate, so a request for approval never carries a wording that could not be sent.
   const draft = await decisionMessageDraft(tx, { app, wording: input.wording ?? null, personalLine, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }).catch(decisionHttpError);
   const proposal: DecisionProposal = { reason: draft?.wording === "eligibility" ? "eligibility" : "human", decision: app.stage, wording: draft?.wording ?? null, personalLine };
-  // ITS staff telling someone locked: as with a message they write, nobody at the company could read this or approve it, and "only a person" has no person there to do it.
-  if (app.lockedAt && actor.kind === "recruiter") {
-    await audit(tx, { companyId: app.companyId, actor, action: "message.approval_skipped", target: { type: "application", id: app.id }, reason: NO_APPROVER_WHILE_LOCKED, details: { actionType: "disposition.send" } });
-    return deliverDecision(tx, container, { app, actor, wording: draft?.wording ?? null, personalLine, holdForUndo: true });
-  }
   const d = await gate(tx, { companyId: app.companyId, roleId: app.roleId, applicationId: app.id, actionType: "disposition.send", subject: { type: "application", id: app.id }, proposal, requestedBy: actor });
   if (d.outcome === "wait_for_approval") return { notice: "waiting_approval", toldState: app.toldState, approvalRequestId: d.approvalRequestId };
   if (d.outcome === "human_only") return { notice: "not_sent_settings", toldState: app.toldState };
@@ -468,17 +460,14 @@ export async function decisionMessagePreview(tx: Tx, container: Container, app: 
   const draft = await decisionMessageDraft(tx, { app, wording: input.wording ?? null, personalLine, statusBaseUrl: container.env.JOBS_BASE_URL, now: container.engine.clock() }).catch(decisionHttpError);
   if (!draft) return null;
   const pending = await pendingDecisionMessages(tx, [app.id]);
-  return { to: draft.to, subject: draft.subject, text: draft.text, wording: draft.wording, wordings: draft.wordings, personalLine: draft.personalLine, adverseDecisionLine: draft.adverseDecisionLine, policy: await declineMessagePolicy(tx, { companyId: app.companyId, roleId: app.roleId, lockedAt: app.lockedAt }), toldState: app.toldState, candidateToldAt: app.candidateToldAt ? new Date(app.candidateToldAt).toISOString() : null, waitingApproval: pending.has(app.id), undoSeconds: container.env.MESSAGE_UNDO_SECONDS };
+  return { to: draft.to, subject: draft.subject, text: draft.text, wording: draft.wording, wordings: draft.wordings, personalLine: draft.personalLine, adverseDecisionLine: draft.adverseDecisionLine, policy: await declineMessagePolicy(tx, { companyId: app.companyId, roleId: app.roleId }), toldState: app.toldState, candidateToldAt: app.candidateToldAt ? new Date(app.candidateToldAt).toISOString() : null, waitingApproval: pending.has(app.id), undoSeconds: container.env.MESSAGE_UNDO_SECONDS };
 }
 
 /**
- * What a Send does under the company's settings for this role (takeovers included), so the page can say it before the
- * click: the message goes at once, waits for an approver, or is not sent at all. Declining itself never sends anything.
- * About someone locked (`lockedAt`) it goes: only ITS staff can read them here, and no rule of the company's holds it for
- * anyone who could read it (`sendDecisionMessage`).
+ * What a Send does under the company's settings for this role, so the page can say it before the click: the message goes
+ * at once, waits for an approver, or is not sent at all. Declining itself never sends anything.
  */
-export async function declineMessagePolicy(tx: Tx, input: { companyId: string; roleId: string; lockedAt?: string | null }): Promise<"sends" | "needs_approval" | "not_sent"> {
-  if (input.lockedAt) return "sends";
+export async function declineMessagePolicy(tx: Tx, input: { companyId: string; roleId: string }): Promise<"sends" | "needs_approval" | "not_sent"> {
   const d = await resolvePolicy(tx, input.companyId, input.roleId, "disposition.send");
   return d.level === "human_only" ? "not_sent" : d.level === "approval" ? "needs_approval" : "sends";
 }
@@ -538,20 +527,8 @@ type ActionBody = ApplicationAction;
  * /applications/:id/messages/:communicationId/undo), and the `wording` used. A decision (decline, talent pool) answers
  * with `decisionMessage`: the message one Send would now write, for the confirmation to show it (plan G4); and with
  * `untoldFallbackOn`: the day the untold safety net acts on it, the day the "not told yet" card names (`untoldFallbackDayOf`).
- * `holdersToTell` is never in the answer: the recruiters holding the request a decided hold raised, whom the caller takes
- * off and emails once its transaction has committed (`emailHolderAboutDecision`).
  */
-export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null; holdersToTell?: HoldDecidedNote[] };
-
-/**
- * ITS's request about someone held on an eligibility answer, once a person kept them in or declined them
- * (`settleHoldRequests`): the recruiters holding one are told after the commit, never the person who decided.
- */
-async function settleHold(tx: Tx, input: { companyId: string; applicationId: string; actor: Actor; now: Date }): Promise<Pick<ActionResult, "holdersToTell">> {
-  const { holders } = await settleHoldRequests(tx, input);
-  const toTell = holders.filter((n) => n.holderId !== input.actor.id);
-  return toTell.length ? { holdersToTell: toTell } : {};
-}
+export type ActionResult = { ok: true; stage: string; ownerStage?: OwnerStage; mark?: ActiveMark | null; toldState?: ToldState; dispositionSent?: boolean; candidateNotice?: CandidateNotice; approvalRequestId?: string; workflowRunId?: string; next?: string; talentPoolOptOut?: boolean; interviewsCancelled?: number; interviewOffNotes?: number; communicationId?: string | null; undoUntil?: string | null; wording?: DecisionWording | null; decisionMessage?: DecisionMessagePreview | null; untoldFallbackOn?: string | null };
 
 /**
  * The day the untold safety net acts on this decision (Q27), YYYY-MM-DD in the company's calendar: five working days
@@ -638,14 +615,12 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await tx.update(applications).set({ rejectNote: body.note ?? null }).where(eq(applications.id, app.id));
       await emit(tx, { type: "application.rejected", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { reason: body.reason, byHuman: true, candidateTold: false, ...provenance } });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "reject", reason: body.reason, ...provenance } });
-      // Someone held on an eligibility answer for so long that ITS was asked to review it: a person has decided now.
-      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
       // Decisions are private (founder decision B6): the decision is not sent. An interview still to come is called off,
       // and a candidate who held a booked time or was offered times is told at once, with no reason, that it is off, so
       // nobody turns up for it; the decision message sent later leaves it out.
       const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: app.id, reason: `declined: ${body.reason}`, actor, candidateEmail: "private_decision" });
       const after = input.via ? {} : await afterDecision(tx, container, app.id, now);
-      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after, ...held };
+      return { ok: true, stage: "rejected", ownerStage: "not_moving_forward", mark: null, toldState: "not_told", dispositionSent: false, candidateNotice: "not_told", interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, next: PRIVATE_DECISION, ...after };
     }
     case "override_eligibility": {
       assertCan(t.role, "application.act");
@@ -653,7 +628,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       await transition(tx, { applicationId: app.id, companyId: t.companyId, to: "eligible", by, actor, reason: body.note });
       await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: app.id }, payload: { action: "override_eligibility", note: body.note } });
       // The résumé is read before the link goes (the review of the live-test fixes, 12 November 2026). An intake still
-      // holding them reads them once woken (below); one that ended (the hold went to ITS after 72 hours, or an "Only a
+      // holding them reads them once woken (below); one that ended (nobody decided the hold in time, or an "Only a
       // person" hold) or waits on an approval no wake moves is started again, as for "Review anyway", so the AI
       // interview's run waits for its reading. Someone locked is read by no AI: their intake stops at its AI notice.
       const runId = (await intakeOn(tx, app.id)) ?? (await container.engine.start(tx, { workflowKey: "application_intake", companyId: t.companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId: app.roleId }, idempotencyKey: `application_intake:${app.id}:kept:${now.getTime()}`, actor })).runId;
@@ -661,9 +636,7 @@ export async function performApplicationAction(tx: Tx, container: Container, inp
       // follows by itself; when that run ended already (the sixty days were up, or it came before 20 Oct 2026), it starts again.
       await container.engine.signal(tx, { companyId: t.companyId, key: heldDecisionSignal(app.id) });
       await startInterviewAgain(tx, container.engine, { companyId: t.companyId, applicationId: app.id, actor, now });
-      // ITS's request about the hold, when it waited that long, needs nothing more.
-      const held = await settleHold(tx, { companyId: t.companyId, applicationId: app.id, actor, now });
-      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId, ...held };
+      return { ok: true, stage: "eligible", ownerStage: ownerStage({ stage: "eligible" }, null), workflowRunId: runId };
     }
     case "review_anyway": {
       // The exclusion view's "review anyway" (docs/FOUNDER-CONTEXT.md §10): reopen an application that an owner-authored eligibility rule declined.
@@ -801,12 +774,12 @@ export async function sendDecisionMessages(tx: Tx, container: Container, input: 
   assertCan(input.tenant.role, "application.reject");
   const ids = [...new Set(input.applicationIds)];
   // Someone past the plan's candidates per job (Rule 3) answers like an id outside the role: no path guard sees these ids.
-  const rows = await tx.select().from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, ids), visibleTo(input.tenant)));
+  const rows = await tx.select().from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.id, ids), notLocked()));
   const out: Array<{ applicationId: string; ok: boolean; candidateNotice?: CandidateNotice; toldState?: ToldState; communicationId?: string | null; undoUntil?: string | null; code?: string; message?: string }> = [];
   const send = (app: App, wording: DecisionWording | null) => sendDecisionMessage(tx, container, { app, actor: input.actor, wording });
   for (const id of ids) {
     const app = rows.find((r) => r.id === id);
-    if (!app || (input.tenant.staff?.scope.applicationId && input.tenant.staff.scope.applicationId !== id)) { out.push({ applicationId: id, ok: false, code: "not_found", message: "Not a candidate of this role." }); continue; }
+    if (!app) { out.push({ applicationId: id, ok: false, code: "not_found", message: "Not a candidate of this role." }); continue; }
     try {
       const r = await send(app, input.wording ?? null).catch((e: unknown) => (e instanceof HttpError && e.code === "wording_not_allowed" ? send(app, null) : Promise.reject(e)));
       out.push({ applicationId: id, ok: true, candidateNotice: r.notice, toldState: r.toldState, ...(r.communicationId !== undefined ? { communicationId: r.communicationId, undoUntil: r.undoUntil ?? null } : {}) });

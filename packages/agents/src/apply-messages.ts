@@ -144,19 +144,19 @@ ${signOff(input)}`;
 }
 
 /**
- * After an outage (E5) a person took the conversation over: the assistant was still not working after a day, or its
- * first answer once it worked again was to hand over. `expectation` says when ("within four business hours (...)").
+ * After an outage (E5) the conversation went to the hiring team: the assistant was still not working after a day, or
+ * its first answer once it worked again was to hand over.
  */
-export async function sendConversationHandedOver(q: Queryable, integrations: Integrations, input: MessageInput & { screen: { id: string }; expectation: string }): Promise<SendResult> {
+export async function sendConversationHandedOver(q: Queryable, integrations: Integrations, input: MessageInput & { screen: { id: string } }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-Sorry about the trouble with your AI interview for the ${packet.identity.title} position at ${company.name}. We have passed your application to a person working with the hiring team, who will contact you ${input.expectation} to go through the questions with you. The answers you started were not sent, so they are not passed on. Nothing else is needed from you.
+Sorry about the trouble with your AI interview for the ${packet.identity.title} position at ${company.name}. The hiring team at ${company.name} has been told. The answers you started were not sent, so they are not passed on. Nothing else is needed from you.
 
 ${packet.communication.signature || `The hiring team at ${company.name}`}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_handed_over", subject: `A person will contact you about ${packet.identity.title}`, text, idempotencyKey: `screen_handed_over:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_handed_over", subject: `Your AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_handed_over:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /** The assistant is working again after an outage (E5): pick up where they stopped. One per pause. */

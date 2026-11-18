@@ -5,8 +5,8 @@ import { NOTIFY_GROUPS, type NotifyCadence, type NotifyGroup } from "@ros/contra
  * product's default for each. The in-app update is never affected: these decide only whether, and how often, the person
  * it is for also hears about it by email.
  *
- * Defaults: what waits on a person (a role or a message to approve, an interview, an answer from a recruiter, the
- * account) is emailed as it happens; news that can wait (candidates moving through, quiet roles, messages sent) comes
+ * Defaults: what waits on a person (a role or a message to approve, an interview, the account) is emailed as it
+ * happens; news that can wait (candidates moving through, quiet roles, messages sent) comes
  * in the morning summary.
  */
 export const NOTIFY_GROUP_INFO: Record<NotifyGroup, { label: string; description: string; defaultCadence: NotifyCadence }> = {
@@ -14,21 +14,18 @@ export const NOTIFY_GROUP_INFO: Record<NotifyGroup, { label: string; description
   candidates: { label: "Candidates", description: "Someone is ready for review or an AI interview, finished one, wrote back or withdrew.", defaultCadence: "daily" },
   interviews: { label: "Interviews", description: "Interviews you were given, reminders, changes, the decision after an interview, and your calendar connection.", defaultCadence: "immediate" },
   stuck: { label: "Roles that need attention", description: "People waiting on you, invitations nobody answered, no applicants, a hold that ended, decisions nobody has told candidates about, or a role that stopped or started taking applications.", defaultCadence: "daily" },
-  recruiter: { label: "Your ITS recruiter", description: "A recruiter answered your request, wrote to you about it, or picked it up.", defaultCadence: "immediate" },
   messages: { label: "Messages to candidates", description: "Messages your team sent, ones that were not approved, and ones that could not be delivered.", defaultCadence: "daily" },
   account: { label: "Your account", description: "Your plan's limits and changes to your team.", defaultCadence: "immediate" },
 };
 
 /**
- * Updates that are always emailed at once and cannot be turned off: a recruiter from outside the company can now see its
- * hiring, ITS confirmed the company or took its confirmation back (the careers page goes public or offline), or accepted a
- * person's request for access, which confirms it too (it shares that line in Settings: it happens once, before Settings can
- * be read), a candidate asked for a person, or someone's application waits on an eligibility decision. Each one concerns
- * who can see the company's data or what the public sees of it, or leaves a person waiting on the team.
+ * Updates that are always emailed at once and cannot be turned off: ITS confirmed the company or took its confirmation
+ * back (the careers page goes public or offline), or accepted a person's request for access, which confirms it too (it
+ * shares that line in Settings: it happens once, before Settings can be read), a candidate asked for a person, or
+ * someone's application waits on an eligibility decision. Each one concerns what the public sees of the company, or
+ * leaves a person waiting on the team.
  */
 export const NOTIFY_ALWAYS: ReadonlyMap<string, { label: string; why: string }> = new Map([
-  ["recruiter.claimed", { label: "An ITS recruiter is given access to your hiring", why: "Someone outside your company can now see your hiring, so you always hear about it." }],
-  ["recruiter.access_granted", { label: "An ITS recruiter is given access to your hiring", why: "Someone outside your company can now see your hiring, so you always hear about it." }],
   ["company.verified", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
   ["company.unverified", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
   ["company.access_accepted", { label: "ITS confirms your company, or takes the confirmation back", why: "It decides whether your careers page and job pages are public, so you always hear about it." }],
@@ -82,8 +79,6 @@ const BY_PREFIX: Array<[string, NotifyGroup]> = [
   ["interview.", "interviews"],
   ["calendar.", "interviews"],
   ["stuck.", "stuck"],
-  ["recruiter.", "recruiter"],
-  ["escalation.", "recruiter"],
   ["message.", "messages"],
   ["approval.", "approvals"],
   ["role.", "approvals"],

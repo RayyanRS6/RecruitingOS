@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, oneLine, typedName, visibleLength, type Actor, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
-import { BOARD_UP_STATES, activeSuppression, audit, cancelPostingTasks, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
+import { BOARD_UP_STATES, activeSuppression, audit, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany } from "@ros/core";
 import { companies, events, invitations, memberships, postings, roles, users, withPlatform, type Db, type Queryable } from "@ros/db";
 import { mailbox } from "@ros/integrations";
 import type { Container } from "../container";
@@ -271,7 +271,6 @@ async function putBackBoardsClosedByRemoval(tx: Queryable, input: { companyId: s
     if (role?.status !== "open" && role?.status !== "paused") continue;
     await tx.update(postings).set({ status: from, closedAt: null, closureRequired: false }).where(eq(postings.id, p.id));
     await emit(tx, { type: `posting.${from}`, companyId: input.companyId, actor: input.actor, subject: { type: "posting", id: p.id }, payload: { channel: p.channel, roleId: p.roleId, from: "closed", to: from, url: p.externalUrl ?? null, reason: "access given back", putBack: true } });
-    await cancelPostingTasks(tx, { companyId: input.companyId, postingId: p.id, kinds: ["take_down_job"], reason: "Access was given back, so the listing stays up.", actor: input.actor, now: input.now });
     back += 1;
   }
   return back;

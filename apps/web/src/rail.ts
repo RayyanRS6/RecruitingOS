@@ -25,43 +25,34 @@ export function railCompact(pathname: string | null | undefined): boolean {
   return /^\/roles\/[^/]+/.test(pathname ?? "");
 }
 
-const TEAM_ROLE_WORD: Record<string, string> = { owner: "Owner", admin: "Admin", hiring_manager: "Hiring manager", hr: "HR", interviewer: "Interviewer", recruiter: "Recruiter" };
+const TEAM_ROLE_WORD: Record<string, string> = { owner: "Owner", admin: "Admin", hiring_manager: "Hiring manager", hr: "HR", interviewer: "Interviewer" };
 
-/** The person's role in the company chip; an ITS recruiter inside a customer has no membership, only limited access. */
-export function teamRoleWord(role: string | null | undefined, staffAccess: boolean): string | null {
-  if (role) return TEAM_ROLE_WORD[role] ?? role.replace(/_/g, " ");
-  return staffAccess ? "ITS recruiter, limited access" : null;
+/** The person's role in the company chip. */
+export function teamRoleWord(role: string | null | undefined): string | null {
+  return role ? TEAM_ROLE_WORD[role] ?? role.replace(/_/g, " ") : null;
 }
 
-type MeLike = { activeCompanyId: string | null; memberships: ReadonlyArray<{ companyId: string; companyName: string; role: string }>; staffAccess?: { companyName: string | null } | null };
+type MeLike = { activeCompanyId: string | null; memberships: ReadonlyArray<{ companyId: string; companyName: string; role: string }> };
 
-/**
- * The company the person is working in and their role in it. An ITS recruiter inside a customer under a grant has no
- * membership: the company's name comes from the grant and there is no role.
- */
+/** The company the person is working in and their role in it. */
 export function activeCompanyOf(me: MeLike | null | undefined): { name: string | null; role: string | null; member: boolean } {
   const m = me?.memberships.find((x) => x.companyId === me.activeCompanyId);
   if (m) return { name: m.companyName, role: m.role, member: true };
-  return { name: me?.staffAccess?.companyName ?? null, role: null, member: false };
+  return { name: null, role: null, member: false };
 }
 
 /**
  * The other companies the person is a member of, for the company menu's switcher (rows 9 and 49): every active
- * membership but the one in use, by name. Empty for someone in one company, and for an ITS recruiter inside a customer
- * under a grant (they enter companies from the queue, never from here).
+ * membership but the one in use, by name. Empty for someone in one company.
  */
 export function otherCompanies(me: MeLike | null | undefined): Array<{ companyId: string; companyName: string; role: string }> {
-  if (!me || me.staffAccess) return [];
+  if (!me) return [];
   return me.memberships.filter((m) => m.companyId !== me.activeCompanyId).slice().sort((a, b) => a.companyName.localeCompare(b.companyName)).map((m) => ({ companyId: m.companyId, companyName: m.companyName, role: m.role }));
 }
 
-/**
- * Whether the rail reads and lists the company's roles: only for a member of the company. An ITS recruiter working under
- * a grant never gets the list, because every request they make is recorded for the customer as a page they opened, and
- * the rail would add one on every page load that the recruiter never chose to open.
- */
+/** Whether the rail reads and lists the company's roles: only for a member of the company. */
 export function railListsRoles(me: MeLike | null | undefined): boolean {
-  return !!me && !me.staffAccess && activeCompanyOf(me).member;
+  return !!me && activeCompanyOf(me).member;
 }
 
 /** Statuses listed under Jobs: the ones still being worked on. Filled and closed jobs are on the Jobs page. */

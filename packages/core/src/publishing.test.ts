@@ -3,7 +3,6 @@ import type { RolePacket } from "@ros/contracts";
 import { addCalendarDays, applyByLabel, closingDateProblem, closingDateView, closingMoment, companyToday, defaultClosingDate } from "./closing-date";
 import { PAY_TRANSPARENCY_CANDIDATES, PAY_TRANSPARENCY_JURISDICTIONS, benefitsDescriptionFor, closingDateRequired, jobJurisdictions, postingLegalCheck } from "./compliance";
 import { chosenBoards, defaultBoards, publishChannelsFor, showsOldVersion, zipRecruiterOffered } from "./postings";
-import { boardPostingOf, isPostingTask, postingTaskLabel } from "./posting-tasks";
 
 /**
  * Approving and publishing (plan Wave D), the pure parts: the boards a role uses (Q11), the closing date in the
@@ -34,20 +33,6 @@ describe("the boards a role uses (founder decision Q11, plan D6)", () => {
     expect(showsOldVersion({ channel: "indeed", status: "ready_to_post", boardVersion: 1 }, 2)).toBe(false); // not up anywhere
     expect(showsOldVersion({ channel: "indeed", status: "live_verified", boardVersion: null }, 2)).toBe(false); // unknown
     expect(showsOldVersion({ channel: "careers_page", status: "live_verified", boardVersion: 1 }, 2)).toBe(false); // the job page itself
-  });
-});
-
-describe("ITS posting tasks (plan D3)", () => {
-  it("ITS posts unless the company chose to post itself; the task words name the board", () => {
-    expect(boardPostingOf({})).toBe("its");
-    expect(boardPostingOf(null)).toBe("its");
-    expect(boardPostingOf({ boardPosting: "self" })).toBe("self");
-    expect(isPostingTask("post_job")).toBe(true);
-    expect(isPostingTask("take_down_job")).toBe(true);
-    expect(isPostingTask("review")).toBe(false);
-    expect(postingTaskLabel("post_job", "Indeed")).toBe("Post the job on Indeed");
-    expect(postingTaskLabel("update_job", "LinkedIn")).toBe("Update the job on LinkedIn");
-    expect(postingTaskLabel("take_down_job", "ZipRecruiter")).toBe("Take the job down from ZipRecruiter");
   });
 });
 

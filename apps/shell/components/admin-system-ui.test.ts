@@ -30,7 +30,7 @@ const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, 
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const headings = (html: string) => [...html.matchAll(/<th scope="col"[^>]*>(.*?)<\/th>/g)].map((m) => text(m[1]).trim());
-const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, staffAccess: null, ai: { provider: "fake" } };
+const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = admin) {
   // A query that failed stays failed while the page is drawn (nothing is fetched on the server).
@@ -265,18 +265,17 @@ describe("System and settings: Queue health and the Business calendar", () => {
     expect(html).toContain(`<input id="cal-eff" class="input" type="date" value="${dayKey(new Date())}"/>`);
     expect(html).toContain('<select id="cal-tz" class="select">');
     expect(text(html)).toContain("Publish version");
-    // fewer words (23 October): how windows join is shown by the coverage field's example, not a hint under it; the rule
-    // about deadlines already set stays, the line explaining what the calendar is for goes
+    // fewer words (23 October): how windows join is shown by the coverage field's example, not a hint under it; the line
+    // explaining what the calendar is for goes
     expect(html).toContain('placeholder="2026-10-05 2026-10-09 09:00-12:00+13:00-15:00 Conference week"');
     expect(text(html)).not.toContain("Join several windows with +");
-    expect(text(html)).toContain("Deadlines already set keep their values unless you recalculate them below.");
     expect(text(html)).not.toContain("Service-level clocks count only open hours.");
   });
 });
 
 describe("System and settings: Administrators", () => {
-  it("lists the people in five columns with plain role words, and picks a role from a select", () => {
-    const grant = { id: "g1", userId: "u1", email: "ben@its.test", name: "Ben", authProvider: "microsoft", role: "platform_admin", source: "console", grantedBy: { id: "s1", name: "Ada Admin" }, grantReason: "Covers the night queue", grantedAt: daysAgo(10), revokedAt: null, revokedBy: null, revokeReason: null };
+  it("lists the people in five columns with plain role words, and adds an administrator by email with a reason", () => {
+    const grant = { id: "g1", userId: "u1", email: "ben@its.test", name: "Ben", authProvider: "microsoft", role: "platform_admin", source: "console", grantedBy: { id: "s1", name: "Ada Admin" }, grantReason: "Covers the night shift", grantedAt: daysAgo(10), revokedAt: null, revokedBy: null, revokeReason: null };
     const html = render(client([[["admin", "platform-roles"], { grants: [grant], activeAdmins: 1, bootstrap: { configured: 0, ignored: false } }]]), createElement(Administrators));
     expect(headings(html)).toEqual(["Person", "Role", "Granted", "Reason", "Actions"]);
     const words = text(html);
@@ -284,8 +283,9 @@ describe("System and settings: Administrators", () => {
     expect(words).toContain("by Ada Admin");
     expect(words).toContain("Revoke");
     expect(html).not.toContain(">platform admin<");
-    expect(html).toContain('<select id="pr-role" class="select">');
-    // who is told of a grant is the eye beside "Grant a platform role" (its words its name and tooltip), not a paragraph
+    expect(words).toContain("Add a platform administrator");
+    expect(html).toContain('<input id="pr-email" class="input" value=""/>');
+    // who is told of a grant is the eye beside "Add a platform administrator" (its words its name and tooltip), not a paragraph
     expect(html).toContain('<span class="icon-label" title="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert.">');
     expect(words).not.toContain("You cannot grant yourself a role");
   });

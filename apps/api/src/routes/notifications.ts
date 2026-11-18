@@ -93,14 +93,6 @@ notificationRoutes.post("/read-all", requireTenant, async (c) => {
   return c.json({ ok: true, marked: n });
 });
 
-/**
- * Email alerts belong to the people on the company's team. An ITS recruiter inside a customer under a grant gets none
- * of the company's updates, so there is nothing of theirs to set here.
- */
-function assertTeamMember(t: Tenant): void {
-  if (t.staff) throw new HttpError(403, "not_a_member", "Email alerts are for the people on this company's team.");
-}
-
 async function preferencesView(tx: Queryable, t: Tenant, email: string): Promise<NotificationPreferencesView> {
   const stored = (await storedPreferences(tx, t.companyId, [t.userId])).get(t.userId) ?? {};
   const [co] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
@@ -121,7 +113,6 @@ function sessionEmail(c: Context<Vars>): string {
 /** This person's email alert settings, with the product's defaults filled in. */
 notificationRoutes.get("/preferences", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertTeamMember(t);
   return c.json(await withTenant(c.get("container").db, t.companyId, (tx) => preferencesView(tx, t, sessionEmail(c))));
 });
 
@@ -132,7 +123,6 @@ notificationRoutes.get("/preferences", requireTenant, async (c) => {
  */
 notificationRoutes.put("/preferences", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertTeamMember(t);
   const body = UpdateNotificationPreferences.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);

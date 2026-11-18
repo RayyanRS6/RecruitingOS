@@ -6,18 +6,15 @@ import { AI_HELP_UPGRADE_QUESTION, MORE_JOBS_UPGRADE_QUESTION, type IntakeSessio
 import { Alert, Button, Card, Icon, IconChip, Skeleton } from "@ros/ui";
 import { api } from "../../api/client";
 import { Link, useNavigate } from "../../nav";
-import { AskRecruiter } from "../../components/AskRecruiter";
-import { presetOf } from "../../recruiter-access";
+import { Upgrade } from "../../components/Upgrade";
 import { browserStorage, QUICK_START_HREF } from "../../start-hire";
 import { TRIAL_ASK } from "../../trial";
 import { Composer } from "./Composer";
 import { AssistantMark, ChatMessage, Thinking } from "./Conversation";
-import { composerPlaceholder, startHireHref, type RecruiterAction } from "./rules";
+import { composerPlaceholder, startHireHref, type PlanAsk } from "./rules";
 import { readQuickStart, type QuickScope } from "./quick-start";
 import { quickStartsFor } from "./quick-starts";
 import { useStartDraft } from "./use-start-draft";
-
-type PlanAsk = RecruiterAction;
 
 /** The company's business type, for the quick starts (GET /companies/current, the query Setup reads too). */
 type CompanyLite = { name?: string; vertical?: string; settings: Record<string, unknown> };
@@ -45,7 +42,7 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask: PlanAsk | null }
         ) : null}
         <div className="row">
           {/* every one of these is a request about the plan, which opens the one upgrade sheet (components/Upgrade.tsx) */}
-          <AskRecruiter label={ask?.label ?? (room.trialEnded ? "Ask ITS to choose a plan" : room.upgrade ? (room.nothingAbove ? "Talk to ITS" : "Upgrade") : "Talk to ITS about more roles")} size="sm" variant="secondary" preset={ask ? presetOf(ask.body) : room.trialEnded ? TRIAL_ASK : { kind: "ask", about: "all", topic: "plan", question: room.aiHelp ? AI_HELP_UPGRADE_QUESTION : room.upgrade ? MORE_JOBS_UPGRADE_QUESTION : "We would like to open more roles than our plan includes. Can we talk about adding more?" }} />
+          <Upgrade label={ask?.label ?? (room.trialEnded ? "Ask ITS to choose a plan" : room.upgrade ? (room.nothingAbove ? "Talk to ITS" : "Upgrade") : "Talk to ITS about more roles")} size="sm" reason={ask ? ask.reason : room.trialEnded ? TRIAL_ASK : room.aiHelp ? AI_HELP_UPGRADE_QUESTION : room.upgrade ? MORE_JOBS_UPGRADE_QUESTION : "We would like to open more roles than our plan includes. Can we talk about adding more?"} />
         </div>
       </div>
     </Alert>

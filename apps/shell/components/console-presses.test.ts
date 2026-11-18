@@ -215,7 +215,7 @@ describe("a question asked on a request for access", () => {
 describe("a question asked in the company check", () => {
   const CONFIRMED_AT = "2026-11-09T10:00:00.000Z";
   type Panel = Parameters<typeof CompanyCheckPanel>[0];
-  const check = (verifiedAt: string | null): Panel => ({ company: { id: "co-harbor", name: "Harbor Dental", verifiedAt, verifiedBy: verifiedAt ? { id: "s2", name: "Nadine" } : null, heldMessages: 0, whoPosts: "its", jobBoardsConfirmedAt: null, settings: {} } as never });
+  const check = (verifiedAt: string | null): Panel => ({ company: { id: "co-harbor", name: "Harbor Dental", verifiedAt, verifiedBy: verifiedAt ? { id: "s2", name: "Nadine" } : null, heldMessages: 0, settings: {} } as never });
   const field = (tree: unknown) => {
     const input = [...elements(tree)].find((e) => e.type === "input" && e.props.id === "co-check-why");
     const label = [...elements(tree)].find((e) => e.type === Field && e.props.htmlFor === "co-check-why");
@@ -242,7 +242,7 @@ describe("a question asked in the company check", () => {
     tree = ui.draw(CompanyCheckPanel, check(CONFIRMED_AT));
     expect(words(tree)).not.toContain("Take back the confirmation of Harbor Dental?");
     expect(words(tree)).not.toContain("Confirm Harbor Dental and make its pages public?");
-    expect(buttons(tree).map(named)).toEqual(["Take back the confirmation", "ITS can sign in to the job boards"]);
+    expect(buttons(tree).map(named)).toEqual(["Take back the confirmation"]);
     // the card now says what is true, and what he typed stays
     expect(field(tree)).toMatchObject({ label: "Why you are taking it back", value: "Called the owner" });
     // a Yes pressed before that draw asks for what it said
@@ -261,7 +261,7 @@ describe("a question asked in the company check", () => {
     tree = ui.draw(CompanyCheckPanel, check(null));
     expect(words(tree)).not.toContain("Confirm Harbor Dental and make its pages public?");
     expect(words(tree)).not.toContain("Take back the confirmation of Harbor Dental?");
-    expect(buttons(tree).map(named)).toEqual(["Confirm the company", "ITS can sign in to the job boards"]);
+    expect(buttons(tree).map(named)).toEqual(["Confirm the company"]);
     expect(field(tree)).toMatchObject({ label: "How you checked the company", value: "The website does not match" });
     yes.onClick();
     await ui.settled();

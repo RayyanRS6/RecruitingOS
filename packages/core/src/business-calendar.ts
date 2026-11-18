@@ -1,14 +1,12 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { businessCalendarVersions, recruiterEscalations, type Queryable } from "@ros/db";
+import { businessCalendarVersions, type Queryable } from "@ros/db";
 import { audit } from "./audit";
-import { emit } from "./events";
-import { DEFAULT_BUSINESS_CALENDAR, addBusinessHours, dayKeyIn, slaBusinessHours, type BusinessCalendar, type CalendarSource } from "./business-hours";
+import { DEFAULT_BUSINESS_CALENDAR, dayKeyIn, type BusinessCalendar, type CalendarSource } from "./business-hours";
 
 /**
  * The stored ITS business calendar (correction 12 of 18 September 2026). Each change is a new immutable version with an
- * effective date; the clock functions read the version in force on each day. Deadlines already computed keep their
- * values; an administrator recalculates them explicitly, with a reason, and the customer sees the change.
+ * effective date; the clock functions read the version in force on each day.
  */
 export const CALENDAR_KEY = "its";
 
@@ -60,31 +58,4 @@ export async function saveBusinessCalendarVersion(
     details: { version, effectiveFrom: input.effectiveFrom, timeZone: input.calendar.timeZone, hours: input.calendar.hours, holidays: input.calendar.holidays.length, closures: input.calendar.closures.length, coverageChanges: input.calendar.coverageChanges.length },
   });
   return row;
-}
-
-/**
- * Recomputes open deadlines from each request's creation time on the calendar in force now. Only on explicit request,
- * with a reason; every change is audited and the customer sees an event on the request.
- */
-export async function recalculateEscalationDeadlines(
-  q: Queryable,
-  input: { escalationIds?: string[]; reason: string; actor: Actor; now?: Date },
-): Promise<Array<{ id: string; companyId: string; from: string | null; to: string; changed: boolean }>> {
-  const now = input.now ?? new Date();
-  const calendar = await loadBusinessCalendar(q, now);
-  const open = inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]);
-  const rows = await q.select().from(recruiterEscalations).where(input.escalationIds?.length ? and(open, inArray(recruiterEscalations.id, input.escalationIds)) : open);
-  const out: Array<{ id: string; companyId: string; from: string | null; to: string; changed: boolean }> = [];
-  for (const e of rows) {
-    const to = addBusinessHours(new Date(e.createdAt), slaBusinessHours(e.kind), calendar).toISOString();
-    const from = e.slaDueAt ? new Date(e.slaDueAt).toISOString() : null;
-    const changed = from !== to;
-    if (changed) {
-      await q.update(recruiterEscalations).set({ slaDueAt: to }).where(eq(recruiterEscalations.id, e.id));
-      await audit(q, { companyId: e.companyId, actor: input.actor, action: "escalation.sla_recalculated", target: { type: "escalation", id: e.id }, reason: input.reason, details: { from, to, calendarVersion: calendar.version } });
-      await emit(q, { type: "recruiter.sla_recalculated", companyId: e.companyId, actor: input.actor, subject: { type: "escalation", id: e.id }, payload: { from, to, reason: input.reason } });
-    }
-    out.push({ id: e.id, companyId: e.companyId, from, to, changed });
-  }
-  return out;
 }

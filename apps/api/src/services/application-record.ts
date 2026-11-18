@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { candidateScoreShown, type ApplicationStage, type CandidateScoreView, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type WriteupAnswer } from "@ros/contracts";
-import { CALL_NOTES_STAGES, DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
+import { DECISION_STAGES, applicationAnswerSentences, candidateScoreView, candidateStep, interviewInScore, matchScore, openingQuestionsOf, readingPair, screenAnswersOf, screenAnswersSent, unsentScreenReadings, writtenQuestionsOf } from "@ros/core";
 import { chatPacket } from "@ros/agents";
 import { applications, assessments, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { interviewRunOn } from "@ros/workflows";
@@ -30,16 +30,12 @@ export const REVIEWING_REFRESH_SECONDS = 15;
  * - `reviewing`: sent a moment ago and the reading is not written yet: "Working out your match score…", with "Check again".
  * - `not_ready`: no score after the reviewing window while a reading may still come (one late, a résumé that could not be
  *   read), or a sent AI interview whose scorecard is not written yet, for as long as that takes: never a résumé-only number
- *   for someone who did it. One waiting for the plan's AI help is `off` instead. The same for an AI interview a recruiter
- *   finished on a call until its scorecard is written, and while the call someone asked for in the AI interview is still to
- *   come (11 November 2026): the team reads both as still to come. That call is still to come only while its notes can finish
- *   the AI interview (`CALL_NOTES_STAGES`): once a person has set up an interview or decided, nothing will score it, so the
- *   résumé's number shows, saying so, as the team reads it.
+ *   for someone who did it. One waiting for the plan's AI help is `off` instead.
  * - `not_coming`: nothing will work a number out by itself (10 November 2026): no reading gives one, the résumé's could not be
  *   made or AI does not read it (`readingWontCome`), and no AI interview is open, being written up or still on its way. Said at
  *   once, never "Working out…" or "Not ready yet" for ever. Since 11 November 2026 (the lead's D2) also a finished AI interview
  *   whose scorecard could not be written, for good: the résumé's number never stands in for it. And readings that are in and
- *   judged nothing (every requirement not known, so no number), with no scorecard due, no call and no AI interview still on.
+ *   judged nothing (every requirement not known, so no number), with no scorecard due and no AI interview still on.
  * - `ready`: the score and its breakdown (`view`).
  */
 export type RecordScore = { state: "off" | "after_chat" | "reviewing" | "not_ready" | "not_coming" | "ready"; view: CandidateScoreView | null };
@@ -82,10 +78,9 @@ export async function packetOf(tx: Tx, roleId: string, version: number): Promise
  * block, which says the team sees it and is under counsel word for word, stays away whole. The same while there is no reading
  * and what would write one waits for the plan's AI help (PL-10): nobody is told that, and "under a minute" would not be true.
  * And the same while a sent AI interview's scorecard waits for it, reading or not: the résumé's number never stands in for that
- * scorecard (6 November 2026). `stageShown`: the stage their page stands at, which under a private decision is the stage it was
- * made from, so whether a call is still to come is read as it was before the decision, and nothing on the page changes with it.
+ * scorecard (6 November 2026).
  */
-export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; stageShown?: ApplicationStage | null; now: Date }): Promise<RecordScore> {
+export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettings: unknown; screens: readonly ScreenRow[]; hiddenDecision: boolean; now: Date }): Promise<RecordScore> {
   if (!candidateScoreShown(input.companySettings) || input.app.lockedAt) return { state: "off", view: null };
   const { app } = input;
   const rows = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
@@ -102,8 +97,7 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   const match = packet && own.length ? matchScore(readingPair(own), packet, { packetVersion: readAgainst, interview: interviewInScore(input.screens, app.stage) }) : null;
   const view = packet ? candidateScoreView(match, packet) : null;
   // An AI interview whose scorecard is not written yet: the score is about to change, and the résumé's number would read low
-  // for someone who did what was asked, so it waits for it (6 November 2026). One they sent, or one a recruiter finished on a
-  // call, whose notes write the scorecard (the release review, 11 November 2026).
+  // for someone who did what was asked, so it waits for it (6 November 2026).
   const sent = last && last.status === "completed" ? last : null;
   // Unless that scorecard waits for the plan's AI help (PL-10): then nothing is about to change, so "Working out…" would not
   // be true, and the résumé's number still never stands in for it. Nothing is said about a score, as with no reading at all,
@@ -113,24 +107,16 @@ export async function recordScoreFor(tx: Tx, input: { app: AppRow; companySettin
   // That scorecard could not be written, for good (the screen's run gave up and asked ITS to look): nothing will give the number
   // by itself, so the record says so at once, in fix A's words, never "Not ready yet" for ever (the lead's D2, 11 November 2026).
   if (sent && scorecardDue && (await failedScorecards(tx, [sent])).size) return { state: "not_coming", view: null };
-  // They asked for a person in the AI interview: a recruiter's call is still to come, and its notes write the scorecard, so the
-  // résumé's number is only a floor, as the team reads it ("Résumé only: AI interview not done yet"). "Not ready yet", never
-  // "under a minute": the call is a person's (the release review, 11 November 2026). Only while those notes can still finish it,
-  // the rule `addRecruiterCallNotes` applies: once a person has booked them or decided, they go nowhere near it (`not_screening`)
-  // and nothing will score it, so "Not ready yet" would stand for good, through the interview and the hire. A private decision
-  // is read from the stage it was made from (B6). Without a stage to read there, as before: still to come.
-  const stageNow = input.hiddenDecision ? input.stageShown ?? null : app.stage;
-  const callComing = last?.status === "human_requested" && (!stageNow || CALL_NOTES_STAGES.includes(stageNow));
   // Nothing will give a number by itself (10 November 2026): said at once, a moment after applying too.
-  if (!view && !scorecardDue && !callComing && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
+  if (!view && !scorecardDue && (await readingWontCome(tx, app.id)) && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   // The readings are in and judged nothing (every requirement not known: no number at all), and nothing else will give one by
-  // itself: no sent chat's scorecard is due, no call is coming, no automatic AI interview is still on. Fix A's words at once,
-  // never "Not ready yet" for ever, and the chat's closing page promises no score (the release review, 11 November 2026).
-  if (match && match.score === null && !scorecardDue && !callComing && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
+  // itself: no sent chat's scorecard is due, no automatic AI interview is still on. Fix A's words at once, never "Not ready
+  // yet" for ever, and the chat's closing page promises no score (the release review, 11 November 2026).
+  if (match && match.score === null && !scorecardDue && !(await interviewRunOn(tx, app.id))) return { state: "not_coming", view: null };
   const since = Date.parse(sent?.completedAt ?? app.createdAt);
   const recent = input.now.getTime() - since < REVIEWING_WINDOW_MS;
   if ((scorecardDue || !view) && recent) return { state: "reviewing", view: null };
-  return view && !scorecardDue && !callComing ? { state: "ready", view } : { state: "not_ready", view: null };
+  return view && !scorecardDue ? { state: "ready", view } : { state: "not_ready", view: null };
 }
 
 /** Whether what would write a reading waits for AI credit: a sent chat's scorecard (its mark), or the résumé's reading (its intake's run, however it started). */

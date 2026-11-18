@@ -1,8 +1,8 @@
 import type { JobBoardAdapter, PostingInput, PublishResult } from "../types";
 
 /**
- * External boards in release 1 are manual (docs/spec/20; founder decision F4): an ITS recruiter (or the company's own
- * team, when it posts itself) posts the job by hand from the company's own account, points the board at the board's own
+ * External boards in release 1 are manual (docs/spec/20; founder decision F4): the company's own team posts the job by
+ * hand from the company's own account, points the board at the board's own
  * tracked apply link, and records the listing's public address, which is checked before anything is called live. No
  * adapter posts anything, reads a board's API or claims a live connection. Partner integrations (Indeed Job Sync,
  * ZipRecruiter partner API, LinkedIn Apply Connect) arrive as separate, verified adapters if approved. The steps say

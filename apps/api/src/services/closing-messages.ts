@@ -57,12 +57,11 @@ const tally = (results: ClosingMessageResult["results"]) => ({
 
 /**
  * "Send the closing message" from the closed role's card: everyone listed in the preview (or the ones chosen among them),
- * through one gate for the whole group. Refused for someone who may not tell candidates decisions, for an ITS recruiter
- * whose access covers one candidate only, while the role is open, and while the group's approval is already waiting.
+ * through one gate for the whole group. Refused for someone who may not tell candidates decisions, while the role is
+ * open, and while the group's approval is already waiting.
  */
 export async function sendClosingMessage(tx: Tx, container: Container, input: { roleId: string; tenant: Tenant; actor: Actor; applicationIds?: string[] }): Promise<ClosingMessageResult> {
   assertCan(input.tenant.role, "application.reject");
-  if (input.tenant.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't send the closing message to the role's whole group.");
   const aud = await closingAudience(tx, input.roleId);
   if (!aud) throw new HttpError(404, "not_found", "Role not found.");
   if (aud.role.status !== "closed") throw new HttpError(409, "role_not_closed", "The closing message is for a role that has closed. Close the role with its outcome first.");

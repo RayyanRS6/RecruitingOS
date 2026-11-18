@@ -320,7 +320,6 @@ function PrivacyRequestDrawer({ id, onClose }: { id: string; onClose: () => void
             <dt>What they wrote</dt>
             <dd className="whitespace-pre-wrap">{r.details ?? "none"}</dd>
             {r.verificationNote ? <><dt>How it was verified</dt><dd>{r.verificationNote}</dd></> : null}
-            {r.escalationId ? <><dt>Escalation</dt><dd><a href={`/recruiter/queue/${r.escalationId}`}>open in the queue</a></dd></> : null}
           </dl>
         </Card>
         {!closedReq && !verified ? (

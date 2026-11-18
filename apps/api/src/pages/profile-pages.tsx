@@ -252,7 +252,7 @@ candidatePages.post("/careers/:slug/jobs/:roleId/apply/reuse", rateLimit(POLICIE
 /** What the emailed link opens: one button while it can still be used, otherwise what happened. Counts only, never the answers. */
 function ConfirmAnswersPage(props: { view: RepeatConfirmationView; token: string }) {
   const { view } = props;
-  // A person asked for, or offered because the assistant stopped working part-way (nobody asked): confirming brings one in.
+  // A person asked for, or offered because the assistant stopped working part-way (nobody asked): confirming tells the hiring team.
   const person = view.intent === "person" || view.intent === "outage";
   const happened = view.intent === "outage" ? "started the screening questions, but our assistant stopped working before they finished" : person ? "asked for a person from the hiring team to contact them" : `answered ${view.answered} of the ${view.questions} screening questions`;
   const outcome: Record<Exclude<RepeatConfirmationView["state"], "ready">, { title: string; text: string }> = {

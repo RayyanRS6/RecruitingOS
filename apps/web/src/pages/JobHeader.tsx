@@ -15,7 +15,7 @@ import { workModelLabel } from "./RolePlan";
 /**
  * The one header and tab strip a job's pages share (Wave S1): /roles/:id (the job, its scoring, interview plan, sharing,
  * report and activity) and /roles/:id/talent (its candidates). The title names the job, a pill its status, one line of
- * facts under it; on the right "Bring in a recruiter" and a More menu with everything else. No eyebrow: the "Job ·
+ * facts under it; on the right a More menu with everything else. No eyebrow: the "Job ·
  * company" line above the title was cut by the founder's fewer-words rule (23 Oct 2026); the rail names the company.
  *
  * It draws what the page hands it. On the first draw (server and browser alike) a page hands it only what the server

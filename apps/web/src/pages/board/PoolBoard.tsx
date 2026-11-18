@@ -4,9 +4,8 @@ import { m } from "motion/react";
 import { Avatar, Button, Chip, cn, EmptyState, Icon, Segmented } from "@ros/ui";
 import type { BoardCard, BoardView } from "../../api/client";
 import { Link } from "../../nav";
-import { AskRecruiter } from "../../components/AskRecruiter";
 import { boardLockedWords } from "../../upgrade";
-import { BOARD_COLUMNS, NO_AI_INTERVIEW_LANE, RECRUITER_CHECK, SORT_TEXT, VIEW_SWITCH_LABEL, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, laneRow, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
+import { BOARD_COLUMNS, NO_AI_INTERVIEW_LANE, SORT_TEXT, VIEW_SWITCH_LABEL, cardChip, cardFacts, confidenceChip, evidenceLines, headerCounts, laneRow, reasonLine, scoreText, sortedText, summarySentences, type TalentMode } from "./board-model";
 
 /** A column: a soft rounded lane on the warm sunken grey; the three appear one after another (motion-safe, CSS only).
  *  It may shrink to its track (min-w-0), so a long chip wraps inside its card instead of pushing the lane wider.
@@ -86,7 +85,6 @@ export function PoolBoard(props: { roleId: string; board: BoardView; only: { ids
           {board.lockedCount ? <span className="font-normal text-ink-2"> · {boardLockedWords(board.lockedCount)}</span> : null}
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <AskRecruiter roleId={props.roleId} label="Have a recruiter check this" preset={{ kind: "review", question: RECRUITER_CHECK }} />
           <Button icon="assistant" onClick={props.onAsk} disabled={!s.total}>Ask about this pool</Button>
           {props.mayApply ? <Button variant="primary" disabled={!s.toSort} title={s.toSort ? undefined : "Nothing to apply right now"} onClick={props.onReview}>Review and apply {s.toSort}</Button> : null}
         </div>

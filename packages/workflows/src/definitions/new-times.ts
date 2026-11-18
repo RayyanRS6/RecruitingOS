@@ -1,10 +1,10 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Actor, AutoNewTimesReason } from "@ros/contracts";
-import { notifyNewTimesNotSent, recordAutoRun, roleTakenOver, setAutoState, type FollowUpRow } from "@ros/core";
+import { notifyNewTimesNotSent, recordAutoRun, setAutoState, type FollowUpRow } from "@ros/core";
 import { companyConfirmed } from "@ros/agents";
 import { applications, candidates, interviewFollowups, interviews, roles, workflowRuns, type Queryable } from "@ros/db";
 import type { WorkflowEngine } from "../engine";
-import { activeInterviewersOf, newTimesStoppedByTakeover, reopenForNewTimes, type ReopenRefusal } from "../new-times-reopen";
+import { activeInterviewersOf, reopenForNewTimes, type ReopenRefusal } from "../new-times-reopen";
 import type { StepContext, StepResult, WorkflowDefinition } from "../types";
 
 type State = { followUpId: string; applicationId: string; roleId: string; interviewId: string };
@@ -28,7 +28,7 @@ function stillPromised(f: FollowUpRow | undefined): f is FollowUpRow & { autoDue
 /** What a refused reopen means for the set: a person got there first, or the interview changed under it. */
 const REOPEN_REASON: Record<ReopenRefusal, AutoNewTimesReason> = { times_out: "team_acted", team_acted: "team_acted", interview_changed: "interview_changed", not_reopenable: "interview_changed", no_interviewers: "no_interviewers" };
 /** The reasons the team must hear about (they may need to act); the others say a person already did, or that the person left. */
-const TELL_TEAM: ReadonlySet<AutoNewTimesReason> = new Set(["no_email", "interview_changed", "takeover", "no_interviewers", "company_not_checked"]);
+const TELL_TEAM: ReadonlySet<AutoNewTimesReason> = new Set(["no_email", "interview_changed", "no_interviewers", "company_not_checked"]);
 
 /**
  * The one automatic set of new times (founder decisions 2A and 3A, 9 October 2026), for a candidate who cancelled a
@@ -47,7 +47,6 @@ export const interviewNewTimes: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "wait",
   maxAttempts: 5,
-  escalationKind: "candidate_issue",
   steps: {
     async wait(ctx) {
       const [f] = await ctx.q.select().from(interviewFollowups).where(eq(interviewFollowups.id, ctx.state.followUpId)).limit(1);
@@ -74,7 +73,6 @@ export const interviewNewTimes: WorkflowDefinition<State> = {
       if (!iv || iv.status !== "cancelled" || iv.attempt !== f.interviewAttempt) return notSent("interview_changed");
       const [open] = await ctx.q.select({ id: interviews.id }).from(interviews).where(and(eq(interviews.applicationId, app.id), inArray(interviews.status, OPEN_INTERVIEW))).limit(1);
       if (open) return notSent("team_acted");
-      if (await roleTakenOver(ctx.q, ctx.companyId, app.roleId)) return notSent("takeover");
       if (!(await activeInterviewersOf(ctx.q, ctx.companyId, f.interviewId)).length) return notSent("no_interviewers");
       // The setting is not read again: switching automatic times off asks what happens to people already told a day, and
       // "stop" ends their sets at that moment (apps/api company-settings.ts). A set still waiting here is one the owner kept.
@@ -98,14 +96,10 @@ export const interviewNewTimes: WorkflowDefinition<State> = {
   },
 };
 
-/**
- * The set does not go: recorded with its reason, and the team told when they may need to act. Under an ITS takeover the
- * recruiter running the role is brought in too, to arrange the time with the candidate (founder question 7).
- */
+/** The set does not go: recorded with its reason, and the team told when they may need to act. */
 async function endNotSent(ctx: StepContext<State>, f: FollowUpRow, reason: AutoNewTimesReason): Promise<StepResult<State>> {
   const row = await setAutoState(ctx.q, { followUpId: f.id, to: "not_sent", reason, actor: ctx.actor, now: ctx.now });
-  if (reason === "takeover") await newTimesStoppedByTakeover(ctx.q, { followUp: row, actor: ctx.actor, now: ctx.now, workflowRunId: ctx.run.id });
-  else if (TELL_TEAM.has(reason)) await notifyNewTimesNotSent(ctx.q, { followUp: row, reason });
+  if (TELL_TEAM.has(reason)) await notifyNewTimesNotSent(ctx.q, { followUp: row, reason });
   return { kind: "complete" };
 }
 

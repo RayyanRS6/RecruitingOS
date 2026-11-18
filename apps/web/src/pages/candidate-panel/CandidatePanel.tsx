@@ -6,7 +6,6 @@ import { LOCKED_WORD } from "@ros/contracts";
 import { Alert, Avatar, Button, Chip, Drawer, ErrorState, IconButton, Menu, type MenuItem, ScoreBadge, Skeleton, StageButton, TabPanel, Tabs, type OwnerStage } from "@ros/ui";
 import { api, isCandidateLocked, type ApplicationDetail } from "../../api/client";
 import { LockedCard } from "../../components/LockedCandidates";
-import { canSeeActivity } from "../../roles";
 import { isTextEntry } from "../../start-hire";
 import { stageBlocked, stageIntent, type PanelStep } from "../../talent-actions";
 import { resumeOnlyChip } from "../../talent-list";
@@ -243,11 +242,11 @@ export function CandidatePanel(props: PanelProps) {
                   counting as the cards' narrowest width), so it never pushes a phone's screen sideways */}
               <div key={tab} className={`${SECTION_CARDS} wrap-anywhere motion-safe:animate-fade motion-safe:[animation-fill-mode:backwards]`}>
                 {tab === "overview" ? <OverviewTab a={a} roleId={roleId} onHistory={() => onTab("history")} onNext={onNext} /> : null}
-                {tab === "screen" ? <ScreenTab a={a} roleId={roleId} myRole={viewer.role} /> : null}
+                {tab === "screen" ? <ScreenTab a={a} roleId={roleId} /> : null}
                 {tab === "resume" ? <ResumeTab a={a} roleId={roleId} /> : null}
                 {tab === "messages" ? <MessagesTab a={a} roleId={roleId} compose={composing} setCompose={setCompose} /> : null}
                 {tab === "notes" ? <NotesTab applicationId={a.id} firstName={a.candidate.firstName} /> : null}
-                {tab === "history" ? <HistoryTab a={a} mayReadActivity={canSeeActivity(viewer.role)} /> : null}
+                {tab === "history" ? <HistoryTab a={a} /> : null}
               </div>
             </TabPanel>
           </div>

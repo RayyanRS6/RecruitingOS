@@ -2,7 +2,6 @@ import { and, count, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { lockedClosingLine, type ApplicationStage, type HireFollowUp, type MembershipRole } from "@ros/contracts";
 import { STAGE_LABEL, activeMarksFor, can, closingDayWords, companyToday, lockedAndWaiting, notLocked } from "@ros/core";
 import { applications, candidates, companies, hiringOutcomes, roles, type Tx } from "@ros/db";
-import { inStaffScope, type StaffScope } from "./staff-scope";
 
 /**
  * The hire sheet (plan H1): after a person records a hire with its start date, the people still in the running for the
@@ -30,12 +29,12 @@ type Backup = { applicationId: string; name: string; stageLabel: string };
 
 /**
  * The backups on a role: everyone still in the running at the interview step or later, and anyone shortlisted, other
- * than the person hired. A recruiter given one candidate sees only that candidate. Never someone past the plan's candidates
- * per job (Rule 3): this names people, and the hire sheet is read by everyone who may record a hire.
+ * than the person hired. Never someone past the plan's candidates per job (Rule 3): this names people, and the hire sheet
+ * is read by everyone who may record a hire.
  */
-export async function backupsOn(tx: Tx, input: { roleId: string; hiredApplicationId: string | null; scope?: StaffScope | null }): Promise<Backup[]> {
+export async function backupsOn(tx: Tx, input: { roleId: string; hiredApplicationId: string | null }): Promise<Backup[]> {
   const apps = (await tx.select({ id: applications.id, stage: applications.stage, candidateId: applications.candidateId, stageChangedAt: applications.stageChangedAt }).from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.stage, [...STILL_IN_PROCESS]), notLocked())))
-    .filter((a) => a.id !== input.hiredApplicationId && inStaffScope(input.scope ?? null, { roleId: input.roleId, applicationId: a.id }));
+    .filter((a) => a.id !== input.hiredApplicationId);
   const marks = await activeMarksFor(tx, apps.map((a) => a.id));
   const warm = apps.filter((a) => IN_THE_RUNNING.includes(a.stage) || marks.get(a.id)?.mark === "shortlist");
   if (!warm.length) return [];
@@ -55,20 +54,19 @@ export async function backupsOn(tx: Tx, input: { roleId: string; hiredApplicatio
  * while it is still open, with how many people that would move to the talent pool. The close needs outcome.record, as
  * the hire does.
  */
-export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplicationId: string; startDate: string | null; role: MembershipRole; scope?: StaffScope | null }): Promise<HireFollowUp> {
-  const backups = await backupsOn(tx, { roleId: input.roleId, hiredApplicationId: input.hiredApplicationId, scope: input.scope });
+export async function hireFollowUp(tx: Tx, input: { roleId: string; hiredApplicationId: string; startDate: string | null; role: MembershipRole }): Promise<HireFollowUp> {
+  const backups = await backupsOn(tx, { roleId: input.roleId, hiredApplicationId: input.hiredApplicationId });
   const [role] = await tx.select({ status: roles.status }).from(roles).where(eq(roles.id, input.roleId)).limit(1);
-  // A recruiter given one candidate reads about nobody else.
-  const locked = input.scope?.applicationId ? 0 : await lockedStillInProcess(tx, input.roleId);
+  const locked = await lockedStillInProcess(tx, input.roleId);
   let closeRole: HireFollowUp["closeRole"] = null;
   if (role && role.status !== "closed" && can(input.role, "outcome.record")) {
     // Who would move to the team's talent pool: someone locked moves with them, but is not the team's to keep (`recordRoleOutcome`).
     const others = (await tx.select({ id: applications.id }).from(applications).where(and(eq(applications.roleId, input.roleId), inArray(applications.stage, [...STILL_IN_PROCESS]), notLocked()))).filter((a) => a.id !== input.hiredApplicationId).length;
     // Someone who may close the role but not tell candidates a decision (HR) is told who sends the closing message. The
     // safety net is said too (founder decision D-03 A): if nobody tells them, the closing message goes by itself after
-    // five working days, or, under settings that keep these messages with a person, an ITS recruiter is brought in.
-    const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page.";
-    const net = "If nobody tells them within 5 working days of closing, the closing message goes by itself (or an ITS recruiter is brought in, if your settings say so).";
+    // five working days, or, under settings that keep these messages with a person, the team is reminded.
+    const then = can(input.role, "application.reject") ? "and you see the closing message before it goes." : "and an owner, admin or hiring manager sends them the closing message from their Home page.";
+    const net = "If nobody tells them within 5 working days of closing, the closing message goes by itself (or your team is reminded, if your settings say so).";
     // The people the team cannot see yet move with the close too: a count, never who, and the closing message goes to them by
     // itself. Never "Nobody else is still in process" while they are (the release review, 11 November 2026).
     const theLocked = locked ? ` ${lockedClosingLine(locked)}` : "";
@@ -91,9 +89,9 @@ export type CloseJobCard = { kind: "needs_review"; title: string; body: string; 
  * "Close this job?" (6 November 2026): once every hire on a job has started, a job still open or paused asks to be closed,
  * on Home every day until it is. "Keep the role open" used to leave it live and taking applications with nothing asking
  * again. While any hire on it is still to start, the backups card stands instead. For those who may close a role
- * (outcome.record), within a recruiter's grant; never about someone the team may not read.
+ * (outcome.record); never about someone the team may not read.
  */
-export async function closeAfterHireCards(tx: Tx, input: { companyId: string; viewer: { role: MembershipRole; scope?: StaffScope | null }; now: Date }): Promise<CloseJobCard[]> {
+export async function closeAfterHireCards(tx: Tx, input: { companyId: string; viewer: { role: MembershipRole }; now: Date }): Promise<CloseJobCard[]> {
   if (!can(input.viewer.role, "outcome.record")) return [];
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
   const today = companyToday(input.now, company?.timezone ?? null);
@@ -104,7 +102,7 @@ export async function closeAfterHireCards(tx: Tx, input: { companyId: string; vi
     .where(and(eq(hiringOutcomes.companyId, input.companyId), eq(hiringOutcomes.outcome, "hired_externally"), isNull(hiringOutcomes.correctedAt), isNotNull(hiringOutcomes.hireDate)));
   // The hires that still stand (a corrected or reopened record leaves the stage), by job.
   const byRole = new Map<string, typeof hires>();
-  for (const h of hires) if (h.roleId && h.stage === "hired" && !h.lockedAt && inStaffScope(input.viewer.scope ?? null, { roleId: h.roleId })) byRole.set(h.roleId, [...(byRole.get(h.roleId) ?? []), h]);
+  for (const h of hires) if (h.roleId && h.stage === "hired" && !h.lockedAt) byRole.set(h.roleId, [...(byRole.get(h.roleId) ?? []), h]);
   if (!byRole.size) return [];
   const live = await tx.select({ id: roles.id, title: roles.title, status: roles.status, acceptingApplications: roles.acceptingApplications }).from(roles).where(and(inArray(roles.id, [...byRole.keys()]), inArray(roles.status, ["open", "paused"])));
   const cards: CloseJobCard[] = [];
@@ -117,7 +115,7 @@ export async function closeAfterHireCards(tx: Tx, input: { companyId: string; vi
     const still = role.status === "paused" ? "paused, and still open" : role.acceptingApplications ? "still live and taking applications" : "still open";
     // Who sends the closing message, as the hire sheet says it (`hireFollowUp`): HR may close a job but not tell candidates (the
     // release review, 11 November 2026).
-    const then = can(input.viewer.role, "application.reject") ? "and you see the closing message before it goes" : "and an owner, admin, hiring manager or recruiter sends them the closing message from their Home page";
+    const then = can(input.viewer.role, "application.reject") ? "and you see the closing message before it goes" : "and an owner, admin or hiring manager sends them the closing message from their Home page";
     cards.push({
       kind: "needs_review",
       title: `Close this job? ${role.title}`,
@@ -133,9 +131,9 @@ export async function closeAfterHireCards(tx: Tx, input: { companyId: string; vi
 /**
  * "Keep your backups warm" (plan H1), one card per hire whose start date has not passed yet, while anyone else is still
  * in the running for that role. Keyed on the start date: the card goes away the day after the hire starts. Shown to
- * those who read applications, within a recruiter's grant.
+ * those who read applications.
  */
-export async function backupsWarmCards(tx: Tx, input: { companyId: string; viewer: { role: MembershipRole; scope?: StaffScope | null }; now: Date }): Promise<HireCard[]> {
+export async function backupsWarmCards(tx: Tx, input: { companyId: string; viewer: { role: MembershipRole }; now: Date }): Promise<HireCard[]> {
   if (!can(input.viewer.role, "application.read")) return [];
   const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
   const today = companyToday(input.now, company?.timezone ?? null);
@@ -143,11 +141,10 @@ export async function backupsWarmCards(tx: Tx, input: { companyId: string; viewe
   const cards: HireCard[] = [];
   for (const h of hires) {
     if (!h.applicationId || !h.roleId || !h.hireDate) continue;
-    if (!inStaffScope(input.viewer.scope ?? null, { roleId: h.roleId })) continue;
     // The hire still stands: a corrected or reopened record leaves the stage, and the card with it.
     const [hired] = await tx.select({ stage: applications.stage, candidateId: applications.candidateId, lockedAt: applications.lockedAt }).from(applications).where(eq(applications.id, h.applicationId)).limit(1);
     if (hired?.stage !== "hired" || hired.lockedAt) continue;
-    const backups = await backupsOn(tx, { roleId: h.roleId, hiredApplicationId: h.applicationId, scope: input.viewer.scope });
+    const backups = await backupsOn(tx, { roleId: h.roleId, hiredApplicationId: h.applicationId });
     if (!backups.length) continue;
     const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, h.roleId)).limit(1);
     const [cand] = await tx.select({ firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(eq(candidates.id, hired.candidateId)).limit(1);

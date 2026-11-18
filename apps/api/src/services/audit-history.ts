@@ -6,8 +6,6 @@ import type { auditRecords } from "@ros/db";
  * platform's own housekeeping stay with ITS. Details are passed through minus anything that names a credential.
  */
 export const CUSTOMER_AUDIT_ACTIONS: readonly string[] = [
-  // ITS staff access
-  "staff.access_granted", "staff.access_ended", "staff.access_revoked", "staff.tenant_accessed", "admin.break_glass",
   // the team
   "membership.changed", "invitation.sent", "invitation.resent", "invitation.revoked", "invitation.accepted", "session.revoked", "session.reauthenticated",
   // the rules and the company
@@ -38,13 +36,8 @@ const OUTCOME_WORDS: Record<string, string> = { hired_externally: "hired", candi
 /** One sentence an owner understands without knowing the action names. */
 export function describeAuditRecord(r: Pick<AuditRow, "action" | "actor" | "reason" | "details" | "target">): string {
   const d = (r.details ?? {}) as Record<string, unknown>;
-  const who = r.actor.name ?? (r.actor.kind === "system" ? "the system" : r.actor.kind === "recruiter" ? "an ITS recruiter" : r.actor.kind === "agent" ? "the AI assistant" : "someone");
+  const who = r.actor.name ?? (r.actor.kind === "system" ? "the system" : r.actor.kind === "agent" ? "the AI assistant" : "someone");
   switch (r.action) {
-    case "staff.access_granted": return `An ITS recruiter was given access${str(d.kind) ? ` (${str(d.kind)})` : ""}${r.reason ? `: ${r.reason}` : ""}.`;
-    case "staff.access_ended": return "A recruiter's access ended.";
-    case "staff.access_revoked": return `${who} ended a recruiter's access${r.reason ? `: ${r.reason}` : ""}.`;
-    case "staff.tenant_accessed": return `${who} opened ${str(d.method) ?? ""} ${str(d.path) ?? "a page"} under their access.`.replace(/\s+/g, " ");
-    case "admin.break_glass": return `An ITS administrator used emergency access${r.reason ? `: ${r.reason}` : ""}.`;
     case "membership.changed": return `${who} ${r.reason ?? "changed a team member"}.`;
     case "invitation.sent": return `${who} invited ${str(d.email) ?? "someone"} as ${roleWords(str(d.role))}.`;
     case "invitation.resent": return `${who} sent the invitation to ${str(d.email) ?? "someone"} again.`;
@@ -116,7 +109,7 @@ function companyUpdatedWords(who: string, d: Record<string, unknown>): string {
 }
 
 function fieldWords(f: unknown): string {
-  return ({ newTimesAfterCancel: "automatic new interview times", name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", about: "the text about the company on job pages", aboutDraft: "a draft of the text about the company", logo: "logo", hiringContact: "the contact candidates can reach before applying", boardPosting: "who posts the jobs on the job boards", zipRecruiterPlan: "the company's own ZipRecruiter plan", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
+  return ({ newTimesAfterCancel: "automatic new interview times", name: "name", website: "website", timezone: "time zone", sizeBand: "size", locations: "locations", logoUrl: "logo", benefitsSummary: "benefits summary", careersPage: "careers page intro", businessHours: "contact hours", notices: "candidate notices", about: "the text about the company on job pages", aboutDraft: "a draft of the text about the company", logo: "logo", hiringContact: "the contact candidates can reach before applying", zipRecruiterPlan: "the company's own ZipRecruiter plan", aiRulesReviewed: "the AI rules marked as reviewed", jobBoardAccess: "job-board access, confirmed by ITS", jobBoardAccessRemoved: "job-board access, no longer confirmed by ITS" } as Record<string, string>)[String(f)] ?? String(f);
 }
 
 /** A timestamp as ISO 8601 whatever the driver returned (Postgres writes "2026-09-30 16:05:10.123+00"). */

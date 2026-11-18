@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { isCompanyVerified, type Actor } from "@ros/contracts";
-import { ALERT_PRIVACY_LINE, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, createEscalation, emit, followUpParked, gate, holdEnded, inCancelled, interviewsInMotionFor, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, planIncludesItsPosting, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
+import { ALERT_PRIVACY_LINE, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, emit, followUpParked, holdEnded, inCancelled, interviewsInMotionFor, isOneVisitFlow, isStillApplying, loadBusinessCalendar, lockedAmong, notLocked, notify, resolveNotifyCadence, resolvePolicy, storedPreferences, unlockedAtFor, waitingSince, zonedParts } from "@ros/core";
 import { applications, approvalRequests, candidates, companies, interventions, memberships, roles, screens, users, type Queryable } from "@ros/db";
 import { mailbox, type Integrations } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -8,7 +8,7 @@ import { queueCommunication } from "./outbox";
 /**
  * The stuck-role detector and its intervention ladder (docs/02 "Customer success", docs/06 `stuck_role_detector`).
  * Detectors are read-only and also feed the brief. The ladder records what was done in `interventions`, respects the
- * `intervention.nudge` cooldown policy, and ends in a recruiter escalation so no role rots quietly.
+ * `intervention.nudge` cooldown policy, and ends with an email to the team.
  */
 
 export type Detection = {
@@ -122,7 +122,7 @@ export async function workingDayRulesFor(q: Queryable, companyId: string, now: D
  * pool; not one whose message waits for an approver): the reminder of the untold safety net. Decisions stay private;
  * the team is reminded, by name, to send the message or record telling them, and hears what happens at five working days
  * (decision-messages.ts `runUntoldSafetyNet`, on the fifth working day by the company's calendar): the standard message
- * goes by itself, or a recruiter is brought in. Someone a change of plan just opened counts from then (`unlocks`): until
+ * goes by itself, or the team is told nothing was sent. Someone a change of plan just opened counts from then (`unlocks`): until
  * then the team could not tell them anything.
  */
 function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof applications.$inferSelect>, waitingApproval: Set<string>, names: Map<string, string>, now: Date, rules: WorkingDayRules, unlocks: Map<string, string>): Detection | null {
@@ -132,7 +132,7 @@ function untoldDecisions(role: { id: string; title: string }, apps: Array<typeof
   const days = Math.max(...late.map(age));
   const who = late.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
   const one = late.length === 1;
-  return { detector: "decisions_untold", roleId: role.id, roleTitle: role.title, days, applicationIds: late.map((a) => a.id), title: `${one ? "1 person has" : `${late.length} people have`} not been told your decision for ${UNTOLD_REMIND_WORKING_DAYS} working days or more (${role.title})`, body: `${who}${late.length > 5 ? ` and ${late.length - 5} more` : ""}. Your decision stays private until someone sends the decision message or records telling ${one ? "them" : "each of them"}. If nobody has after ${UNTOLD_SEND_WORKING_DAYS} working days, the standard message goes by itself and you are told; if your settings ask for approval or keep decision messages with a person, or a recruiter is running the role, a recruiter is brought in instead and nothing is sent. Check the message, then send it.`, action: { label: "Review and send", href: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` } };
+  return { detector: "decisions_untold", roleId: role.id, roleTitle: role.title, days, applicationIds: late.map((a) => a.id), title: `${one ? "1 person has" : `${late.length} people have`} not been told your decision for ${UNTOLD_REMIND_WORKING_DAYS} working days or more (${role.title})`, body: `${who}${late.length > 5 ? ` and ${late.length - 5} more` : ""}. Your decision stays private until someone sends the decision message or records telling ${one ? "them" : "each of them"}. If nobody has after ${UNTOLD_SEND_WORKING_DAYS} working days, the standard message goes by itself and you are told; if your settings ask for approval or keep decision messages with a person, nothing is sent and you are told who still waits. Check the message, then send it.`, action: { label: "Review and send", href: `/roles/${role.id}/talent?ownerStage=not_moving_forward&told=not_told` } };
 }
 
 const HOURS = 3_600_000;
@@ -243,7 +243,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       if (days >= 3) out.push({ detector: "candidates_waiting", roleId: role.id, roleTitle: role.title, days, applicationIds: longestFirst, title: `${waiting.length} ${waiting.length === 1 ? "candidate has" : "candidates have"} been waiting on you for ${days} days (${role.title})`, body, action: { label: "Review them", href: `/roles/${role.id}/talent` } });
     }
     // An offer made outside the app (plan H2) with no answer recorded: the team checks in with the candidate, then records
-    // Accepted or Declined. The team's own follow-up, never a recruiter's.
+    // Accepted or Declined. The team's own follow-up.
     const offers = apps.filter((a) => a.stage === "offer_sent" && !parked(a) && now.getTime() - Date.parse(a.stageChangedAt) >= OFFER_WAIT_DAYS * DAYS);
     if (offers.length) {
       const days = Math.floor((now.getTime() - Math.min(...offers.map((a) => Date.parse(a.stageChangedAt)))) / DAYS);
@@ -265,7 +265,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     const stale = invites.filter((s) => s.invitedAt && now.getTime() - Date.parse(s.invitedAt) >= 3 * DAYS && !parked({ id: s.applicationId }) && !isStillApplying(s) && !isOneVisitFlow(s.progress));
     if (stale.length && publicNow) {
       const days = Math.floor((now.getTime() - Math.min(...stale.map((s) => Date.parse(s.invitedAt!)))) / DAYS);
-      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} AI interview ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. A recruiter can call them, or you can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
+      out.push({ detector: "screens_unanswered", roleId: role.id, roleTitle: role.title, days, title: `${stale.length} AI interview ${stale.length === 1 ? "invite has" : "invites have"} gone unanswered for ${days} days (${role.title})`, body: "A reminder went out automatically. You can move on to the next candidates.", action: { label: "See who", href: `/roles/${role.id}/talent?stage=screen_invited` } });
     }
     // The conversation that goes with the application closes by itself (E4, E5). One still open well past that point
     // leaves the person "Still applying", unseen by the team and maybe waiting: they are named, for the team to open.
@@ -276,7 +276,7 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
       const names = await candidateNames(q, stuckApps.map((a) => a.candidateId));
       const who = stuckApps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ");
       const days = Math.floor((now.getTime() - Math.min(...stuckApps.map((a) => Date.parse(a.createdAt)))) / DAYS);
-      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the AI interview (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their AI interview should have closed by itself and did not, so they may be waiting. Their answers appear only once they send them; a recruiter can contact them.`, action: { label: "See who", href: `/roles/${role.id}/talent?ownerStage=no_ai_interview` } });
+      out.push({ detector: "conversations_stuck", roleId: role.id, roleTitle: role.title, days, applicationIds: stuckApps.map((a) => a.id), title: `${stuckApps.length === 1 ? "1 applicant is" : `${stuckApps.length} applicants are`} stuck in the AI interview (${role.title})`, body: `${who}${stuckApps.length > 5 ? ` and ${stuckApps.length - 5} more` : ""}. Their AI interview should have closed by itself and did not, so they may be waiting. Their answers appear only once they send them.`, action: { label: "See who", href: `/roles/${role.id}/talent?ownerStage=no_ai_interview` } });
     }
     const pending = await q.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
     // Its rationale names the person, and the team could not decide it anyway.
@@ -294,27 +294,21 @@ export async function detectStuckRoles(q: Queryable, companyId: string, now: Dat
     if (untold) out.push(untold);
     const daysOpen = role.openedAt ? Math.floor((now.getTime() - Date.parse(role.openedAt)) / DAYS) : 0;
     if (apps.length === 0 && daysOpen >= 14 && publicNow) {
-      out.push({ detector: "no_applicants", roleId: role.id, roleTitle: role.title, days: daysOpen, title: `${role.title} has had no applicants in ${daysOpen} days`, body: "Posting on Indeed from your account, asking the team for referrals, or a recruiter search usually fixes this within a week.", action: { label: "See posting options", href: `/roles/${role.id}` } });
+      out.push({ detector: "no_applicants", roleId: role.id, roleTitle: role.title, days: daysOpen, title: `${role.title} has had no applicants in ${daysOpen} days`, body: "Posting on Indeed from your account or asking the team for referrals usually fixes this within a week.", action: { label: "See posting options", href: `/roles/${role.id}` } });
     }
   }
   return out;
 }
 
-export type LadderLevel = "brief" | "message" | "offer_recruiter" | "escalation";
-const LADDER: LadderLevel[] = ["brief", "message", "offer_recruiter", "escalation"];
+export type LadderLevel = "brief" | "message";
+const LADDER: LadderLevel[] = ["brief", "message"];
 /**
  * Detectors that only ever tell the team in the app: a hold that ended is the team's own reminder, and so is a decision
  * nobody has told yet (the reminder of the untold safety net; at five working days the safety net acts itself). An offer
  * waiting for an answer goes as far as an email to the team: following up an offer made outside the app is theirs.
  */
 const LADDER_TOP: Partial<Record<Detection["detector"], LadderLevel>> = { hold_ended: "brief", decisions_untold: "brief", offers_waiting: "message" };
-/**
- * The ladder's top on a plan with no ITS staff time (the plans of 5 November 2026, Rule 6): the email. Nobody at ITS is
- * offered or brought in by the ladder, read from the plan's `its_work`. A person who asks for a recruiter still reaches ITS.
- */
-const NO_ITS_WORK_TOP: LadderLevel = "message";
-
-export type LadderDeps = { integrations: Integrations; appBaseUrl: string; itsQueueEmail: string; now: Date; actor: Actor };
+export type LadderDeps = { integrations: Integrations; appBaseUrl: string; now: Date; actor: Actor };
 
 /**
  * Applies the ladder to today's detections and closes interventions whose condition has cleared.
@@ -322,7 +316,6 @@ export type LadderDeps = { integrations: Integrations; appBaseUrl: string; itsQu
  */
 export async function runInterventionLadder(q: Queryable, deps: LadderDeps, companyId: string, detections: Detection[]): Promise<Array<{ roleId: string; detector: string; level: LadderLevel | "skipped" | "resolved"; reason?: string }>> {
   const results: Array<{ roleId: string; detector: string; level: LadderLevel | "skipped" | "resolved"; reason?: string }> = [];
-  const itsWork = await planIncludesItsPosting(q, companyId);
   const openInterventions = await q.select().from(interventions).where(and(eq(interventions.companyId, companyId), eq(interventions.status, "sent")));
   for (const iv of openInterventions) {
     const still = detections.some((d) => d.roleId === iv.roleId && d.detector === iv.detector);
@@ -342,11 +335,10 @@ export async function runInterventionLadder(q: Queryable, deps: LadderDeps, comp
     // An intervention that was already resolved once and fires again starts the ladder over.
     const active = last && last.status === "sent" ? prior.filter((p) => p.status === "sent") : [];
     if (last && last.status === "sent" && sinceLast < cooldownHours) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: `cooldown (${Math.round(cooldownHours - sinceLast)}h left)` }); continue; }
-    const level = LADDER[Math.min(active.length, LADDER.length - 1)];
-    if (level === "escalation" && active.some((p) => p.ladderLevel === "escalation")) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "already escalated" }); continue; }
+    if (active.length >= LADDER.length) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "already told by email" }); continue; }
+    const level = LADDER[active.length];
     const top = LADDER_TOP[d.detector];
     if (top && LADDER.indexOf(level) > LADDER.indexOf(top)) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "already told in the app" }); continue; }
-    if (!itsWork && LADDER.indexOf(level) > LADDER.indexOf(NO_ITS_WORK_TOP)) { results.push({ roleId: d.roleId, detector: d.detector, level: "skipped", reason: "the plan has no ITS staff time" }); continue; }
     await sendIntervention(q, deps, companyId, d, level);
     const [row] = await q.insert(interventions).values({ companyId, roleId: d.roleId, detector: d.detector, ladderLevel: level, status: "sent", sentAt: deps.now.toISOString() }).returning({ id: interventions.id });
     await emit(q, { type: "intervention.sent", companyId, actor: deps.actor, subject: { type: "role", id: d.roleId }, payload: { detector: d.detector, level, interventionId: row.id, days: d.days } });
@@ -376,27 +368,8 @@ async function sendIntervention(q: Queryable, deps: LadderDeps, companyId: strin
   // The emails carry the title (the role, counts and days) and the link, never the body: a body can name candidates,
   // and no email alert does (plan B3). The app shows the rest after sign-in.
   // The people emailed here have their copy recorded as emailed, so no alert or summary repeats it for them.
-  if (level === "message") {
-    await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action, emailedSeparatelyTo: emailed });
-    for (const o of owners) {
-      await teamMail(q, deps, companyId, { to: o.email, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.title}.\n\n${d.action.label}: ${href}\n\n${ALERT_PRIVACY_LINE}\n\nIf you would rather a recruiter handled this, reply to this email or use "Ask a recruiter" in the app.`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
-    }
-    return;
+  await notify(q, { companyId, kind: `stuck.${d.detector}`, title: d.title, body: d.body, action: d.action, emailedSeparatelyTo: emailed });
+  for (const o of owners) {
+    await teamMail(q, deps, companyId, { to: o.email, subject: d.title, text: `${o.name ? `Hi ${o.name.split(" ")[0]},` : "Hi,"}\n\n${d.title}.\n\n${d.action.label}: ${href}\n\n${ALERT_PRIVACY_LINE}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:message:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
   }
-  if (level === "offer_recruiter") {
-    const g = await gate(q, { companyId, roleId: d.roleId, actionType: "intervention.offer_recruiter", subject: { type: "role", id: d.roleId }, proposal: { detector: d.detector }, rationale: d.title, requestedBy: deps.actor });
-    if (g.outcome === "human_only") return;
-    const offer = "An ITS recruiter can review the shortlist, reach out to candidates, and get this moving. It is one click from the job's page or Home.";
-    await notify(q, { companyId, kind: "stuck.offer_recruiter", title: `Want a recruiter to take a look at ${d.roleTitle}?`, body: `${d.body}\n\n${offer}`, action: { label: "Ask a recruiter", href: d.action.href }, emailedSeparatelyTo: emailed });
-    for (const o of owners) {
-      await teamMail(q, deps, companyId, { to: o.email, subject: `Want a recruiter to look at ${d.roleTitle}?`, text: `${d.title}.\n\n${offer}\n\nOpen: ${href}\n\n${ALERT_PRIVACY_LINE}`, idempotencyKey: `intervention:${companyId}:${d.roleId}:${d.detector}:offer:${day}:${o.userId}`, templateKey: "intervention", tags: { detector: d.detector } });
-    }
-    return;
-  }
-  const esc = await createEscalation(q, { companyId, roleId: d.roleId, kind: "stuck_role", question: `${d.title}. ${d.body} The owner has not acted after a brief line, a message, and an offer of help. Please review the role and reach out.`, requestedBy: deps.actor });
-  await notify(q, { companyId, kind: "stuck.escalated", title: `A recruiter is reviewing ${d.roleTitle}`, body: "It has been waiting a while, so an ITS recruiter is taking a look and will reach out.", action: { label: "See role", href: `/roles/${d.roleId}` } });
-  // The ITS queue gets the title (the role, counts and days) and the link, never the body: a body can name candidates or
-  // carry the team's own words, and the queue sees only what the request is about until someone accepts it (correction
-  // 11). The full request stays on the escalation, which opens on acceptance and loses a person's name on deletion.
-  await teamMail(q, deps, companyId, { to: deps.itsQueueEmail, subject: `[stuck_role] ${d.title}`, text: `${d.title}.\n\nThe team has not acted after a note in the app, an email, and an offer of help. Accept it in the queue to open the full request: ${deps.appBaseUrl}/recruiter/queue/${esc.id}`, idempotencyKey: `escalation:${esc.id}`, templateKey: "escalation" });
 }

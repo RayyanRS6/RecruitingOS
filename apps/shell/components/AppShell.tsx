@@ -68,7 +68,6 @@ export function sectionTrail(pathname: string, jobs: ReadonlyArray<Pick<RailRole
   if (under("/talent") || under("/people")) return ["Candidates"];
   if (under("/interviews")) return ["Interviews"];
   if (under("/setup")) return ["Settings"];
-  if (under("/recruiter")) return ["Queue"];
   if (under("/admin")) {
     const section = CONSOLE_LINKS.find((l) => (l.to === "/admin" ? pathname === "/admin" : under(l.to)));
     return section ? ["Console", section.label] : ["Console"];
@@ -190,8 +189,8 @@ function RailLink(props: { to: string; end?: boolean; icon: IconName; label: str
 }
 
 /**
- * A mono label over the ITS staff's groups of links (Recruiter, Admin), which it tells apart from the company's own
- * links above them; the folded rail draws a hairline instead (the phone menu keeps the word).
+ * A mono label over a platform administrator's links (Admin), which it tells apart from the company's own links above
+ * them; the folded rail draws a hairline instead (the phone menu keeps the word).
  */
 function SectionLabel({ children, folded, first }: { children: string; folded: boolean; first?: boolean }) {
   const look = first ? SECTION_FIRST : SECTION;
@@ -205,14 +204,14 @@ function SectionLabel({ children, folded, first }: { children: string; folded: b
 
 /**
  * The signed-in frame (docs/07): the rail, a thin bar with the way back up on a page that sits under another (a job,
- * the job builder, Updates, a console section; none on a section's own page), the staff-access notice, the
- * development-mode notice, and the page.
+ * the job builder, Updates, a console section; none on a section's own page), the development-mode notice, and the
+ * page.
  *
  * The rail, top to bottom: the name, the company chip (your role, a "Switch company" menu for someone in more than one
  * company, and a cog to Settings), "Start a hire" for the people who may start one (N opens it from anywhere outside a
  * text field, on a page with nothing changed), Home, Jobs with the jobs being worked on listed underneath (for members
- * only; a live job opens on its Candidates), Candidates, Interviews, Settings (Queue and Console for ITS staff under
- * their Recruiter and Admin labels, the console's five sections listed under Console for platform administrators), and,
+ * only; a live job opens on its Candidates), Candidates, Interviews, Settings (Console for platform administrators
+ * under its Admin label, with the console's five sections listed under it), and,
  * at its foot, who is signed in with Sign out and the light/dark theme switch. No slogans and no label over the
  * company's own links (founder, 23 October 2026: fewer words). The current link sits on a lavender highlight that
  * glides to the next one.
@@ -229,18 +228,16 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const qc = useQueryClient();
   const router = useRouter();
   const pathname = usePathname() ?? "";
-  const isStaff = ["platform_admin", "its_recruiter"].includes(me.user.platformRole);
   const isAdmin = me.user.platformRole === "platform_admin";
   const active = me.memberships.find((m) => m.companyId === me.activeCompanyId);
   const myRole = active?.role ?? null;
-  const companyName = active?.companyName ?? me.staffAccess?.companyName ?? null;
+  const companyName = active?.companyName ?? null;
   // Links a role cannot use are not shown: an interviewer has no Candidates page, only the interviews they are on.
   const showTalent = !active || canSeeTalent(active.role);
-  // The same rule as Home's button: role.create, held through a membership (an ITS recruiter's grant does not start hires).
+  // The same rule as Home's button: role.create, held through a membership.
   const mayStartHire = !!me.activeCompanyId && canStartHire(myRole);
 
-  // The jobs under Jobs, for members only: an ITS recruiter under a grant gets no list (each request they make is
-  // recorded for the customer as a page they opened). The API gives an interviewer only the jobs they interview for.
+  // The jobs under Jobs, for members only. The API gives an interviewer only the jobs they interview for.
   // The list refreshes when a page changes a job and every two minutes while the tab is in view. Home reads the same list.
   const listRoles = railListsRoles(me);
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles"), enabled: listRoles, refetchInterval: 120_000 });
@@ -378,9 +375,9 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   useMarkGlide(rail);
 
   const who = me.user.name ?? me.user.email;
-  const roleWord = teamRoleWord(myRole, !!me.staffAccess);
+  const roleWord = teamRoleWord(myRole);
   // The company the page is about, under the name in the phone's top bar (wider screens have the rail's company chip).
-  const workspace = companyName ? (active ? companyName : `${companyName} (recruiter access)`) : isStaff ? "ITS staff" : "No company";
+  const workspace = companyName ?? (isAdmin ? "ITS staff" : "No company");
   const trail = parentTrail(pathname, listed);
   const width = cx(foldedByChoice ? "max-w-[1280px]" : "max-w-[1040px]", "group-has-[.builder,.start,.pool-board,[data-wide]]/page:max-w-[1440px]");
   return (
@@ -414,7 +411,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
                   heading="Your companies"
                   buttonClassName="icon-btn sm"
                   align="end"
-                  items={[{ id: active.companyId, label: active.companyName, current: true }, ...others.map((o) => ({ id: o.companyId, label: o.companyName, hint: teamRoleWord(o.role, false) ?? undefined, current: false }))]}
+                  items={[{ id: active.companyId, label: active.companyName, current: true }, ...others.map((o) => ({ id: o.companyId, label: o.companyName, hint: teamRoleWord(o.role) ?? undefined, current: false }))]}
                   onSelect={(id) => { if (id !== active.companyId) void switchTo(id); }}
                 />
               ) : null}
@@ -480,15 +477,9 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
               <RailLink to="/setup" icon="settings" label="Settings" folded={folded} />
             </>
           ) : null}
-          {isStaff ? (
-            <>
-              <SectionLabel folded={folded} first={!me.activeCompanyId}>Recruiter</SectionLabel>
-              <RailLink to="/recruiter/queue" icon="grid" label="Queue" folded={folded} />
-            </>
-          ) : null}
           {isAdmin ? (
             <>
-              <SectionLabel folded={folded}>Admin</SectionLabel>
+              <SectionLabel folded={folded} first={!me.activeCompanyId}>Admin</SectionLabel>
               <RailLink to="/admin" icon="lock" label="Console" folded={folded} />
               {/* The console's sections (Wave S6): Console stays marked on all of them, the section itself too. Folded,
                   the rail still shows them, as icons with their word in the tooltip. */}
@@ -551,7 +542,6 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
           </div>
         ) : null}
         <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 sm:px-6 rail:px-10 rail:pb-20", trail ? "rail:pt-9" : "rail:pt-12", width)}>
-          {me.staffAccess ? <div className="mb-4"><Alert tone="info">You are inside {me.staffAccess.companyName} through an escalation ({me.staffAccess.purpose}). Access is limited to that request and ends {new Date(me.staffAccess.expiresAt).toLocaleString()}. Every page you open is recorded for the customer.</Alert></div> : null}
           {me.ai.provider === "fake" ? <div className="mb-4"><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.</Alert></div> : null}
           {children}
         </main>

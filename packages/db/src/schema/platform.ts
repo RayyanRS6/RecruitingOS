@@ -48,7 +48,7 @@ export const approvalRequests = pgTable(
 
 /** A wait ends on a human decision, a signalled event, or a timer. An event or human wait may also carry `until`: whichever comes first wakes the run. `token` lets a stale timer be ignored. */
 export type WaitCondition =
-  | { kind: "human"; approvalRequestId?: string; escalationId?: string; until?: string; token?: string }
+  | { kind: "human"; approvalRequestId?: string; until?: string; token?: string }
   | { kind: "event"; eventTypes: string[]; subjectId?: string; until?: string; reason?: string; token?: string }
   | { kind: "timer"; until: string; reason?: string; token?: string };
 

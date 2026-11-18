@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { activeMarksFor, availabilitySourceFor, effectiveContactWindow, newTimesSettingOf, roleTakenOver, zonedParts, zonedToUtc } from "@ros/core";
+import { activeMarksFor, availabilitySourceFor, effectiveContactWindow, newTimesSettingOf, zonedParts, zonedToUtc } from "@ros/core";
 import { companies, interviewFollowups, interviewParticipants, memberships, type Queryable } from "@ros/db";
 import { companyConfirmed } from "./outbox";
 import { workingDayRulesFor, type WorkingDayRules } from "./orchestrator";
@@ -63,7 +63,7 @@ export async function interviewHasNoHours(q: Queryable, input: { companyId: stri
 }
 
 /** Why no automatic set is armed for someone who asked for new times. */
-export type AutoPlanReason = "switched_off" | "company_not_checked" | "already_used" | "reschedules_used" | "takeover" | "was_on_hold" | "no_hours";
+export type AutoPlanReason = "switched_off" | "company_not_checked" | "already_used" | "reschedules_used" | "was_on_hold" | "no_hours";
 export type AutoPlan = { arm: true; dueAt: string; day: string; workingDays: number } | { arm: false; reason: AutoPlanReason };
 
 /**
@@ -73,7 +73,6 @@ export type AutoPlan = { arm: true; dueAt: string; day: string; workingDays: num
  * - ITS has not confirmed the company (founder decision B7): every email to its candidates waits, so no day is promised;
  * - they already had their one automatic set (being prepared, or sent);
  * - they used both "Ask for a different time" presses, so a person arranges the time, as the page promised;
- * - an ITS recruiter is running the role (founder question 7);
  * - a person had put them on hold (founder question 6); the cancel ends the hold, and nothing goes automatically;
  * - `interviewId`, the interview they are cancelling, has someone on it with no hours to offer (`interviewHasNoHours`):
  *   no set could be worked out on the day, so none is promised, and a person sets the next time.
@@ -82,7 +81,7 @@ export type AutoPlan = { arm: true; dueAt: string; day: string; workingDays: num
  * automatic times off locks that row too (apps/api company-settings.ts), so the two take turns: a cancel either armed its
  * set before the switch (and Setup asks about it) or reads the setting as switched off.
  */
-export async function autoNewTimesPlan(q: Queryable, input: { companyId: string; roleId: string; applicationId: string; rescheduleCount: number; now: Date; lock?: boolean; interviewId?: string }): Promise<AutoPlan> {
+export async function autoNewTimesPlan(q: Queryable, input: { companyId: string; applicationId: string; rescheduleCount: number; now: Date; lock?: boolean; interviewId?: string }): Promise<AutoPlan> {
   const read = q.select({ settings: companies.settings }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
   const [company] = input.lock ? await read.for("share") : await read;
   const setting = newTimesSettingOf(company?.settings);
@@ -91,7 +90,6 @@ export async function autoNewTimesPlan(q: Queryable, input: { companyId: string;
   const [used] = await q.select({ id: interviewFollowups.id }).from(interviewFollowups).where(and(eq(interviewFollowups.applicationId, input.applicationId), inArray(interviewFollowups.autoState, ["preparing", "sent"]))).limit(1);
   if (used) return { arm: false, reason: "already_used" };
   if (input.rescheduleCount >= MAX_CANDIDATE_RESCHEDULES) return { arm: false, reason: "reschedules_used" };
-  if (await roleTakenOver(q, input.companyId, input.roleId)) return { arm: false, reason: "takeover" };
   const marks = await activeMarksFor(q, [input.applicationId]);
   if (marks.get(input.applicationId)?.mark === "on_hold") return { arm: false, reason: "was_on_hold" };
   if (input.interviewId && (await interviewHasNoHours(q, { companyId: input.companyId, interviewId: input.interviewId }))) return { arm: false, reason: "no_hours" };

@@ -1,11 +1,11 @@
 import { and, asc, eq, gt, gte, inArray, isNotNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, ITS_WORK, JOBS_TOTAL, RECRUITER_ASKS, SEATS, TEXT_SCREENS, isAiCreditKey } from "@ros/contracts";
+import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, JOBS_TOTAL, PLAN_LIMIT_KEYS, SEATS, TEXT_SCREENS, isAiCreditKey } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
 
 /** The limit keys (packages/contracts/src/domain/plans.ts, which says what each one is), read by key: product code never compares plan names. */
-export { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, ITS_WORK, JOBS_TOTAL, RECRUITER_ASKS, SEATS, TEXT_SCREENS };
+export { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, JOBS_TOTAL, SEATS, TEXT_SCREENS };
 
 /** The company's plan: its key, and its name when the plans table knows it. */
 export async function planOf(q: Queryable, companyId: string): Promise<{ key: string; name: string | null } | null> {
@@ -22,8 +22,7 @@ export async function limitOf(q: Queryable, companyId: string, key: string): Pro
 /**
  * The people using the plan's places now, counted live (never from a running total): active members of any team role,
  * plus invitations sent and not yet answered (an unexpired pending one holds its place, so a 4th invitation is refused
- * before anyone accepts). ITS never counts: a person with a platform role, and a membership with the role "recruiter"
- * (always an ITS recruiter's grant; the team page never offers that role). `exceptEmail` leaves out the invitations to
+ * before anyone accepts). ITS never counts: a person with a platform role. `exceptEmail` leaves out the invitations to
  * one address, for a new invitation that replaces an open one to the same address and for the one being accepted.
  */
 export async function seatsInUse(q: Queryable, companyId: string, opts: { now: Date; exceptEmail?: string }): Promise<number> {
@@ -31,7 +30,7 @@ export async function seatsInUse(q: Queryable, companyId: string, opts: { now: D
     .select({ n: sql<number>`count(*)` })
     .from(memberships)
     .innerJoin(users, eq(users.id, memberships.userId))
-    .where(and(eq(memberships.companyId, companyId), eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none")));
+    .where(and(eq(memberships.companyId, companyId), eq(memberships.status, "active"), eq(users.platformRole, "none")));
   const open = [eq(invitations.companyId, companyId), eq(invitations.status, "pending"), gt(invitations.expiresAt, opts.now.toISOString())];
   if (opts.exceptEmail) open.push(ne(invitations.email, opts.exceptEmail.trim().toLowerCase()));
   const [invited] = await q.select({ n: sql<number>`count(*)` }).from(invitations).where(and(...open));
@@ -126,7 +125,7 @@ const PERIOD_MS = PERIOD_DAYS * 86_400_000;
  * `used` column stays 0 and never holds money. The total AI credit is not here: it never resets, so a company moved down
  * to Free gets no second credit.
  */
-export const MONTHLY_KEYS: readonly string[] = ["text_screens", "recruiter_asks", "screen_person_requests", "voice_minutes", "sourcing_contacts", AI_CREDIT_MONTHLY_CENTS];
+export const MONTHLY_KEYS: readonly string[] = ["text_screens", "screen_person_requests", "voice_minutes", "sourcing_contacts", AI_CREDIT_MONTHLY_CENTS];
 export const isMonthly = (key: string): boolean => MONTHLY_KEYS.includes(key);
 
 /** A row as the period rules read it. */
@@ -248,8 +247,8 @@ export async function record(q: Queryable, companyId: string, key: string, quant
  */
 export type UsageLine = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
 
-/** Limits that are not a count of anything used, so they have no "used of limit" line: read them with `limitOf`. */
-const NOT_A_COUNT: readonly string[] = [CANDIDATES_PER_JOB, ITS_WORK];
+/** The keys with a "used of limit" line: the ones every plan names, but the candidates per job, which is not a count of anything used (read it with `limitOf`). */
+const COUNTED_KEYS: readonly string[] = PLAN_LIMIT_KEYS.filter((key) => key !== CANDIDATES_PER_JOB);
 
 const MICROS_PER_CENT = 10_000;
 
@@ -261,14 +260,15 @@ export const creditPercent = (spent: number, limit: number): number => (limit <=
  * members and open invitations now (known bug 128: the stored count never moved), jobs ever from the roles (only with a
  * limit: without one there is nothing to say), the AI credit as a percentage (only with a limit), the rest within their
  * period. The credit's percentage is money actually spent, worked out as Home's is (`aiCreditView`), so a draft's hold does
- * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds.
+ * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds. A company
+ * keeps the rows of every plan it was on, so a row whose key no plan names now has no line.
  */
 export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
   const now = opts.now ?? new Date();
   const out: Record<string, UsageLine> = {};
   for (const e of rows) {
-    if (NOT_A_COUNT.includes(e.key)) continue;
+    if (!COUNTED_KEYS.includes(e.key)) continue;
     const credit = isAiCreditKey(e.key);
     if ((credit || e.key === JOBS_TOTAL) && e.limit === null) continue;
     const resets = isMonthly(e.key) ? { resetsAt: currentPeriod(e, now).periodEnd } : {};
@@ -312,7 +312,7 @@ export async function applyPlan(q: Queryable, companyId: string, planKey: string
   return { aiCreditMonthStarted };
 }
 
-/** Requests for a person instead of the screening conversation (Q16): counted, never limited; ITS covers them. */
+/** Requests for a person instead of the screening conversation (Q16): counted, never limited. */
 export const PERSON_REQUESTS = "screen_person_requests";
 /** The share of the monthly allowance at which the owner and ITS are warned (Q17). */
 export const ALLOWANCE_WARN_RATIO = 0.8;
@@ -362,50 +362,10 @@ export async function flagScreenAllowance(q: Queryable, input: { companyId: stri
   }, { now: input.now });
 }
 
-/** Where a company stands against its recruiter-request allowance: `over` once it has used more than the plan includes. */
-export type RecruiterAskStanding = { used: number; limit: number | null; over: boolean };
-
-export async function recruiterAskStanding(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<RecruiterAskStanding> {
-  const [row] = await q.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, RECRUITER_ASKS))).limit(1);
-  if (!row) return { used: 0, limit: null, over: false };
-  const used = currentPeriod(row, opts.now).used;
-  return { used, limit: row.limit, over: row.limit !== null && used > row.limit };
-}
-
-/**
- * Counts one recruiter request against the plan (founder decision Q33, option A). Only requests the company's own team
- * makes are counted (the caller decides: never a candidate's, the system's or an ITS recruiter's), and nothing is ever
- * refused: a person can always reach a person. Runs inside the request's own tenant transaction.
- */
-export async function recordRecruiterAsk(q: Queryable, companyId: string, ref: Record<string, unknown>): Promise<RecruiterAskStanding> {
-  await record(q, companyId, RECRUITER_ASKS, 1, "request", ref);
-  return recruiterAskStanding(q, companyId);
-}
-
-/**
- * Flags a company that has gone past its recruiter requests to ITS for billing: one alert in the admin console while
- * it stands (a second request over the line does not raise another). Platform side only: the tenant role cannot write
- * alerts.
- */
-export async function flagRecruiterAsksOver(q: Queryable, input: { companyId: string; companyName: string; standing: RecruiterAskStanding; escalationId: string; now?: Date }): Promise<{ id: string; created: boolean }> {
-  const { used, limit } = input.standing;
-  await settleAllowanceAlerts(q, { companyId: input.companyId });
-  return raiseAlertOnce(q, {
-    kind: "billing.recruiter_asks_over",
-    severity: "info",
-    companyId: input.companyId,
-    target: { type: "company", id: input.companyId },
-    title: `${input.companyName} has asked for more recruiter help than its plan includes`,
-    body: `${used} recruiter requests used${limit === null ? "" : ` of the ${limit} the plan includes`}. Nothing was held up: every request went to the queue as usual. Talk with the customer about billing for the extra.`,
-    details: { used, limit, escalationId: input.escalationId },
-  }, { now: input.now });
-}
-
 /** The ITS alerts about an allowance, the allowance each is about, and whether it still stands for a count and a limit. */
 const ALLOWANCE_ALERTS: Record<string, { key: string; stands: (used: number, limit: number) => boolean }> = {
   "billing.screens_warning": { key: TEXT_SCREENS, stands: (used, limit) => used >= Math.ceil(limit * ALLOWANCE_WARN_RATIO) },
   "billing.screens_used_up": { key: TEXT_SCREENS, stands: (used, limit) => used >= limit },
-  "billing.recruiter_asks_over": { key: RECRUITER_ASKS, stands: (used, limit) => used > limit },
 };
 
 /**
@@ -420,7 +380,7 @@ export async function settleAllowanceAlerts(q: Queryable, opts: { companyId?: st
   const alerts = await q.select({ id: adminAlerts.id, kind: adminAlerts.kind, companyId: adminAlerts.companyId }).from(adminAlerts).where(and(...where));
   const companyIds = [...new Set(alerts.map((a) => a.companyId).filter((c): c is string => !!c))];
   if (!companyIds.length) return 0;
-  const rows = await q.select().from(entitlements).where(and(inArray(entitlements.companyId, companyIds), inArray(entitlements.key, [TEXT_SCREENS, RECRUITER_ASKS])));
+  const rows = await q.select().from(entitlements).where(and(inArray(entitlements.companyId, companyIds), eq(entitlements.key, TEXT_SCREENS)));
   const now = opts.now ?? new Date();
   const gone = alerts.filter((a) => {
     const rule = ALLOWANCE_ALERTS[a.kind];

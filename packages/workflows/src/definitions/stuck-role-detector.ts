@@ -24,7 +24,6 @@ export const stuckRoleDetector: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "detect",
   maxAttempts: 5,
-  escalationKind: "stuck_role",
   steps: {
     async detect(ctx) {
       // The company's morning email summaries (plan B3) run beside this check: a company that existed before them gets
@@ -32,7 +31,7 @@ export const stuckRoleDetector: WorkflowDefinition<State> = {
       await startNotificationDigest(ctx.services.engine, ctx.q, ctx.companyId, ctx.actor);
       await retireInviteSuggestions(ctx);
       const detections = await detectStuckRoles(ctx.q, ctx.companyId, ctx.now);
-      const results = await runInterventionLadder(ctx.q, { integrations: ctx.services.integrations, appBaseUrl: ctx.services.env.appBaseUrl, itsQueueEmail: ctx.services.env.itsQueueEmail, now: ctx.now, actor: ctx.actor }, ctx.companyId, detections);
+      const results = await runInterventionLadder(ctx.q, { integrations: ctx.services.integrations, appBaseUrl: ctx.services.env.appBaseUrl, now: ctx.now, actor: ctx.actor }, ctx.companyId, detections);
       // The candidate's status link lives on the job-page host, like the acknowledgment's.
       const courtesy = { integrations: ctx.services.integrations, statusBaseUrl: ctx.services.env.jobsBaseUrl, now: ctx.now, actor: { kind: "system" as const, id: "untold_safety_net" } };
       const safetyNet = await runUntoldSafetyNet(ctx.q, courtesy, ctx.companyId);

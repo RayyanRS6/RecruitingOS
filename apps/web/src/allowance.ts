@@ -50,8 +50,8 @@ export function screeningAllowanceWarning(usage: Record<string, UsageLine> | nul
   };
 }
 
-/** What Today's card asks ITS, opened in the request form first (never sent in one click). */
-export const ALLOWANCE_ASK = { kind: "ask" as const, about: "all" as const, topic: "plan" as const, question: "We are running low on this month's AI interviews. Can we add more?" };
+/** Why Today's card asks ITS about the plan: sent with the request, from the upgrade sheet (never in one click). */
+export const ALLOWANCE_ASK = "We are running low on this month's AI interviews. Can we add more?";
 
 /** An ITS alert about a company's allowance (GET /admin/alerts), as the admin console reads it. */
 export type AllowanceAlert = { companyId: string; level: AllowanceLevel; used: number | null; limit: number | null; since: string };

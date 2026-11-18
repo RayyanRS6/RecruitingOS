@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PacketRevisionProposal, RequirementsCheck } from "@ros/contracts";
 import { Alert, Card } from "@ros/ui";
-import { api, ApiError, type NewVersionResponse, type RolePacket, type WhoPosts } from "../../api/client";
+import { api, ApiError, type NewVersionResponse, type RolePacket } from "../../api/client";
 import { savedVersionToast } from "../../publishing";
 import { toast } from "../../toast";
 import { Composer } from "./Composer";
@@ -19,9 +19,9 @@ import { errorWords } from "./rules";
  * new version only when a person presses Confirm; whether it takes effect now or after approval is the API's rule, and
  * the card says which before anything is pressed. Shown to people who may edit the packet. What a saved change became
  * is said the same way as the editor's (founder decision Q10): live now, with the boards still showing the earlier
- * version, or waiting for approval, which a company's only owner confirms themselves (`whoPosts` names who updates them).
+ * version, or waiting for approval, which a company's only owner confirms themselves.
  */
-export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: string; packet: RolePacket; whoPosts?: WhoPosts }) {
+export function RoleRefine({ roleId, packet }: { roleId: string; packet: RolePacket }) {
   const qc = useQueryClient();
   const paths = refinePaths({ kind: "role", roleId });
   const [text, setText] = useState("");
@@ -44,7 +44,7 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
   const confirm = useMutation({
     mutationFn: (p: PacketRevisionProposal) => api.post<NewVersionResponse>(paths.apply(p.revisionId)),
     onSuccess: async (r) => {
-      const t = savedVersionToast(r, whoPosts);
+      const t = savedVersionToast(r);
       toast(t.title, t.detail);
       setProposal(null);
       setAsked(null);
@@ -62,7 +62,7 @@ export function RoleRefine({ roleId, packet, whoPosts = "its" }: { roleId: strin
   const fix = useMutation({
     mutationFn: (fixId: string) => api.post<NewVersionResponse & { applied: string[] }>(paths.applyFixes, { base: check.data?.base ?? "", fixIds: [fixId] }),
     onSuccess: async (r) => {
-      const t = savedVersionToast(r, whoPosts);
+      const t = savedVersionToast(r);
       toast(t.title, [r.applied.join(" "), t.detail].filter(Boolean).join(" ") || undefined);
       await refresh();
     },

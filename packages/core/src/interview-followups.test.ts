@@ -27,7 +27,6 @@ import {
   type FollowUpView,
 } from "./interview-followups";
 import { setMark } from "./marks";
-import { roleTakenOver } from "./policy";
 import { exportCandidateData } from "./privacy-requests";
 import { ownerStage, transition } from "./stages";
 
@@ -252,8 +251,7 @@ describe("interview follow-ups (the Cancelled column)", () => {
       expect((await move("waiting_check")).autoState).toBe("waiting_check");
       expect((await move("preparing")).autoState).toBe("preparing");
       // from being prepared only these reasons end it: no email, the team acted, they left, the interview changed, a
-      // reply asking for a person or saying no, an ITS recruiter taking the role over (never "stop", nor the switch: the
-      // interview is open by then)
+      // reply asking for a person or saying no (never "stop", nor the switch: the interview is open by then)
       for (const reason of ["stopped_by_team", "switched_off", "no_interviewers", "company_not_checked"] as const) await expect(move("not_sent", reason), reason).rejects.toThrow(FollowUpError);
       await expect(move("waiting")).rejects.toThrow(FollowUpError);
       const sent = await move("sent");
@@ -276,12 +274,10 @@ describe("interview follow-ups (the Cancelled column)", () => {
       expect(stopped).toMatchObject({ autoState: "not_sent", autoReason: "stopped_by_team" });
     });
 
-    it("lets a reply asking for a person or saying no, or an ITS takeover, end a set still being prepared", async () => {
-      for (const reason of ["candidate_replied", "takeover"] as const) {
-        const { row } = await cancelled(await person("interview_recommended"));
-        await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "preparing", actor: system, now: NOW }));
-        expect(await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "not_sent", reason, actor: system, now: NOW }))).toMatchObject({ autoState: "not_sent", autoReason: reason });
-      }
+    it("lets a reply asking for a person or saying no end a set still being prepared", async () => {
+      const { row } = await cancelled(await person("interview_recommended"));
+      await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "preparing", actor: system, now: NOW }));
+      expect(await tenant((tx) => setAutoState(tx, { followUpId: row.id, to: "not_sent", reason: "candidate_replied", actor: system, now: NOW }))).toMatchObject({ autoState: "not_sent", autoReason: "candidate_replied" });
     });
 
     it("lists the sets already promised a day, for Setup to ask about before switching off", async () => {
@@ -459,16 +455,6 @@ describe("interview follow-ups (the Cancelled column)", () => {
       await noShow(q);
       const bundle = await tenant((tx) => exportCandidateData(tx, companyId, p.candidateId));
       expect(bundle.interviewCancellations).toEqual([{ applicationId: p.applicationId, at: NOW.toISOString(), choice: "not_interested" }]);
-    });
-
-    it("knows when an ITS recruiter is running the role", async () => {
-      expect(await tenant((tx) => roleTakenOver(tx, companyId, roleId))).toBe(false);
-      const takeoverId = randomUUID();
-      await handle.db.execute(sql`INSERT INTO takeovers (id, company_id, role_id, recruiter_user_id, status) VALUES (${takeoverId}, ${companyId}, ${roleId}, ${ownerId}, 'active')`);
-      expect(await tenant((tx) => roleTakenOver(tx, companyId, roleId))).toBe(true);
-      expect(await tenant((tx) => roleTakenOver(tx, companyId, otherRoleId))).toBe(false);
-      await handle.db.execute(sql`UPDATE takeovers SET status = 'ended', ended_at = now() WHERE id = ${takeoverId}`);
-      expect(await tenant((tx) => roleTakenOver(tx, companyId, roleId))).toBe(false);
     });
 
     it("reads the open row, locked when asked", async () => {

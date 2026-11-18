@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScreenProgress, ScreenTranscriptEntry } from "@ros/contracts";
-import { HANDED_TO_A_PERSON, WITHHELD_RUN_OUTPUT, conversationMessageOf, isUnsentConversationReading, screenAnswersSent, teamScreenView, unsentScreenReadings, withoutSentimentWords, withoutUnsentConversation, withoutUnsentInContext, withoutUnsentRunOutput, withoutUnsentScreenEvents } from "./screen-answers";
+import { HANDED_TO_A_PERSON, WITHHELD_RUN_OUTPUT, conversationMessageOf, isUnsentConversationReading, screenAnswersSent, teamScreenView, unsentScreenReadings, withoutSentimentWords, withoutUnsentConversation, withoutUnsentRunOutput, withoutUnsentScreenEvents } from "./screen-answers";
 
 /**
  * "Hide them until they send" (founder decision, 9 October 2026; counsel register item 20): the pure rules every team
@@ -170,50 +170,5 @@ describe("the ITS operations console", () => {
       expect(withoutUnsentRunOutput(detachedRun(task), screens).structuredOutput).toEqual(WITHHELD_RUN_OUTPUT);
       expect(withoutUnsentRunOutput(detachedRun(task), screens, rows("confirmed"))).toEqual(detachedRun(task));
     }
-  });
-});
-
-describe("a recruiter's captured context", () => {
-  it("shows a captured conversation the team could not read as a recruiter's notes alone, however old the capture", () => {
-    const ctx = withoutUnsentInContext({
-      screens: [
-        { channel: "web", status: "human_requested", transcript, answers: { license: "Yes, CA RDH 12345" } },
-        { channel: "web", status: "completed", transcript, answers: { license: "Yes" }, answersShared: true },
-      ],
-      communications: [{ direction: "inbound", channel: "web", body: "Yes, CA RDH 12345" }, { direction: "inbound", channel: "email", body: "a reply" }],
-    });
-    const screens = ctx.screens as Array<{ answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; answersShared: boolean }>;
-    expect(screens[0]).toMatchObject({ answers: {}, answersShared: false, transcript: [transcript[3]] });
-    expect(screens[1].answers).toEqual({ license: "Yes" });
-    expect(ctx.communications).toEqual([{ direction: "inbound", channel: "email", body: "a reply" }]);
-  });
-
-  it("drops an older capture's reading of an unsent conversation, the history of it, and how the candidate sounded", () => {
-    const incomplete = { summary: "Read from what she said before she stopped: 'Yes, CA RDH 12345'.", anomalies: [{ kind: "incomplete_screen", detail: "2 of 5 questions answered." }] };
-    const ctx = withoutUnsentInContext({
-      screens: [{ channel: "web", status: "unfinished", transcript, answers: { license: "Yes, CA RDH 12345" } }],
-      assessments: [{ kind: "triage", overall: "potential", result: { anomalies: [] } }, { kind: "screen", overall: "strong", result: incomplete }],
-      timeline: [
-        { type: "assessment.created", payload: { kind: "screen", assessmentId: "old", overall: "strong" } },
-        { type: "assessment.created", payload: { kind: "triage", assessmentId: "resume", overall: "potential" } },
-        { type: "screen.assessed", payload: { recommendation: "interview", incomplete: true } },
-        { type: "application.stage_changed", payload: { to: "triaged", reason: "candidate sounded distressed" } },
-      ],
-    });
-    expect(ctx.assessments).toEqual([{ kind: "triage", overall: "potential", result: { anomalies: [] } }]);
-    expect((ctx.timeline as Array<{ type: string; payload: Record<string, unknown> }>).map((t) => [t.type, t.payload.kind ?? null])).toEqual([["assessment.created", "triage"], ["application.stage_changed", null]]);
-    expect(JSON.stringify(ctx)).not.toContain("RDH 12345");
-    expect(JSON.stringify(ctx)).not.toContain("sounded");
-  });
-
-  it("keeps a capture made since 9 October as it was filtered then: the notes' scorecard of a call stays", () => {
-    const notes = { summary: "From the recruiter's notes.", anomalies: [] };
-    const ctx = withoutUnsentInContext({
-      screens: [{ channel: "web", status: "completed", transcript: [transcript[3]], answers: {}, answersShared: false }],
-      assessments: [{ kind: "screen", overall: "potential", result: notes }],
-      timeline: [{ type: "assessment.created", payload: { kind: "screen", assessmentId: "notes", overall: "potential" } }],
-    });
-    expect(ctx.assessments).toEqual([{ kind: "screen", overall: "potential", result: notes }]);
-    expect(ctx.timeline).toHaveLength(1);
   });
 });

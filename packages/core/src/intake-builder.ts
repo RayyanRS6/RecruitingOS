@@ -712,7 +712,7 @@ export function applyFactsPatch(facts: IntakeFacts, patch: IntakeFactsPatch, tea
   return edit;
 }
 
-/** The panel's fields as the conversation names them: the person reads these lines as their own message, and so does a recruiter they bring in. */
+/** The panel's fields as the conversation names them: the person reads these lines as their own message. */
 const FACT_LABEL: Readonly<Record<string, string>> = {
   title: "Job title",
   locationText: "Where the job is",

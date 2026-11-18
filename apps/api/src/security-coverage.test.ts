@@ -10,7 +10,7 @@ import { statusTokenFor, testContainerOptions } from "./test-helpers";
 /**
  * Item 8 of the founder's instruction of 18 September 2026: the tests that must never be deferred. Tenant isolation,
  * candidate-link authorization, audit completeness for privileged reads, analytics payload privacy, and scheduling retries
- * under calendar failure. (Staff grants, MFA and break-glass, human-only decisions, no automatic rejection, calendar
+ * under calendar failure. (MFA, human-only decisions, no automatic rejection, calendar
  * disconnection, secret revocation, email suppression, privacy requests, accessibility and browser journeys have their own suites.)
  */
 describe("release-1 security coverage", () => {

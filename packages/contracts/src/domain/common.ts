@@ -3,7 +3,7 @@ import { z } from "zod";
 export const Id = z.uuid();
 export type Id = z.infer<typeof Id>;
 
-export const ActorKind = z.enum(["user", "agent", "system", "candidate", "recruiter"]);
+export const ActorKind = z.enum(["user", "agent", "system", "candidate"]);
 export type ActorKind = z.infer<typeof ActorKind>;
 
 /** Who did something. Every event, audit record, and packet version carries one. */
@@ -34,7 +34,6 @@ export const SubjectType = z.enum([
   "communication",
   "workflow_run",
   "approval_request",
-  "escalation",
   "integration",
   "policy",
   "ai_run",

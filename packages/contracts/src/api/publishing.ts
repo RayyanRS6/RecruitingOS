@@ -3,8 +3,8 @@ import type { PolicyLevel } from "../domain/policy";
 
 /**
  * Approving and publishing a role (plan Wave D): the boards a role uses (Q11), its closing date (Q12), sharing (D8),
- * the legal check before approval (D5), what starts on its own once the role is live (D9) and the ITS posting tasks
- * (D3). The API builds these shapes and the web client reads them.
+ * the legal check before approval (D5) and what starts on its own once the role is live (D9). The API builds these
+ * shapes and the web client reads them.
  */
 
 /** The job boards a person may tick for a role (Q11). The careers page, Google and email are part of every open role. */
@@ -34,11 +34,7 @@ export type SharePlace = z.infer<typeof SharePlace>;
 export const CreateShareLink = z.object({ place: SharePlace });
 export type CreateShareLink = z.infer<typeof CreateShareLink>;
 
-/** The ITS posting tasks (D3): post the job on a board, bring a board up to date after an approved edit, take it down. */
-export const PostingTaskKind = z.enum(["post_job", "update_job", "take_down_job"]);
-export type PostingTaskKind = z.infer<typeof PostingTaskKind>;
-
-/** "The board shows the new version now": recorded by the team or the ITS recruiter, with an optional note. */
+/** "The board shows the new version now": recorded by the team, with an optional note. */
 export const ConfirmBoardUpdated = z.object({ note: z.string().trim().max(500).optional() });
 export type ConfirmBoardUpdated = z.infer<typeof ConfirmBoardUpdated>;
 
@@ -81,13 +77,6 @@ export type ClosingDateView = {
   passed: boolean;
   applicationsClosedByDate: boolean;
 };
-
-/**
- * An ITS posting task as the role's Posting tab shows it: what it is, where it stands, who has it (a name only).
- * `notDone`: the recruiter closed it as not possible, and `note` says why in their words; the team can ask again
- * (POST /roles/:id/postings/:channel/ask-its) or do it from its own account.
- */
-export type PostingTaskView = { id: string; kind: PostingTaskKind; status: string; label: string; recruiterName: string | null; createdAt: string; resolvedAt: string | null; notDone: boolean; note: string | null };
 
 /**
  * Where publishing stands, for the screen right after approval (D2). Poll while `pollAfterSeconds` is a number:

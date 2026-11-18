@@ -13,12 +13,7 @@ export type AuditAction =
   | "credentials.updated"
   | "notice.changed"
   | "session.revoked"
-  | "escalation.context_viewed"
   | "assessment.flagged"
-  | "staff.access_granted"
-  | "staff.access_ended"
-  | "staff.tenant_accessed"
-  | "admin.break_glass"
   | "plan.changed"
   /** An application past the plan's candidates per job, and its opening by a change of plan (Rule 2): why, in arrival order and the plan's numbers, never a name. */
   | "application.locked"
@@ -27,10 +22,7 @@ export type AuditAction =
   | "trial.started"
   | "trial.extended"
   | "trial.ended"
-  /** A recruiter or administrator looked at the pre-acceptance preview of a customer's request (correction 11). */
-  | "escalation.preview_viewed"
   | "calendar.changed"
-  | "escalation.sla_recalculated"
   /** Secret lifecycle (correction 10): every read of a stored credential is recorded with service, purpose, tenant and integration. */
   | "secret.stored"
   | "secret.read"
@@ -49,8 +41,6 @@ export type AuditAction =
   | "platform_role.revoked"
   /** A listed bootstrap email signed in after administrators already existed: the list is ignored (21 Sep, item 2). */
   | "bootstrap.ignored"
-  /** The customer ended a recruiter's access early (21 Sep, item 1). */
-  | "staff.access_revoked"
   /** Human-recorded hiring outcomes (21 Sep, item 4). */
   | "outcome.recorded"
   /** A rate limit tripped (21 Sep, item 5): the key is a hash, never the subject. */
@@ -113,16 +103,13 @@ export type AuditAction =
   /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
   | "message.sent"
   | "message.approval_requested"
-  /** ITS staff wrote to someone locked, past the company's approval rule, because nobody at the company may read them (the plans of 5 November 2026, Rule 2). Which rule, never the text. */
-  | "message.approval_skipped"
   /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
   | "message.undone"
   /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */
   | "role.closing_message"
   /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
   | "notification.preferences_changed"
-  /** Wave E: a recruiter added notes from a call to a screening conversation; ITS changed how a role or a company's roles meet the conversation. Never the notes. */
-  | "screen.recruiter_notes_added"
+  /** Wave E: ITS changed how a role or a company's roles meet the conversation. */
   | "role.apply_mode_changed"
   | "company.apply_flow_changed";
 

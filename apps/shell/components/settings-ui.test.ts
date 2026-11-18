@@ -86,7 +86,7 @@ describe("Settings' tabs", () => {
 
   it("keeps every card on the page under its tab, so old #links still find their card", () => {
     const html = page();
-    for (const id of ["setup-company", "setup-profile", "setup-team", "setup-notifications", "setup-availability", "setup-shortcut", "setup-rules", "setup-boards", "setup-new-times", "setup-sessions", "setup-recruiters", "setup-services", "setup-audit"]) {
+    for (const id of ["setup-company", "setup-profile", "setup-team", "setup-notifications", "setup-availability", "setup-shortcut", "setup-rules", "setup-boards", "setup-new-times", "setup-sessions", "setup-services", "setup-audit"]) {
       expect(html, id).toContain(`<div id="${id}" class="setup-section" tabindex="-1">`);
     }
     expect(html.indexOf('id="settings-panel-notifications"')).toBeLessThan(html.indexOf('id="setup-availability"'));
@@ -195,9 +195,7 @@ describe("each card says one line, the rest one click away", () => {
     // no line under each title that only describes the card (founder, 23 October 2026: fewer words)
     expect(words).toContain("Your sessions How this works Each place's internet address is shown only as a short code, never in full.");
     expect(words).not.toContain("Every place you are signed in.");
-    expect(words).toContain("ITS recruiter access How this works A recruiter gets access when your team asks for one");
-    expect(words).not.toContain("Which ITS recruiters can see your hiring");
-    expect(words).toContain("Audit history Download as a spreadsheet How this works It lists recruiter access");
+    expect(words).toContain("Audit history Download as a spreadsheet How this works It lists team changes");
     expect(words).not.toContain("Who did what in your workspace");
     // services in plain words, not code names
     expect(words).toContain("Job board LinkedIn Not connected");
@@ -237,7 +235,7 @@ describe("Settings: the Trial plan's 30 days and 3 people (founder decision L-02
 });
 
 describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
-  const onFree = (over: Record<string, unknown> = {}, seats = { used: 1, limit: 2 }) => ({ ...company, planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, usage: { active_roles: { used: 1, limit: 1 }, jobs_total: { used: 1, limit: 1 }, text_screens: { used: 3, limit: null, resetsAt: "2026-12-05T12:00:00.000Z" }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-12-05T12:00:00.000Z" }, seats }, trial: null, ...over });
+  const onFree = (over: Record<string, unknown> = {}, seats = { used: 1, limit: 2 }) => ({ ...company, planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, usage: { active_roles: { used: 1, limit: 1 }, jobs_total: { used: 1, limit: 1 }, text_screens: { used: 3, limit: null, resetsAt: "2026-12-05T12:00:00.000Z" }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, seats }, trial: null, ...over });
 
   it("Free shows its jobs and its AI help as a percentage, with no trial words, no dollars and no row for candidates per job", () => {
     const words = text(page({ company: onFree() }));
@@ -261,12 +259,12 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
   });
 
   it("after an upgrade the AI help's month and the other allowances' dates differ, and each says its own: Free on October 1, Basic on November 5", () => {
-    // the upgrade starts the credit's month, November 5 to December 5; recruiter requests keep rolling from sign-up, to November 30
-    const usage = { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent" as const, resetsAt: "2026-12-05T18:00:00.000Z" }, recruiter_asks: { used: 0, limit: 1, resetsAt: "2026-11-30T18:00:00.000Z" } };
-    expect(usageLines(usage)).toEqual(["AI help this month: 18% used, starts again December 5", "recruiter requests: 0 of 1"]);
+    // the upgrade starts the credit's month, November 5 to December 5; a limit of AI interviews keeps rolling from sign-up, to November 30
+    const usage = { ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent" as const, resetsAt: "2026-12-05T18:00:00.000Z" }, text_screens: { used: 3, limit: 150, resetsAt: "2026-11-30T18:00:00.000Z" } };
+    expect(usageLines(usage)).toEqual(["AI help this month: 18% used, starts again December 5", "AI interviews this month: 3 of 150"]);
     expect(usageResets(usage)).toBe("Monthly allowances reset on November 30.");
     const words = text(page({ company: onFree({ usage }) }));
-    expect(words).toContain("AI help this month: 18% used, starts again December 5 · recruiter requests: 0 of 1 Monthly allowances reset on November 30.");
+    expect(words).toContain("AI help this month: 18% used, starts again December 5 · AI interviews this month: 3 of 150 Monthly allowances reset on November 30.");
     // on the company's calendar, as Home says it, whichever server draws it: 2 a.m. in UTC on the 5th is still the 4th in Los Angeles
     expect(usageLines({ ai_credit_monthly_cents: { used: 18, limit: 100, unit: "percent", resetsAt: "2026-12-05T02:00:00.000Z" } }, "America/Los_Angeles")).toEqual(["AI help this month: 18% used, starts again December 4"]);
     // and the page reads the company's own zone: 6 p.m. in UTC on the 5th is already the 6th in Tokyo
@@ -286,7 +284,7 @@ describe("Settings: the plan's usage (the plans of 5 November 2026)", () => {
     expect(usageLines({ ai_credit_total_cents: { used: 83, limit: 100, unit: "percent" } }, null, "warning")).toEqual(["AI help: 83% used"]);
     expect(usageLines({ ai_credit_total_cents: { used: 12, limit: 100, unit: "percent" } }, null, null)).toEqual(["AI help: 12% used"]);
     // and nothing else on the row reads the level
-    expect(usageLines({ recruiter_asks: { used: 1, limit: 1 } }, null, "used_up")).toEqual(["recruiter requests: 1 of 1"]);
+    expect(usageLines({ active_roles: { used: 1, limit: 1 } }, null, "used_up")).toEqual(["active jobs: 1 of 1"]);
   });
 
   it("promises a pilot only while the company is on one: its dates stay on record after a move to Pro or Free, and the line goes", () => {

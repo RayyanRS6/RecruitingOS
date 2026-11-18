@@ -16,7 +16,7 @@ import { OPEN_REQUESTS_EMAILED, companyRequestDetails, decideAccess, sendAccessR
 import { emailReallyLeft } from "./services/company-trust";
 import { createCompany, signupDoor } from "./services/companies";
 import { backfillPublishing } from "./services/publishing-backfill";
-import { signInAdmin, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
+import { signInAdmin, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
  * First sign-in asks for approval (the owner's request of 6 November 2026, SIGNUP_MODE=approval). Someone signed in fills
@@ -148,7 +148,6 @@ describe("the third mode (env.ts)", () => {
       expect(signupDoor(env, person("Quinn@LISTED-DOMAIN.test"))).toBe("direct");
       expect(signupDoor(env, person("ada@its.test", "platform_admin"))).toBe("direct");
       expect(signupDoor(env, person("sam@stranger.test"))).toBe("request");
-      expect(signupDoor(env, person("rita@its.test", "its_recruiter"))).toBe("request");
       const invite = loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "invite", SIGNUP_ALLOWED_EMAILS: "pat@listed.test" });
       expect(signupDoor(invite, person("sam@stranger.test"))).toBe("none");
       expect(signupDoor(invite, person("pat@listed.test"))).toBe("direct");
@@ -578,11 +577,9 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const asker = await w.ask("guarded@stranger.test", "Guarded Dental");
     const body = { decision: "accept", from: "requested", confirm: true };
     expect((await w.json("", "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(401);
-    // the person themselves, another customer, an ITS recruiter
+    // the person themselves
     expect(await w.code(await w.json(asker.cookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, body))).toBe("forbidden");
     expect((await w.json(asker.cookie, "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(403);
-    const recruiter = await signInStaff(w.app, w.container, "rae@identifiedtalent.com", "its_recruiter", "Rae Recruiter");
-    expect((await w.json(recruiter, "POST", `/api/v1/admin/customers/${asker.id}/access`, body)).status).toBe(403);
     // an administrator whose session carries no second factor
     const second = await signInAdmin(w.app, w.container, "second.admin@identifiedtalent.com", "Second Admin");
     await withPlatform(w.container.db, (tx) => tx.update(sessions).set({ aal: "aal1" }).where(sql`${sessions.userId} = (select id from users where email = 'second.admin@identifiedtalent.com')`));
@@ -612,7 +609,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
     const actions: Array<[string, string, (id: string) => unknown]> = [
       ["confirm", "/verification", () => ({ verified: true, reason: "Checked the website.", confirm: true })],
       ["take back", "/verification", () => ({ verified: false, reason: "Checked the website.", confirm: true })],
-      ["job boards", "/job-boards", () => ({ confirmed: true })],
       ["apply flow", "/apply-flow", () => ({ applyFlow: "one_visit", reason: "A pilot company." })],
       ["trial", "/trial", () => ({ days: 10, reason: "A longer look.", confirm: true })],
       ["candidate score", "/candidate-score", () => ({ shown: false, reason: "Asked by counsel." })],
@@ -629,9 +625,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
         expect(error.message, what).toMatch(/^This company/);
         expect(error.details.path, what).toBe(`/api/v1/admin/customers/${id}/access`);
       }
-      const glass = await w.json(adminCookie, "POST", "/api/v1/admin/break-glass", { companyId: id, reason: "An emergency, in a test.", minutes: 5 });
-      expect(glass.status).toBe(409);
-      expect(await w.code(glass)).toBe("access_request_open");
       // reads answer, and say nothing odd
       const report = await w.json(adminCookie, "GET", `/api/v1/admin/customers/${id}/report`);
       expect(report.status).toBe(200);
@@ -1271,12 +1264,10 @@ const FILL = (t: Targets): Array<[string, Record<string, string>]> => [
   ["/api/v1/auth/sessions", { id: NOBODY }],
   ["/api/v1/companies/current/invitations", { id: NOBODY }],
   ["/api/v1/companies/current/members", { userId: t.userId }],
-  ["/api/v1/companies/current/staff-access", { grantId: NOBODY }],
   ["/api/v1/intake/sessions", { id: t.session, revisionId: NOBODY }],
   ["/api/v1/roles", { id: t.role, channel: "careers_page", kind: "missing_must_have", revisionId: NOBODY, version: "1", linkId: NOBODY }],
   ["/api/v1/applications", { id: t.application, communicationId: NOBODY, documentId: NOBODY, assessmentId: NOBODY }],
   ["/api/v1/approvals", { id: NOBODY }],
-  ["/api/v1/escalations", { id: NOBODY }],
   ["/api/v1/admin/platform-roles", { grantId: NOBODY }],
   ["/api/v1/admin/users", { userId: t.userId }],
   ["/api/v1/admin/customers", { id: t.company }],
@@ -1836,8 +1827,6 @@ describe("taking an accepted company's access away", () => {
     const body = { decision: "remove", confirm: true };
     expect((await w.json("", "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(401);
     expect((await w.json(co.cookie, "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(403);
-    const recruiter = await signInStaff(w.app, w.container, "ray@identifiedtalent.com", "its_recruiter", "Ray Recruiter");
-    expect((await w.json(recruiter, "POST", `/api/v1/admin/customers/${co.id}/access`, body)).status).toBe(403);
     expect((await w.json(adminCookie, "POST", `/api/v1/admin/customers/${co.id}/access`, { decision: "remove" })).status).toBe(400);
     expect(await w.statusesOf(co.id)).toEqual(["active", "active"]);
   });

@@ -527,8 +527,8 @@ describe("interviewInScore: where the AI interview stands, from the screens in a
     expect(interviewInScore([{ status: "expired" }, { status: "completed", scoreFailed: true }])).toBe("scoring_failed");
     expect(interviewInScore([{ status: "completed", scoreFailed: true }, { status: "completed" }])).toBe("being_scored");
     expect(interviewInScore([{ status: "completed", scoreFailed: true }, { status: "completed", scoreWaitsForCredit: "2026-11-05T10:00:00Z" }])).toBe("not_scored");
-    for (const open of ["invited", "reminded", "in_progress", "paused", "human_requested"]) expect(interviewInScore([{ status: "expired" }, { status: open }]), open).toBe("not_done_yet");
-    for (const closed of ["expired", "unfinished", "declined_by_candidate", "abandoned", "cancelled"]) expect(interviewInScore([{ status: closed }]), closed).toBe("not_done");
+    for (const open of ["invited", "reminded", "in_progress", "paused"]) expect(interviewInScore([{ status: "expired" }, { status: open }]), open).toBe("not_done_yet");
+    for (const closed of ["expired", "unfinished", "declined_by_candidate", "abandoned", "cancelled", "human_requested"]) expect(interviewInScore([{ status: closed }]), closed).toBe("not_done");
     expect(interviewInScore([], "eligible")).toBe("not_done_yet");
     expect(interviewInScore([], "received")).toBe("not_done_yet");
     expect(interviewInScore([], "triaged")).toBe("none");
@@ -545,14 +545,12 @@ describe("interviewInScore: where the AI interview stands, from the screens in a
     expect(interviewInScore([{ status: "completed" }], "screen_complete", { allowanceLapsed: true })).toBe("being_scored");
   });
 
-  it("reads a request for a person as still coming only while a recruiter's call can finish the AI interview (the release review, 11 November 2026)", () => {
-    // at the screening steps a recruiter's notes from the call finish it and write its scorecard
-    for (const stage of ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"]) expect(interviewInScore([{ status: "human_requested" }], stage), stage).toBe("not_done_yet");
-    // past them (an interview set up, a decision) the notes go nowhere near it (`not_screening`): nothing will score it
-    for (const stage of ["interview_recommended", "interview_scheduled", "interview_complete", "finalist", "hired", "rejected", "talent_pool", "withdrawn"]) expect(interviewInScore([{ status: "expired" }, { status: "human_requested" }], stage), stage).toBe("not_done");
-    // a link still open there is theirs to send, so it still counts; and without a stage nothing changes
+  it("reads a request for a person as not done at every stage: nothing will score that AI interview", () => {
+    for (const stage of ["screen_invited", "screening", "screen_complete", "interview_recommended", "interview_scheduled", "interview_complete", "finalist", "hired", "rejected", "talent_pool", "withdrawn"]) expect(interviewInScore([{ status: "expired" }, { status: "human_requested" }], stage), stage).toBe("not_done");
+    expect(interviewInScore([{ status: "human_requested" }])).toBe("not_done");
+    // a link still open is theirs to send, so it still counts, whatever the stage
     expect(interviewInScore([{ status: "in_progress" }], "interview_scheduled")).toBe("not_done_yet");
-    expect(interviewInScore([{ status: "human_requested" }])).toBe("not_done_yet");
+    expect(interviewInScore([{ status: "human_requested" }, { status: "invited" }], "screen_invited")).toBe("not_done_yet");
   });
 
   it("gives the same answer whatever order the screens come in (the list loads them unordered)", () => {

@@ -24,7 +24,7 @@ const appPages = "/((?!(?:api|c|careers|a|files|webhooks|feeds|dev)(?:/|$)|(?:pr
 const hostedStaging = () => process.env.VERCEL_ENV === "preview" || process.env.DEPLOY_ENV === "staging";
 
 /**
- * The application shell on Vercel (decision D20, slice 5 step 5). One Next.js app serves the owner, recruiter and admin
+ * The application shell on Vercel (decision D20, slice 5 step 5). One Next.js app serves the owner and admin
  * interface and mounts the existing Hono API and candidate pages under catch-all route handlers, so the API code is
  * retained unchanged. Workspace packages are TypeScript sources and are transpiled here; native database drivers stay
  * external so they load at runtime.

@@ -25,7 +25,7 @@ export const TRIAL_ENDED_ALERT = "billing.trial_ended";
 
 /** The question the team sends ITS from a refusal: the existing "ask ITS" request about the plan. */
 export const TRIAL_PLAN_QUESTION = "Our trial has ended. We would like to choose a plan.";
-const askForPlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: TRIAL_PLAN_QUESTION } };
+const askForPlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/plans/request", body: { reason: TRIAL_PLAN_QUESTION } };
 
 /** A trial date in words, on the company's own calendar: "Friday, October 30". */
 export function trialDateWords(iso: string, timeZone: string | null | undefined): string {

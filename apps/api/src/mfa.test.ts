@@ -190,7 +190,7 @@ describe("staff second factor: enrol, verify, backup, recovery, enforcement", ()
   });
 
   it("the fifth wrong code ends the attempt, the warning comes on the fourth, and an older copy of the cookie does not restore any tries", async () => {
-    const { jar } = await h.browserSignIn({ email: "recruiter@identifiedtalent.com", name: "Riley Recruiter", provider: "azure", aal2: false });
+    const { jar } = await h.browserSignIn({ email: "riley@identifiedtalent.com", name: "Riley Staff", provider: "azure", aal2: false });
     const secret = setupKeyOf(await (await h.get(jar, "/api/v1/auth/mfa")).text());
     const original = { ...jar };
     for (let i = 1; i <= 4; i++) {

@@ -193,7 +193,7 @@ describe("toasts", () => {
 describe("the page behind an open drawer", () => {
   it("stays still while any drawer is open and scrolls again once the last one closes, in whatever order they close", () => {
     const body = { style: { overflow: "auto" } };
-    // a candidate drawer, then "Bring in a recruiter" opened from inside it
+    // a candidate drawer, then a second drawer opened from inside it
     const releaseDrawer = holdPageScroll(body);
     const releaseSheet = holdPageScroll(body);
     expect(body.style.overflow).toBe("hidden");

@@ -4,10 +4,10 @@ import { and, eq } from "drizzle-orm";
 import { expireEmptyDrafts } from "@ros/agents";
 import { entitlements } from "@ros/core";
 import type { DraftRolePacket, IntakeQuestion, IntakeSessionSummary, IntakeSessionView, PlanRoom, RolePacket } from "@ros/contracts";
-import { aiRuns, events, intakeSessions, notifications, recruiterEscalations, rolePackets, roles } from "@ros/db";
+import { aiRuns, events, intakeSessions, notifications, rolePackets, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { putOnInterview, signInAs, signInStaff } from "./test-helpers";
+import { putOnInterview, signInAs } from "./test-helpers";
 
 /**
  * The job builder (plan Wave C): a draft starts with its first message, tap-to-answer cards set the facts, the draft is
@@ -487,25 +487,6 @@ describe("the job builder API", () => {
     // the old form's leaving it off is kept as a question left unticked, which nobody reads but the draft's prompt
     expect((await view(owner, session.id)).facts.suggestions).toEqual([{ field: "eligibility", text: "Do you have this: Active California RDA license?", origin: "owner" }]);
     await json(owner, "POST", `/api/v1/intake/sessions/${session.id}/abandon`);
-  });
-
-  it("'Bring in a recruiter' on a draft carries its conversation; the recruiter opens that draft and no other (C12)", async () => {
-    const otherDraft = (await read<{ session: IntakeSessionView }>(await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour." }))).session.id;
-    expect((await json(owner, "POST", "/api/v1/escalations", { kind: "ask", scope: "role", roleId, intakeSessionId: managersDraft, question: "Help" })).status).toBe(400);
-    expect((await json(manager, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", intakeSessionId: managersDraft, question: "Help" })).status).toBe(403);
-    const asked = await json(owner, "POST", "/api/v1/escalations", { kind: "ask", scope: "company", intakeSessionId: managersDraft, question: "Please help me finish drafting this role." });
-    expect(asked.status).toBe(201);
-    const escalationId = (await read<{ id: string }>(asked)).id;
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId));
-    const snapshot = esc.contextSnapshot as { intakeSession: { id: string; messages: Array<{ content: string }>; facts: { title?: string } } };
-    expect(snapshot.intakeSession.id).toBe(managersDraft);
-    expect(snapshot.intakeSession.messages[0].content).toMatch(/dental office manager/);
-    const recruiter = await signInStaff(app, container, "ria@its.test", "its_recruiter", "Ria Recruiter");
-    expect((await json(recruiter, "POST", `/api/v1/escalations/${escalationId}/claim`)).status).toBe(200);
-    expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    expect((await json(recruiter, "GET", `/api/v1/intake/sessions/${managersDraft}`)).status).toBe(200);
-    expect((await json(recruiter, "GET", `/api/v1/intake/sessions/${otherDraft}`)).status).toBe(403);
-    expect((await read<{ sessions: IntakeSessionSummary[] }>(await json(recruiter, "GET", "/api/v1/intake/sessions"))).sessions.map((s) => s.id)).toEqual([managersDraft]);
   });
 
   // The live test of 12 Nov 2026: the answers to the builder's follow-up cards reached the panel but not the draft, which

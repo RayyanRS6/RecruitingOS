@@ -8,8 +8,7 @@ import { describe, expect, it, vi } from "vitest";
  * The pool board on the Talent page (plan F6-F10; founder decisions B2, B4, B5, B6) as the server first draws it, from
  * answers shaped like the API's: the Board / List switch and the board's Refresh, the board's header and counts,
  * the green summary with next steps naming people, three columns of cards, Review and apply with its groups, ticks,
- * reasons and private footer, the one-click questions panel, Today's pool card, and the board a recruiter is asked to
- * check.
+ * reasons and private footer, the one-click questions panel, and Today's pool card.
  */
 const nav = vi.hoisted(() => ({ search: "", params: { id: "r1" } as Record<string, string> }));
 vi.mock("next/navigation", () => ({
@@ -24,14 +23,13 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { People } = await import("@ros/web/src/pages/People");
 const { Home } = await import("@ros/web/src/pages/Home");
 const { AskPool, AnswerView } = await import("@ros/web/src/pages/board/AskPool");
-const { BoardSnapshotCard } = await import("@ros/web/src/pages/board/BoardSnapshot");
 const { MustHavesCard } = await import("@ros/web/src/pages/RoleReport");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
 
 function score(value: number, over: Record<string, unknown> = {}) {
   const band = value >= 85 ? "very_high" : value >= 70 ? "high" : value >= 55 ? "medium" : "low";
@@ -119,10 +117,8 @@ describe("the pool board on the Candidates page", () => {
     expect(html).not.toMatch(/<h2[^>]*>Dental Hygienist<\/h2>/);
     expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward · 1 already sorted or decided · 1 not on the board yet");
     expect(words).toContain("Ask about this pool");
-    expect(words).toContain("Have a recruiter check this");
     expect(html).toMatch(/<button type="button" class="btn primary">Review and apply (<!-- -->)?3<\/button>/);
-    // on the board, the list's own Compare and recruiter buttons give way to the board's
-    expect(words).not.toContain("Bring in a recruiter");
+    // on the board, the list's own stage strip gives way to the board's
     expect(html).not.toContain('aria-label="Stages"');
     // the summary: two plain sentences, then the next steps naming people
     expect(words).toContain("What the pool looks like 2 of 4 show every must-have. The must-have shown least often is \"Periodontal charting\": 1 of 4 don't show it.");
@@ -170,7 +166,7 @@ describe("the pool board on the Candidates page", () => {
     expect(html).toContain('title="Added to your Shortlist. Private, the candidate is not told.">Shortlist</h3>');
     expect(html).toContain('title="Kept warm on your Longlist. Private, no email.">Longlist</h3>');
     // filed privately, with the day-5 safety net (founder decision D-03), on hover and in the footer below
-    expect(html).toContain('title="Filed privately; nobody is emailed now. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).">Not moving forward</h3>');
+    expect(html).toContain('title="Filed privately; nobody is emailed now. If nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so).">Not moving forward</h3>');
     expect(words).not.toContain("Added to your Shortlist");
     // "untick anyone" is the Apply button's title, not a line under the title
     expect(words).not.toContain("Untick anyone");
@@ -187,7 +183,7 @@ describe("the pool board on the Candidates page", () => {
     // Eve is done: not in the window
     expect(html).not.toContain('id="review-a3"');
     // the footer: private, the safety net while someone ticked is not moving forward, the live counter, Cancel and Apply
-    expect(words).toContain("Private: nobody is emailed now. Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so). 2 decisions ready (1 shortlist · 0 longlist · 1 not moving forward)");
+    expect(words).toContain("Private: nobody is emailed now. Not moving forward: if nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so). 2 decisions ready (1 shortlist · 0 longlist · 1 not moving forward)");
     expect(words).toContain("Cancel");
     expect(words).toContain("Apply 2 decisions");
   });
@@ -273,23 +269,5 @@ describe("the role's Report tab: how the pool meets the must-haves (F7)", () => 
     expect(words).not.toMatch(/Maria|Ben|Luis/);
     // the administrator's view has no link into the customer's role
     expect(render(client(), createElement(MustHavesCard, { mustHaves }))).not.toContain("Look at the must-haves</a>");
-  });
-});
-
-describe("the board a recruiter is asked to check (F9)", () => {
-  it("shows the board as it stood: counts, the summary and each person's place, score, reason and next step", () => {
-    const snapshot = { capturedAt: "2026-10-09T10:00:00.000Z", summary: { sentences: summary.sentences.slice(0, 2), counts: summary.counts }, people: [
-      { applicationId: "a1", name: "Maria Reyes", column: "shortlist", state: "suggested", score: 91, reason: "Match score 91.", needsYourEye: null, nextStep: "Interview" },
-      { applicationId: "a2", name: "Ben Ortiz", column: "longlist", state: "suggested", score: 76, reason: "Match score 76.", needsYourEye: "The assistant was not confident.", nextStep: "Read it yourself" },
-      { applicationId: "a5", name: "Sofia Lind", column: null, state: "waiting", score: null, reason: "Still applying.", needsYourEye: null, nextStep: null },
-    ] };
-    const words = text(render(client(), createElement(BoardSnapshotCard, { snapshot: snapshot as never })));
-    expect(words).toContain("The pool board when they asked");
-    expect(words).toContain("To sort: 1 shortlist · 1 longlist · 1 not moving forward");
-    expect(words).toContain("Maria Reyes Shortlist 91/100 Match score 91. Interview");
-    expect(words).toContain("Ben Ortiz Longlist 76/100 Needs a person's eye: The assistant was not confident. Read it yourself");
-    expect(words).toContain("Sofia Lind No AI interview yet No score yet");
-    // people make every hiring decision: kept, since the team's request is their own (editable) words
-    expect(words).toContain("The board only suggests. The team applies it themselves, privately, in Review and apply.");
   });
 });

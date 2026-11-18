@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -160,14 +160,12 @@ describe("candidate privacy requests", () => {
     expect(req.status).toBe("fulfilled");
   });
 
-  it("asking for a person opens a recruiter escalation with the generic preview", async () => {
+  it("asking for a person's review is a privacy request like the others: ITS has it, with what they wrote", async () => {
     expect((await form(`/c/status/${statusToken}/privacy`, { kind: "human_review", details: "I think my resume was misread." })).status).toBe(302);
     const [req] = await container.db.select().from(dataRequests).where(and(eq(dataRequests.candidateId, candidateId), eq(dataRequests.kind, "human_review")));
-    expect(req.escalationId).toBeTruthy();
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, req.escalationId!));
-    expect(esc.kind).toBe("candidate_issue");
-    expect(esc.summary).toMatch(/asked for a person/);
-    expect(esc.summary).not.toContain("misread");
+    expect(req).toMatchObject({ details: "I think my resume was misread.", channel: "status_page", verificationStatus: "verified_by_link" });
+    const listed = (await (await json(admin, "GET", "/api/v1/admin/data-requests")).json()) as Array<{ id: string; kind: string }>;
+    expect(listed.find((r) => r.id === req.id)).toMatchObject({ kind: "human_review" });
   });
 
   it("a deletion is never automatic: refused without a recorded counsel approval and an explicit confirmation; then anonymizes and keeps the stage history", async () => {
@@ -449,10 +447,9 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(dr)).length).toBe(countAfterFirst);
     expect(outbox().filter((m) => m.to === "noor.haddad@example.com").length).toBe(1);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.replayed"))).length).toBeGreaterThanOrEqual(1);
-    // a request for a person opens an escalation whose text never carries the candidate's words to the customer
+    // a request for a person's review never carries the candidate's words to the customer
     await form(`/c/status/${token}/privacy`, { kind: "human_review", details: "My manager at Coastal is the owner's cousin, please keep this private." });
-    const mine = (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as Array<{ question?: string; summary?: string }>;
-    expect(JSON.stringify(mine)).not.toContain("cousin");
+    for (const path of ["/api/v1/notifications", "/api/v1/events", "/api/v1/brief"]) expect(await (await json(owner, "GET", path)).text(), path).not.toContain("cousin");
     // every creation is audited with the request id, and the token appears in no audit record, event or product event
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.created"));
     expect(audits.some((a) => (a.details as { requestId?: string }).requestId === created[0].id)).toBe(true);

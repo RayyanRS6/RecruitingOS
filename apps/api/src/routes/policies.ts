@@ -21,7 +21,7 @@ const GROUPS: Record<string, string[]> = {
   "Interviews": ["interview.request", "interview.schedule", "interview.reschedule", "interview.record", "scorecard.draft", "debrief.recommend", "candidate.hire_decision"],
   "Offers": ["offer.draft", "offer.send", "offer.negotiate", "offer.revise"],
   "After the offer": ["reference.request", "background_check.order", "background_check.adverse_action", "employee.create_in_hris", "welcome.send", "checkin.request"],
-  "Nudges and sourcing": ["intervention.nudge", "intervention.offer_recruiter", "sourcing.search_internal", "sourcing.enrich_external", "outreach.send"],
+  "Nudges and sourcing": ["intervention.nudge", "sourcing.search_internal", "sourcing.enrich_external", "outreach.send"],
   "Rules and data": ["policy.change", "knockout_rule.change", "notice_text.change", "data.delete", "data.export"],
 };
 
@@ -32,7 +32,7 @@ const GROUPS: Record<string, string[]> = {
  */
 export const SETTABLE: ReadonlySet<string> = new Set([
   "role_packet.approve", "application.hold_ineligible", "application.recommend_interview",
-  "message.send_freeform", "disposition.send", "message.still_reviewing", "intervention.nudge", "intervention.offer_recruiter",
+  "message.send_freeform", "disposition.send", "message.still_reviewing", "intervention.nudge",
 ]);
 
 /**

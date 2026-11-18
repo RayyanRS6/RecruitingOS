@@ -1,11 +1,11 @@
 import { APPLY_FORM_MINUTES, formatPayRange, oneVisitMinutes, type JobPreview, type JobPreviewFact } from "@ros/contracts";
 import type { IconName, Tone } from "@ros/ui";
-import type { AutoActionsOnOpen, BoardChoiceView, ClosingDateResponse, ClosingDateView, LegalCheck, LegalCheckItem, NewVersionResponse, PostingView, PostingsResponse, PublishingState, RolePacket, ShareTarget, ShareView, WhoPosts } from "./api/client";
+import type { AutoActionsOnOpen, BoardChoiceView, ClosingDateResponse, ClosingDateView, LegalCheck, LegalCheckItem, NewVersionResponse, PostingView, PostingsResponse, PublishingState, RolePacket, ShareTarget, ShareView } from "./api/client";
 import { boardNames } from "./role-words";
 
 /**
  * Approving and publishing a role (plan Wave D), the pure parts the pages share: the screen right after approval (D2),
- * the board ticks and who posts (D3, D6), which changes to a live job need approval (D4), the legal check (D5), the
+ * the board ticks (D6), which changes to a live job need approval (D4), the legal check (D5), the
  * closing date (D7), sharing (D8) and what starts on its own once the job is live (D9). No React and no API calls, so
  * every sentence can be checked without a browser (tests/web/publishing.test.ts). Nothing is called done until it was
  * checked: a careers page or a board listing ticks only once its address was checked, Google only once someone saw it.
@@ -77,8 +77,8 @@ export function googleStatus(p: Pick<PostingView, "status"> | undefined, publish
   }
 }
 
-/** A board listing: who has it (ITS or the team), then "Checking it is up", then a tick once the address was checked. */
-export function boardStatus(p: Pick<PostingView, "status" | "postedBy" | "task" | "showsOldVersion" | "closureRequired" | "closureConfirmedAt"> | undefined, publishing: Pick<PublishingState, "state">): StatusChip {
+/** A board listing: waiting for the team to post it, then "Checking it is up", then a tick once the address was checked. */
+export function boardStatus(p: Pick<PostingView, "status" | "showsOldVersion" | "closureRequired" | "closureConfirmedAt"> | undefined, publishing: Pick<PublishingState, "state">): StatusChip {
   if (publishing.state === "waiting_for_company_check") return WAITS_FOR_CHECK;
   if (!p || p.status === "draft" || p.status === "approved") return GETTING_READY;
   switch (p.status) {
@@ -90,16 +90,12 @@ export function boardStatus(p: Pick<PostingView, "status" | "postedBy" | "task" 
     default: break;
   }
   // ready to post: nothing is on the board yet
-  if (p.postedBy !== "its") return { label: "Waiting for you to post it", tone: "caution", done: false, working: false };
-  // ITS closed its task as not possible: never "done", and the Share tab has its words and "Ask ITS again".
-  if (p.task && p.task.status === "resolved" && p.task.notDone) return { label: "ITS could not post it", tone: "caution", done: false, working: false };
-  if (p.task && (p.task.status === "claimed" || p.task.status === "in_progress")) return { label: p.task.recruiterName ? `${p.task.recruiterName} at ITS is posting it` : "ITS is posting it", tone: "neutral", done: false, working: true };
-  return { label: "Waiting for ITS", tone: "neutral", done: false, working: false };
+  return { label: "Waiting for you to post it", tone: "caution", done: false, working: false };
 }
 
-/** Who posts a board, in one line. */
-export function whoPostsLine(postedBy: PostingView["postedBy"] | WhoPosts, board: string): string {
-  return postedBy === "its" ? `ITS is posting this on ${board} from your company's own account.` : `You post this on ${board} from your own account. The Share tab has the words to paste and the steps.`;
+/** How a board gets posted, in one line. */
+export function youPostLine(board: string): string {
+  return `You post this on ${board} from your own account. The Share tab has the words to paste and the steps.`;
 }
 
 /** One place the job is going, as the screen right after approval lists it. */
@@ -107,7 +103,7 @@ export type Destination = { key: string; icon: IconName; name: string; detail: s
 
 /**
  * Where the job is going (D2): the careers page with its address, Google, the email address for applications only
- * while it works, then each chosen board with who posts it. Boards chosen but not prepared yet show "Getting it ready".
+ * while it works, then each chosen board. Boards chosen but not prepared yet show "Getting it ready".
  */
 export function destinationsOf(d: Pick<PostingsResponse, "postings" | "publishing" | "urls" | "emailIn" | "boards" | "closingDate">): Destination[] {
   const find = (channel: string) => d.postings.find((p) => p.channel === channel);
@@ -124,21 +120,20 @@ export function destinationsOf(d: Pick<PostingsResponse, "postings" | "publishin
   for (const b of chosen) {
     const p = find(b.channel);
     if (p && p.status === "closed" && !p.stillUp) continue;
-    out.push({ key: b.channel, icon: "briefcase", name: b.name, detail: whoPostsLine(p?.postedBy ?? null, b.name), status: boardStatus(p, d.publishing), url: p?.externalUrl ?? null });
+    out.push({ key: b.channel, icon: "briefcase", name: b.name, detail: youPostLine(b.name), status: boardStatus(p, d.publishing), url: p?.externalUrl ?? null });
   }
   return out;
 }
 
 /** What saving the board ticks did (D6): the boards now chosen, what happens to the ones added and taken off. */
-export function boardTicksToast(input: { before: readonly string[]; after: readonly string[]; roleStatus: string; whoPosts: WhoPosts }): { title: string; detail?: string } {
+export function boardTicksToast(input: { before: readonly string[]; after: readonly string[]; roleStatus: string }): { title: string; detail?: string } {
   const added = input.after.filter((c) => !input.before.includes(c));
   const removed = input.before.filter((c) => !input.after.includes(c));
   const title = input.after.length ? `Boards saved: ${boardNames([...input.after])}.` : "No job boards for this job.";
   if (input.roleStatus !== "open" && input.roleStatus !== "paused") return { title, detail: "Nothing is posted until the job is approved; the ticked boards are prepared then." };
-  const its = input.whoPosts === "its";
   const parts: string[] = [];
-  if (added.length) parts.push(input.roleStatus === "paused" ? `${boardNames(added)} ${added.length === 1 ? "is" : "are"} prepared when you resume the job.` : its ? `ITS posts the job on ${boardNames(added)} from your company's account.` : `${boardNames(added)} ${added.length === 1 ? "is" : "are"} being prepared for you to post.`);
-  if (removed.length) parts.push(`${boardNames(removed)} closed${its ? "; ITS takes the listing down if it was up." : "; take the listing down from your own account if it was up."}`);
+  if (added.length) parts.push(input.roleStatus === "paused" ? `${boardNames(added)} ${added.length === 1 ? "is" : "are"} prepared when you resume the job.` : `${boardNames(added)} ${added.length === 1 ? "is" : "are"} being prepared for you to post.`);
+  if (removed.length) parts.push(`${boardNames(removed)} closed; take the listing down from your own account if it was up.`);
   return { title, detail: parts.join(" ") || undefined };
 }
 
@@ -187,14 +182,11 @@ export function interviewersNote(i: { rounds: number; roundsWithoutInterviewers:
   return `${i.roundsWithoutInterviewers} of the ${i.rounds} interview rounds ${i.roundsWithoutInterviewers === 1 ? "has" : "have"} nobody named to interview yet. ${who}`;
 }
 
-/** The boards an approved edit left showing the earlier version, and who brings them up to date. */
-export function outdatedBoardsLine(channels: readonly string[], whoPosts: WhoPosts): string | null {
+/** The boards an approved edit left showing the earlier version, and how to bring them up to date. */
+export function outdatedBoardsLine(channels: readonly string[]): string | null {
   if (!channels.length) return null;
   const one = channels.length === 1;
-  const names = boardNames([...channels]);
-  return whoPosts === "its"
-    ? `${names} still ${one ? "shows" : "show"} the earlier version. ITS has a task to update ${one ? "it" : "them"} from your company's account.`
-    : `${names} still ${one ? "shows" : "show"} the earlier version. Update ${one ? "it" : "them"} from your own account, then confirm on the Share tab.`;
+  return `${boardNames([...channels])} still ${one ? "shows" : "show"} the earlier version. Update ${one ? "it" : "them"} from your own account, then confirm on the Share tab.`;
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
@@ -270,12 +262,12 @@ export function liveEditWords(material: readonly MaterialChange[]): { heading: s
 }
 
 /** What a saved version became, in two short lines (the boards still showing the earlier version included). */
-export function savedVersionToast(r: NewVersionResponse, whoPosts: WhoPosts): { title: string; detail?: string } {
+export function savedVersionToast(r: NewVersionResponse): { title: string; detail?: string } {
   const guard = r.guardChanges?.length ? r.guardChanges.join(" ") : "";
   const join = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(" ") || undefined;
   // a paused job shows the version only when it resumes
   if (r.outcome === "approved_current" && r.paused) return { title: `Version ${r.version} is current.`, detail: join("It shows when you resume the job.", guard) };
-  if (r.outcome === "approved_current") return { title: `Version ${r.version} is live.`, detail: join(outdatedBoardsLine(r.boardsShowingOldVersion ?? [], whoPosts) ?? "The job page shows it now.", guard) };
+  if (r.outcome === "approved_current") return { title: `Version ${r.version} is live.`, detail: join(outdatedBoardsLine(r.boardsShowingOldVersion ?? []) ?? "The job page shows it now.", guard) };
   if (r.outcome === "proposed_pending_approval") {
     if (r.needsApproval) return { title: `Saved as version ${r.version}. It waits for approval.`, detail: join(r.needsApproval.words, r.needsApproval.youMayConfirm ? "As the company's only owner, you confirm it yourself on the approval card at the top of the role page." : "The job keeps running as it is until then.", guard) };
     return { title: `Saved as version ${r.version}. It takes effect once an approver says yes.`, detail: join(guard) };
@@ -486,24 +478,6 @@ export function shareTargetsFor(input: { url: string; text: string; subject: str
 export function visitsWords(n: number): string {
   return `${n} ${n === 1 ? "visit" : "visits"}`;
 }
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* ITS posting tasks (D3)                                                                                         */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-const POSTING_TASK_TITLE: Record<string, string> = { post_job: "Post a job", update_job: "Update a job listing", take_down_job: "Take a job listing down" };
-
-export function isPostingTaskKind(kind: string): boolean {
-  return kind in POSTING_TASK_TITLE;
-}
-
-/** A request's kind in the queue, in words: the posting tasks by name, the rest as before. */
-export function queueKindLabel(kind: string): string {
-  return POSTING_TASK_TITLE[kind] ?? kind.replace(/_/g, " ");
-}
-
-/** Before accepting a posting task: what accepting opens, and that it opens nothing about candidates. */
-export const POSTING_TASK_BEFORE_ACCEPT = "Accept the task to open the job ad, the board's own apply link and the steps. A posting task never opens the customer's candidates: there is no access to grant, and every opening is recorded for the customer.";
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Setup: the logo and the company's "about" text (Q13)                                                           */

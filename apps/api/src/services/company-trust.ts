@@ -145,17 +145,6 @@ export async function markPoliciesReviewed(tx: Queryable, input: { companyId: st
   await emit(tx, { type: "company.updated", companyId: input.companyId, actor: input.actor, subject: { type: "company", id: input.companyId }, payload: { fields: ["aiRulesReviewed"] } });
 }
 
-/** ITS confirms it can sign in to the company's job-board accounts (or no longer can); the getting-started step follows. */
-export async function setJobBoardAccess(tx: Queryable, input: { companyId: string; confirmed: boolean; actor: Actor; now: Date; note?: string }): Promise<boolean> {
-  const [co] = await tx.select({ id: companies.id }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
-  if (!co) return false;
-  await mergeOnboarding(tx, co.id, input.confirmed ? { jobBoardsConfirmedAt: input.now.toISOString(), jobBoardsConfirmedBy: input.actor } : { jobBoardsConfirmedAt: null, jobBoardsConfirmedBy: null });
-  const field = input.confirmed ? "jobBoardAccess" : "jobBoardAccessRemoved";
-  await audit(tx, { companyId: co.id, actor: input.actor, action: "company.updated", target: { type: "company", id: co.id }, reason: input.note || (input.confirmed ? "ITS confirmed it can sign in to the job boards" : "ITS can no longer sign in to the job boards"), details: { fields: [field] } });
-  await emit(tx, { type: "company.updated", companyId: co.id, actor: input.actor, subject: { type: "company", id: co.id }, payload: { fields: [field] } });
-  return true;
-}
-
 /**
  * Whether an email really left: the provider took it. The fake adapter on a hosted deployment reports every email sent
  * and keeps it in memory (email-gate.ts), and a provider that is not set up, or a reply that was cut off, says nothing

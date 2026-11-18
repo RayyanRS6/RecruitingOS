@@ -4,7 +4,7 @@ import { entitlements } from "@ros/core";
 import { intakeSessions, users } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInStaff } from "./test-helpers";
+import { signInAs } from "./test-helpers";
 
 /**
  * Who can see a role while it is being drafted (founder decision Q6, option A; plan item 0.2). A draft carries the pay
@@ -94,29 +94,5 @@ describe("drafts belong to the person who started them", () => {
     expect((await json(owner, "POST", `/api/v1/intake/sessions/${managers.id}/abandon`)).status).toBe(200);
     expect((await json(owner, "POST", "/api/v1/intake/sessions/not-a-uuid/messages", { message: "x" })).status).toBe(404);
     expect((await json(owner, "POST", "/api/v1/intake/sessions/00000000-0000-4000-8000-000000000000/compile")).status).toBe(404);
-  });
-
-  it("an ITS recruiter brought in for one role does not see or touch the owner's draft", async () => {
-    const roleId = await (async () => {
-      const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-      return ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    })();
-    const recruiter = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-    const esc = (await (await json(owner, "POST", "/api/v1/escalations", { kind: "review", roleId, question: "Can you look at our hygienist candidates?" })).json()) as { id: string };
-    expect((await json(recruiter, "POST", `/api/v1/escalations/${esc.id}/claim`)).status).toBe(200);
-    expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    // a grant for one role opens no draft and starts none (plan C12): every drafting route refuses it plainly
-    const resumed = await current(recruiter);
-    expect(resumed.status).toBe(403);
-    expect(((await resumed.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-    expect((await json(recruiter, "POST", `/api/v1/intake/sessions/${ownersDraft}/messages`, { message: "Hello" })).status).toBe(403);
-    expect((await json(recruiter, "GET", `/api/v1/intake/sessions/${ownersDraft}`)).status).toBe(403);
-    expect((await json(recruiter, "GET", "/api/v1/intake/sessions")).status).toBe(403);
-    const before = (await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).length;
-    expect((await json(recruiter, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Irvine, $24 to $28 an hour." })).status).toBe(403);
-    expect((await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).length).toBe(before);
-    // the conversation box answers them from the brief instead of starting a draft
-    const conv = (await (await json(recruiter, "POST", "/api/v1/intake/conversation/messages", { message: "I need a dental assistant in Irvine." })).json()) as { intakeSessionId?: string };
-    expect(conv.intakeSessionId).toBeUndefined();
   });
 });

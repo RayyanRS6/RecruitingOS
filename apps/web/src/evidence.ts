@@ -144,11 +144,9 @@ export function scorecardWaiting(a: Pick<ApplicationDetail, "screens">): boolean
 }
 
 /**
- * The latest screen finished but its scorecard could not be written (the run gave up after two unusable answers; the
- * engine then asked ITS to look). The page says so instead of showing a screen with no reading.
+ * The latest screen finished but its scorecard could not be written (the run gave up after two unusable answers, and
+ * ITS is alerted). The page says so instead of showing a screen with no reading.
  */
-export function scorecardUnavailable(a: ApplicationDetail): { unavailable: boolean; recruiterAsked: boolean } {
-  const latest = a.screens[0];
-  const unavailable = latest?.scorecard === "unavailable";
-  return { unavailable, recruiterAsked: unavailable && !!latest?.recruiterAsked };
+export function scorecardUnavailable(a: Pick<ApplicationDetail, "screens">): boolean {
+  return a.screens[0]?.scorecard === "unavailable";
 }

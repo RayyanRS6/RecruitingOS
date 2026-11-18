@@ -44,7 +44,6 @@ export const ActionType = z.enum([
   "data.delete",
   "data.export",
   "intervention.nudge",
-  "intervention.offer_recruiter",
   "sourcing.search_internal",
   "sourcing.enrich_external",
   "outreach.send",
@@ -63,7 +62,7 @@ export const PolicyDecision = z.object({
   actionType: ActionType,
   level: PolicyLevel,
   approverRoles: z.array(z.string()),
-  source: z.enum(["role", "company", "default", "takeover"]),
+  source: z.enum(["role", "company", "default"]),
   params: z.record(z.string(), z.unknown()),
 });
 export type PolicyDecision = z.infer<typeof PolicyDecision>;

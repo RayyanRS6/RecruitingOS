@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Chip, ErrorState, Field, IconLabel, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
+import { Alert, Button, Card, ErrorState, Field, IconLabel, numHead, Pill, Sheet, Skeleton, Table, type Tone } from "@ros/ui";
 import { LOCKED_WORD } from "@ros/contracts";
-import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport, type WhoPosts } from "../api/client";
+import { api, ApiError, type ApplicationLink, type Posting, type PostingView, type PostingsResponse, type RoleDetail, type VolumeReport } from "../api/client";
 import { POSTING_WAITS_FOR_CHECK } from "../company-check";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
@@ -20,16 +20,16 @@ import { linkedInPostLink } from "../linkedin-post";
 
 /**
  * The Share tab (once called Posting) and the header pieces of the job page (docs/spec/20 section 2, items 9 to 17;
- * plan Wave D; Wave S1). A posting is one role on one channel; unless the company posts itself, ITS posts to the boards
- * by hand from the company's own account (an ITS posting task per board, plan D3), records the public address, and the
- * worker checks it before anything is called live. Every state on screen says what happens next.
+ * plan Wave D; Wave S1). A posting is one role on one channel; the team posts to the boards by hand from the company's
+ * own account, records the public address, and the worker checks it before anything is called live. Every state on
+ * screen says what happens next.
  *
  * The tab leads with the job's public link (share it, copy it, open it), then a LinkedIn post to copy (Wave S2), then
  * where it is posted and the closing date; each board's own card, the tracked links and the counts by source sit
  * underneath, folded away until opened (a board that needs the team starts open). Home's cards and the jobs list link
  * straight to parts of it (`#share`, `#linkedin`, `#closing-date`).
  *
- * Every change here needs role.manage (owner, admin, recruiter). Anyone else (a hiring manager, HR, an interviewer)
+ * Every change here needs role.manage (owner, admin). Anyone else (a hiring manager, HR, an interviewer)
  * sees the same tab read-only, with one line saying who can change it, instead of buttons the API always refuses.
  * Sharing is the exception: whoever approves roles may share the job too.
  */
@@ -178,20 +178,18 @@ export function ClosedBanner({ role, canManage, onOpenPosting }: { role: RoleDet
 
 /**
  * The boards still showing the job (item 15): after the role closed, or after one board's posting was closed while the
- * role stays open. When ITS posts for the company, ITS has a task to take each down (plan D3).
+ * role stays open.
  */
-export function StillUpAlert({ channels, roleStatus, onOpen, canManage, whoPosts = "self" }: { channels: string[]; roleStatus: string; onOpen: () => void; canManage: boolean; whoPosts?: WhoPosts }) {
+export function StillUpAlert({ channels, roleStatus, onOpen, canManage }: { channels: string[]; roleStatus: string; onOpen: () => void; canManage: boolean }) {
   if (!channels.length) return null;
   const one = channels.length === 1;
   return (
-    <Alert tone={whoPosts === "its" ? "caution" : "critical"}>
+    <Alert tone="critical">
       <strong>Still up on: {boardNames(channels)}.</strong>{" "}
       {roleStatus === "closed"
         ? `The job is closed, but ${one ? "this board still shows" : "these boards still show"} it.`
         : `The posting was closed ${one ? "there" : "on these boards"}, but ${one ? "the board still shows" : "they still show"} the job.`}{" "}
-      {whoPosts === "its"
-        ? `ITS takes ${one ? "it" : "them"} down and ticks ${one ? "it" : "them"} off; nothing for you to do.`
-        : canManage ? "Take it down from your own account, then tick it off on the Share tab." : "An owner or an admin takes it down and ticks it off on the Share tab."} <Button size="sm" onClick={onOpen}>Go to the Share tab</Button>
+      {canManage ? "Take it down from your own account, then tick it off on the Share tab." : "An owner or an admin takes it down and ticks it off on the Share tab."} <Button size="sm" onClick={onOpen}>Go to the Share tab</Button>
     </Alert>
   );
 }
@@ -240,7 +238,6 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
   const careers = d.postings.find((p) => p.channel === "careers_page");
   const google = d.postings.find((p) => p.channel === "google_jobs");
   const busy = act.isPending;
-  const its = d.whoPosts === "its";
   const live = roleStatus === "open" || roleStatus === "paused";
   const channels = [careers, google, ...boards].filter((p): p is PostingView => !!p);
   const otherLinks = d.links.filter((l) => !l.postingId);
@@ -254,7 +251,7 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
       {!canManage ? <Alert tone="info">{READ_ONLY_POSTINGS}</Alert> : null}
       {roleStatus === "draft" || roleStatus === "pending_approval" ? <Alert tone="caution">Posting starts once the job is approved.</Alert> : null}
       {roleStatus === "paused" ? <Alert tone="caution">The job is paused: it is off your careers page and the feeds. Resume it to carry on. A board still shows it until it is paused or removed there.</Alert> : null}
-      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length && !its ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The job is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${its ? "ITS takes each listing down and ticks it off below." : canManage ? "Take each one down from your own account, then tick it off below." : "An owner or an admin takes each one down and ticks it off below."}` : "The job is closed and every board is confirmed down."}</Alert> : null}
+      {roleStatus === "closed" ? <Alert tone={d.boardsStillUp.length ? "critical" : "neutral"}>{d.boardsStillUp.length ? `The job is closed. Still up on: ${boardNames(d.boardsStillUp)}. ${canManage ? "Take each one down from your own account, then tick it off below." : "An owner or an admin takes each one down and ticks it off below."}` : "The job is closed and every board is confirmed down."}</Alert> : null}
       {check === "waiting" && roleStatus !== "closed" ? <Alert tone="caution">{POSTING_WAITS_FOR_CHECK}</Alert> : null}
 
       {/* First: the job's public link, to share, copy or open. */}
@@ -289,8 +286,8 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
       {/* Where it is posted and the closing date: two cards side by side on a wide screen, one under the other on a phone */}
       <div className="grid-2">
         <Card title="Where it is posted">
-          <p className="small muted mb-3">{its ? "ITS posts it on the job boards from your company's accounts." : "Your team posts it on the job boards from your own accounts."}</p>
-          {roleStatus === "pending_approval" ? <p className="small text-ink-2">{BOARDS_ON_THE_CARD}</p> : <BoardTicks key={savedBoardsKey(d.boards)} roleId={roleId} boards={d.boards} roleStatus={roleStatus} whoPosts={d.whoPosts} canManage={canManage} />}
+          <p className="small muted mb-3">Your team posts it on the job boards from your own accounts.</p>
+          {roleStatus === "pending_approval" ? <p className="small text-ink-2">{BOARDS_ON_THE_CARD}</p> : <BoardTicks key={savedBoardsKey(d.boards)} roleId={roleId} boards={d.boards} roleStatus={roleStatus} canManage={canManage} />}
         </Card>
         <section id="closing-date" className="setup-section" tabIndex={-1}>
           <Card title="Closing date">
@@ -336,17 +333,15 @@ export function PostingTab({ roleId, roleStatus, canManage, canShare = false, ro
 }
 
 /**
- * Whether a board's card holds a step for the team: an address to record when the team posts it, a check that failed,
- * a listing to take down or bring up to date, or a task ITS could not do.
+ * Whether a board's card holds a step for the team: an address to record, a check that failed, or a listing to take
+ * down or bring up to date.
  */
-export function postingNeedsTeam(p: Pick<PostingView, "status" | "postedBy" | "isBoard" | "verificationAttempts" | "closureRequired" | "closureConfirmedAt" | "showsOldVersion"> & { task?: PostingView["task"] }, live: boolean): boolean {
-  const its = p.postedBy === "its";
-  if (its && p.task?.status === "resolved" && p.task.notDone) return true;
-  if (p.showsOldVersion && live && !its) return true;
-  if (p.status === "failed" && !its) return true;
-  if (p.status === "closed" && p.closureRequired && !p.closureConfirmedAt && !its) return true;
-  if (p.status === "ready_to_post" && p.isBoard && !its) return true;
-  if (p.status === "posted_manually" && p.verificationAttempts > 0 && !its) return true;
+export function postingNeedsTeam(p: Pick<PostingView, "status" | "isBoard" | "verificationAttempts" | "closureRequired" | "closureConfirmedAt" | "showsOldVersion">, live: boolean): boolean {
+  if (p.showsOldVersion && live) return true;
+  if (p.status === "failed") return true;
+  if (p.status === "closed" && p.closureRequired && !p.closureConfirmedAt) return true;
+  if (p.status === "ready_to_post" && p.isBoard) return true;
+  if (p.status === "posted_manually" && p.verificationAttempts > 0) return true;
   return false;
 }
 
@@ -367,42 +362,19 @@ function Header({ p, by }: { p: PostingView; by?: string }) {
   );
 }
 
-/**
- * One sentence per state: what it means and what happens next. No state is a dead end. When ITS posts for the company
- * (plan D3) the sentence says ITS has it, never "from your own account".
- */
-export function boardStateLine(p: Pick<PostingView, "status" | "name" | "postedBy" | "verificationAttempts" | "verificationError" | "verifiedAt" | "verifiedBy" | "verificationNote" | "pausedAt" | "error" | "closedAt" | "closureRequired" | "closureConfirmedAt"> & { task?: PostingView["task"] }): string {
-  const its = p.postedBy === "its";
-  // ITS closed its task as not possible (plan D3): the work is back with the team until someone asks ITS again.
-  const itsCouldNot = its && !!p.task?.notDone && p.task.status === "resolved";
+/** One sentence per state: what it means and what happens next. No state is a dead end. */
+export function boardStateLine(p: Pick<PostingView, "status" | "name" | "verificationAttempts" | "verificationError" | "verifiedAt" | "verifiedBy" | "verificationNote" | "pausedAt" | "error" | "closedAt" | "closureRequired" | "closureConfirmedAt">): string {
   switch (p.status) {
     case "draft": return "Waiting for the role to be approved.";
     case "approved": return `The role is approved; ${p.name} is being prepared.`;
-    case "ready_to_post": return itsCouldNot
-      ? `Nothing is on ${p.name} yet: ITS could not post it. Ask ITS again once that is sorted out, or post it from your company's own account and record the address below.`
-      : its
-      ? `ITS is posting this on ${p.name} from your company's own account, with this board's own apply link. It is marked as up only once its address has been checked.`
-      : `Nothing is on ${p.name} yet. Post the package from your own ${p.name} account, use this board's apply link as the way to apply, then record the public address below.`;
-    case "posted_manually": return p.verificationAttempts === 0 ? "Address recorded. Checking the link now; this usually takes a minute." : `The last check did not pass: ${plainCheckFailure(p.verificationError)}. It is checked again shortly (${p.verificationAttempts} of 3).${its ? "" : " If you can see the posting yourself, confirm it below."}`;
+    case "ready_to_post": return `Nothing is on ${p.name} yet. Post the package from your own ${p.name} account, use this board's apply link as the way to apply, then record the public address below.`;
+    case "posted_manually": return p.verificationAttempts === 0 ? "Address recorded. Checking the link now; this usually takes a minute." : `The last check did not pass: ${plainCheckFailure(p.verificationError)}. It is checked again shortly (${p.verificationAttempts} of 3). If you can see the posting yourself, confirm it below.`;
     case "live_verified": return `Live. Verified ${when(p.verifiedAt)} by ${who(p.verifiedBy)}.${p.verificationNote ? ` Note: ${p.verificationNote}` : ""}`;
-    case "paused": return `Paused ${when(p.pausedAt)}. Resume brings it back to where it was. The posting may still be visible on ${p.name}; ${its ? "ask ITS to pause or remove it there" : "pause or remove it there too"} if you want it hidden.`;
-    case "failed": return `${p.verificationError ? `The address could not be verified ${checksIn(p.error) || "by the automatic check"}: ${plainCheckFailure(p.verificationError)}.` : p.error ?? "The check failed."} ${its ? "ITS checks the listing and records the address again." : "Check the address and record it again, or confirm it yourself if you can see the posting."}`;
-    case "closed": return `Closed ${when(p.closedAt)}. ${p.closureRequired ? (p.closureConfirmedAt ? `Removed from ${p.name}, confirmed ${when(p.closureConfirmedAt)}.` : itsCouldNot ? `Still up on ${p.name}: ITS could not take it down. Ask ITS again, or take it down from your company's own account and tick the box.` : its ? `Still up on ${p.name}: ITS takes it down from your company's account and ticks it off here.` : `Still up on ${p.name}: take it down from your own account, then tick the box.`) : "It was never posted on this board, so there is nothing to take down."}`;
+    case "paused": return `Paused ${when(p.pausedAt)}. Resume brings it back to where it was. The posting may still be visible on ${p.name}; pause or remove it there too if you want it hidden.`;
+    case "failed": return `${p.verificationError ? `The address could not be verified ${checksIn(p.error) || "by the automatic check"}: ${plainCheckFailure(p.verificationError)}.` : p.error ?? "The check failed."} Check the address and record it again, or confirm it yourself if you can see the posting.`;
+    case "closed": return `Closed ${when(p.closedAt)}. ${p.closureRequired ? (p.closureConfirmedAt ? `Removed from ${p.name}, confirmed ${when(p.closureConfirmedAt)}.` : `Still up on ${p.name}: take it down from your own account, then tick the box.`) : "It was never posted on this board, so there is nothing to take down."}`;
     default: return "";
   }
-}
-
-/**
- * The ITS posting task on a board (plan D3), in a few words: what it is and where it stands, with the recruiter's name
- * once one has it. A task ITS closed as not possible is never called done.
- */
-export function taskChip(task: PostingView["task"]): { label: string; tone: Tone } | null {
-  if (!task) return null;
-  if (task.status === "resolved" && task.notDone) return { label: `${task.label}: ITS could not do it`, tone: "caution" };
-  if (task.status === "resolved") return { label: `${task.label}: done${task.recruiterName ? ` by ${task.recruiterName}` : ""}`, tone: "good" };
-  if (task.status === "cancelled") return null;
-  if (task.status === "claimed" || task.status === "in_progress") return { label: `${task.label}: ${task.recruiterName ? `${task.recruiterName} at ITS has it` : "an ITS recruiter has it"}`, tone: "accent" };
-  return { label: `${task.label}: waiting for ITS`, tone: "neutral" };
 }
 
 function nativeStateLine(p: PostingView, jobUrl: string): string {
@@ -441,7 +413,7 @@ function CloseConfirm({ p, run, busy, onDone }: { p: PostingView; run: Run; busy
   const up = ["posted_manually", "live_verified", "paused"].includes(p.status) && p.isBoard;
   return (
     <div className="stack mt-3 max-w-[520px] gap-2.5 motion-safe:animate-fade">
-      <p className="small text-ink-2">{up ? (p.postedBy === "its" ? `Closing here does not remove it from ${p.name} by itself: ITS gets a task to take it down from your company's account and ticks it off here.` : `Closing here does not remove it from ${p.name}: take it down from your own account too, then tick "Removed from this board".`) : "Closing here is final for this channel; a re-opened role prepares it again."}</p>
+      <p className="small text-ink-2">{up ? `Closing here does not remove it from ${p.name}: take it down from your own account too, then tick "Removed from this board".` : "Closing here is final for this channel; a re-opened role prepares it again."}</p>
       <Field label="Reason (optional)" htmlFor={id}><input id={id} className="input" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
       <div className="row">
         <Button variant="destructive" disabled={busy} onClick={() => run(p.channel, "close", `${p.name} closed.`, { reason: reason.trim() || undefined }, onDone)}>Yes, close it</Button>
@@ -492,14 +464,9 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   const [open, setOpen] = useState<null | "verify" | "close" | "updated">(null);
   const [showSteps, setShowSteps] = useState(false);
   const [updateNote, setUpdateNote] = useState("");
-  const its = p.postedBy === "its";
-  // When ITS posts, the steps and the address field are ITS's work: folded away, still there if the team posted it themselves.
-  const stepsOpen = (p.status === "ready_to_post" && !its) || showSteps;
+  const stepsOpen = p.status === "ready_to_post" || showSteps;
   const canRecord = canManage && roleStatus !== "closed" && ["ready_to_post", "posted_manually", "failed"].includes(p.status);
   const urlId = `url-${p.id}`;
-  const chip = taskChip(p.task);
-  // ITS closed its task as not possible (plan D3): its words, and a way to ask again once the reason is sorted out.
-  const itsCouldNot = its && p.task?.status === "resolved" && p.task.notDone ? p.task : null;
   // A board a person closed while it stays ticked on an open role comes back only by being prepared again (plan D6).
   const mayPrepareAgain = canManage && roleStatus === "open" && p.status === "closed" && p.chosen && !(p.closureRequired && !p.closureConfirmedAt);
   const recordForm = canRecord ? (
@@ -515,20 +482,13 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
   ) : null;
   return (
     <Card>
-      <Header p={p} by={p.isBoard && p.status !== "closed" ? (its ? "Posted by ITS from your company's own account" : "Posted by your team from your own account") : undefined} />
+      <Header p={p} by={p.isBoard && p.status !== "closed" ? "Posted by your team from your own account" : undefined} />
       <p className="small text-ink-2">{boardStateLine(p)}</p>
-      {chip ? <p className="mt-2"><Chip tone={chip.tone === "good" ? "good" : chip.tone === "accent" ? "accent" : chip.tone === "caution" ? "caution" : "neutral"}>{chip.label}</Chip></p> : null}
-      {itsCouldNot ? (
-        <div className="alert caution mt-3">
-          <strong>ITS could not {itsCouldNot.label.charAt(0).toLowerCase()}{itsCouldNot.label.slice(1)}.</strong>{itsCouldNot.note ? ` ${itsCouldNot.recruiterName ?? "The recruiter"} wrote: "${itsCouldNot.note}"` : ""}
-          {canManage ? <div className="row mt-2"><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "ask-its", `Asked ITS again: ${itsCouldNot.label.charAt(0).toLowerCase()}${itsCouldNot.label.slice(1)}.`)}>Ask ITS again</Button></div> : null}
-        </div>
-      ) : null}
       {p.showsOldVersion && live ? (
         <div className="alert caution mt-3">
           <strong>Shows an earlier version of the job{p.boardVersion ? ` (version ${p.boardVersion})` : ""}.</strong>{" "}
-          {its && !itsCouldNot ? "ITS has a task to update it from your company's account with the new posting package." : "Update the listing from your own account with the posting package below, then confirm it here."}
-          {canManage && (!its || itsCouldNot) && open !== "updated" ? <div className="row mt-2"><Button size="sm" variant="primary" onClick={() => setOpen("updated")}>It shows the new version now</Button></div> : null}
+          Update the listing from your own account with the posting package below, then confirm it here.
+          {canManage && open !== "updated" ? <div className="row mt-2"><Button size="sm" variant="primary" onClick={() => setOpen("updated")}>It shows the new version now</Button></div> : null}
           {canManage && open === "updated" ? (
             <div className="stack mt-2 max-w-[520px] gap-2">
               <Field label="What did you update? (optional)" htmlFor={`updated-${p.id}`}><input id={`updated-${p.id}`} className="input" value={updateNote} onChange={(e) => setUpdateNote(e.target.value)} placeholder="e.g. Pasted the new description on 9 October" /></Field>
@@ -541,7 +501,7 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
         </div>
       ) : null}
       {p.externalUrl ? <p className="small mt-2 wrap-anywhere">On {p.name}: <a href={p.externalUrl} target="_blank" rel="noreferrer">{p.externalUrl}</a></p> : null}
-      {mayPrepareAgain ? <div className="row mt-3"><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "prepare", its ? `${p.name} is prepared again; ITS posts it.` : `${p.name} is prepared again for you to post.`)}>Prepare this board again</Button></div> : null}
+      {mayPrepareAgain ? <div className="row mt-3"><Button size="sm" variant="primary" disabled={busy} onClick={() => run(p.channel, "prepare", `${p.name} is prepared again for you to post.`)}>Prepare this board again</Button></div> : null}
       <div className="row mt-3 border-t border-line pt-3">
         {p.link ? (
           <>
@@ -557,12 +517,7 @@ function BoardCard({ p, run, busy, roleStatus, canManage, live }: { p: PostingVi
           <ol className="mt-3 grid list-decimal gap-1 pl-5 marker:text-ink-3">{p.steps.map((s, i) => <li key={`${p.id}-step-${i}`} className="small">{s}</li>)}</ol>
         ) : <p className="mt-2"><Button size="sm" variant="quiet" onClick={() => setShowSteps(true)}>Show the steps</Button></p>
       ) : null}
-      {recordForm && its ? (
-        <details className="more mt-3">
-          <summary className="small">Posted it yourself? Record the address</summary>
-          {recordForm}
-        </details>
-      ) : recordForm}
+      {recordForm}
       {canManage && open === "verify" ? <VerifyNote p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === "close" ? <CloseConfirm p={p} run={run} busy={busy} onDone={() => setOpen(null)} /> : null}
       {canManage && open === null ? <Actions p={p} run={run} busy={busy} roleStatus={roleStatus} onVerify={() => setOpen("verify")} onClose={() => setOpen("close")} /> : null}

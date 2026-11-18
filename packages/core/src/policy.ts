@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { ActionType, Actor, PolicyDecision, PolicyLevel, Subject } from "@ros/contracts";
-import { approvalRequests, policies, takeovers, type Queryable } from "@ros/db";
+import { approvalRequests, policies, type Queryable } from "@ros/db";
 import { emit } from "./events";
 
 /**
@@ -62,15 +62,15 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "message.send_freeform": { level: "auto_notify", approverRoles: ["owner", "admin"] },
   /**
    * The courtesy note to someone still waiting for a decision `afterDays` after they applied (plan G10): one short,
-   * disclosed "still reviewing" note, once per application. "Do it" sends it; any other level sends none (the team, or a
-   * recruiter running the role, keeps in touch themselves). Off unless a company switches it on in Setup (founder
+   * disclosed "still reviewing" note, once per application. "Do it" sends it; any other level sends none (the team keeps
+   * in touch itself). Off unless a company switches it on in Setup (founder
    * decision of 9 October 2026: with many applicants a team picks the best few, so automatic notes are not wanted). A
    * company that saved a level keeps it: its row overrides this default.
    */
   "message.still_reviewing": { level: "human_only", approverRoles: [], params: { afterDays: 30 } },
   "application.triage": { level: "auto", approverRoles: [] },
-  /** The hold is operational, never permission for adverse action: notify, review timer, reminders, escalation of an overdue review. */
-  "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, escalateAfterHours: 72 } },
+  /** The hold is operational, never permission for adverse action: notify, review timer, reminders for a few days. */
+  "application.hold_ineligible": { level: "auto_notify", approverRoles: [], params: { reviewWindowHours: 24, remindEveryHours: 24, remindForHours: 72 } },
   "application.reject_ineligible": { level: "human_only", approverRoles: [] },
   "application.reject_on_assessment": { level: "human_only", approverRoles: [] },
   /** Fixed since 20 Oct 2026 (R20-4): every applicant gets the AI interview; the team hears once it is scored. */
@@ -83,7 +83,7 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
    * that never chose reads this at once; one that saved "Do it and tell me" keeps it, because its row overrides this default.
    */
   "application.recommend_interview": { level: "human_only", approverRoles: [] },
-  "interview.request": { level: "approval", approverRoles: ["owner", "hiring_manager", "recruiter"] },
+  "interview.request": { level: "approval", approverRoles: ["owner", "hiring_manager"] },
   "interview.schedule": { level: "auto", approverRoles: [] },
   "interview.reschedule": { level: "auto_notify", approverRoles: [] },
   "interview.record": { level: "approval", approverRoles: ["interviewer"] },
@@ -100,8 +100,8 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
    * for a second person; "human_only" means the product sends no decision messages and the team tells candidates
    * themselves. Saved send-at-once settings moved to the new default in migration 0026; "Ask me first" and "only a person" stayed.
    * It also governs the untold safety net (Q27): under "auto", someone not told five working days after the decision
-   * gets the standard message by itself; under any other level, or during a recruiter takeover, a recruiter is brought
-   * in instead and nothing is sent. And the closing message for a closed role (Q30), approved once for everyone.
+   * gets the standard message by itself; under any other level nothing is sent and the team is told who still waits.
+   * And the closing message for a closed role (Q30), approved once for everyone.
    */
   "disposition.send": { level: "auto", approverRoles: [] },
   "reference.request": { level: "auto_notify", approverRoles: [] },
@@ -116,17 +116,14 @@ export const DEFAULT_POLICIES: Record<ActionType, { level: PolicyLevel; approver
   "data.delete": { level: "human_only", approverRoles: ["owner", "admin", "hr"] },
   "data.export": { level: "human_only", approverRoles: ["owner", "admin", "hr"] },
   "intervention.nudge": { level: "auto", approverRoles: [], params: { cooldownHours: 48 } },
-  "intervention.offer_recruiter": { level: "auto_notify", approverRoles: [] },
   "sourcing.search_internal": { level: "auto", approverRoles: [] },
   "sourcing.enrich_external": { level: "auto", approverRoles: [], params: { withinCredits: true } },
   "outreach.send": { level: "auto_notify", approverRoles: [] },
 };
 
 /**
- * Resolution order: takeover overlay → role → company → platform default. The floors, the ceiling and the hard
- * "only a person" list are applied to the saved rows first; the takeover overlay comes last and only ever turns an
- * automatic action into the recruiter's approval, so an action that already needs a person (role approval among them)
- * keeps its own approvers during a takeover.
+ * Resolution order: role → company → platform default. The floors, the ceiling and the hard "only a person" list are
+ * applied to the saved rows.
  */
 export async function resolvePolicy(q: Queryable, companyId: string, roleId: string | null, actionType: ActionType): Promise<PolicyDecision> {
   const def = DEFAULT_POLICIES[actionType];
@@ -158,24 +155,7 @@ export async function resolvePolicy(q: Queryable, companyId: string, roleId: str
   const moved = clamped !== decision.level;
   if (moved) decision = { ...decision, level: clamped };
   if (decision.level === "approval" && !decision.approverRoles.length && (moved || actionType === "role_packet.approve")) decision = { ...decision, approverRoles: def.approverRoles };
-  // An action pinned to "Do it" (the AI interview every applicant gets) goes during a takeover too.
-  if (roleId && MAX_LEVELS[actionType] !== "auto" && (decision.level === "auto" || decision.level === "auto_notify") && (await roleTakenOver(q, companyId, roleId))) {
-    decision = { ...decision, level: "approval", approverRoles: ["recruiter"], source: "takeover" };
-  }
   return decision;
-}
-
-/**
- * Whether an ITS recruiter is running the role (an active takeover). During one the recruiter manages candidate contact:
- * automatic actions wait for them (`resolvePolicy`), and no automatic new interview times go (founder question 7).
- */
-export async function roleTakenOver(q: Queryable, companyId: string, roleId: string): Promise<boolean> {
-  const active = await q
-    .select({ id: takeovers.id })
-    .from(takeovers)
-    .where(and(eq(takeovers.companyId, companyId), eq(takeovers.roleId, roleId), eq(takeovers.status, "active")))
-    .limit(1);
-  return !!active[0];
 }
 
 export type GateResult =

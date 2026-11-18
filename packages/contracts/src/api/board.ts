@@ -104,12 +104,11 @@ export const BATCH_MAX = 50;
 
 /**
  * What Review and apply can do for one person. `shortlist`, `longlist`, `on_hold`: the private marks. `not_moving_forward`:
- * the private decline (reason required, nobody emailed). `invite_screen`: the screening conversation. `escalate`: ask an
- * ITS recruiter to look at this person.
+ * the private decline (reason required, nobody emailed). `invite_screen`: the screening conversation.
  */
-export const BatchAction = z.enum(["shortlist", "longlist", "not_moving_forward", "on_hold", "invite_screen", "escalate"]);
+export const BatchAction = z.enum(["shortlist", "longlist", "not_moving_forward", "on_hold", "invite_screen"]);
 export type BatchAction = z.infer<typeof BatchAction>;
-export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the AI interview", escalate: "Ask a recruiter to look" };
+export const BATCH_ACTION_LABEL: Record<BatchAction, string> = { shortlist: "Shortlist", longlist: "Longlist", not_moving_forward: "Not moving forward", on_hold: "On hold", invite_screen: "Invite to the AI interview" };
 
 export const RoleBatchItem = z.object({
   applicationId: z.string().min(1).max(64),

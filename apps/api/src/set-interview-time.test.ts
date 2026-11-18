@@ -426,7 +426,7 @@ describe("a person sets the date and time", () => {
       }
     });
 
-    it("who may press: an owner, an admin, a hiring manager and an ITS recruiter's roles hold it; HR and an interviewer see the time and cannot set it", async () => {
+    it("who may press: an owner, an admin and a hiring manager hold it; HR and an interviewer see the time and cannot set it", async () => {
       const hr = await signInAs(container, app, { companyId, role: "hr", email: "hr@settime.test", name: "Hana Ruiz" });
       const interviewer = await signInAs(container, app, { companyId, role: "interviewer", email: "ivan@settime.test", name: "Ivan Petrov" });
       const manager = await signInAs(container, app, { companyId, role: "hiring_manager", email: "mia@settime.test", name: "Mia Lund" });
@@ -444,14 +444,12 @@ describe("a person sets the date and time", () => {
       expect(((await (await json(hr, "GET", `/api/v1/interviews/${id}`)).json()) as { status: string }).status).toBe("scheduled");
       expect((await routeB(id, {}, manager)).status).toBe(200);
       // the press is the approval for every role that holds it: no second person, on either route
-      for (const role of ["admin", "recruiter"] as const) {
-        const cookie = await signInAs(container, app, { companyId, role, email: `${role}.presser@settime.test`, name: `${role} Presser` });
-        const theirs = await apply("Max", role === "admin" ? "Admin" : "Recruiter");
-        const set = await routeA(theirs.id, {}, {}, cookie);
-        expect(set.status, await set.clone().text()).toBe(201);
-        const { id: theirId } = (await set.json()) as Booked;
-        expect((await routeB(theirId, {}, cookie)).status, role).toBe(200);
-      }
+      const admin = await signInAs(container, app, { companyId, role: "admin", email: "admin.presser@settime.test", name: "Ada Presser" });
+      const theirs = await apply("Max", "Admin");
+      const set = await routeA(theirs.id, {}, {}, admin);
+      expect(set.status, await set.clone().text()).toBe(201);
+      const { id: theirId } = (await set.json()) as Booked;
+      expect((await routeB(theirId, {}, admin)).status).toBe(200);
     });
   });
 
@@ -572,7 +570,7 @@ describe("a person sets the date and time", () => {
       setClock(BASE + 98 * H);
       await container.drain();
       expect(await interview(lapsing.id)).toMatchObject({ status: "offer_expired", scheduleToken: null });
-      expect((await noticesAbout("interview.offer_expired", "Ola Bloom"))[0]).toMatchObject({ body: "Four days passed with a reminder. Set a date and time, decide, or bring in a recruiter.", action: { label: "Set a date and time", href: `/interviews/${lapsing.id}` } });
+      expect((await noticesAbout("interview.offer_expired", "Ola Bloom"))[0]).toMatchObject({ body: "Four days passed with a reminder. Set a date and time, or decide.", action: { label: "Set a date and time", href: `/interviews/${lapsing.id}` } });
       const set = await routeB(lapsing.id, {}, wes);
       expect(set.status, await set.clone().text()).toBe(200);
       await container.drain();

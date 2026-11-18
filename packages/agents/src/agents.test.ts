@@ -63,7 +63,7 @@ describe("fake intake handler", () => {
     { text: `Facts established so far (JSON): ${JSON.stringify(facts)}` },
   ];
 
-  it("extracts title, location, pay, and asks recruiter questions", async () => {
+  it("extracts title, location, pay, and asks its questions", async () => {
     const res = await fake.structured({
       task: "intake.turn", agent: "intake", companyId: "c", promptKey: "intake.turn", promptVersion: 1,
       system: sys({}),

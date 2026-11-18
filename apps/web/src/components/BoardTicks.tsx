@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Chip } from "@ros/ui";
-import { api, ApiError, type BoardChoiceView, type WhoPosts } from "../api/client";
+import { api, ApiError, type BoardChoiceView } from "../api/client";
 import { boardTicksToast, unsavedBoards } from "../publishing";
 import { toast } from "../toast";
 
@@ -13,13 +13,12 @@ const ROW = "flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text
 /**
  * Where the job is posted (founder decision Q11, plan D6): the careers page and Google always, then a tick per job
  * board, starting from the boards the role plan names. ZipRecruiter is offered only to a company with its own paid
- * plan, and says so. The ticks can change before and after approval: on a live job a newly ticked board is prepared
- * (and ITS gets a task to post it when ITS posts for the company), and an unticked board's listing is closed and, if it
- * was up, taken down. Changing them needs role.manage; everyone else sees the same list read-only. `onUnsaved` tells the
+ * plan, and says so. The ticks can change before and after approval: on a live job a newly ticked board is prepared,
+ * and an unticked board's listing is closed and, if it was up, taken down. Changing them needs role.manage; everyone else sees the same list read-only. `onUnsaved` tells the
  * approval card what is ticked and not saved yet, so approving goes by what is on the screen, and that lasts only as long
  * as this list. `busy` holds the list while that approval is being sent.
  */
-export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; roleStatus: string; whoPosts: WhoPosts; canManage: boolean; busy?: boolean; onDone?: () => void; onUnsaved?: (channels: string[] | null) => void }) {
+export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; roleStatus: string; canManage: boolean; busy?: boolean; onDone?: () => void; onUnsaved?: (channels: string[] | null) => void }) {
   const qc = useQueryClient();
   const chosen = props.boards.filter((b) => b.chosen).map((b) => b.channel as string);
   const [picked, setPicked] = useState<string[]>(chosen);
@@ -28,7 +27,7 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
   const save = useMutation({
     mutationFn: () => api.post(`/api/v1/roles/${props.roleId}/channels`, { channels: picked }),
     onSuccess: async () => {
-      const t = boardTicksToast({ before: chosen, after: picked, roleStatus: props.roleStatus, whoPosts: props.whoPosts });
+      const t = boardTicksToast({ before: chosen, after: picked, roleStatus: props.roleStatus });
       toast(t.title, t.detail);
       // Read again first, the role last: the card's line goes from these ticks straight to the same boards saved, never back to the old ones.
       for (const k of [["postings", props.roleId], ["brief"], ["role", props.roleId]]) await qc.invalidateQueries({ queryKey: k });
@@ -66,7 +65,7 @@ export function BoardTicks(props: { roleId: string; boards: BoardChoiceView[]; r
       </div>
       {editable && changed ? (
         <div className="grid gap-2.5">
-          {props.roleStatus === "open" || props.roleStatus === "paused" ? <Alert tone="info">{props.whoPosts === "its" ? "A board you tick is prepared now and ITS posts it from your company's account. A board you untick is closed; if the job is up there, ITS takes it down." : "A board you tick is prepared now for you to post. A board you untick is closed; if the job is up there, take it down from your own account."}</Alert> : null}
+          {props.roleStatus === "open" || props.roleStatus === "paused" ? <Alert tone="info">A board you tick is prepared now for you to post. A board you untick is closed; if the job is up there, take it down from your own account.</Alert> : null}
           <div className="row">
             <Button size="sm" variant="primary" loading={save.isPending} disabled={busy} onClick={() => save.mutate()}>Save the boards</Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => pick(chosen)}>Undo</Button>

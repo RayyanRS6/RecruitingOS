@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, eq, gte, or, sql } from "drizzle-orm";
-import { ConfirmBoardUpdated, CreateApplicationLink, CreateShareLink, PostingReason, RecordPostingUrl, SetAcceptingApplications, SetPublishChannels, VerifyPosting, companyOnboarding, type PostingTaskKind, type PostingTaskView } from "@ros/contracts";
-import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, whoPostsBoards, can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notify, openPostingTask, postingPackage, postingTaskLabel, postingTaskNeeded, postingTasksForRole, showsOldVersion, transitionPosting, visibleTo, lockedAndWaiting, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
+import { ConfirmBoardUpdated, CreateApplicationLink, CreateShareLink, PostingReason, RecordPostingUrl, SetAcceptingApplications, SetPublishChannels, VerifyPosting } from "@ros/contracts";
+import { BOARD_CHANNELS, BOARD_UP_STATES, CHANNEL_NAME, CLOSING_DATE_REASON, POSTING_CHANNELS, POSTING_STATE_LABEL, POSTING_VERIFY_JOB_KIND, POSTING_VERIFY_MAX_ATTEMPTS, PostingNotFoundError, PostingTransitionError, SHARE_PLACES, SOURCES, SOURCE_LABEL, assertCan, audit, can, chosenBoards, closingMoment, confirmBoardRemoved, confirmBoardUpdated, createApplicationLink, disableApplicationLink, emit, isBoardChannel, isPostingState, isSource, listApplicationLinks, notLocked, notify, postingPackage, showsOldVersion, transitionPosting, lockedAndWaiting, zipRecruiterOffered, type ApplicationLinkRow, type BoardChannel, type PostingChannel, type PostingPatch, type PostingRow, type PostingState } from "@ros/core";
 import { applicationLinks, applications, companies, postings, rolePackets, roles, withTenant, type Tx } from "@ros/db";
 import { intakeAddress } from "@ros/integrations";
 import { DEFAULT_VOLUME_ALERT_PER_DAY, localDays } from "@ros/workflows";
@@ -10,8 +10,7 @@ import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Vars } from "../middleware/session";
 import { jobUrls, shareTargets, trackedLinkUrl } from "../services/job-urls";
 import { currentVersionOf } from "../services/packet-versions";
-import { boardChoices, closingDateFor, postingTaskViews, publishingState, sharePlaceLink, shareText, shareView } from "../services/publishing";
-import { tellItsQueueAboutTasks } from "../services/publishing-backfill";
+import { boardChoices, closingDateFor, publishingState, sharePlaceLink, shareText, shareView } from "../services/publishing";
 import { assertNoNewWork } from "../services/trial";
 import { replayHeldEmails } from "../webhooks/postmark";
 
@@ -33,10 +32,9 @@ type Actor = ReturnType<typeof actorOf>;
 export type LinkView = { id: string; url: string; source: string; sourceLabel: string; sourceDetail: string | null; label: string; postingId: string | null; visits: number; lastVisitedAt: string | null; createdAt: string; disabledAt: string | null; landing: string };
 /**
  * One channel as the Posting tab and the after-approval screen show it (plan D2). For a board: `chosen` (still ticked
- * for the role), `postedBy` ("its" when an ITS recruiter posts it from the company's own account, "you" otherwise),
- * the latest ITS posting `task` with its state, and `showsOldVersion` once an approved edit left it behind.
+ * for the role), and `showsOldVersion` once an approved edit left it behind.
  */
-export type PostingView = PostingRow & { name: string; stateLabel: string; isBoard: boolean; link: LinkView | null; package: { text: string; fields: Record<string, string> } | null; stillUp: boolean; chosen: boolean; postedBy: "its" | "you" | null; task: PostingTaskView | null; showsOldVersion: boolean };
+export type PostingView = PostingRow & { name: string; stateLabel: string; isBoard: boolean; link: LinkView | null; package: { text: string; fields: Record<string, string> } | null; stillUp: boolean; chosen: boolean; showsOldVersion: boolean };
 
 function postingHttpError(e: unknown): never {
   if (e instanceof PostingTransitionError) throw new HttpError(409, e.code, e.message, { from: e.from, to: e.to });
@@ -83,7 +81,7 @@ function linkView(container: Container, l: ApplicationLinkRow): LinkView {
   return { id: l.id, url: trackedLinkUrl(container.env, l.token), source: l.source, sourceLabel: isSource(l.source) ? SOURCE_LABEL[l.source] : l.source, sourceDetail: l.sourceDetail, label: l.label, postingId: l.postingId, visits: l.visits, lastVisitedAt: l.lastVisitedAt, createdAt: l.createdAt, disabledAt: l.disabledAt, landing: l.landing };
 }
 
-/** Everything the package and the cards are built from: the company, the current packet, the public URLs, the intake address, the links, the ITS tasks. */
+/** Everything the package and the cards are built from: the company, the current packet, the public URLs, the intake address, the links. */
 async function postingContext(tx: Tx, container: Container, role: RoleRow) {
   const [company] = await tx.select({ name: companies.name, slug: companies.slug, locations: companies.locations, settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
   const [pv] = role.currentPacketVersion ? await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1) : [];
@@ -94,9 +92,8 @@ async function postingContext(tx: Tx, container: Container, role: RoleRow) {
   const emailInAddress = emailIn?.intakeToken ? intakeAddress(emailIn.intakeToken, container.integrations.env.intakeDomain) : null;
   const emailInConnected = emailIn?.status === "live_verified";
   const linkUrl = (l: ApplicationLinkRow) => trackedLinkUrl(container.env, l.token);
-  const tasks = postingTaskViews(await postingTasksForRole(tx, role.id), (id) => posts.find((p) => p.id === id)?.channel ?? null);
   const boards: readonly string[] = pv ? chosenBoards(role, pv.packet, company?.settings) : (role.publishChannels ?? []);
-  return { company, packet: pv?.packet ?? null, posts, links, urls, emailIn, emailInAddress, emailInConnected, linkUrl, tasks, boards, whoPosts: await whoPostsBoards(tx, role.companyId, company?.settings), currentVersion: role.currentPacketVersion };
+  return { company, packet: pv?.packet ?? null, posts, links, urls, emailIn, emailInAddress, emailInConnected, linkUrl, boards, currentVersion: role.currentPacketVersion };
 }
 type PostingContext = Awaited<ReturnType<typeof postingContext>>;
 
@@ -112,14 +109,14 @@ function postingView(container: Container, ctx: PostingContext, p: PostingRow): 
   const active = ctx.links.find((l) => l.postingId === p.id && !l.disabledAt) ?? null;
   return {
     ...p, name: channelName(p.channel), stateLabel: stateLabel(p.status), isBoard, link: active ? linkView(container, active) : null, package: isBoard ? packageFor(ctx, p) : null, stillUp: p.closureRequired && !p.closureConfirmedAt,
-    chosen: !isBoard || ctx.boards.includes(p.channel), postedBy: isBoard ? (ctx.whoPosts === "its" ? "its" : "you") : null, task: ctx.tasks.get(p.id) ?? null, showsOldVersion: showsOldVersion(p, ctx.currentVersion),
+    chosen: !isBoard || ctx.boards.includes(p.channel), showsOldVersion: showsOldVersion(p, ctx.currentVersion),
   };
 }
 
 /**
  * The Posting tab and the screen right after approval (plan D2). Besides the channels, links and the email address:
  * `publishing` says where publishing stands and when to ask again (poll while `pollAfterSeconds` is a number),
- * `whoPosts` and `boards` are the board ticks (D3, D6), `closingDate` the role's date (D7), `share` the ready-made share
+ * `boards` are the board ticks (D3, D6), `closingDate` the role's date (D7), `share` the ready-made share
  * places (D8), and `interviewers` whether every interview step has someone on it. `emailIn.shown` is true only while
  * applications by email actually work, so the screen offers the address only then.
  */
@@ -136,47 +133,10 @@ async function describePostings(tx: Tx, container: Container, role: RoleRow) {
     links: ctx.links.map((l) => linkView(container, l)),
     boardsStillUp: views.filter((v) => v.stillUp).map((v) => v.channel),
     publishing: await publishingState(tx, { role, company: ctx.company ?? null, packet: ctx.packet, posts: ctx.posts }),
-    whoPosts: ctx.whoPosts,
     boards: boardChoices(role, ctx.packet, ctx.company?.settings),
     closingDate: closingDateFor(role, ctx.company ?? null, ctx.packet, now),
     share: shareView({ packet: ctx.packet, companyName: ctx.company?.name ?? "", jobUrl: ctx.urls.job, links: ctx.links, linkUrl: ctx.linkUrl }),
     interviewers: { rounds: rounds.length, roundsWithoutInterviewers: rounds.filter((r) => !r.interviewerUserIds.length).length },
-  };
-}
-
-/**
- * What an ITS recruiter sees of a posting task they accepted (plan D3): the job ad as the board will show it (the
- * posting package, with the board's own apply link), the numbered steps, where the posting stands and what to do.
- * Nothing about applicants, so no access grant is needed and none is given.
- */
-export async function postingTaskDetail(tx: Tx, container: Container, task: { kind: string; postingId: string | null; roleId: string | null }) {
-  if (!task.postingId || !task.roleId) throw new HttpError(404, "not_found", "This task names no posting.");
-  const role = await loadRole(tx, task.roleId);
-  const ctx = await postingContext(tx, container, role);
-  const p = ctx.posts.find((x) => x.id === task.postingId);
-  if (!p || !isBoardChannel(p.channel)) throw new HttpError(404, "not_found", "The posting this task is about no longer exists.");
-  const view = postingView(container, ctx, p);
-  const kind = task.kind as PostingTaskKind;
-  const board = CHANNEL_NAME[p.channel];
-  const company = ctx.company?.name ?? "the company";
-  const boardAccessConfirmed = !!companyOnboarding(ctx.company?.settings).jobBoardsConfirmedAt;
-  const whatToDo = kind === "post_job"
-    ? `Sign in to ${board} with ${company}'s own account and post the job with the package below, using ${board}'s own apply link. Then record the public address here; the task closes once the address is checked.`
-    : kind === "update_job"
-      ? `Update the ${board} listing${p.externalUrl ? ` (${p.externalUrl})` : ""} from ${company}'s own account with the package below (version ${role.currentPacketVersion ?? "?"}), then confirm it here.`
-      : `Take the ${board} listing${p.externalUrl ? ` (${p.externalUrl})` : ""} down from ${company}'s own account, then confirm it is gone here.`;
-  return {
-    kind,
-    label: postingTaskLabel(kind, board),
-    companyName: ctx.company?.name ?? "",
-    role: { id: role.id, title: role.title, status: role.status, currentPacketVersion: role.currentPacketVersion },
-    board: { channel: p.channel, name: board },
-    posting: { id: p.id, status: p.status, stateLabel: view.stateLabel, externalUrl: p.externalUrl, verifiedAt: p.verifiedAt, verificationError: p.verificationError, error: p.error, closureRequired: p.closureRequired, closureConfirmedAt: p.closureConfirmedAt, boardVersion: p.boardVersion, showsOldVersion: view.showsOldVersion },
-    package: kind === "take_down_job" ? null : view.package,
-    steps: kind === "post_job" ? p.steps : [],
-    applyUrl: view.link?.url ?? null,
-    boardAccessConfirmed,
-    whatToDo: boardAccessConfirmed ? whatToDo : `${whatToDo} ITS has not confirmed it can sign in to ${company}'s job-board accounts yet; sort that out with them first.`,
   };
 }
 
@@ -257,11 +217,8 @@ postingRoutes.post("/:id/postings/:channel/url", requireTenant, async (c) => {
   return c.json(result);
 });
 
-/**
- * Records a board listing's public address and queues its check (item 13). Shared by the Posting tab and the ITS
- * queue's posting task (plan D3); the caller has checked who may do it and kicks the worker after the commit.
- */
-export async function recordBoardAddress(tx: Tx, container: Container, input: { posting: PostingRow; url: string; actor: Actor }): Promise<PostingRow> {
+/** Records a board listing's public address and queues its check (item 13). The caller kicks the worker after the commit. */
+async function recordBoardAddress(tx: Tx, container: Container, input: { posting: PostingRow; url: string; actor: Actor }): Promise<PostingRow> {
   const { posting, url, actor } = input;
   const now = container.engine.clock();
   const patch: PostingPatch = { ...UNVERIFIED, externalUrl: url, publicUrlRecordedAt: now.toISOString() };
@@ -296,8 +253,8 @@ postingRoutes.post("/:id/postings/:channel/verify", requireTenant, async (c) => 
   return c.json(result);
 });
 
-/** A person's "I checked it myself", shared by the Posting tab and the ITS queue's posting task. A board's ITS task settles with it. */
-export async function confirmPostingByHand(tx: Tx, container: Container, input: { posting: PostingRow; note: string; actor: Actor }): Promise<PostingRow> {
+/** A person's "I checked it myself". */
+async function confirmPostingByHand(tx: Tx, container: Container, input: { posting: PostingRow; note: string; actor: Actor }): Promise<PostingRow> {
   const { actor, note } = input;
   let posting = input.posting;
   const channel = posting.channel;
@@ -310,11 +267,6 @@ export async function confirmPostingByHand(tx: Tx, container: Container, input: 
   const moved = await move(tx, { postingId: posting.id, to: "live_verified", actor, now, patch: { verificationNote: note, verificationError: null, verificationAttempts: 0, error: null }, payload: { check: "person" } });
   await auditPosting(tx, posting.companyId, actor, moved.row, "verified by a person", { note, from: moved.from });
   return moved.row;
-}
-
-/** Queues a fresh check of a posting's address (exported for the ITS queue's posting task). */
-export async function queuePostingCheck(tx: Tx, container: Container, posting: PostingRow): Promise<void> {
-  await queueCheck(tx, container, posting.id, posting.companyId, { requested: true });
 }
 
 /**
@@ -412,7 +364,6 @@ postingRoutes.post("/:id/postings/:channel/closure-confirm", requireTenant, asyn
     const posting = await loadPosting(tx, role.id, channel);
     if (!posting.closureRequired) throw new HttpError(409, "not_required", `${CHANNEL_NAME[channel]} was not up when it closed, so there is nothing to take down.`);
     if (posting.closureConfirmedAt) return describeOne(tx, container, role, posting.id);
-    // The ITS take-down task, when there is one, settles with it (packages/core/src/postings.ts).
     const row = await confirmBoardRemoved(tx, { posting, actor, now: container.engine.clock() });
     await auditPosting(tx, t.companyId, actor, row, "removed from the board, confirmed by a person");
     return describeOne(tx, container, role, row.id);
@@ -422,8 +373,7 @@ postingRoutes.post("/:id/postings/:channel/closure-confirm", requireTenant, asyn
 
 /**
  * "The board shows the new version now" (plan D4): after an approved edit, a board posted by hand still showed the
- * earlier version; a person updated it and says so. The ITS update task settles, and the address is checked again,
- * since the title may have changed.
+ * earlier version; a person updated it and says so. The address is checked again, since the title may have changed.
  */
 postingRoutes.post("/:id/postings/:channel/updated", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -437,7 +387,7 @@ postingRoutes.post("/:id/postings/:channel/updated", requireTenant, async (c) =>
     const role = await loadRole(tx, c.req.param("id"));
     const posting = await loadPosting(tx, role.id, channel);
     if (!showsOldVersion(posting, role.currentPacketVersion)) throw new HttpError(409, "up_to_date", `${CHANNEL_NAME[channel]} does not show an earlier version of the job, so there is nothing to update.`);
-    const row = await confirmBoardUpdated(tx, { posting, version: role.currentPacketVersion!, actor, note: body.note ?? null, now: container.engine.clock() });
+    const row = await confirmBoardUpdated(tx, { posting, version: role.currentPacketVersion!, actor, note: body.note ?? null });
     if (row.externalUrl && ["posted_manually", "live_verified"].includes(row.status)) await queueCheck(tx, container, row.id, t.companyId, { requested: true });
     await auditPosting(tx, t.companyId, actor, row, "brought up to date with the approved version", { version: role.currentPacketVersion, note: body.note ?? null });
     return describeOne(tx, container, role, row.id);
@@ -447,9 +397,9 @@ postingRoutes.post("/:id/postings/:channel/updated", requireTenant, async (c) =>
 });
 
 /**
- * "Prepare this board" (plan D6): ticks a board for an open role and prepares it, with its package, its own tracked
- * link and, when ITS posts for the company, an ITS posting task. A board a person closed while the role stayed open
- * comes back only this way; one still waiting to be taken down from its earlier listing does not.
+ * "Prepare this board" (plan D6): ticks a board for an open role and prepares it, with its package and its own tracked
+ * link. A board a person closed while the role stayed open comes back only this way; one still waiting to be taken down
+ * from its earlier listing does not.
  */
 postingRoutes.post("/:id/postings/:channel/prepare", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -481,37 +431,6 @@ postingRoutes.post("/:id/postings/:channel/prepare", requireTenant, async (c) =>
 });
 
 /**
- * "Ask ITS again" (plan D3): a board whose ITS task was closed as not possible, or that has none, gets a fresh task of
- * the kind its posting needs now (post it, bring it up to date, take it down), and the ITS queue is told. Only while
- * ITS posts for the company; asking while a task is already waiting changes nothing (`created: false`).
- */
-postingRoutes.post("/:id/postings/:channel/ask-its", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.manage");
-  const channel = channelParam(c);
-  if (!isBoardChannel(channel)) throw new HttpError(409, "not_a_board", `${CHANNEL_NAME[channel]} shows the job page itself, so there is nothing for ITS to post there.`);
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const role = await loadRole(tx, c.req.param("id"));
-    const posting = await loadPosting(tx, role.id, channel);
-    const [company] = await tx.select({ name: companies.name, vertical: companies.vertical, settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    if ((await whoPostsBoards(tx, role.companyId, company?.settings)) !== "its") throw new HttpError(409, "team_posts", "Your team posts on the job boards itself (Settings, Job boards), so there is no ITS task to ask for.");
-    const kind = postingTaskNeeded(posting, role);
-    if (!kind) throw new HttpError(409, "nothing_to_do", `${CHANNEL_NAME[channel]} needs nothing from ITS right now (it is "${stateLabel(posting.status)}").`);
-    const now = container.engine.clock();
-    const task = await openPostingTask(tx, { companyId: t.companyId, roleId: role.id, postingId: posting.id, channel, board: CHANNEL_NAME[channel], kind, roleTitle: role.title, companyName: company?.name ?? "", vertical: company?.vertical ?? null, actor, now });
-    if (task.created) {
-      await tellItsQueueAboutTasks(tx, container, { companyId: t.companyId, companyName: company?.name ?? "A customer", tasks: [{ roleTitle: role.title, board: CHANNEL_NAME[channel], kind }], key: `asked_again:${task.id}`, actor, now });
-      await auditPosting(tx, t.companyId, actor, posting, "asked ITS again", { kind });
-    }
-    return { created: task.created, kind, posting: await describeOne(tx, container, role, posting.id) };
-  });
-  await container.kick();
-  return c.json(result, result.created ? 201 : 200);
-});
-
-/**
  * A person's board ticks, checked and written: POST /:id/channels below, and POST /:id/approve when the boards ticked on
  * the approval card go with the approval (routes/roles.ts). Refused on a closed role (409 `role_closed`), and ZipRecruiter
  * only with the company's own plan (409 `ziprecruiter_needs_plan`). Answers what is chosen now and what was before; what
@@ -535,8 +454,7 @@ export async function saveBoardTicks(tx: Tx, input: { role: RoleRow; channels: r
 /**
  * The boards a role uses (founder decision Q11, plan D6): the ticks, before or after approval. The careers page,
  * Google and email are part of every role. On an open role a newly ticked board is prepared; an unticked board's
- * posting closes, and a listing that was up is named for taking down (by ITS, when ITS posts for the company).
- * ZipRecruiter only with the company's own plan (409 `ziprecruiter_needs_plan`).
+ * posting closes, and a listing that was up is named for taking down. ZipRecruiter only with the company's own plan (409 `ziprecruiter_needs_plan`).
  */
 postingRoutes.post("/:id/channels", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -703,8 +621,8 @@ export type VolumeDay = { day: string; total: number; bySource: Record<string, n
 /**
  * Applications per day for the last fourteen days, by source. Days are calendar days in the company's time zone, cut
  * the same way the daily volume alert cuts them. Counting only: nothing here touches an application. The counts follow
- * the role page's (GET /roles/:id): none for those who do not read applications (an interviewer), and a grant about one
- * candidate counts that candidate alone. The switch's state and the alert threshold are the role's own, for everyone.
+ * the role page's (GET /roles/:id): none for those who do not read applications (an interviewer). The switch's state
+ * and the alert threshold are the role's own, for everyone.
  * Someone past the plan's candidates per job (Rule 3) counts in a day's total, which shows demand and names nobody, and never
  * by source: a locked card says when they applied, so a day's sources would say how, and a link sent to one person who.
  * Someone who withdrew or was deleted while locked counts nowhere here, as on the job page (`lockedAndWaiting`): no upgrade opens
@@ -715,14 +633,13 @@ postingRoutes.get("/:id/volume", requireTenant, async (c) => {
   assertCan(t.role, "role.read");
   const container = c.get("container");
   const readsApplications = can(t.role, "application.read");
-  const onlyApplicationId = t.staff?.scope.applicationId ?? null;
   const result = await withTenant(container.db, t.companyId, async (tx) => {
     const role = await loadRole(tx, c.req.param("id"));
     const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
     const local = localDays(container.engine.clock(), company?.timezone);
     const windowStart = local.start(-(VOLUME_WINDOW_DAYS - 1));
     const inWindow = and(eq(applications.roleId, role.id), gte(applications.createdAt, windowStart.toISOString()));
-    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source, readable: sql<boolean>`${visibleTo(t) ?? sql`true`}` }).from(applications).where(and(onlyApplicationId ? and(inWindow, eq(applications.id, onlyApplicationId)) : inWindow, or(visibleTo(t) ?? sql`true`, lockedAndWaiting())));
+    const rows = !readsApplications ? [] : await tx.select({ createdAt: applications.createdAt, source: applications.source, readable: sql<boolean>`${notLocked()}` }).from(applications).where(and(inWindow, or(notLocked(), lockedAndWaiting())));
     const days: VolumeDay[] = Array.from({ length: VOLUME_WINDOW_DAYS }, (_, i) => ({ day: local.key(local.start(i - (VOLUME_WINDOW_DAYS - 1))), total: 0, bySource: {} }));
     const byDay = new Map(days.map((d) => [d.day, d]));
     const totals: Record<string, number> = {};

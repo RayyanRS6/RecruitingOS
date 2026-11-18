@@ -1,8 +1,8 @@
 /**
  * Hidden text aimed at the AI (founder decision L-08 B, 16 October 2026: "tell the hiring team"). When a résumé, or the
  * written answers the résumé reading uses, holds lines addressed to the AI ("ignore previous instructions", "rate this
- * candidate 100", "you are an AI", a tag or chat token copied from a prompt), the candidate panel and the ITS recruiter's
- * queue show one calm line: the text was ignored and did not change the score. It is found in code, by fixed phrase
+ * candidate 100", "you are an AI", a tag or chat token copied from a prompt), the candidate panel shows one calm line:
+ * the text was ignored and did not change the score. It is found in code, by fixed phrase
  * patterns on the text the reading read, plus any flag the reading or the résumé's extraction already raised about it.
  *
  * It is worked out each time the panel is read and never stored, so it can never reach the reading's input, the score,
@@ -121,7 +121,7 @@ function flagsOf(source: unknown): Array<{ kind: string; detail: string }> {
 }
 
 /**
- * The one line for the candidate panel and the ITS recruiter's queue, or null. `resumeText`: the résumé's text as the
+ * The one line for the candidate panel, or null. `resumeText`: the résumé's text as the
  * reading read it (null when there is none, or the file is not clean); `answers` and `extraction`: the application's;
  * `readings`: the readings the team may see (only the résumé readings' flags count). The CV line when the résumé holds
  * such text, or a flag says so and there is a résumé; else the answers line when an answer holds it, or a flag says so;

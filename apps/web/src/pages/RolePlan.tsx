@@ -6,7 +6,7 @@ import { PACKET_VISIBILITY_LABEL } from "@ros/contracts";
 import { Alert, Avatar, Button, Card, Chip, cn, EmptyState, ErrorState, Field, Icon, IconLabel, Pill, Skeleton, Timeline } from "@ros/ui";
 import { api, ApiError, type DecisionMaker, type InterviewPlanView, type LegalCheck, type LegalCheckItem, type PacketFlag, type Requirement, type RoleDetail, type RoleEvent, type RolePacket } from "../api/client";
 import { APPROVE_WAITS_FOR_CHECK, approvedToast } from "../company-check";
-import { AskRecruiter } from "../components/AskRecruiter";
+import { Upgrade } from "../components/Upgrade";
 import { BoardTicks } from "../components/BoardTicks";
 import { ClosingDateField } from "../components/ClosingDate";
 import { useCompanyCheck } from "../components/use-company-check";
@@ -195,7 +195,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
       </Card>
     );
   }
-  if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} roleId={role.id} />;
+  if (!pending && role.status === "pending_approval") return <CatchingUpCard latest={latest} sentBackHere={sentBackHere} />;
   if (!pending) return null;
   const packet = pending.editWhileOpen ? role.proposedPacket?.packet ?? null : role.currentPacket?.packet ?? null;
   const assumptions = packet?.provenance.assumptions ?? [];
@@ -238,7 +238,7 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
     >
       <div className="stack gap-3">
         {!pending.viewer.mayDecide && !fixesFirst ? <div id="approve-why"><Alert tone="info">{pending.viewer.reason ?? "Someone else on your team decides this one."}</Alert></div> : null}
-        {pending.viewer.blockedBy === "trial_ended" ? <div className="row"><AskRecruiter label="Ask ITS to choose a plan" size="sm" variant="secondary" preset={TRIAL_ASK} /></div> : null}
+        {pending.viewer.blockedBy === "trial_ended" ? <div className="row"><Upgrade label="Ask ITS to choose a plan" size="sm" reason={TRIAL_ASK} /></div> : null}
         {reserved && (pending.viewer.mayDecide || fixesFirst) ? <p className="small muted">{reserved}</p> : null}
         {!pending.editWhileOpen && check === "waiting" ? <Alert tone="info">{APPROVE_WAITS_FOR_CHECK}</Alert> : null}
         {pending.editWhileOpen && lead ? <p className="max-w-[68ch] text-ink-2">{lead}</p> : null}
@@ -310,17 +310,17 @@ export function PacketApprovalCard({ role, onEdit, canEdit, canManage, canChange
 }
 
 /** What the approval card says once the role page has waited on the worker as long as it reads the role again (`CATCH_UP_FOR_MS`). */
-export const TAKING_LONGER = { title: "This is taking longer than it should", words: "It usually takes a few seconds. Reload the page in a minute; if it still shows this, bring in a recruiter." } as const;
+export const TAKING_LONGER = { title: "This is taking longer than it should", words: "It usually takes a few seconds. Reload the page in a minute." } as const;
 
 /**
  * The approval card while the worker catches up (the role page reads the role again meanwhile), so the page says what is
  * happening rather than show nothing: just after "Ask for approval", just after approving, and just after this page sent
  * the role back (`sentBackHere`), when the API still says the role waits for approval until the worker makes it a draft.
  * The page reads the role again for two minutes at most; then the card stops its spinner and says so plainly, with Reload
- * and Bring in a recruiter (6 November 2026: a worker that is down left the page spinning for ever). `stalled` draws that
- * state at once, for tests and for a page opened long after the wait began.
+ * (6 November 2026: a worker that is down left the page spinning for ever). `stalled` draws that state at once, for tests
+ * and for a page opened long after the wait began.
  */
-export function CatchingUpCard({ latest, sentBackHere, roleId, stalled: stalledAtFirst = false }: { latest: RoleDetail["packetApproval"]["latest"]; sentBackHere: boolean; roleId?: string; stalled?: boolean }) {
+export function CatchingUpCard({ latest, sentBackHere, stalled: stalledAtFirst = false }: { latest: RoleDetail["packetApproval"]["latest"]; sentBackHere: boolean; stalled?: boolean }) {
   const [stalled, setStalled] = useState(stalledAtFirst);
   useEffect(() => {
     if (stalled) return;
@@ -333,7 +333,6 @@ export function CatchingUpCard({ latest, sentBackHere, roleId, stalled: stalledA
         <p className="small text-ink-2" role="status">{TAKING_LONGER.words}</p>
         <div className="row mt-4">
           <Button size="sm" variant="secondary" icon="refresh" onClick={() => window.location.reload()}>Reload the page</Button>
-          <AskRecruiter roleId={roleId} size="sm" />
         </div>
       </Card>
     );
@@ -367,10 +366,10 @@ function WhereItGoes({ role, canManage, unsaved, mayDecide, busy, onUnsaved }: {
   return (
     <div className="stack gap-1.5">
       <p className="small text-ink-2">
-        Once approved it goes to {places}. {boards.length && role.whoPosts !== "its" ? "You post it on the job boards from your own accounts." : ""}
+        Once approved it goes to {places}. {boards.length ? "You post it on the job boards from your own accounts." : ""}
         {canManage && !changing ? <> <button type="button" className="link-btn" onClick={() => setChanging(true)}>Change the boards</button></> : null}
       </p>
-      {changing ? <BoardTicks key={savedBoardsKey(role.boards)} roleId={role.id} boards={role.boards} roleStatus={role.status} whoPosts={role.whoPosts} canManage={canManage} busy={busy} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
+      {changing ? <BoardTicks key={savedBoardsKey(role.boards)} roleId={role.id} boards={role.boards} roleStatus={role.status} canManage={canManage} busy={busy} onDone={() => setChanging(false)} onUnsaved={onUnsaved} /> : null}
     </div>
   );
 }

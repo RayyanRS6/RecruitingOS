@@ -20,5 +20,5 @@
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.9.0"
   },
-  "description": "The signed-in pages (owner, recruiter, administrator) as React components; routed and served by apps/shell (Next.js)."
+  "description": "The signed-in pages (owner, administrator) as React components; routed and served by apps/shell (Next.js)."
 }

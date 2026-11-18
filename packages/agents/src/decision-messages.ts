@@ -1,6 +1,6 @@
 import { and, count, eq, gt, gte, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
 import { CHOOSABLE_WORDINGS, DECISION_WORDING_LABEL, type Actor, type ApplicationStage, type CandidateNotice, type DecisionWording, type DecisionWordingOption, type ToldState } from "@ros/contracts";
-import { CANDIDATE_LOCK_ACTOR, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, adverseDecisionLineApplies, createEscalation, emit, gate, inCancelled, notLocked, notify, resolvePolicy, unlockedAtFor, waitingSince } from "@ros/core";
+import { CANDIDATE_LOCK_ACTOR, CLOSE_OUT_SENDS_FROM_DAYS, DECISION_STAGES, activeFollowUpsFor, activeMarksFor, adverseDecisionLineApplies, emit, gate, inCancelled, notLocked, notify, resolvePolicy, unlockedAtFor, waitingSince } from "@ros/core";
 import { applications, approvalRequests, candidates, communications, companies, events, interviews, rolePackets, roles, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { CLOSE_OUT_TEMPLATE, dispositionMessage, sendCloseOutNote, sendDisposition, sendStillReviewingNote, type CancelledInterview, type PersonalLine } from "./coordinator";
@@ -41,8 +41,8 @@ export function statusUrlOf(baseUrl: string, app: Pick<App, "statusToken">): str
 
 /**
  * The status link as the team sees it in a preview. The real link never leaves the server: it never expires, and
- * whoever holds it can act as the candidate (withdraw, opt out, ask for their data), so a team member, or an ITS
- * recruiter whose access later ends, must never be able to copy it from a preview.
+ * whoever holds it can act as the candidate (withdraw, opt out, ask for their data), so a team member must never be
+ * able to copy it from a preview.
  */
 export function statusUrlPlaceholder(baseUrl: string): string {
   return `${baseUrl}/c/status/[their status link]`;
@@ -243,8 +243,8 @@ export async function queueClosingMessages(q: Queryable, integrations: Integrati
  * `wording`, with no word about keeping them, whatever the company's settings say, because the team cannot tell them. Nothing
  * goes to the team and nobody is brought in, and the fact on the record means nobody tries again if it could not go. True
  * when it is on its way. The closing message for someone a closed job left in its talent pool (`tellOneLockedOfClose`), or
- * the standard wording of the decision (`defaultWording`) for someone ITS decided about under a grant, on a job still open
- * or not, once the safety net's day comes (`runUntoldSafetyNet`; known bug 141).
+ * the standard wording of the decision (`defaultWording`) for someone locked whose application carries a decision, on a job
+ * still open or not, once the safety net's day comes (`runUntoldSafetyNet`; known bug 141).
  */
 export async function tellOneLocked(q: Queryable, integrations: Integrations, input: { app: App; wording: DecisionWording; statusBaseUrl: string; now: Date }): Promise<boolean> {
   const { app } = input;
@@ -283,23 +283,22 @@ export async function tellLockedOfClose(q: Queryable, integrations: Integrations
 /* ------------------------------------------------------------------------------------------------------------ */
 
 export type SafetyNetDeps = { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor };
-export type SafetyNetResult = { applicationId: string; action: "sent" | "recruiter" };
+export type SafetyNetResult = { applicationId: string; action: "sent" | "not_sent" };
 
 /**
  * Q27: a decision nobody has told the candidate about by the fifth working day after it was made (Monday to Friday in the
  * company's time zone, its contact days, holidays left out). It is due on that day by the company's calendar, the day the
  * toast and the "not told yet" card name, whatever hour the daily check runs (`untoldFallbackDue`). Under "Do it" for
  * `disposition.send` the standard message goes out by itself through the same gate and wording as a person's Send, and
- * the team is told who got it. When the settings ask for approval, keep decisions with a person, or an ITS recruiter is
- * running the role, nothing is sent: a recruiter is brought in, one request per role, to make sure they are told. Someone
- * with no email address on file brings in a recruiter too. Once per decision (recorded as `application.untold_fallback`
- * with when the decision was made). Someone whose details were deleted at their request is never written to, and nobody is
- * asked to reach them. Someone a change of plan just opened counts from then: until then the team could not tell them.
+ * the team is told who got it. When the settings ask for approval or keep decisions with a person, or there is no email
+ * address on file for someone, nothing is sent: the team is told who still waits and why, one notice per role. Once per
+ * decision (recorded as `application.untold_fallback` with when the decision was made). Someone whose details were
+ * deleted at their request is never written to, and nobody is asked to reach them. Someone a change of plan just opened
+ * counts from then: until then the team could not tell them.
  *
  * Someone locked (the plans of 5 November 2026, Rule 2) is told by itself whatever the settings say, because the team cannot
- * tell them, with no name to the team and no recruiter: the closing message when their job closed and left them in its talent
- * pool, and the standard wording of the decision when ITS decided about them under a grant, on a job still open or not
- * (known bug 141: nothing ever told them). They were promised a date when they applied, and a decision or a job closing does
+ * tell them, with no name to the team: the closing message when their job closed and left them in its talent pool, and
+ * the standard wording of the decision on a job still open or not. They were promised a date when they applied, and a decision or a job closing does
  * not move it, so they are due by then too: from the day before it by the company's calendar (29 days after they applied, as
  * the close-out note goes), whatever hour the daily check runs, or on the fifth working day if that comes first. The day the
  * answer, the toast and the card name is that day (`untoldFallbackDay`).
@@ -322,13 +321,13 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
     const closed = new Set((await q.select({ id: roles.id }).from(roles).where(and(inArray(roles.id, [...new Set(lockedOnes.map((a) => a.roleId))]), eq(roles.status, "closed")))).map((r) => r.id));
     for (const app of lockedOnes) {
       // The closing message to someone a closed job left in its talent pool; the standard wording of the decision to anyone
-      // else (ITS's decline or talent pool under a grant), never the closing message on a job that has not closed.
+      // else, never the closing message on a job that has not closed.
       const wording = defaultWording(app, { status: closed.has(app.roleId) ? "closed" : "open" });
       if (await tellOneLocked(q, deps.integrations, { app, wording, statusBaseUrl: deps.statusBaseUrl, now: deps.now })) results.push({ applicationId: app.id, action: "sent" });
     }
   }
-  const byRole = new Map<string, { sent: App[]; recruiter: Array<{ app: App; why: string }> }>();
-  const slot = (roleId: string) => { let s = byRole.get(roleId); if (!s) { s = { sent: [], recruiter: [] }; byRole.set(roleId, s); } return s; };
+  const byRole = new Map<string, { sent: App[]; notSent: Array<{ app: App; why: string }> }>();
+  const slot = (roleId: string) => { let s = byRole.get(roleId); if (!s) { s = { sent: [], notSent: [] }; byRole.set(roleId, s); } return s; };
   for (const app of todo.filter((a) => !a.lockedAt)) {
     const policy = await resolvePolicy(q, companyId, app.roleId, "disposition.send");
     if (policy.level === "auto" || policy.level === "auto_notify") {
@@ -348,17 +347,17 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
           results.push({ applicationId: app.id, action: "sent" });
           continue;
         }
-        slot(app.roleId).recruiter.push({ app, why: "there is no email address on file for them, so the message could not be sent" });
+        slot(app.roleId).notSent.push({ app, why: "there is no email address on file for them, so the message could not be sent" });
         continue;
       }
     }
-    const why = policy.source === "takeover" ? "an ITS recruiter is running this role" : policy.level === "human_only" ? "the settings keep decision messages with a person" : "the settings ask for approval before a decision message goes";
-    slot(app.roleId).recruiter.push({ app, why });
+    const why = policy.level === "human_only" ? "the settings keep decision messages with a person" : "the settings ask for approval before a decision message goes";
+    slot(app.roleId).notSent.push({ app, why });
   }
   for (const [roleId, s] of byRole) {
     const [role] = await q.select({ title: roles.title }).from(roles).where(eq(roles.id, roleId)).limit(1);
     const title = role?.title ?? "a role";
-    const all = [...s.sent, ...s.recruiter.map((x) => x.app)];
+    const all = [...s.sent, ...s.notSent.map((x) => x.app)];
     const names = new Map((await q.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(inArray(candidates.id, all.map((a) => a.candidateId)))).map((c) => [c.id, `${c.firstName} ${c.lastName}`.trim() || "A candidate"]));
     const list = (apps: App[]) => `${apps.slice(0, 5).map((a) => names.get(a.candidateId) ?? "A candidate").join(", ")}${apps.length > 5 ? ` and ${apps.length - 5} more` : ""}`;
     const open = `/roles/${roleId}/talent?ownerStage=not_moving_forward`;
@@ -366,16 +365,15 @@ export async function runUntoldSafetyNet(q: Queryable, deps: SafetyNetDeps, comp
       const one = s.sent.length === 1;
       await notify(q, { companyId, kind: "message.untold_sent", title: `${one ? "1 person was" : `${s.sent.length} people were`} sent your decision message (${title})`, body: `${list(s.sent)}. Nobody had told them your decision for ${UNTOLD_SEND_WORKING_DAYS} working days, so the standard message went out, as your settings allow. ${one ? "It is on their page." : "Each message is on that person's page."}`, action: { label: "See who", href: open } });
     }
-    if (s.recruiter.length) {
-      const apps = s.recruiter.map((x) => x.app);
-      const reasons = [...new Set(s.recruiter.map((x) => x.why))].join("; ");
-      const esc = await createEscalation(q, { companyId, roleId, kind: "candidate_issue", summaryOrigin: "system", question: `${apps.length === 1 ? "One person has" : `${apps.length} people have`} not been told the team's decision on the ${title} role for ${UNTOLD_SEND_WORKING_DAYS} working days: ${list(apps)}. Nothing was sent, because ${reasons}. Please make sure each of them is told: the team can send the decision message from their page, or record that they told them in person.`, requestedBy: deps.actor, now: deps.now });
-      for (const { app, why } of s.recruiter) {
-        await emit(q, { type: "application.untold_fallback", companyId, actor: deps.actor, subject: { type: "application", id: app.id }, payload: { action: "recruiter", decisionAt: decidedAt(app), escalationId: esc.id, why } });
-        results.push({ applicationId: app.id, action: "recruiter" });
+    if (s.notSent.length) {
+      const apps = s.notSent.map((x) => x.app);
+      const reasons = [...new Set(s.notSent.map((x) => x.why))].join("; ");
+      for (const { app, why } of s.notSent) {
+        await emit(q, { type: "application.untold_fallback", companyId, actor: deps.actor, subject: { type: "application", id: app.id }, payload: { action: "not_sent", decisionAt: decidedAt(app), why } });
+        results.push({ applicationId: app.id, action: "not_sent" });
       }
       const one = apps.length === 1;
-      await notify(q, { companyId, kind: "recruiter.untold_brought_in", title: `A recruiter is helping tell ${one ? "1 person" : `${apps.length} people`} your decision (${title})`, body: `${list(apps)} ${one ? "has" : "have"} not been told for ${UNTOLD_SEND_WORKING_DAYS} working days. Nothing was sent, because ${reasons}, so an ITS recruiter was brought in. You can still send the message or record telling them yourself.`, action: { label: "See who", href: `${open}&told=not_told` } });
+      await notify(q, { companyId, kind: "message.untold_not_sent", title: `${one ? "1 person has" : `${apps.length} people have`} not been told your decision (${title})`, body: `${list(apps)} ${one ? "has" : "have"} not been told for ${UNTOLD_SEND_WORKING_DAYS} working days. Nothing was sent, because ${reasons}. Send the decision message from their page, or record that you told them yourself.`, action: { label: "See who", href: `${open}&told=not_told` } });
     }
   }
   return results;

@@ -9,13 +9,12 @@ import type { Tenant } from "../middleware/session";
 /**
  * How the owner meets the AI credit (packages/core/src/ai-credit.ts) on the routes they use: a plain line and a way to
  * upgrade (on the last plan, with nothing above it, a way to ITS and the day it starts again), in words, never dollars,
- * and never "try again" or "bring in a recruiter", which would be false or would offer a free person in place of an
- * upgrade. A candidate never comes here: their pages carry on in the job's own words. The one
+ * and never "try again", which would be false. A candidate never comes here: their pages carry on in the job's own words. The one
  * exception is a call refused only for money held by work still running: nothing is used up, and trying again is what is true.
  */
 
-/** The way on: the "ask ITS" request about the plan, which never uses one of the plan's recruiter requests. */
-export const askForMoreAiHelp = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: AI_HELP_UPGRADE_QUESTION } };
+/** The way on: the request to ITS about the plan. */
+export const askForMoreAiHelp = { label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } };
 /** The same request on the last plan, where nothing is above theirs: it opens the same sheet, which asks to talk about the plan (the check of 9 November). */
 export const talkToItsAboutAiHelp = { ...askForMoreAiHelp, label: "Talk to ITS" };
 
@@ -35,7 +34,7 @@ export async function aiHelpWordsOf(q: Queryable, companyId: string, now: Date):
 
 /** 402, never 502: nothing failed. `message`: one of `AI_HELP_LINE` (`aiHelpLine`). `planKey`: the company's, so the last plan's button says Talk to ITS. */
 export function aiCreditRefusal(t: Pick<Tenant, "role">, message: string, planKey?: string): HttpError {
-  return new HttpError(402, "ai_credit_used_up", message, { actions: can(t.role, "escalation.create") ? [askForAiHelpOn(planKey)] : [], upgrade: true });
+  return new HttpError(402, "ai_credit_used_up", message, { actions: can(t.role, "plan.request") ? [askForAiHelpOn(planKey)] : [], upgrade: true });
 }
 
 /** Refused only for money held by work still running (`refusedForNow`): nothing to upgrade, and it comes back within minutes. `message`: one of `AI_HELP_LINE`'s busy lines. */

@@ -31,7 +31,7 @@ const { emptyQuickAnswers, STEP_HINT } = await import("@ros/web/src/pages/new-ro
 const { suggestKey } = await import("@ros/web/src/pages/new-role/quick-suggest");
 type QuickAnswersT = import("@ros/web/src/pages/new-role/quick-start").QuickAnswers;
 
-const me = (role: string) => ({ user: { id: "u-dana", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+const me = (role: string) => ({ user: { id: "u-dana", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
 const room = { ok: true, limit: 5, used: 1, holding: [], message: null };
 const essentials = (done: Record<string, string | null>) => (["title", "location", "compensation_range", "reason_for_hire", "interviewers", "decision_maker"] as const).map((key) => ({ key, label: { title: "Job title", location: "Where the job is", compensation_range: "Pay", reason_for_hire: "Why you are hiring", interviewers: "Who interviews", decision_maker: "Who makes the final decision" }[key], done: !!done[key], value: done[key] ?? null, note: null }));
 
@@ -395,7 +395,7 @@ describe("Today's hand-off", () => {
   it("offers the 'Who are you hiring?' box and the draft in progress, asking before a discard", () => {
     nav.path = "/";
     const brief = { generatedAt: "2026-10-08T09:00:00Z", summary: "1 draft in progress.", cards: [{ kind: "draft", title: "Draft in progress: Dental Hygienist", body: "Pick up where you left off; nothing has been sent to anyone.", actions: [{ label: "Continue", method: "GET", path: "/roles/new?session=s1" }, { label: "Discard", method: "POST", path: "/api/v1/intake/sessions/s1/abandon" }] }] };
-    const html = render(createElement(Home), [[["me"], me("owner")], [["brief"], brief], [["notifications", "unread"], []], [["escalations", "mine"], []]]);
+    const html = render(createElement(Home), [[["me"], me("owner")], [["brief"], brief], [["notifications", "unread"], []]]);
     expect(html).toContain("Draft in progress: Dental Hygienist");
     expect(html).toContain(">Draft</span>");
     expect(html).toContain('href="/roles/new?session=s1"');

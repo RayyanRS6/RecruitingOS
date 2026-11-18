@@ -122,7 +122,7 @@ export const CommunicationPolicy = z.object({
 
 export const ApprovalRules = z.object({
   packetApproverRoles: z.array(z.string()).default(["owner", "admin", "hiring_manager"]),
-  interviewApproverRoles: z.array(z.string()).default(["owner", "hiring_manager", "recruiter"]),
+  interviewApproverRoles: z.array(z.string()).default(["owner", "hiring_manager"]),
   offerApproverRoles: z.array(z.string()).default(["owner", "admin"]),
 });
 

@@ -176,7 +176,7 @@ export async function createApprovedInterview(tx: Tx, container: Container, inpu
   const read = tx.select().from(applications).where(and(eq(applications.id, input.applicationId), eq(applications.companyId, companyId))).limit(1);
   const [app] = input.locked ? await read : await read.for("update");
   if (!app) throw new HttpError(404, "not_found", "Application not found.");
-  // Under a grant naming someone locked too: the interviewers would get their name by email and calendar, and could not open them.
+  // Never for someone locked: the interviewers would get their name by email and calendar, and could not open them.
   if (app.lockedAt) throw new HttpError(409, "not_while_locked", NO_WORK_WHILE_LOCKED);
   // Two people pressing at once take turns on the lock above: the second finds the first one's booking, and is told that.
   if (app.stage === "interview_scheduled") throw new HttpError(409, "interview_open", INTERVIEW_ALREADY_OPEN);

@@ -507,7 +507,7 @@ const todayKey = () => dayKey(new Date());
 
 /**
  * The ITS business calendar (correction 12): every save is a new version with an effective date; nothing is edited in
- * place; deadlines already set keep their values until an administrator recalculates them with a reason.
+ * place.
  */
 export function CalendarAdmin() {
   const qc = useQueryClient();
@@ -519,7 +519,6 @@ export function CalendarAdmin() {
   const [closures, setClosures] = useState("");
   const [coverage, setCoverage] = useState("");
   const [note, setNote] = useState("");
-  const [recalcReason, setRecalcReason] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
     if (!q.data) return;
@@ -545,16 +544,11 @@ export function CalendarAdmin() {
     onSuccess: (r) => { setProblem(null); toast(`Saved as version ${r.version}${r.inForceNow ? " (in force now)" : " (takes effect on its date)"}.`); qc.invalidateQueries({ queryKey: ["admin", "calendar"] }); },
     onError: (e) => setProblem(e instanceof ApiError ? `${e.message}${e.details ? ` ${JSON.stringify(e.details)}` : ""}` : "Could not save."),
   });
-  const recalc = useMutation({
-    mutationFn: () => api.post<{ considered: number; changed: number }>("/api/v1/admin/calendar/recalculate", { reason: recalcReason }, reason),
-    onSuccess: (r) => { toast(`Recalculated ${r.changed} of ${r.considered} open deadlines.`); setRecalcReason(""); },
-    onError: (e) => toast(e instanceof ApiError ? e.message : "Could not recalculate."),
-  });
   if (!q.data) return q.error ? <ErrorState message="Could not load the business calendar." onRetry={() => q.refetch()} /> : <Skeleton lines={6} />;
   return (
     <div className="stack gap-5">
       <Card title={`In force: ${q.data.description}`}>
-        <p className="small max-w-[75ch] text-ink-2">{q.data.version ? `Version ${q.data.version}, effective ${q.data.effectiveFrom}.` : "Built-in default; no version published yet."}{q.data.upcoming.length ? ` Upcoming: ${q.data.upcoming.map((u) => `v${u.version} from ${u.effectiveFrom}`).join(", ")}.` : ""} Deadlines already set keep their values unless you recalculate them below.</p>
+        <p className="small max-w-[75ch] text-ink-2">{q.data.version ? `Version ${q.data.version}, effective ${q.data.effectiveFrom}.` : "Built-in default; no version published yet."}{q.data.upcoming.length ? ` Upcoming: ${q.data.upcoming.map((u) => `v${u.version} from ${u.effectiveFrom}`).join(", ")}.` : ""}</p>
       </Card>
       <Card title="Publish a new version">
         <div className="stack gap-5">
@@ -579,13 +573,6 @@ export function CalendarAdmin() {
           <div><Button variant="primary" loading={save.isPending} onClick={() => save.mutate()}>Publish version</Button></div>
         </div>
       </Card>
-      {/* who sees a change: an eye beside the title, its words as its name and tooltip */}
-      <Card title="Recalculate open deadlines" aside={<IconLabel icon="eye" label="Every changed deadline is audited and the customer sees the change on their request." />}>
-        <div className="stack max-w-[620px] gap-4">
-          <Field label="Reason" htmlFor="cal-reason"><input id="cal-reason" className="input" value={recalcReason} onChange={(e) => setRecalcReason(e.target.value)} placeholder="Holiday closure added after these requests were opened" /></Field>
-          <div><Button variant="secondary" loading={recalc.isPending} disabled={recalcReason.trim().length < 5} onClick={() => recalc.mutate()}>Recalculate all open deadlines</Button></div>
-        </div>
-      </Card>
       <Card title="Next four weeks">
         <Table head={["Date", "Day", "Open", "Note"]}>
           {q.data.preview.map((d) => <tr key={d.date}><td className="nowrap font-semibold">{d.date}</td><td className="text-ink-2">{d.weekday}</td><td>{d.open.length ? windowsToText(d.open) : <Chip tone="neutral">closed</Chip>}</td><td className="small muted">{d.reason ?? ""}</td></tr>)}
@@ -608,7 +595,7 @@ export function CalendarAdmin() {
 
 type RoleGrant = { id: string; userId: string; email: string; name: string | null; authProvider: string | null; role: string; source: string; grantedBy: { name?: string; id: string }; grantReason: string; grantedAt: string; revokedAt: string | null; revokedBy: { name?: string; id: string } | null; revokeReason: string | null };
 
-/** A platform role, as the Role picker names it. */
+/** A platform role in words. Only an administrator can be granted; `its_recruiter` names rows already on the ledger. */
 const PLATFORM_ROLE_WORDS: Readonly<Record<string, string>> = { its_recruiter: "ITS recruiter", platform_admin: "Platform administrator" };
 const roleWords = (code: string) => wordFor(PLATFORM_ROLE_WORDS, code);
 
@@ -619,10 +606,10 @@ const roleWords = (code: string) => wordFor(PLATFORM_ROLE_WORDS, code);
 export function Administrators() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: adminKeys.platformRoles, queryFn: () => api.get<{ grants: RoleGrant[]; activeAdmins: number; bootstrap: { configured: number; ignored: boolean } }>("/api/v1/admin/platform-roles", reason) });
-  const [form, setForm] = useState({ email: "", role: "its_recruiter", reason: "" });
+  const [form, setForm] = useState({ email: "", reason: "" });
   const [confirming, setConfirming] = useState(false);
   const [revoking, setRevoking] = useState<{ id: string; reason: string } | null>(null);
-  const grant = useMutation({ mutationFn: () => api.post("/api/v1/admin/platform-roles", { ...form, confirm: true }, reason), onSuccess: () => { toast("Granted. Every other administrator has been told."); setForm({ email: "", role: "its_recruiter", reason: "" }); setConfirming(false); qc.invalidateQueries({ queryKey: ["admin", "platform-roles"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not grant.") });
+  const grant = useMutation({ mutationFn: () => api.post("/api/v1/admin/platform-roles", { ...form, role: "platform_admin", confirm: true }, reason), onSuccess: () => { toast("Granted. Every other administrator has been told."); setForm({ email: "", reason: "" }); setConfirming(false); qc.invalidateQueries({ queryKey: ["admin", "platform-roles"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not grant.") });
   const revoke = useMutation({ mutationFn: (r: { id: string; reason: string }) => api.post(`/api/v1/admin/platform-roles/${r.id}/revoke`, { reason: r.reason, confirm: true }, reason), onSuccess: () => { toast("Revoked. Every other administrator has been told."); setRevoking(null); qc.invalidateQueries({ queryKey: ["admin", "platform-roles"] }); }, onError: (e) => toast(e instanceof ApiError ? e.message : "Could not revoke.") });
   if (!q.data) return q.error ? <ErrorState message="Could not load platform roles." onRetry={() => q.refetch()} /> : <Skeleton lines={4} />;
   const active = q.data.grants.filter((g) => !g.revokedAt);
@@ -652,13 +639,12 @@ export function Administrators() {
       </Card>
       {/* who is told: an eye beside the title (its words are its name and tooltip). The API's own errors say when the person
           has not signed in with Microsoft 365 and a second factor yet, or when someone tries to grant themselves a role. */}
-      <Card title="Grant a platform role" aside={<IconLabel icon="eye" label="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert." />}>
+      <Card title="Add a platform administrator" aside={<IconLabel icon="eye" label="Every other administrator and the ITS queue mailbox are told, and another administrator must acknowledge the alert." />}>
         <div className="stack max-w-[520px] gap-4">
           <Field label="Staff email" htmlFor="pr-email"><input id="pr-email" className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
-          <Field label="Role" htmlFor="pr-role"><select id="pr-role" className="select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="its_recruiter">ITS recruiter</option><option value="platform_admin">Platform administrator</option></select></Field>
           <Field label="Reason" htmlFor="pr-reason"><input id="pr-reason" className="input" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
           {confirming ? (
-            <Alert tone="caution"><div className="row justify-between"><span>Grant {roleWords(form.role)} to {form.email}?</span><span className="row"><Button size="sm" variant="primary" loading={grant.isPending} onClick={() => grant.mutate()}>Yes, grant it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
+            <Alert tone="caution"><div className="row justify-between"><span>Grant {roleWords("platform_admin")} to {form.email}?</span><span className="row"><Button size="sm" variant="primary" loading={grant.isPending} onClick={() => grant.mutate()}>Yes, grant it</Button><Button size="sm" variant="quiet" onClick={() => setConfirming(false)}>No</Button></span></div></Alert>
           ) : <div className="row"><Button variant="primary" disabled={!form.email.includes("@") || form.reason.trim().length < 5} onClick={() => setConfirming(true)}>Grant</Button></div>}
         </div>
       </Card>

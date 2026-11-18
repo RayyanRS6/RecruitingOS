@@ -23,7 +23,6 @@ vi.mock("@ros/web/src/components/use-is-client", () => ({ useIsClient: () => tru
 
 (globalThis as { React?: typeof React }).React = React;
 const { Upgrade, UpgradeSheet } = await import("@ros/web/src/components/Upgrade");
-const { AskRecruiter } = await import("@ros/web/src/components/AskRecruiter");
 const { LockedCandidates, LockedCard } = await import("@ros/web/src/components/LockedCandidates");
 const { RoomAlert } = await import("@ros/web/src/pages/new-role/StartView");
 const { TeamCard } = await import("@ros/web/src/pages/TeamCard");
@@ -36,19 +35,15 @@ const { NewRole } = await import("@ros/web/src/pages/NewRole");
 const { ReportFigures } = await import("@ros/web/src/pages/RoleReport");
 const { CandidatePanel } = await import("@ros/web/src/pages/candidate-panel/CandidatePanel");
 const { ScorecardWaitingCard } = await import("@ros/web/src/pages/candidate-panel/assessment");
-const { CallNotesCard } = await import("@ros/web/src/pages/candidate-panel/call-notes");
-const { MessagesTab, ScreenTab } = await import("@ros/web/src/pages/candidate-panel/sections");
+const { MessagesTab } = await import("@ros/web/src/pages/candidate-panel/sections");
 const { CloseRoleCard } = await import("@ros/web/src/components/ClosingMessage");
-const { RecruiterRequests } = await import("@ros/web/src/components/RecruiterRequests");
-const { RecruiterQueue } = await import("@ros/web/src/pages/RecruiterQueue");
 const { CustomersSection, aiCreditDollars, planChangedToast, planLimitsLine, planPriceLine } = await import("@ros/web/src/pages/admin/customers");
 const { attentionRows } = await import("@ros/web/src/pages/admin/Overview");
 const { needsAPerson } = await import("@ros/web/src/pages/admin/problems");
 const { ApiError } = await import("@ros/web/src/api/client");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-const me = (role: string) => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
-const recruiter = { ...me("owner"), user: { id: "s2", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, memberships: [], activeCompanyId: "co1", staffAccess: { grantId: "g1", kind: "escalation", purpose: "A role", expiresAt: "2026-12-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: null } } };
+const me = (role: string) => ({ user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
 const admin = { ...me("owner"), user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, memberships: [], activeCompanyId: null };
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 
@@ -64,7 +59,7 @@ const refused = (qc: QueryClient, queryKey: readonly unknown[], error: Error) =>
 const locked402 = new ApiError(402, "candidate_locked", "Locked. Upgrade to view more candidates.", { upgrade: true, actions: [] });
 
 const plans = {
-  requested: false,
+  requestedAt: null,
   plans: [
     { key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit", current: true },
     { key: "basic", name: "Basic", monthlyUsd: 49, activeRoles: 3, jobsTotal: null, candidatesPerJob: 25, seats: 3, aiHelp: "About 600 candidates a month", current: false },
@@ -100,17 +95,17 @@ describe("the one Upgrade and its sheet", () => {
     expect(html).not.toContain('value="free"');
   });
 
-  it("asks one thing, with one plain line about money; nothing about access, urgency or a recruiter's help", () => {
+  it("asks one thing, with one plain line about money; nothing about access or urgency", () => {
     const html = sheet();
     const words = text(html);
     expect(words).toContain("A note for ITS (optional)");
     expect(words).toContain("Ask ITS to upgrade");
     expect(words).toContain("No card is charged. ITS will contact you, and nothing changes until then.");
-    for (const not of ["will see", "every candidate", "access", "How urgent", "What do you want help with", "Send to a recruiter", "Bring in a recruiter", "$10", "cents"]) expect(words, not).not.toContain(not);
+    for (const not of ["will see", "every candidate", "access", "How urgent", "What do you want help with", "$10", "cents"]) expect(words, not).not.toContain(not);
   });
 
   it("on the last plan nothing below is chosen for them, and they can still talk with ITS, in words that do not send them to a plan that is not there", () => {
-    const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
+    const html = sheet({ requestedAt: null, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
     expect(html.match(/type="radio"/g)).toHaveLength(3);
     expect(html).not.toContain('checked=""');
     expect(html).toContain('aria-label="Your plan"');
@@ -120,33 +115,29 @@ describe("the one Upgrade and its sheet", () => {
   });
 
   it("on a plan not in the list (the pilot, Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
-    const html = sheet({ requested: false, plans: plans.plans.map((p) => ({ ...p, current: false })) });
+    const html = sheet({ requestedAt: null, plans: plans.plans.map((p) => ({ ...p, current: false })) });
     expect(html.match(/type="radio"/g)).toHaveLength(4);
     expect(html).not.toContain('checked=""');
     expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
   });
 
-  it("says softly that ITS has the request, and asks nothing more", () => {
-    const words = text(sheet({ ...plans, requested: true }));
-    expect(words).toContain("ITS has your request.");
+  it("with a request already sent: says the day it went, and asks nothing more", () => {
+    const html = sheet({ ...plans, requestedAt: "2026-11-18T12:00:00Z" });
+    const words = text(html);
+    expect(words).toContain("Request sent on November 18, 2026. No card is charged. ITS will contact you, and nothing changes until then.");
     expect(words).not.toContain("Ask ITS to upgrade");
     expect(words).not.toContain("A note for ITS");
+    expect(html).not.toContain('type="radio"');
   });
 
-  it("the button shows for anyone at the company who may ask, never for an interviewer or for ITS staff inside a customer, and the sheet stays closed until pressed", () => {
+  it("the button shows for anyone at the company who may ask, never for an interviewer, and the sheet stays closed until pressed; with a request sent, its day stands in the button's place", () => {
     const button = (who: unknown) => render(client([], who), createElement(Upgrade, {}));
     const html = button(me("owner"));
     expect(html).toMatch(/<button type="button" class="btn secondary"[^>]*>.*Upgrade<\/button>/);
     expect(html).not.toContain('role="dialog"');
     expect(button(me("hiring_manager"))).toContain(">Upgrade<");
     expect(button(me("interviewer"))).toBe("");
-    expect(button(recruiter)).toBe("");
-  });
-
-  it("a request about the plan always takes this way, whatever the card calls it; any other request keeps the recruiter's form", () => {
-    expect(render(client(), createElement(AskRecruiter, { label: "Ask ITS to choose a plan", preset: { kind: "ask", about: "all", topic: "plan", question: "x" } }))).toContain("Ask ITS to choose a plan");
-    expect(render(client(), createElement(AskRecruiter, { preset: { kind: "ask", about: "all", topic: "plan", question: "x" } }))).toContain(">Upgrade<");
-    expect(render(client(), createElement(AskRecruiter, {}))).toContain(">Bring in a recruiter<");
+    expect(render(client([[["plans"], { ...plans, requestedAt: "2026-11-18T12:00:00Z" }]]), createElement(Upgrade, {}))).toBe('<span class="small muted">Request sent on November 18, 2026</span>');
   });
 
   it("the room alert: no roles to close and the plan's words, with the Upgrade", () => {
@@ -174,7 +165,7 @@ describe("the one Upgrade and its sheet", () => {
 
 describe("the team card and Settings", () => {
   const member = { userId: "u1", role: "owner", status: "active", email: "dana@bright.test", name: "Dana Whitfield", calendar: null, availability: null, schedulable: false };
-  const company = (over: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: daysAgo(30) }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { jobs_total: { used: 1, limit: 1 }, active_roles: { used: 1, limit: 1 }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, seats: { used: 1, limit: 2 } }, trial: null, whoPosts: "self", itsPosting: false, ...over });
+  const company = (over: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright-dental", vertical: "dental", sizeBand: "20-49", timezone: "America/Los_Angeles", planKey: "free", status: "active", plan: { key: "free", name: "Free", limits: { jobs_total: 1, candidates_per_job: 5, seats: 2 } }, locations: [{ city: "Irvine", region: "CA" }], settings: { verifiedAt: daysAgo(30) }, integrations: [{ kind: "jobboard", provider: "linkedin_basic", status: "not_connected" }], ai: { provider: "fake" }, usage: { jobs_total: { used: 1, limit: 1 }, active_roles: { used: 1, limit: 1 }, ai_credit_total_cents: { used: 18, limit: 100, unit: "percent" }, seats: { used: 1, limit: 2 } }, trial: null, ...over });
   const page = (c: Record<string, unknown>, search = "", role = "owner") => {
     nav.search = search;
     nav.path = "/setup";
@@ -210,22 +201,10 @@ describe("the team card and Settings", () => {
   });
 
   it("no Upgrade where nothing is above: the last public plan and the private pilot; any other plan has one", () => {
-    expect(text(page(company({ planKey: "ultra", plan: { key: "ultra", name: "Ultra", limits: {} }, itsPosting: true })))).not.toContain("Upgrade");
-    expect(text(page(company({ planKey: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} }, itsPosting: true })))).not.toContain("Upgrade");
+    expect(text(page(company({ planKey: "ultra", plan: { key: "ultra", name: "Ultra", limits: {} } })))).not.toContain("Upgrade");
+    expect(text(page(company({ planKey: "design_partner", plan: { key: "design_partner", name: "Design Partner", limits: {} } })))).not.toContain("Upgrade");
     expect(text(page(company({ planKey: "pro", plan: { key: "pro", name: "Pro", limits: {} } })))).toContain("Plan Pro Upgrade");
     expect(text(page(company({ planKey: "growth", plan: { key: "growth", name: "Growth", limits: {} } })))).toContain("Plan Growth Upgrade");
-  });
-
-  it("job boards on a plan with no ITS staff time: the team posts, no choice, and the way to ITS is an Upgrade; with it, the choice is the company's", () => {
-    const none = text(page(company(), "?tab=rules"));
-    expect(none).toContain("Who posts your jobs on the boards Your team posts them Upgrade");
-    expect(none).not.toContain("ITS posts them for us");
-    const withIts = page(company({ planKey: "pro", whoPosts: "its", itsPosting: true }), "?tab=rules");
-    expect(text(withIts)).toContain("ITS posts them for us");
-    expect(withIts).toMatch(/aria-pressed="true"[^>]*>ITS posts them for us/);
-    // what the Connected services line says follows the same answer, not the setting alone
-    expect(text(page(company(), "?tab=security"))).not.toContain("ITS posts your jobs here");
-    expect(text(page(company({ whoPosts: "its", itsPosting: true }), "?tab=security"))).toContain("ITS posts your jobs here");
   });
 });
 
@@ -234,7 +213,6 @@ describe("Home", () => {
     [["brief"], { generatedAt: daysAgo(0), summary: "", cards: over.cards ?? [] }],
     [["notifications", "unread"], []],
     [["roles"], []],
-    [["escalations", "mine"], []],
     [["company"], { settings: {}, planKey: over.planKey ?? "free", timezone: "America/Los_Angeles", usage: {}, trial: null, aiCredit: over.credit ?? null }],
     ...(over.room ? [[["intake", "mine"], { sessions: [], room: over.room }] as [readonly unknown[], unknown]] : []),
   ], me(over.role ?? "owner")), createElement(Home));
@@ -263,7 +241,7 @@ describe("Home", () => {
   });
 
   it("a card's Upgrade opens the sheet: a button of its own, with the card's other ways on beside it", () => {
-    const html = page({ cards: [{ kind: "new_applicants", title: "More people applied to Dental Hygienist.", body: "Upgrade to view more candidates.", roleId: "r1", actions: [{ label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: "We would like to view more candidates." } }, { label: "See applicants", method: "GET", path: "/roles/r1/talent" }] }] });
+    const html = page({ cards: [{ kind: "new_applicants", title: "More people applied to Dental Hygienist.", body: "Upgrade to view more candidates.", roleId: "r1", actions: [{ label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: "We would like to view more candidates." } }, { label: "See applicants", method: "GET", path: "/roles/r1/talent" }] }] });
     expect(text(html)).toContain("More people applied to Dental Hygienist.");
     expect(html).toContain(">Upgrade<");
     expect(html).toContain('href="/roles/r1/talent"');
@@ -283,7 +261,7 @@ describe("Home", () => {
 describe("a person past the plan's candidates per job", () => {
   const vera = { id: "a1", stage: "triaged", stageLabel: "Ready", group: "in_process", source: "careers_page", createdAt: daysAgo(4), eligibility: null, ownerStage: "new", ownerStageLabel: "New", mark: null, tags: [], stageMoves: [], toldState: null, candidate: { id: "c1", name: "Vera Visible", email: "vera@people.test", phone: null, locationText: "Tustin, CA" }, extractionSummary: null, assessment: null, appliedAt: daysAgo(4), stageChangedAt: daysAgo(3), daysInStage: 3, candidateToldAt: null, decisionMessageWaiting: false, score: 91, cancelled: null };
   const counts = (total: number) => ({ total, byOwnerStage: { new: 1, longlist: 0, shortlist: 0, interviewing: 0, cancelled: 0, on_hold: 0, offer: 0, hired: 0, not_moving_forward: 0, no_ai_interview: 0 }, byGroup: { waiting_on_you: 0, in_process: 1, not_moving_forward: 0, hired: 0 }, notTold: 0, holdsEnded: 0 });
-  const job = { id: "r1", title: "Dental Hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null }, packetVersions: [{ version: 1, status: "approved", source: "intake_session", createdAt: daysAgo(8), createdBy: { kind: "user", id: "u1", name: "Dana Whitfield" }, changeSummary: null }], counts: { in_process: 1 }, lockedCount: 2, boardsStillUp: [], boardsShowingOldVersion: [], whoPosts: "self", decisionMaker: null, boards: [], autoActionsOnOpen: { lines: [], changeHref: "" }, pendingApprovals: [], postings: [], currentPacket: { version: 1, status: "approved", packet: { identity: { locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" }, compensation: { basis: "hourly", min: 40, max: 52, discloseRange: true } } } };
+  const job = { id: "r1", title: "Dental Hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null }, packetVersions: [{ version: 1, status: "approved", source: "intake_session", createdAt: daysAgo(8), createdBy: { kind: "user", id: "u1", name: "Dana Whitfield" }, changeSummary: null }], counts: { in_process: 1 }, lockedCount: 2, boardsStillUp: [], boardsShowingOldVersion: [], decisionMaker: null, boards: [], autoActionsOnOpen: { lines: [], changeHref: "" }, pendingApprovals: [], postings: [], currentPacket: { version: 1, status: "approved", packet: { identity: { locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" }, compensation: { basis: "hourly", min: 40, max: 52, discloseRange: true } } } };
   const cards = [{ position: 6, appliedAt: daysAgo(0) }, { position: 7, appliedAt: daysAgo(2) }];
   const people = (search = "", extra: Array<[readonly unknown[], unknown]> = []) => {
     nav.search = search;
@@ -376,69 +354,20 @@ describe("a person past the plan's candidates per job", () => {
     nav.path = "/roles/r1";
     nav.params = { id: "r1" };
     expect(render(client([[["role", "r1"], job]]), createElement(RoleDetail))).toMatch(/data-label="Candidates">Candidates<\/span> <span class="count">3<\/span>/);
-    const report = { generatedAt: daysAgo(0), role: null, applicants: { total: 5, locked: 2, last30Days: 5, timeZone: "America/Los_Angeles", bySource: [], byDay: [] }, stages: { total: 5, byStage: [], byGroup: {}, byOwnerStage: {} }, timeInStage: { byStage: [], waitingOnYou: { count: 0, averageDays: null, medianDays: null, longestDays: null } }, interviews: { total: 0, requested: 0, scheduled: 0, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0, byRound: [] }, pendingDecisions: { count: 0, approvals: 0, candidates: 0, oldestDays: null, list: [] }, recommendationsVsDecisions: { assessed: 0, rows: [] }, overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: {} }, escalations: { total: 0, open: 0, resolved: 0, overdue: 0, medianResponseHours: null }, messages: { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 }, outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 0, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [] } };
+    const report = { generatedAt: daysAgo(0), role: null, applicants: { total: 5, locked: 2, last30Days: 5, timeZone: "America/Los_Angeles", bySource: [], byDay: [] }, stages: { total: 5, byStage: [], byGroup: {}, byOwnerStage: {} }, timeInStage: { byStage: [], waitingOnYou: { count: 0, averageDays: null, medianDays: null, longestDays: null } }, interviews: { total: 0, requested: 0, scheduled: 0, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0, byRound: [] }, pendingDecisions: { count: 0, approvals: 0, candidates: 0, oldestDays: null, list: [] }, recommendationsVsDecisions: { assessed: 0, rows: [] }, overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, byAction: {} }, messages: { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 }, outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 0, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [] } };
     const words = text(render(client(), createElement(ReportFigures, { report: report as never })));
     expect(words).toContain("people are locked");
     expect(text(render(client(), createElement(ReportFigures, { report: { ...report, applicants: { ...report.applicants, locked: 0 } } as never })))).not.toContain("locked");
   });
 });
 
-describe("someone locked, as ITS reads them under a grant naming them", () => {
-  const person = (over: Record<string, unknown> = {}) => ({ id: "a9", roleId: "r1", stage: "received", lockedAt: daysAgo(3), allowedActions: ["reject"], blockedReasons: {}, screens: [], communications: [], packetLabels: { mustHaves: [], competencies: [], questions: [{ key: "q1", question: "Can you work Saturdays?" }], written: [] }, candidate: { firstName: "Sam", lastName: "Lockwood", email: "sam@people.test" }, ...over }) as never;
-
-  it("the notes from a call say what they do: on the Notes tab, with no AI review and no AI interview to finish", () => {
-    const words = text(render(client(), createElement(CallNotesCard, { a: person(), roleId: "r1", prominent: true })));
-    expect(words).toContain("Sam is locked, so these notes go on the Notes tab and no AI review is written from them.");
-    expect(words).not.toContain("Finish the AI interview");
-    expect(words).not.toContain("these notes are their AI interview");
-    // someone the team can read keeps what they had
-    const open = text(render(client(), createElement(CallNotesCard, { a: person({ lockedAt: null }), roleId: "r1", prominent: true })));
-    expect(open).toContain("these notes are their AI interview");
-    expect(open).not.toContain("is locked");
-  });
-
-  it("the AI interview tab the queue's hint sends the recruiter to has the notes from a call at any stage, a closed job's talent pool too", () => {
-    const tab = (over: Record<string, unknown>) => text(render(client(), createElement(ScreenTab, { a: person({ assessments: [], timeline: [], ownerStage: "no_ai_interview", aiInterview: null, ...over }), roleId: "r1", myRole: "recruiter" })));
-    for (const stage of ["talent_pool", "withdrawn", "rejected"]) expect(tab({ stage }), stage).toContain("Add notes from a call");
-    // someone the team can read, at the talent pool, has no AI interview to add notes to
-    expect(tab({ stage: "talent_pool", lockedAt: null })).not.toContain("Add notes from a call");
-  });
-
-  it("writing to them stays, with no suggested line on the company's credit", () => {
-    const tab = (a: never) => text(render(client([[["message-preview", "a9"], { to: "sam@people.test", fromName: "Bright Dental hiring team", footer: "Rae Recruiter", needsApproval: false, repliesComeBack: true, undoSeconds: 0 }]]), createElement(MessagesTab, { a, roleId: "r1", compose: { open: true, subject: "", text: "" }, setCompose: () => undefined })));
-    const words = tab(person());
+describe("writing to a candidate from their page", () => {
+  it("has the message form, Send and a suggested opening line", () => {
+    const a = { id: "a9", roleId: "r1", stage: "received", allowedActions: ["reject"], blockedReasons: {}, screens: [], communications: [], packetLabels: { mustHaves: [], competencies: [], questions: [], written: [] }, candidate: { firstName: "Sam", lastName: "Lockwood", email: "sam@people.test" } } as never;
+    const words = text(render(client([[["message-preview", "a9"], { to: "sam@people.test", fromName: "Bright Dental hiring team", footer: "Dana Whitfield", needsApproval: false, repliesComeBack: true, undoSeconds: 0 }]]), createElement(MessagesTab, { a, roleId: "r1", compose: { open: true, subject: "", text: "" }, setCompose: () => undefined })));
     expect(words).toContain("Write to Sam");
     expect(words).toContain("Send");
-    expect(words).not.toContain("Suggest an opening line");
-    expect(tab(person({ lockedAt: null }))).toContain("Suggest an opening line");
-  });
-
-  it("the queue's request gives its own hint, never that the notes finish an AI interview", () => {
-    nav.path = "/recruiter/queue/e1";
-    nav.params = { id: "e1" };
-    const taken = { id: "e1", status: "claimed", kind: "candidate_issue", urgency: "normal", requiredExpertise: "candidate follow-up", summary: "A candidate asked for a person.", companyName: "Bright Dental", roleTitle: "Dental Hygienist", slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: daysAgo(0), claimedByMe: true, claimed: true, accessGranted: true, why: null, companyId: "co1", roleId: "r1", applicationId: "a9", question: "Sam replied HUMAN.", contextSnapshot: { capturedAt: daysAgo(0) }, thread: [], reopenedCount: 0, grant: { id: "g1", purpose: "A candidate", expiresAt: daysAgo(-7), scope: { roleId: "r1", applicationId: "a9" } } };
-    const hint = (detail: unknown) => text(render(client([[["escalations"], [taken]], [["escalation", "e1"], detail]], recruiter), createElement(RecruiterQueue)));
-    const locked = hint({ ...taken, lockedForCompany: true });
-    expect(locked).toContain("the company cannot read them");
-    expect(locked).toContain("no AI interview or interview starts, while they are locked");
-    expect(locked).not.toContain("Your notes finish the AI interview");
-    expect(hint({ ...taken, lockedForCompany: false })).toContain("Your notes finish the AI interview so the scorecard is written");
-
-    // Nobody at the company reads an answer about them while they are locked, it can once an upgrade opens them, and it never
-    // reaches them: the card says so and offers the candidate instead.
-    expect(locked).toContain("Write to the candidate");
-    expect(locked).toContain("What you did or advised (not sent to the candidate; the company can't read it while the candidate is locked, but can if an upgrade opens them)");
-    expect(locked).not.toContain("only ITS reads");
-    expect(locked).toContain("Do not name them to the company");
-    expect(locked).not.toContain("Write to the customer");
-    expect(locked).not.toContain("The person who asked and the owners read it in full");
-    expect(locked).not.toContain("the customer reads this in full");
-    // Everyone else's request reads as it did.
-    const open = hint({ ...taken, lockedForCompany: false });
-    expect(open).toContain("Write to the customer");
-    expect(open).toContain("the customer reads this in full");
-    expect(open).not.toContain("Write to the candidate");
-    expect(open).not.toContain("while the candidate is locked");
+    expect(words).toContain("Suggest an opening line");
   });
 });
 
@@ -476,7 +405,7 @@ describe("the job builder and the quick start with no room", () => {
     expect(atATime).toContain("Step 1 of 10");
   });
 
-  it("the builder says it when a draft opens, and a turn with no AI help left offers the Upgrade, never a recruiter or 'try again'", () => {
+  it("the builder says it when a draft opens, and a turn with no AI help left offers the Upgrade, never 'try again'", () => {
     nav.search = "session=s1";
     nav.path = "/roles/new";
     const session = { id: "s1", status: "active", roleId: null, createdAt: daysAgo(0), updatedAt: daysAgo(0), startedBy: { userId: "u1", name: "Dana Whitfield", mine: true }, messages: [], facts: { title: "Dental Hygienist", mustHaves: [], niceToHaves: [], eligibilityNotes: [], interviewers: [], dealBreakers: [], declinedCriteria: [] }, missingFacts: [], questions: [], readiness: { essentials: [], missing: [], payConfirmed: false, mayDraft: false, draftBlocker: null, hasDraft: false, draftOutOfDate: false, draftEdits: 0, openFlags: 0, mayAskForApproval: false, approvalBlockers: ["Write the draft first."] }, pay: { basis: null, benchmark: null, gap: null, stated: { min: null, max: null, ceiling: null }, confirmed: null, belowMarket: false, summary: "" }, draft: null, flags: [], ad: null, fromRole: null, progress: null };
@@ -485,113 +414,24 @@ describe("the job builder and the quick start with no room", () => {
     expect(noted).toContain("Your Free plan includes one job. Upgrade to post more.");
     // a turn refused for the AI help, as the first reply answers it
     const line = "Your plan's AI help is used up. Your draft is saved. Upgrade to keep going.";
-    const html = seed([[["intake", "first-reply", "s1"], { error: "AI credit used up", recovery: line, upgrade: true, proposedActions: [{ kind: "ask", label: "Upgrade", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: "We would like more AI help." } }] }]]);
+    const html = seed([[["intake", "first-reply", "s1"], { error: "AI credit used up", recovery: line, upgrade: true, proposedActions: [{ kind: "ask", label: "Upgrade", path: "/api/v1/plans/request", body: { reason: "We would like more AI help." } }] }]]);
     const words = text(html);
     expect(words).toContain(line);
     expect(words).not.toContain("could not reply");
     expect(html).toContain(">Upgrade<");
-    expect(words).not.toContain("Bring in a recruiter");
   });
 });
 
-describe("the team's list of requests", () => {
-  it("a request about the plan is about the plan, with nothing about access", () => {
-    nav.search = "request=e1";
-    const row = { id: "e1", kind: "ask", status: "resolved", urgency: "normal", summary: "A customer asked about their plan.", question: "We would like to move to the Pro plan.", scope: "company", topic: "plan", roleId: null, roleTitle: null, applicationId: null, candidateName: null, askedBy: { kind: "you", name: "Dana" }, createdAt: daysAgo(1), slaDueAt: daysAgo(0), firstResponseAt: daysAgo(0), resolvedAt: daysAgo(0), resolution: "Your company is on the Pro plan now.", accessExpiresAt: null, recruiterName: "Ada Admin", reopenedCount: 0, thread: [] };
-    const words = text(render(client([[["escalations", "mine"], [row]]]), createElement(RecruiterRequests)));
-    expect(words).toContain("Your plan");
-    expect(words).not.toContain("All of your hiring");
-    expect(words).not.toContain("will see");
-  });
-
-  // Left out by the second look at the taps and kept-in fix (caa7cb7): Recruiting OS closes a held application's request once
-  // a person decides, and Home read "Answered", "Recruiting OS answered" and "Picked up by Recruiting OS" (17 November 2026)
-  it("a request Recruiting OS closed on its own reads Closed with its day and why, never answered or picked up", () => {
-    const decided = "Someone has now decided about this application, so nothing more is needed.";
-    const question = "Maria Reyes answered no to an eligibility question for Dental Hygienist and has waited 80 hours for a decision. Please review it with the customer; only they can decline.";
-    const row = {
-      id: "e2", kind: "review", status: "resolved", urgency: "normal", summary: "", question, scope: "application", roleId: "r1", roleTitle: "Dental Hygienist", applicationId: "a1", candidateName: "Maria Reyes",
-      askedBy: { kind: "system", name: null }, createdAt: daysAgo(4), slaDueAt: daysAgo(1), firstResponseAt: null, resolvedAt: daysAgo(0), resolution: decided, accessExpiresAt: null, recruiterName: null, reopenedCount: 0, closedBy: "system",
-      thread: [
-        { id: "e2:question", side: "customer", kind: "question", body: question, by: null, at: daysAgo(4), raisedBy: "system" },
-        // the API marks the line Recruiting OS wrote itself (17 November 2026)
-        { id: "m1", side: "recruiter", kind: "answer", body: decided, by: "Recruiting OS", at: daysAgo(0), raisedBy: "system" },
-      ],
-    };
-    const html = render(client([[["escalations", "mine"], [row]]]), createElement(RecruiterRequests));
-    const words = text(html);
-    expect(html).toContain('<span class="pill neutral sm"><span class="dot" aria-hidden="true"></span>Closed</span>');
-    expect(words).toMatch(/Brought in on its own when something got stuck · Closed \w{3}, \w{3} \d{1,2}, /);
-    // why it closed, in the place of the question
-    expect(words).toContain(decided);
-    expect(words).not.toContain("has waited 80 hours");
-    expect(words).not.toMatch(/Answered|Recruiting OS answered|Picked up/);
-    // the team can still say it did not solve it
-    expect(words).toContain("This didn't solve it");
-    // Opened from a notice (?request=<id>), the conversation shows, and Recruiting OS's own line says it closed the request:
-    // it read "Recruiting OS answered" under "Closed" (the review of the live-test fixes, 17 November 2026)
-    nav.search = "request=e2";
-    const opened = text(render(client([[["escalations", "mine"], [row]]]), createElement(RecruiterRequests)));
-    expect(opened).toContain("Hide the conversation");
-    expect(opened).toContain("Raised automatically by Recruiting OS · ");
-    expect(opened).toContain("Recruiting OS closed it · ");
-    expect(opened).not.toMatch(/Answered|Recruiting OS answered|The recruiter answered|Picked up/);
-    // a recruiter's answer keeps its box, heading and state
-    const answered = text(render(client([[["escalations", "mine"], [{ ...row, closedBy: undefined, recruiterName: "Kai Recruiter", thread: [row.thread[0], { ...row.thread[1], body: "Call her about the licence.", by: "Kai Recruiter", raisedBy: undefined }] }]]]), createElement(RecruiterRequests)));
-    expect(answered).toContain("Kai Recruiter answered Call her about the licence.");
-    expect(answered).toMatch(/· Answered .* · Picked up by Kai Recruiter \(ITS recruiter\)/);
-    // and in the open conversation too
-    expect(answered).toContain("Kai Recruiter answered · ");
-  });
-});
-
-describe("a request about the plan in the recruiter queue", () => {
-  const row = { id: "e1", status: "open", kind: "ask", urgency: "normal", requiredExpertise: "plan and billing", summary: "A customer asked about their plan.", companyName: "Bright Dental", roleTitle: null, slaDueAt: null, slaRemainingMinutes: null, businessMinutesRemaining: null, overdue: false, createdAt: daysAgo(0), claimedByMe: false, claimed: false };
-  const taken = { ...row, status: "claimed", claimedByMe: true, claimed: true, accessGranted: true, why: null, companyId: "co1", roleId: null, applicationId: null, question: "We would like to move to the Pro plan.", contextSnapshot: { capturedAt: daysAgo(0), company: { name: "Bright Dental", vertical: "dental", sizeBand: "20-49" } }, thread: [{ id: "e1:question", side: "customer", kind: "question", body: "We would like to move to the Pro plan.", by: "Dana", at: daysAgo(0), raisedBy: "team" }], reopenedCount: 0, grant: null, planRequest: true };
-  const queue = (detail: unknown, who: unknown) => {
-    nav.path = "/recruiter/queue/e1";
-    nav.params = { id: "e1" };
-    return render(client([[["escalations"], [row]], [["escalation", "e1"], detail]], who), createElement(RecruiterQueue));
-  };
-
-  it("before Accept: says it opens only their words, never that it opens their hiring", () => {
-    const words = text(queue({ ...row, accessGranted: false, why: "Accept to read what the customer wrote about their plan. It gives you no access to their hiring." }, recruiter));
-    expect(words).toContain("Accept this request");
-    expect(words).toContain("Accept to read what the customer wrote about their plan. It gives you no access to their hiring.");
-    // not the line every other request has before Accept
-    expect(words).not.toContain("Accept to open the full request");
-    expect(words).not.toContain("Your access covers");
-  });
-
-  it("after Accept, for an administrator: what they wrote and the way to the console's Change plan; no customer's workspace and no access line", () => {
-    const html = queue(taken, admin);
-    const words = text(html);
-    expect(words).toContain("We would like to move to the Pro plan.");
-    expect(html).toContain('href="/admin/customers?open=co1&amp;tab=plan"');
-    expect(words).toContain("Change the plan in the console");
-    expect(words).toContain("Change the plan in the console. That tells the company and closes this request.");
-    expect(words).toContain("Release");
-    expect(words).not.toContain("Open in the customer's workspace");
-    expect(words).not.toContain("Your access covers");
-  });
-
-  it("after Accept, for an ITS recruiter: an administrator changes it, and it opens nothing of theirs", () => {
-    const words = text(queue(taken, { ...recruiter, staffAccess: null, activeCompanyId: null }));
-    expect(words).toContain("An ITS administrator changes the plan in the console. You have no access to this customer's hiring.");
-    expect(words).not.toContain("Change the plan in the console");
-    expect(words).not.toContain("Open in the customer's workspace");
-  });
-});
 describe("the console", () => {
-  const customer = (over: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "free", status: "active", roles: 1, applications: 6, aiCostUsd: 1.2, lastActivityAt: daysAgo(1), escalations: 1, createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, jobBoardsConfirmedAt: null, applyFlowDefault: "form_then_screen", screeningConversations: { used: 4, limit: null }, aiCredit: { monthly: false, spentUsd: 1.2, limitUsd: 10, percent: 12, level: null, resetsAt: null }, lockedApplicants: 3, planRequestSince: daysAgo(1), whoPosts: "self", ...over });
+  const customer = (over: Record<string, unknown> = {}) => ({ id: "co1", name: "Bright Dental", slug: "bright", vertical: "dental", sizeBand: "20-49", planKey: "free", status: "active", roles: 1, applications: 6, aiCostUsd: 1.2, lastActivityAt: daysAgo(1), createdAt: daysAgo(30), settings: {}, verifiedAt: daysAgo(29), verifiedBy: null, heldMessages: 0, applyFlowDefault: "form_then_screen", screeningConversations: { used: 4, limit: null }, aiCredit: { monthly: false, spentUsd: 1.2, limitUsd: 10, percent: 12, level: null, resetsAt: null }, lockedApplicants: 3, planRequestSince: daysAgo(1), ...over });
   const section = (search: string, rows: unknown[], plansAnswer: unknown = []) => {
     nav.search = search;
     nav.path = "/admin/customers";
     return render(client([[["admin", "customers"], rows], [["admin", "alerts"], []], [["admin", "plans"], plansAnswer]], admin), createElement(CustomersSection, { view: null, onView: () => undefined }));
   };
   const planRows = [
-    { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, recruiter_asks: 1, seats: 2, its_work: 0 } },
-    { key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, limits: { active_roles: 3, jobs_total: null, candidates_per_job: 25, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 2000, recruiter_asks: 1, seats: 3, its_work: 0 } },
+    { key: "free", name: "Free", prices: { monthlyUsd: 0 }, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, seats: 2 } },
+    { key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, limits: { active_roles: 3, jobs_total: null, candidates_per_job: 25, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 2000, seats: 3 } },
     { key: "pro", name: "Pro", prices: { monthlyUsd: 149 }, limits: {} },
     { key: "ultra", name: "Ultra", prices: { monthlyUsd: 399 }, limits: {} },
     { key: "design_partner", name: "Design Partner", prices: { monthlyUsd: 0 }, limits: {} },
@@ -607,7 +447,6 @@ describe("the console", () => {
     const overview = text(section("?open=co1", [customer()]));
     expect(overview).toContain("Plan Free · Active Change plan");
     expect(overview).toContain("$1.20 of $10 AI credit 3 locked Asked to upgrade");
-    expect(overview).toContain("Job boards Their team posts them");
     const used = text(section("", [customer({ aiCredit: { monthly: true, spentUsd: 20, limitUsd: 20, percent: 100, level: "used_up", resetsAt: "2026-12-05T12:00:00Z" } })]));
     expect(used).toContain("$20.00 of $20 AI credit this month, resets December 5");
     expect(used).toContain("AI credit used up");
@@ -617,7 +456,7 @@ describe("the console", () => {
     const html = section("?open=co1&tab=plan", [customer()], planRows);
     const words = text(html);
     expect([...html.matchAll(/<option value="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["free", "basic", "pro", "ultra", "design_partner"]);
-    expect(words).toContain("$0 a month · 1 job ever · 5 candidates a job · $10 AI credit in all · 1 recruiter request a month · 2 seats · the team posts its own boards");
+    expect(words).toContain("$0 a month · 1 job ever · 5 candidates a job · $10 AI credit in all · 2 seats");
     const retired = section("?open=co1&tab=plan", [customer({ planKey: "growth" })], planRows);
     expect([...retired.matchAll(/<option value="([a-z_]+)"/g)].map((m) => m[1])).toEqual(["free", "basic", "pro", "ultra", "design_partner", "growth"]);
     expect(retired).toMatch(/<option value="growth" selected="">Growth<\/option>/);
@@ -625,16 +464,11 @@ describe("the console", () => {
     expect(text(retired)).not.toContain("Why (required");
   });
 
-  it("the job-board access card is for a company whose boards ITS posts", () => {
-    expect(text(section("?open=co1&tab=check", [customer()]))).not.toContain("Job-board access");
-    expect(text(section("?open=co1&tab=check", [customer({ whoPosts: "its" })]))).toContain("Job-board access");
-  });
-
   it("a plan's line, its price, its dollars and the toast", () => {
-    // what the older plans said, unchanged
-    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, recruiter_asks: 10, seats: null })).toBe("3 active jobs · 300 AI interviews a month · 10 recruiter requests a month · unlimited seats");
-    expect(planLimitsLine({ active_roles: 3, jobs_total: null, candidates_per_job: null, text_screens: 300, ai_credit_total_cents: null, ai_credit_monthly_cents: null, recruiter_asks: 10, seats: null, its_work: null })).toBe("3 active jobs · 300 AI interviews a month · 10 recruiter requests a month · unlimited seats");
-    expect(planLimitsLine({ active_roles: 30, jobs_total: null, candidates_per_job: null, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 20000, recruiter_asks: 6, seats: null, its_work: null })).toBe("30 active jobs · $200 AI credit a month · 6 recruiter requests a month · unlimited seats");
+    // an older plan's limits
+    expect(planLimitsLine({ active_roles: 3, text_screens: 300, voice_minutes: 0, sourcing_contacts: 0, seats: null })).toBe("3 active jobs · 300 AI interviews a month · unlimited seats");
+    expect(planLimitsLine({ active_roles: 3, jobs_total: null, candidates_per_job: null, text_screens: 300, ai_credit_total_cents: null, ai_credit_monthly_cents: null, seats: null })).toBe("3 active jobs · 300 AI interviews a month · unlimited seats");
+    expect(planLimitsLine({ active_roles: 30, jobs_total: null, candidates_per_job: null, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 20000, seats: null })).toBe("30 active jobs · $200 AI credit a month · unlimited seats");
     expect(planLimitsLine({})).toBe("");
     expect(planPriceLine({ monthlyUsd: 149 })).toBe("$149 a month");
     expect(planPriceLine(undefined)).toBeNull();

@@ -1,15 +1,15 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { desc, eq, gt, gte, inArray, isNotNull, ne, sql } from "drizzle-orm";
-import { BREAK_GLASS_MAX_MINUTES, REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, boardPostingOf, emit, entitlements, grantStaffAccess, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, recalculateEscalationDeadlines, releaseSuppression, saveBusinessCalendarVersion, servedSummary, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, whoPostsBoards, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
-import { AI_CREDIT_AVAILABLE, ApplyFlowDefaultChange, BreakGlass, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, CustomerAccessChange, JobBoardAccessChange, PUBLIC_PLAN_KEYS, PlanChange, RecalculateDeadlines, TrialExtensionRequest, candidateScoreShown, companyOnboarding, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
+import { desc, eq, gt, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { REVOKE_JOB_KIND, acknowledgeAlert, aiCreditLines, audit, emit, entitlements, listBusinessCalendarVersions, listSuppressions, loadBusinessCalendar, openAlerts, pendingCredentialDeletions, previewCalendarDays, releaseSuppression, saveBusinessCalendarVersion, settleAiCreditAlerts, suppressAddress, describeHours, unsentScreenReadings, withoutUnsentRunOutput, withoutUnsentScreenEvents, zonedToUtc, APPLY_FLOW_FALLBACK } from "@ros/core";
+import { AI_CREDIT_AVAILABLE, PLAN_REQUEST_ALERT_KIND, ApplyFlowDefaultChange, BusinessCalendarInput, CandidateScoreSwitchChange, CompanyVerificationChange, CustomerAccessChange, PUBLIC_PLAN_KEYS, PlanChange, TrialExtensionRequest, candidateScoreShown, companyVerifiedAt, isCompanyVerified, newTrialTerm, onTrialPlan, trialStanding, type Actor } from "@ros/contracts";
 import { HELD_STATUS } from "@ros/agents";
 import { mailbox } from "@ros/integrations";
 import { unlockApplicants } from "@ros/workflows";
-import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, recruiterEscalations, roles, screens, staffAccessGrants, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
+import { aiRuns, applications, communications, companies, entitlements as entitlementRows, events, integrations, invitations, jobs, memberships, plans, roles, screens, users, workflowRuns, workflowSteps, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
-import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole, type PlatformRole } from "@ros/core";
+import { OUTCOME_STATEMENT, OutcomeError, PlatformRoleError, STANDING_STATUSES, raiseAlert, resolveAlert, resolveAlertsFor, correctOutcome, countActiveAdmins, grantPlatformRole, listPlatformRoleGrants, revokeAllSessions, revokePlatformRole } from "@ros/core";
 import { CorrectOutcome } from "@ros/contracts";
 import { listCspReports, reviewCspReport } from "@ros/core";
 import { hiringOutcomes, unconfirmedScreens } from "@ros/db";
@@ -19,7 +19,7 @@ import { HttpError } from "../middleware/errors";
 import type { Container } from "../container";
 import { customerReport } from "../services/role-report";
 import { customerAccessRequests, decideAccess, refuseWhileAccessOpen, tellOwnersRemoved, tellPersonDeclined } from "../services/access-requests";
-import { setJobBoardAccess, unverifyCompany, verifyCompany } from "../services/company-trust";
+import { unverifyCompany, verifyCompany } from "../services/company-trust";
 import { resetPublicFeedCache } from "../pages/public-feeds";
 import { failedEmailApplications, retryFailedEmail } from "../webhooks/postmark";
 import { afterPlanChange } from "../services/plan-change";
@@ -44,7 +44,6 @@ adminRoutes.get("/customers", async (c) => {
   const appCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).groupBy(applications.companyId));
   const costs = byCompany(await db.select({ companyId: aiRuns.companyId, usd: sql<string>`coalesce(sum(cost_usd), 0)` }).from(aiRuns).groupBy(aiRuns.companyId));
   const lastActivity = byCompany(await db.select({ companyId: events.companyId, at: sql<string>`max(occurred_at)` }).from(events).groupBy(events.companyId));
-  const escalationCounts = byCompany(await db.select({ companyId: recruiterEscalations.companyId, n: sql<number>`count(*)` }).from(recruiterEscalations).groupBy(recruiterEscalations.companyId));
   // Messages to candidates waiting for the ITS company check (founder decision B7): how long a company has been waiting matters.
   const heldCounts = byCompany(await db.select({ companyId: communications.companyId, n: sql<number>`count(*)` }).from(communications).where(eq(communications.status, HELD_STATUS)).groupBy(communications.companyId));
   // Allowance alerts whose period ended or whose limit was raised leave the list first (Wave S2 F1).
@@ -54,21 +53,17 @@ adminRoutes.get("/customers", async (c) => {
   const aiCredit = await aiCreditLines(db, { now: c.get("container").engine.clock() });
   // Each monthly allowance counts only its current period: a period that ended reads as a new one, nothing used yet.
   const allowanceOf = async (key: string) => byCompany((await db.select().from(entitlementRows).where(eq(entitlementRows.key, key))).map((r) => { const p = entitlements.currentPeriod(r); return { companyId: r.companyId, used: p.used, limit: r.limit, resetsAt: p.periodEnd }; }));
-  // Where each company stands against its recruiter requests (Q33): going over never refuses one; ITS talks about billing.
-  const asks = await allowanceOf(entitlements.RECRUITER_ASKS);
   // This month's screening conversations (plan E9, Q17): counted at a candidate's first answer, so ITS can see a company nearing its allowance.
   const conversations = await allowanceOf(entitlements.TEXT_SCREENS);
   // People on the plan (founder decision L-02 B: 3 on Trial), counted as Settings counts them (core entitlements.seatsInUse):
-  // active members of any team role but ITS's, plus invitations not yet answered. Two grouped counts and the seats rows.
+  // active members who hold no platform role, plus invitations not yet answered. Two grouped counts and the seats rows.
   const now = c.get("container").engine.clock();
-  const memberCounts = byCompany(await db.select({ companyId: memberships.companyId, n: sql<number>`count(*)` }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.status, "active"), ne(memberships.role, "recruiter"), eq(users.platformRole, "none"))).groupBy(memberships.companyId));
+  const memberCounts = byCompany(await db.select({ companyId: memberships.companyId, n: sql<number>`count(*)` }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.status, "active"), eq(users.platformRole, "none"))).groupBy(memberships.companyId));
   const inviteCounts = byCompany(await db.select({ companyId: invitations.companyId, n: sql<number>`count(*)` }).from(invitations).where(and(eq(invitations.status, "pending"), gt(invitations.expiresAt, now.toISOString()))).groupBy(invitations.companyId));
   const seatRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.SEATS)));
   // The people the plan's candidates per job left locked (a count, for ITS), and whether the company asked to upgrade.
   const lockedCounts = byCompany(await db.select({ companyId: applications.companyId, n: sql<number>`count(*)` }).from(applications).where(isNotNull(applications.lockedAt)).groupBy(applications.companyId));
-  const planAsks = byCompany(await db.select({ companyId: recruiterEscalations.companyId, since: sql<string>`min(${recruiterEscalations.createdAt})` }).from(recruiterEscalations).where(and(inArray(recruiterEscalations.status, ["open", "claimed", "in_progress"]), sql`${recruiterEscalations.billing}->>'topic' = 'plan'`)).groupBy(recruiterEscalations.companyId));
-  // Who posts its jobs: the plan first, as `whoPostsBoards` reads it for one company (a row with no staff time), then its own setting.
-  const itsWorkRows = byCompany(await db.select({ companyId: entitlementRows.companyId, limit: entitlementRows.limit }).from(entitlementRows).where(eq(entitlementRows.key, entitlements.ITS_WORK)));
+  const planAsks = byCompany(await db.select({ companyId: adminAlerts.companyId, since: sql<string>`min(${adminAlerts.createdAt})` }).from(adminAlerts).where(and(eq(adminAlerts.kind, PLAN_REQUEST_ALERT_KIND), inArray(adminAlerts.status, [...STANDING_STATUSES]))).groupBy(adminAlerts.companyId));
   const planLimits = new Map((await db.select({ key: plans.key, limits: plans.limits }).from(plans)).map((p) => [p.key, p.limits]));
   const seatsOf = (co: typeof companies.$inferSelect) => {
     const row = seatRows.get(co.id);
@@ -85,12 +80,9 @@ adminRoutes.get("/customers", async (c) => {
     aiCostUsd: Number(costs.get(co.id)?.usd ?? 0),
     aiCredit: aiCredit.get(co.id) ?? null,
     lastActivityAt: lastActivity.get(co.id)?.at ?? null,
-    escalations: Number(escalationCounts.get(co.id)?.n ?? 0),
     verifiedAt: companyVerifiedAt(co.settings),
     verifiedBy: companyVerifiedAt(co.settings) ? ((co.settings as { verifiedBy?: Actor }).verifiedBy ?? null) : null,
     heldMessages: Number(heldCounts.get(co.id)?.n ?? 0),
-    jobBoardsConfirmedAt: companyOnboarding(co.settings).jobBoardsConfirmedAt ?? null,
-    recruiterAsks: recruiterAsksOf(asks.get(co.id)),
     screeningConversations: { used: conversations.get(co.id)?.used ?? 0, limit: conversations.get(co.id)?.limit ?? null, resetsAt: conversations.get(co.id)?.resetsAt ?? null },
     // How new roles meet the screening conversation (plan E1): "form now, conversation later" until ITS switches the
     // one-visit flow on for the company (pilot roles first, founder decision B1) with POST /customers/:id/apply-flow.
@@ -104,16 +96,9 @@ adminRoutes.get("/customers", async (c) => {
     trialTerm: co.settings.trial ?? null,
     seats: seatsOf(co),
     lockedApplicants: Number(lockedCounts.get(co.id)?.n ?? 0),
-    planRequestSince: planAsks.get(co.id)?.since ?? null,
-    whoPosts: itsWorkRows.get(co.id)?.limit === 0 ? "self" : boardPostingOf(co.settings),
+    planRequestSince: planAsks.has(co.id) ? new Date(planAsks.get(co.id)!.since).toISOString() : null,
   })));
 });
-
-/** A company's recruiter requests as the Customers tab shows them; a plan without the allowance counts what was used. */
-function recruiterAsksOf(row: { used: number; limit: number | null } | undefined): { used: number; limit: number | null; over: boolean } {
-  if (!row) return { used: 0, limit: null, over: false };
-  return { used: row.used, limit: row.limit, over: row.limit !== null && row.used > row.limit };
-}
 
 /**
  * First sign-in asks for approval (the owner's request of 6 November 2026, SIGNUP_MODE=approval): an administrator accepts
@@ -179,22 +164,6 @@ adminRoutes.post("/customers/:id/verification", async (c) => {
   resetPublicFeedCache(container);
   await container.kick();
   return c.json({ ok: true, companyId: result.companyId, verified: body.verified, changed: result.changed, verifiedAt: result.verifiedAt, releasedMessages: result.released });
-});
-
-/** ITS confirms it can sign in to the company's job-board accounts (onboarding checklist step 8), or no longer can. */
-adminRoutes.post("/customers/:id/job-boards", async (c) => {
-  const s = c.get("session")!;
-  const container = c.get("container");
-  const companyId = c.req.param("id") ?? "";
-  if (!UUID.test(companyId)) throw new HttpError(404, "not_found", "Company not found.");
-  const body = JobBoardAccessChange.parse(await c.req.json().catch(() => ({})));
-  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const ok = await withPlatform(container.db, async (tx) => {
-    await refuseWhileAccessOpen(tx, companyId);
-    return setJobBoardAccess(tx, { companyId, confirmed: body.confirmed, actor, now: container.engine.clock(), note: body.note });
-  });
-  if (!ok) throw new HttpError(404, "not_found", "Company not found.");
-  return c.json({ ok: true, companyId, confirmed: body.confirmed });
 });
 
 /**
@@ -346,6 +315,8 @@ adminRoutes.post("/runs/:id/retry", async (c) => {
   const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, c.req.param("id"))).limit(1);
   if (!run) throw new HttpError(404, "not_found", "Run not found.");
   await container.db.update(workflowRuns).set({ status: "running", attempts: 0, wait: null, lastError: null }).where(eq(workflowRuns.id, run.id));
+  // The alert that it stopped is done with; if it stops again, a new one is raised.
+  await resolveAlertsFor(container.db, "workflow.failed", run.id);
   await container.db.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "manual" } } });
   await container.kick();
   return c.json({ ok: true });
@@ -507,29 +478,9 @@ adminRoutes.get("/costs", async (c) => {
   return c.json(rows.map((r) => ({ ...r, runs: Number(r.runs), inputTokens: Number(r.inputTokens), outputTokens: Number(r.outputTokens), costUsd: Number(r.costUsd) })));
 });
 
-/** Operational view only (correction 11): category, urgency, expertise, generic summary, timing and assignment. Never the request text, the context snapshot, or the resolution text. */
-adminRoutes.get("/escalations", async (c) => {
-  const db = c.get("container").db;
-  const rows = await db
-    .select({ id: recruiterEscalations.id, companyName: companies.name, roleTitle: roles.title, kind: recruiterEscalations.kind, status: recruiterEscalations.status, urgency: recruiterEscalations.urgency, requiredExpertise: recruiterEscalations.requiredExpertise, summary: recruiterEscalations.summary, slaDueAt: recruiterEscalations.slaDueAt, createdAt: recruiterEscalations.createdAt, claimedAt: recruiterEscalations.claimedAt, firstResponseAt: recruiterEscalations.firstResponseAt, resolvedAt: recruiterEscalations.resolvedAt, minutesSpent: recruiterEscalations.minutesSpent, assignedTo: users.email, accessExpiresAt: recruiterEscalations.accessExpiresAt, requestedBy: recruiterEscalations.requestedBy, roleId: recruiterEscalations.roleId, applicationId: recruiterEscalations.applicationId })
-    .from(recruiterEscalations)
-    .innerJoin(companies, eq(companies.id, recruiterEscalations.companyId))
-    .leftJoin(roles, eq(roles.id, recruiterEscalations.roleId))
-    .leftJoin(users, eq(users.id, recruiterEscalations.assignedToUserId))
-    .orderBy(desc(recruiterEscalations.createdAt))
-    .limit(200);
-  const s = c.get("session")!;
-  const byCompany = new Map<string, string[]>();
-  for (const r of rows) byCompany.set(r.companyName, [...(byCompany.get(r.companyName) ?? []), r.id]);
-  await audit(db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "escalation.preview_viewed", reason: "admin console", details: { escalationIds: rows.map((r) => r.id), fields: "preview" } });
-  // The summary as the queue shows it (one Recruiting OS raised says so); who raised it and the ids are read for that only.
-  return c.json(rows.map(({ requestedBy, roleId, applicationId, ...r }) => ({ ...r, summary: servedSummary({ ...r, requestedBy, roleId, applicationId }) })));
-});
-
 /**
  * The ITS business calendar (correction 12): editable standard hours, time zone, holidays, closures and temporary
- * coverage changes, each change a new version with an effective date. Existing deadlines keep their values unless an
- * administrator recalculates them explicitly, with a reason.
+ * coverage changes, each change a new version with an effective date.
  */
 adminRoutes.get("/calendar", async (c) => {
   const db = c.get("container").db;
@@ -561,54 +512,11 @@ adminRoutes.post("/calendar", async (c) => {
   return c.json({ id: row.id, version: row.version, effectiveFrom: row.effectiveFrom, inForceNow: loaded.version === row.version, description: describeHours(loaded) }, 201);
 });
 
-adminRoutes.post("/calendar/recalculate", async (c) => {
-  const s = c.get("session")!;
-  const body = RecalculateDeadlines.parse(await c.req.json());
-  const db = c.get("container").db;
-  const results = await withPlatform(db, (tx) => recalculateEscalationDeadlines(tx, { escalationIds: body.escalationIds, reason: body.reason, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email } }));
-  return c.json({ considered: results.length, changed: results.filter((r) => r.changed).length, results });
-});
-
 adminRoutes.get("/queue", async (c) => {
   const db = c.get("container").db;
   const [q] = await db.select({ queued: sql<number>`count(*) filter (where status = 'queued')`, failed: sql<number>`count(*) filter (where status = 'failed')`, oldest: sql<string | null>`min(run_at) filter (where status = 'queued')` }).from(jobs);
   const waiting = await db.select({ n: sql<number>`count(*)` }).from(workflowRuns).where(eq(workflowRuns.status, "waiting"));
   return c.json({ queued: Number(q.queued), failed: Number(q.failed), oldestQueuedAt: q.oldest, waitingRuns: Number(waiting[0].n), definitions: c.get("container").engine.definitions() });
-});
-
-/**
- * Emergency access (founder decision F10): MFA, a recorded reason, a short expiry, immutable audit. Until Supabase Auth
- * with a second factor exists (decision D25) this endpoint refuses every request; there is no interim bypass.
- */
-adminRoutes.post("/break-glass", async (c) => {
-  const s = c.get("session")!;
-  const body = BreakGlass.parse(await c.req.json());
-  const freshMfa = s.mfaVerifiedAt && Date.now() - Date.parse(s.mfaVerifiedAt) < 15 * 60_000;
-  if (!freshMfa) throw new HttpError(403, "mfa_required", "Break-glass access requires a second factor verified in the last 15 minutes. Multi-factor sign-in arrives with the authentication migration; there is no interim bypass.");
-  const minutes = Math.min(body.minutes, BREAK_GLASS_MAX_MINUTES);
-  const now = new Date();
-  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const grant = await withPlatform(c.get("container").db, async (tx) => {
-    // A request has nothing to read yet, and no AI and no work may start in its name before someone accepts it.
-    await refuseWhileAccessOpen(tx, body.companyId);
-    const g = await grantStaffAccess(tx, { userId: s.user.id, userName: actor.name, companyId: body.companyId, kind: "break_glass", scope: {}, purpose: `break-glass: ${body.reason}`, grantedBy: actor, expiresAt: new Date(now.getTime() + minutes * 60_000), mfaVerified: true, now });
-    await audit(tx, { companyId: body.companyId, actor, action: "admin.break_glass", target: { type: "company", id: body.companyId }, reason: body.reason, details: { grantId: g.id, minutes, expiresAt: g.expiresAt } });
-    return g;
-  });
-  return c.json({ grantId: grant.id, expiresAt: grant.expiresAt }, 201);
-});
-
-/** Every grant ever issued, newest first: who, which customer, why, scope, when it ended. */
-adminRoutes.get("/staff-access", async (c) => {
-  const db = c.get("container").db;
-  const rows = await db
-    .select({ id: staffAccessGrants.id, userEmail: users.email, companyId: staffAccessGrants.companyId, companyName: companies.name, kind: staffAccessGrants.kind, escalationId: staffAccessGrants.escalationId, roleId: staffAccessGrants.roleId, applicationId: staffAccessGrants.applicationId, purpose: staffAccessGrants.purpose, mfaVerified: staffAccessGrants.mfaVerified, startsAt: staffAccessGrants.startsAt, expiresAt: staffAccessGrants.expiresAt, revokedAt: staffAccessGrants.revokedAt, endedAt: staffAccessGrants.endedAt })
-    .from(staffAccessGrants)
-    .innerJoin(users, eq(users.id, staffAccessGrants.userId))
-    .innerJoin(companies, eq(companies.id, staffAccessGrants.companyId))
-    .orderBy(desc(staffAccessGrants.createdAt))
-    .limit(200);
-  return c.json(rows);
 });
 
 /**
@@ -660,8 +568,6 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // a retired plan (hidden from GET /admin/plans) is not offered by the API either
     if (plan.active === false) throw new HttpError(400, "inactive_plan", `The ${body.planKey} plan is retired and can no longer be given to a customer.`);
     const [fromPlan] = await tx.select({ name: plans.name }).from(plans).where(eq(plans.key, co.planKey)).limit(1);
-    // Who posts on the boards before the change: the plan decides that too (Rule 6), read against what it decides after.
-    const postedBy = await whoPostsBoards(tx, companyId, co.settings);
     // People a smaller plan left locked open now, oldest first, up to the new limit. A move down opens nobody and locks nobody.
     // Before the plan's rows are written, because opening many takes a while and every AI call of this company waits on those
     // rows: until they are written its calls go on under the old plan, and they wait only for the short rest of this transaction.
@@ -691,8 +597,8 @@ adminRoutes.post("/customers/:id/plan", async (c) => {
     // The customer reads this in their own history (`describeAuditRecord`), so it carries the plans' names.
     await audit(tx, { companyId, actor, action: "plan.changed", target: { type: "company", id: companyId }, reason, details: { pilot, from: co.planKey, to: body.planKey, fromName: fromPlan?.name ?? null, toName: plan.name, unlocked: opened.unlocked, ...(term ? { trial: { startedAt: term.startedAt, endsAt: term.endsAt } } : {}), ...(leavingTrial ? { trialEnded: true } : {}) } });
     if (term) await emit(tx, { type: "trial.started", companyId, actor, subject: { type: "company", id: companyId }, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
-    // The boards' work follows the plan, the open plan request is answered and the owners and admins are told.
-    await afterPlanChange(tx, container, { companyId, planName: plan.name, opened: opened.unlocked, postedBy, postsNow: await whoPostsBoards(tx, companyId, settings), actor, now: clock });
+    // The company's open request about its plan is done, and the owners and admins are told.
+    await afterPlanChange(tx, { companyId, planName: plan.name, opened: opened.unlocked, now: clock });
     return { updated, wasPaused, leavingTrial, unlocked: opened.unlocked, aiCreditMonthStarted };
   });
   if (result.wasPaused) {
@@ -720,8 +626,8 @@ adminRoutes.post("/platform-roles", async (c) => {
   const container = c.get("container");
   const body = (await c.req.json().catch(() => ({}))) as { email?: string; role?: string; reason?: string; confirm?: boolean };
   if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm the grant.");
-  const role = body.role as PlatformRole;
-  if (!["its_recruiter", "platform_admin"].includes(role)) throw new HttpError(400, "bad_role", "Role must be its_recruiter or platform_admin.");
+  if (body.role !== "platform_admin") throw new HttpError(400, "bad_role", "Role must be platform_admin.");
+  const role = body.role;
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (reason.length < 5) throw new HttpError(400, "reason_required", "Give the reason for the grant; every administrator will see it.");
   const email = (body.email ?? "").trim().toLowerCase();

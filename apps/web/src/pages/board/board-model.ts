@@ -1,4 +1,4 @@
-import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, MATCH_FIT_LABEL, RESUME_ONLY_CHIP, RejectReason, sureBeside, type MatchFit } from "@ros/contracts";
+import { BATCH_MAX, BOARD_COLUMN_LABEL, BoardColumn, DECLINE_REASON_LABEL, MATCH_FIT_LABEL, RejectReason, sureBeside, type MatchFit } from "@ros/contracts";
 import { scoreBand, type Tone } from "@ros/ui";
 import type { BatchPreview, BatchResult, BoardCard, BoardView, PoolAnswer, PoolQuestion, PoolSummary, RoleBatchItem } from "../../api/client";
 import { SAFETY_NET_NOTE, appliedWhen, scoreBasis } from "../../talent-list";
@@ -173,12 +173,6 @@ export function evidenceLines(card: Pick<BoardCard, "strengths" | "gap">): Evide
   const line = (kind: EvidenceLine["kind"], q: BoardCard["strengths"][number]): EvidenceLine => ({ kind, text: q.claim, source: sourceWords(q.source), quoted: !q.unquoted && !!q.quote });
   return [...card.strengths.slice(0, 2).map((s) => line("strength", s)), ...(card.gap ? [line("gap", card.gap)] : [])];
 }
-
-/**
- * "Have a recruiter check this" (plan F9): the request it opens, filled in. The recruiter sees the board as it stood
- * when it was sent, beside the role (apps/api/src/services/escalation-queue.ts).
- */
-export const RECRUITER_CHECK = "Please check how the board sorted this role's applicants before we apply it.";
 
 /** Everyone on the board in its order (the columns left to right, top to bottom): the panel steps through them. */
 export function boardOrder(view: Pick<BoardView, "columns">, only?: ReadonlySet<string> | null): string[] {
@@ -424,7 +418,7 @@ export function togglePick(picked: readonly string[], id: string, on: boolean, m
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* Today's pool card, and the board a recruiter was asked to check                                                */
+/* Today's pool card                                                                                              */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** Said on Today's pool card under its buttons. */
@@ -438,35 +432,4 @@ export function poolCardView(pool: PoolSummary): { sentences: string[]; steps: P
 /** Where a person's name on Today's pool card opens: their panel over the role's board. */
 export function boardPersonPath(roleId: string, applicationId: string): string {
   return `/roles/${roleId}/talent?view=board&open=${applicationId}`;
-}
-
-/** The pool board as it stood when a team asked a recruiter to check it (plan F9; `contextSnapshot.board`). */
-export type BoardSnapshot = {
-  capturedAt: string;
-  summary: Pick<PoolSummary, "sentences" | "counts"> & Partial<Pick<PoolSummary, "done">>;
-  /** `interview` and `basis` (R20-9): whether their AI interview is in the score, and its label; older snapshots have neither. */
-  people: Array<{ applicationId: string; name: string; column: BoardColumn | null; state: string; score: number | null; interview?: string | null; basis?: string | null; reason: string; needsYourEye: string | null; nextStep: string | null }>;
-};
-
-/**
- * A snapshot row's score: "88/100", with "Résumé only" beside a score whose AI interview is not in it (R20-9) and the
- * full label on hover, as on the list; "No score yet" without one.
- */
-export function snapshotScore(p: Pick<BoardSnapshot["people"][number], "score" | "interview" | "basis">): { text: string; title?: string } {
-  if (p.score === null) return { text: "No score yet" };
-  const resumeOnly = !!p.interview && p.interview !== "done";
-  return resumeOnly ? { text: `${p.score}/100 · ${RESUME_ONLY_CHIP}`, title: p.basis ?? RESUME_ONLY_CHIP } : { text: `${p.score}/100`, ...(p.basis ? { title: p.basis } : {}) };
-}
-
-/** The snapshot from a request's context, or null when it has none (or not in the shape the board wrote). */
-export function snapshotOf(context: unknown): BoardSnapshot | null {
-  const board = (context as { board?: unknown } | null | undefined)?.board as Partial<BoardSnapshot> | undefined;
-  if (!board || typeof board.capturedAt !== "string" || !Array.isArray(board.people) || !board.summary || !Array.isArray(board.summary.sentences)) return null;
-  return board as BoardSnapshot;
-}
-
-/** A snapshot row's place in words: its column, or "No AI interview yet" for someone not placed (R20-7). */
-export function snapshotPlace(p: BoardSnapshot["people"][number]): string {
-  if (!p.column) return NO_AI_INTERVIEW_LANE.title;
-  return `${BOARD_COLUMN_LABEL[p.column]}${p.state === "done" ? " (already sorted)" : ""}`;
 }

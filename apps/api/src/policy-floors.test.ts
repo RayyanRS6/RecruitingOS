@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { clampLevel, entitlements, resolvePolicy } from "@ros/core";
-import { approvalRequests, policies, roles, takeovers, users, withTenant } from "@ros/db";
+import { approvalRequests, policies, roles, users, withTenant } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 
@@ -82,20 +82,11 @@ describe("what the AI may do: floors and ceilings", () => {
     expect((await withTenant(container.db, companyId, (tx) => resolvePolicy(tx, companyId, roleId, "role_packet.approve"))).level).toBe("approval");
   });
 
-  it("during a recruiter takeover, a saved 'automatic' role approval still goes to the customer's approvers; automatic actions go to the recruiter", async () => {
+  it("a saved 'automatic' role approval with no approvers still goes to the company's approvers", async () => {
     await withTenant(container.db, companyId, (tx) => tx.update(policies).set({ level: "auto", approverRoles: [] }).where(and(eq(policies.companyId, companyId), eq(policies.actionType, "role_packet.approve"))));
     const [role] = await container.db.select().from(roles).where(eq(roles.companyId, companyId)).limit(1);
-    const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId: role.id, recruiterUserId: ownerId, status: "active" }).returning();
-    try {
-      const approve = await withTenant(container.db, companyId, (tx) => resolvePolicy(tx, companyId, role.id, "role_packet.approve"));
-      // the recruiter role cannot approve a role, so handing it to them would leave nobody able to
-      expect(approve).toMatchObject({ level: "approval", approverRoles: ["owner", "admin", "hiring_manager"] });
-      expect(approve.source).not.toBe("takeover");
-      const decline = await withTenant(container.db, companyId, (tx) => resolvePolicy(tx, companyId, role.id, "disposition.send"));
-      expect(decline).toMatchObject({ level: "approval", approverRoles: ["recruiter"], source: "takeover" });
-    } finally {
-      await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
-    }
+    const approve = await withTenant(container.db, companyId, (tx) => resolvePolicy(tx, companyId, role.id, "role_packet.approve"));
+    expect(approve).toMatchObject({ level: "approval", approverRoles: ["owner", "admin", "hiring_manager"] });
   });
 
   it("clampLevel holds every floor and ceiling and leaves other actions alone", () => {

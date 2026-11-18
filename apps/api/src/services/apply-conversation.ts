@@ -7,7 +7,7 @@ import {
   isFocusKey, loadScreenBundle, nextQuestion, pausedMessage, redactProtected, requestHuman, reviewItems, runScreenTurn, screenCommand, screenContextOf, screenIntro, sendConversationForLater, sendRepeatConfirmation,
   sendRepeatConversationLater, sendRepeatConversationResume, startScreenConversation, statusUrlFor, submitScreenAnswers, tapWords, turnWithoutModel, withFocusAnswer, withdrawPending, withdrawnMessage, type AllowanceNote, type ChatFacts, type ScreenDeps, type ScreenIntro, type TurnResult,
 } from "@ros/agents";
-import { addBusinessHours, aiCreditStanding, applicationAnswerSentences, chatCounter, deadlineWords, emit, entitlements, errorForLog, evaluateEligibility, humanResponseExpectation, loadBusinessCalendar, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
+import { aiCreditStanding, applicationAnswerSentences, chatCounter, emit, entitlements, errorForLog, evaluateEligibility, tapFormatFor, transition, withoutCandidateWords, writtenQuestionsOf } from "@ros/core";
 import { applications, candidates, communications, companies, randomToken, rolePackets, roles, screens, unconfirmedScreens, withTenant, workflowRuns, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { FORM_READ_WAIT_MS, formReadingOutcome, formReadingRun, type WorkflowEngine } from "@ros/workflows";
@@ -288,7 +288,7 @@ function detachedContext(d: Detached, state: { progress: ScreenProgress; answers
 
 function closedFor(status: string, companyName: string): string {
   if (status === "completed") return SCREEN_COMPLETE_MESSAGE;
-  if (status === "human_requested") return "A person from the hiring team will follow up with you shortly.";
+  if (status === "human_requested") return "The hiring team has been told you asked for a person.";
   if (status === "paused") return pausedMessage(companyName);
   return "This screening has closed. Reply HUMAN if you would like a person to follow up.";
 }
@@ -346,9 +346,9 @@ async function detachedReply(tx: Tx, d: Detached, s: DetachedState & { message: 
   return { kind: "reply", message, done: false, humanRequested: false, ...(s.done ? { review: true } : {}) };
 }
 
-/** "Understood. A person ... will follow up": the same words the real conversation uses. */
-async function personReply(q: Tx, companyName: string): Promise<string> {
-  return `Understood. A person from ${companyName} will follow up with you ${humanResponseExpectation(new Date(), await loadBusinessCalendar(q))}.`;
+/** "Understood. The hiring team ... has been told": the same words the real conversation uses. */
+function personReply(companyName: string): string {
+  return `Understood. The hiring team at ${companyName} has been told you asked for a person. Thank you for your patience.`;
 }
 
 /** The first transaction of a detached turn, mirroring `beginScreenTurn`: commands, a skip and a tap never reach the model. */
@@ -446,7 +446,6 @@ async function finishDetachedTurn(tx: Tx, deps: ConversationDeps, id: string, ou
   const aiRunId = out.ok ? out.runId : undefined;
   let turn = enforced.turn;
   if (turn.humanRequested) {
-    turn = !/business/i.test(turn.messageToCandidate) ? { ...turn, messageToCandidate: `${turn.messageToCandidate} You can expect to hear from a person ${humanResponseExpectation(new Date(), await loadBusinessCalendar(tx))}.` } : turn;
     await tx.update(unconfirmedScreens).set({ transcript: [...row.transcript, { role: "assistant", content: turn.messageToCandidate, at: now.toISOString(), channel: "web", aiRunId }] }).where(eq(unconfirmedScreens.id, row.id));
     const fresh = (await loadDetached(tx, id))!;
     await detachedPerson(tx, deps, fresh, "contact_me", { silent: true });
@@ -478,7 +477,7 @@ async function detachedPerson(tx: Tx, deps: ConversationDeps, d: Detached, choic
     await tx.update(unconfirmedScreens).set({ status: "declined_by_candidate", finishedAt: now.toISOString(), transcript: [...row.transcript, { role: "assistant", content: msg, at: now.toISOString(), channel: "web" }] }).where(eq(unconfirmedScreens.id, row.id));
     return { kind: "reply", message: msg, done: true, humanRequested: false };
   }
-  const msg = opts.silent ? null : await personReply(tx, company.name);
+  const msg = opts.silent ? null : personReply(company.name);
   await tx.update(unconfirmedScreens).set({ status: "human_requested", finishedAt: now.toISOString(), transcript: msg ? [...row.transcript, { role: "assistant", content: msg, at: now.toISOString(), channel: "web" }] : row.transcript }).where(eq(unconfirmedScreens.id, row.id));
   await askAddressOwner(tx, deps, d, opts.outage ? "outage" : "person", now);
   return { kind: "reply", message: msg ?? "", done: false, humanRequested: true };
@@ -677,12 +676,7 @@ export async function findConversation(db: Db, token: string): Promise<Conversat
  *   unfinished, abandoned, expired, cancelled).
  * - `current`: the question being asked, the tap answer it offers (E12), and whether it already has an answer (the
  *   assistant is following up: skipping then moves on and keeps it, E11). `review`: one line per question.
- * - `transcript`: what the candidate sees; a recruiter's call notes are never on it.
- * - `personExpectation`: when a person would be in touch if asked now ("within four business hours (...)"), for the
- *   page that offers one.
- * - `personAsked`: once a person was asked for (status `human_requested`), the time promised then, in words, and whether
- *   it has passed: the closed page keeps that promise instead of making a new one each time it is opened. Null
- *   otherwise, or for an old conversation with no record of when.
+ * - `transcript`: what the candidate sees; notes from a call are never on it.
  * There is deliberately no status link here: a detached conversation has none to give, so neither kind shows one.
  */
 export type ConversationView = {
@@ -701,9 +695,7 @@ export type ConversationView = {
   current: { key: string; question: string; tap: TapFormat | null; answered: boolean } | null;
   review: ReviewItem[] | null;
   withdrawPending: boolean;
-  personExpectation: string;
-  personAsked: { dueWords: string; overdue: boolean } | null;
-  /** Closed as complete by a recruiter's notes from a call: the candidate never sent their own answers, so the page never says they did. */
+  /** Closed as complete by notes from a call: the candidate never sent their own answers, so the page never says they did. */
   finishedOnACall: boolean;
   /**
    * Wave S7 (the contracts in s7-contracts.md): the written questions in order (`writtenQuestionsOf`, never their private
@@ -726,7 +718,7 @@ export type ConversationView = {
   scoreComes: boolean;
 };
 
-function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; expectation: string; personAsked: ConversationView["personAsked"]; formAnswers: string[]; scoreComes: boolean }): ConversationView {
+function viewOf(input: { token: string; status: string; channel: string; progress: ScreenProgress; answers: Record<string, string>; transcript: ScreenTranscriptEntry[]; companyName: string; notices: Company["settings"]["notices"]; packet: RolePacket; rolePacket: RolePacket; firstName: string; formAnswers: string[]; scoreComes: boolean }): ConversationView {
   const { progress, packet } = input;
   const status = input.status as ScreenStatus;
   const oneVisit = progress.flow === "one_visit";
@@ -753,8 +745,6 @@ function viewOf(input: { token: string; status: string; channel: string; progres
     current: q ? { key: q.key, question: q.question, tap: tapFormatFor(q, packet.compensation), answered: answers[q.key] !== undefined } : null,
     review: phase === "review" ? reviewItems({ answers: input.answers, progress }, packet) : null,
     withdrawPending: open && withdrawPending(input.transcript),
-    personExpectation: input.expectation,
-    personAsked: status === "human_requested" ? input.personAsked : null,
     finishedOnACall: status === "completed" && progress.completedBy === "recruiter_call",
     written: writtenQuestionsOf(input.rolePacket),
     counter: chatCounter(progress.chat),
@@ -764,35 +754,21 @@ function viewOf(input: { token: string; status: string; channel: string; progres
   };
 }
 
-/** How long a person may take to reach someone who asked for one, as the conversation promises it (founder decision F12). */
-const PERSON_REPLY_BUSINESS_HOURS = 4;
-
-/**
- * `now`: the moment the page is read (the real time unless a test says otherwise). The promise to someone who asked for
- * a person is worked out from when they asked, so it stays the same however often the page is opened; a request made
- * outside business hours counts from the next opening, as "on the next business day" said at the time.
- */
+/** `now`: the moment the page is read (the real time unless a test says otherwise). */
 export async function conversationView(db: Db, ref: ConversationRef, now: Date = new Date()): Promise<ConversationView | null> {
   return withTenant(db, ref.companyId, async (tx) => {
-    const calendar = await loadBusinessCalendar(tx, now);
-    const expectation = humanResponseExpectation(now, calendar);
-    const asked = (at: string | null | undefined): ConversationView["personAsked"] => {
-      if (!at) return null;
-      const due = addBusinessHours(new Date(at), PERSON_REPLY_BUSINESS_HOURS, calendar);
-      return { dueWords: deadlineWords(due, calendar), overdue: now.getTime() > due.getTime() };
-    };
     if (ref.kind === "screen") {
       const b = await loadScreenBundle(tx, ref.id);
       if (!b) return null;
       const scoreComes = b.screen.status === "completed" && !["off", "not_coming"].includes((await recordScoreFor(tx, { app: b.app, companySettings: b.company.settings, screens: await screensOf(tx, b.app.id), hiddenDecision: false, now })).state);
-      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, expectation, personAsked: b.screen.status === "human_requested" ? asked(b.screen.humanRequestedAt) : null, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [], scoreComes });
+      return viewOf({ token: ref.token, status: b.screen.status, channel: b.screen.channel, progress: b.screen.progress, answers: b.screen.answers, transcript: b.screen.transcript, companyName: b.company.name, notices: b.company.settings.notices, packet: b.packet, rolePacket: b.rolePacket, firstName: b.candidate.firstName, formAnswers: chatFactsFor(b.chatFacts, b.screen.progress, b.screen.invitedVia)?.formAnswers ?? [], scoreComes });
     }
     const d = await loadDetached(tx, ref.id);
     if (!d) return null;
     // A wiped conversation reads as an expired link, like a screen nobody answered.
     const status = d.row.discardedAt ? "expired" : d.row.status;
     const scoreComes = status === "completed" && candidateScoreShown(d.company.settings) && !(await aiCreditStanding(tx, d.company.id, { now, settled: true }))?.usedUp;
-    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", expectation, personAsked: status === "human_requested" ? asked(d.row.finishedAt) : null, formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [], scoreComes });
+    return viewOf({ token: ref.token, status, channel: "web", progress: d.row.progress, answers: d.row.answers, transcript: d.row.discardedAt ? [] : d.row.transcript, companyName: d.company.name, notices: d.company.settings.notices, packet: d.packet, rolePacket: d.rolePacket, firstName: d.row.firstName || "there", formAnswers: d.row.discardedAt ? [] : chatFactsFor(null, d.row.progress, "apply")?.formAnswers ?? [], scoreComes });
   });
 }
 
@@ -907,9 +883,9 @@ export async function conversationLater(container: Container, ref: ConversationR
 }
 
 /**
- * "I'd rather talk to a person" leads to two equal choices (E3, Q16): `contact_me` (an ITS recruiter contacts them
- * within four business hours; escalated as before, and counted) or `send_without` (the application goes on to the team
- * without the conversation). Works while the conversation is paused too (E5). Null when the conversation is closed.
+ * "I'd rather talk to a person" leads to two equal choices (E3, Q16): `contact_me` (the hiring team is told they asked
+ * to talk to a person, and it is counted) or `send_without` (the application goes on to the team without the
+ * conversation). Works while the conversation is paused too (E5). Null when the conversation is closed.
  */
 export async function conversationPerson(container: Container, ref: ConversationRef, choice: "contact_me" | "send_without"): Promise<{ message: string } | null> {
   const out = await withTenant(container.db, ref.companyId, async (tx) => {
@@ -917,7 +893,7 @@ export async function conversationPerson(container: Container, ref: Conversation
       const b = await loadScreenBundle(tx, ref.id);
       if (!b || !SCREEN_PERSON_ROUTE_STATUSES.includes(b.screen.status as ScreenStatus)) return null;
       if (choice === "send_without") return declineConversation(tx, screenDeps(container), { screenId: ref.id, actor: { kind: "candidate", id: b.candidate.id } });
-      const reply = await personReply(tx, b.company.name);
+      const reply = personReply(b.company.name);
       await requestHuman(tx, screenDeps(container), { screenId: ref.id, reason: "candidate chose 'Have a person contact me'", actor: { kind: "candidate", id: b.candidate.id }, reply, replyChannel: "web" });
       return { message: reply };
     }

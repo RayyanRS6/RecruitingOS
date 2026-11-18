@@ -1,12 +1,10 @@
 import type { AiInterviewView, ApplicationDetail, Screen, ScreeningFunnel, ScreenTranscriptLine, TimelineEvent } from "./api/client";
-import { canAddCallNotes } from "./roles";
 
 /**
  * The screening conversation as the team reads it (plan Wave E), kept free of React so it can be tested
  * (tests/web/screen-view.test.ts): whether it came with the application ("Applied, then did the AI interview"), each
  * answer with what the candidate did with it (chose not to answer, changed it before sending, picked it from the
- * choices), a recruiter's call notes kept apart from the candidate's own words, who may add those notes, and the role's
- * figures in plain words.
+ * choices), a recruiter's call notes kept apart from the candidate's own words, and the role's figures in plain words.
  */
 
 /** A conversation's state in a word or two. */
@@ -93,7 +91,7 @@ export function overviewScreenLine(a: Pick<ApplicationDetail, "screens" | "timel
   if (origin === APPLIED_IN_ONE_VISIT) return `${APPLIED_IN_ONE_VISIT}.`;
   if (origin === NOT_SENT_YET) return `${STILL_APPLYING_LINE}${s.status === "paused" ? " The AI interview is paused while the assistant is not working." : ""} Nothing about ${a.candidate.firstName} waits on you until then.`;
   if (s.status === "declined_by_candidate") return "Sent the application without the AI interview, by their own choice. Nobody is declined for it; their score is from the résumé alone.";
-  if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. A recruiter contacts them and adds notes from the call. Anything they typed before asking was not sent, so you won't see it.";
+  if (s.status === "human_requested") return "Asked to talk to a person instead of the assistant. Your team follows up with them. Anything they typed before asking was not sent, so you won't see it.";
   if (s.status === "unfinished") return `${DIDNT_FINISH_LINE} The AI review and match score use their application only.`;
   if (s.status === "cancelled" && s.startedAt && s.answersShared === false) return "The AI interview closed before they sent their answers, so you won't see them. The AI review and match score use their application only.";
   return null;
@@ -116,7 +114,7 @@ export function aiInterviewLine(v: AiInterviewView): string {
     case "started":
       return "Started, not finished: their answers appear here once they send them.";
     case "asked_person":
-      return "Asked for a person instead of the assistant. A recruiter contacts them and adds notes from the call.";
+      return "Asked for a person instead of the assistant. Your team follows up with them.";
     case "link_expired":
       return `The link expired${v.since ? ` on ${longDay(v.since)}` : ""} without being started.`;
     default:
@@ -197,7 +195,7 @@ export function hiddenAnswersLine(s: Pick<Screen, "id" | "invitedVia" | "status"
     case "declined_by_candidate":
       return "They sent their application without the conversation, so there are no answers to show.";
     case "human_requested":
-      return "They asked for a person. Anything they typed before asking was not sent, so you won't see it; a recruiter adds notes from the call.";
+      return "They asked for a person. Anything they typed before asking was not sent, so you won't see it.";
     case "completed":
       return "Finished on a call with a recruiter: only the recruiter's notes are shown, never anything the candidate typed without sending it.";
     case "abandoned":
@@ -257,66 +255,6 @@ export function transcriptBubble(t: ScreenTranscriptLine): TranscriptBubble {
   if (t.source === "skip") return { kind: "system", label: null, text: `${DECLINED_WORDS} this question.` };
   if (t.role === "candidate") return { kind: "user", label: t.source === "edit" ? "Changed on the check-your-answers page" : t.source === "tap" ? TAPPED_WORDS : null, text: t.content };
   return { kind: t.role === "assistant" ? "assistant" : "system", label: null, text: t.content };
-}
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* A recruiter's notes from a call (plan E3)                                                                     */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/** The conversation states notes can be added to (mirrors NOTES_ALLOWED in apps/api/src/services/screens.ts). */
-const CALL_NOTES_STATUSES = ["invited", "reminded", "in_progress", "paused", "human_requested", "unfinished", "expired", "declined_by_candidate"];
-const CALL_NOTES_STAGES = ["received", "eligible", "triaged", "screen_invited", "screening", "screen_complete"];
-
-/**
- * Whether the signed-in person can add notes from a call (escalation.work: a recruiter, the company's own or ITS under a
- * grant), and whether it is the thing waiting on them: the candidate asked for a person. About someone locked the API keeps
- * the notes on the recruiter's own note whatever the stage (a closed job's talent pool, a withdrawal, a decline), so the card
- * is there at any stage, never as the step at the top: they have no AI interview.
- */
-export function callNotesState(a: Pick<ApplicationDetail, "stage" | "screens" | "lockedAt">, role: string | null | undefined): { show: boolean; prominent: boolean } {
-  const latest = a.screens[0];
-  if (a.lockedAt) return { show: canAddCallNotes(role), prominent: false };
-  if (!canAddCallNotes(role) || !CALL_NOTES_STAGES.includes(a.stage) || (latest && !CALL_NOTES_STATUSES.includes(latest.status))) return { show: false, prominent: false };
-  return { show: true, prominent: latest?.status === "human_requested" };
-}
-
-/**
- * Whether the notes may leave the conversation open: only when there is one. With no conversation yet the notes are the
- * screening and finish it (the API refuses anything else).
- */
-export function callNotesMayStayOpen(a: Pick<ApplicationDetail, "screens">): boolean {
-  return a.screens.length > 0;
-}
-
-/**
- * The questions the notes can be filed under: the ones the conversation asks, as the API keeps a note's question only
- * when the conversation has it (apps/api/src/services/screens.ts). Its open questions first; then, for one created since
- * Wave S8 (`progress.asks`), a Kanvis-style chat, and the one the notes start when there is none, the written questions
- * (`packetLabels.written`: the company's own, or the job's screening questions when it set none); for one from before,
- * the job's screening questions. An older answer without `written` gives the screening questions, as before.
- */
-export function callNotesQuestions(a: Pick<ApplicationDetail, "screens" | "packetLabels">): Array<{ key: string; question: string }> {
-  const latest = a.screens[0];
-  const focus = (latest?.progress.focusQuestions ?? []).map((f) => ({ key: f.key, question: f.question }));
-  const writtenList = !latest || latest.progress.asks === "written" || !!latest.progress.chat;
-  const asked = writtenList && a.packetLabels.written ? a.packetLabels.written.map((w) => ({ key: w.key, question: w.question })) : a.packetLabels.questions;
-  const keys = new Set(focus.map((f) => f.key));
-  return [...focus, ...asked.filter((q) => !keys.has(q.key))];
-}
-
-/** What POST /applications/:id/screen/recruiter-notes takes, from the form; null when nothing was written. */
-export function callNotesBody(byQuestion: Record<string, string>, other: string, complete: boolean): { notes: Array<{ questionKey?: string; text: string }>; complete: boolean } | null {
-  const notes: Array<{ questionKey?: string; text: string }> = Object.entries(byQuestion).filter(([, text]) => text.trim()).map(([questionKey, text]) => ({ questionKey, text: text.trim() }));
-  if (other.trim()) notes.push({ text: other.trim() });
-  return notes.length ? { notes, complete } : null;
-}
-
-/** What adding the notes did, in two short lines. */
-export function callNotesToast(r: { completed: boolean; keptAsNote?: boolean }, firstName: string): { title: string; detail: string } {
-  if (r.keptAsNote) return { title: "Notes kept.", detail: `They are on the Notes tab. ${firstName} is locked, so no AI review is written.` };
-  return r.completed
-    ? { title: "Notes added. The conversation is complete.", detail: `${firstName}'s scorecard is written from them, marked as your notes and never as their own words.` }
-    : { title: "Notes added.", detail: `The conversation stays open for ${firstName}.` };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

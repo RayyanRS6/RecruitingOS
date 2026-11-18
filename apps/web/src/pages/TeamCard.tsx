@@ -26,7 +26,7 @@ function copyInvitationLink(link: string): void {
   navigator.clipboard.writeText(link).then(() => toast("Link copied.", "Send it to them yourself. It works for seven days, only for the address it was made for."), () => toast("Could not copy. Select the link and copy it by hand."));
 }
 
-/** The roles a person on the team can hold, in the words the team page uses. Recruiters are ITS staff under a grant, never assigned here. */
+/** The roles a person on the team can hold, in the words the team page uses. */
 const ROLES: Array<{ value: string; label: string; help: string }> = [
   { value: "owner", label: "Owner", help: "Everything, including making other owners." },
   { value: "admin", label: "Admin", help: "Everything except the owner role." },
@@ -54,7 +54,7 @@ function explain(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback;
   switch (e.code) {
     case "last_owner": return "This is the only owner. Make someone else an owner first.";
-    case "staff_domain": return "That address belongs to ITS. Recruiters are not team members; ask for one under Bring in a recruiter.";
+    case "staff_domain": return "That address belongs to ITS. ITS staff are not team members.";
     case "already_member": return "That person is already on your team.";
     case "self_change": return "You cannot change your own role or remove yourself. Ask another owner or admin.";
     case "owner_only": return "Only an owner can make someone an owner or change an owner's role.";

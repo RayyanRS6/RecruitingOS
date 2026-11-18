@@ -17,7 +17,6 @@ import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "
 import { aiCreditAnswer } from "../services/ai-credit";
 import { jobPreview } from "../services/job-preview";
 import { diffPackets } from "../services/packet-diff";
-import { eventTargets, inStaffScope, staffScopeOf } from "../services/staff-scope";
 import { applyCompanyQuestionsEdit, applyFieldEdit } from "../services/packet-fields";
 import { withoutLockedEvents } from "../services/locked-visibility";
 import { withoutUnsentChats } from "../services/screen-visibility";
@@ -135,9 +134,7 @@ rolePacketRoutes.post("/:id/request-approval", requireTenant, async (c) => {
 
 /**
  * The role's activity: every event about the role itself, its packet versions, or anything that names the role in its
- * payload (applications, approvals, postings), newest first. Described in plain words by the page. An ITS recruiter under
- * a grant reads only the events it covers, by the rule of the activity list (GET /events): a grant about one candidate
- * sees the role's own events and that candidate's, never another applicant's application or outcome. Like the activity
+ * payload (applications, approvals, postings), newest first. Described in plain words by the page. Like the activity
  * list, nothing is shown about a screening chat the candidate has not sent: no entry about a single answer, no count of
  * what was answered, and no entry about a reading the team may not see (`withoutUnsentScreenEvents`). Nor about anyone
  * past the plan's candidates per job (Rule 3, `withoutLockedEvents`).
@@ -146,7 +143,6 @@ rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "events.read");
   const roleId = c.req.param("id") ?? "";
-  const scope = staffScopeOf(t);
   const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [role] = await tx.select({ id: roles.id }).from(roles).where(eq(roles.id, roleId)).limit(1);
     if (!role) return null;
@@ -162,12 +158,9 @@ rolePacketRoutes.get("/:id/timeline", requireTenant, async (c) => {
         ),
       ))
       .orderBy(desc(events.occurredAt), desc(events.id))
-      // Scoped, or with people past the plan's limit whose entries come out: read further back, keep what may be shown, and answer with the same number at most.
-      .limit(scope || (await companyHasLocked(tx, t.companyId)) ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
-    const shown = await withoutLockedEvents(tx, { companyId: t.companyId, reader: t }, await withoutUnsentChats(tx, found));
-    if (!scope) return shown.slice(0, TIMELINE_LIMIT);
-    const targets = await eventTargets(tx, shown);
-    return shown.filter((e) => inStaffScope(scope, targets.get(e.id) ?? {})).slice(0, TIMELINE_LIMIT);
+      // With people past the plan's limit whose entries come out: read further back, keep what may be shown, and answer with the same number at most.
+      .limit((await companyHasLocked(tx, t.companyId)) ? TIMELINE_LIMIT * 10 : TIMELINE_LIMIT);
+    return (await withoutLockedEvents(tx, t.companyId, await withoutUnsentChats(tx, found))).slice(0, TIMELINE_LIMIT);
   });
   if (!rows) throw new HttpError(404, "not_found", "Role not found.");
   return c.json(rows);
@@ -234,11 +227,8 @@ function takesEffect(role: RoleRow, mayApprove: boolean, openFlags: number, mate
 }
 
 const AI_FAILED = "The assistant could not work out that change. Nothing was changed. Try again, or make the change in the editor.";
-/**
- * The same on a draft, where Edit changes the answers and writing the draft again needs the assistant too: the way on is
- * to try again, or "Bring in a recruiter", which the job builder shows beside it (live test, 12 Nov 2026).
- */
-const AI_FAILED_DRAFT = "The assistant could not work out that change. Nothing was changed. Try again, or bring in a recruiter.";
+/** The same on a draft, where Edit changes the answers and writing the draft again needs the assistant too: the way on is to try again. */
+const AI_FAILED_DRAFT = "The assistant could not work out that change. Nothing was changed. Try again.";
 
 /**
  * A failed model call is recorded as an event on what it was about, then answered plainly; nothing was changed. No AI credit

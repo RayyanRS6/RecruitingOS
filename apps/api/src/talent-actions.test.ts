@@ -3,7 +3,7 @@ import { and, eq, like } from "drizzle-orm";
 import { NO_WORK_WHILE_LOCKED, type ApplicationStage, type MembershipRole } from "@ros/contracts";
 import { entitlements, openFollowUp, type FollowUpStrip } from "@ros/core";
 import { SCORECARD_READINGS, newTimesDayWords } from "@ros/agents";
-import { applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, recruiterEscalations, screens, users, withTenant, workflowRuns } from "@ros/db";
+import { adminAlerts, applications, candidates, communications, companies, events, interviewFollowups, interviews, policies, randomToken, screens, users, withTenant, workflowRuns } from "@ros/db";
 import { armNewTimes } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -24,7 +24,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
     it("offers nothing that spends AI on someone locked or starts an interview, whatever their step, and says why", () => {
       const open = applicationActionState(facts({ openUnknowns: 2 }));
       expect(open.allowed).toEqual(expect.arrayContaining(["invite_screen", "ask_in_screen", "interview", "advance_to_interview"]));
-      const locked = applicationActionState(facts({ openUnknowns: 2, lockedAt: "2026-11-01T00:00:00.000Z", role: "recruiter" }));
+      const locked = applicationActionState(facts({ openUnknowns: 2, lockedAt: "2026-11-01T00:00:00.000Z" }));
       for (const cap of ["invite_screen", "ask_in_screen", "interview", "advance_to_interview"] as const) {
         expect(locked.allowed).not.toContain(cap);
         expect(locked.blockedReasons[cap]).toBe(NO_WORK_WHILE_LOCKED);
@@ -43,20 +43,16 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       // HR may act on applications, sort them and record outcomes, but neither decline nor approve interviews, nor tell a decision
       const hr = applicationActionState(facts({ role: "hr" }));
       expect(hr.allowed).toEqual(["invite_screen", "advance_to_interview", "hold", "move_to_talent_pool", "record_outcome", "set_mark"]);
-      expect(hr.blockedReasons.reject).toBe("Your role can't decline candidates; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(hr.blockedReasons.interview).toBe("Your role can't set up interviews; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.send_decision).toBe("Your role can't tell candidates about a decision; ask an owner, an admin, a hiring manager or a recruiter.");
-      // a recruiter declines and interviews, but recording a hiring outcome is the customer's
-      const recruiter = applicationActionState(facts({ role: "recruiter" }));
-      expect(recruiter.allowed).toContain("reject");
-      expect(recruiter.allowed).not.toContain("record_outcome");
-      expect(recruiter.blockedReasons.record_outcome).toBe("Your role can't record hiring outcomes; ask an owner, an admin, a hiring manager or HR.");
+      expect(hr.blockedReasons.reject).toBe("Your role can't decline candidates; ask an owner, an admin or a hiring manager.");
+      expect(hr.blockedReasons.interview).toBe("Your role can't set up interviews; ask an owner, an admin or a hiring manager.");
+      expect(applicationActionState(facts({ role: "hr", stage: "rejected" })).blockedReasons.send_decision).toBe("Your role can't tell candidates about a decision; ask an owner, an admin or a hiring manager.");
       // an interviewer is offered nothing, and told why on each
       const interviewer = applicationActionState(facts({ role: "interviewer" }));
       expect(interviewer.allowed).toEqual([]);
       expect(Object.keys(interviewer.blockedReasons)).toHaveLength(21);
+      expect(interviewer.blockedReasons.record_outcome).toBe("Your role can't record hiring outcomes; ask an owner, an admin, a hiring manager or HR.");
       // every choice not allowed has a reason, for every role
-      for (const role of ["owner", "admin", "hiring_manager", "hr", "recruiter", "interviewer"] as MembershipRole[]) {
+      for (const role of ["owner", "admin", "hiring_manager", "hr", "interviewer"] as MembershipRole[]) {
         const s = applicationActionState(facts({ role }));
         expect(s.allowed.length + Object.keys(s.blockedReasons).length, role).toBe(21);
         for (const reason of Object.values(s.blockedReasons)) expect(reason, role).not.toMatch(/_|undefined/);
@@ -95,7 +91,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts({ stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).allowed).toContain("cancel_screen");
       expect(applicationActionState(facts({ stage: "screening", hasOpenScreen: true })).blockedReasons.cancel_screen).toBe("They have started the AI interview, so it can't be stopped now.");
       expect(applicationActionState(facts()).blockedReasons.cancel_screen).toBe("No AI interview invitation is waiting for them.");
-      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop an AI interview invitation; ask an owner, an admin, a hiring manager or a recruiter.");
+      expect(applicationActionState(facts({ role: "hr", stage: "screen_invited", hasOpenScreen: true, hasUnstartedScreen: true })).blockedReasons.cancel_screen).toBe("Your role can't stop an AI interview invitation; ask an owner, an admin or a hiring manager.");
     });
 
     it("builds the stage button from the same rule: every stage, how it is reached, and why not", () => {
@@ -119,7 +115,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(moves({ stage: "interview_complete" }).offer).toMatchObject({ allowed: false, blockedReason: "Record Finalist as the interview's decision first, or mark them Hired." });
       expect(moves({ stage: "finalist" }).offer).toMatchObject({ allowed: true, via: "offer" });
       expect(moves({ stage: "reference_check" }).offer).toMatchObject({ allowed: true, via: "offer" });
-      expect(moves({ stage: "finalist", role: "recruiter" }).offer).toMatchObject({ allowed: false, blockedReason: "Your role can't record that an offer was made; ask an owner, an admin, a hiring manager or HR." });
+      expect(moves({ stage: "finalist", role: "interviewer" }).offer).toMatchObject({ allowed: false, blockedReason: "Your role can't record that an offer was made; ask an owner, an admin, a hiring manager or HR." });
       expect(moves({ stage: "rejected" }).offer).toMatchObject({ allowed: false, blockedReason: "Not available at this step (Not moving forward)." });
       expect(applicationActionState(facts({ stage: "finalist" })).allowed).toContain("record_offer");
       // on the shortlist, choosing New takes the mark off
@@ -188,9 +184,9 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts()).blockedReasons.send_new_times).toBe("Only for someone under Cancelled.");
       expect(applicationActionState(facts({ stage: "interview_scheduled" })).blockedReasons.send_new_times).toBe("Only for someone under Cancelled.");
       // only those who manage interviews (HR does not)
-      expect(applicationActionState(under({ role: "hr" })).blockedReasons.send_new_times).toBe("Your role can't send new interview times; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(applicationActionState(under({ role: "hr" })).blockedReasons.stop_new_times).toBe("Your role can't stop automatic new interview times; ask an owner, an admin, a hiring manager or a recruiter.");
-      expect(applicationActionState(under({ role: "recruiter" })).allowed).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
+      expect(applicationActionState(under({ role: "hr" })).blockedReasons.send_new_times).toBe("Your role can't send new interview times; ask an owner, an admin or a hiring manager.");
+      expect(applicationActionState(under({ role: "hr" })).blockedReasons.stop_new_times).toBe("Your role can't stop automatic new interview times; ask an owner, an admin or a hiring manager.");
+      expect(applicationActionState(under({ role: "hiring_manager" })).allowed).toEqual(expect.arrayContaining(["send_new_times", "stop_new_times"]));
 
       // the stage button: they are under Cancelled; Interviewing comes back by booking a time, never by hand
       const moves = Object.fromEntries(stageMoves(under()).map((m) => [m.to, m]));
@@ -226,7 +222,7 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(applicationActionState(facts()).blockedReasons.remind_screen).toBe("Only for someone whose AI interview link is open.");
       // the same hands that send a new link (HR may; an interviewer may not)
       expect(applicationActionState(inColumn({ role: "hr" })).allowed).toContain("remind_screen");
-      expect(applicationActionState(inColumn({ role: "interviewer" })).blockedReasons.remind_screen).toBe("Your role can't remind candidates about their AI interview; ask an owner, an admin, a hiring manager, HR or a recruiter.");
+      expect(applicationActionState(inColumn({ role: "interviewer" })).blockedReasons.remind_screen).toBe("Your role can't remind candidates about their AI interview; ask an owner, an admin, a hiring manager or HR.");
       // the stage button: here now; New comes with the AI interview; sorting, interviewing and declining work as from New
       const moves = Object.fromEntries(stageMoves(inColumn()).map((m) => [m.to, m]));
       expect(moves.no_ai_interview).toMatchObject({ current: true, allowed: false });
@@ -262,11 +258,10 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
     let owner = "";
     let ownerId = "";
     let hr = "";
-    let recruiter = "";
     let companyId = "";
     let roleId = "";
     const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-    type Detail = { allowedActions: string[]; blockedReasons: Record<string, string>; declineMessage: string; screens: Array<{ id: string; status: string; scorecard?: string; recruiterAsked?: boolean }> };
+    type Detail = { allowedActions: string[]; blockedReasons: Record<string, string>; declineMessage: string; screens: Array<{ id: string; status: string; scorecard?: string }> };
     const detail = async (cookie: string, id: string) => (await (await json(cookie, "GET", `/api/v1/applications/${id}`)).json()) as Detail;
     const act = async (cookie: string, id: string, body: Record<string, unknown>) => json(cookie, "POST", `/api/v1/applications/${id}/actions`, body);
     const seed = (first: string, input: { email?: string | null; stage?: ApplicationStage } = {}) =>
@@ -296,24 +291,18 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
       await container.drain();
       hr = await signInAs(container, app, { companyId, role: "hr" });
-      recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
     });
     afterAll(async () => {
       await container.close();
     });
 
-    it("HR sees no Decline, with the reason on it, and the route refuses; a recruiter cannot record an outcome", async () => {
+    it("HR sees no Decline, with the reason on it, and the route refuses", async () => {
       const id = await seed("Hana");
       const asHr = await detail(hr, id);
       expect(asHr.allowedActions).not.toContain("reject");
       expect(asHr.allowedActions).toContain("hold");
       expect(asHr.blockedReasons.reject).toMatch(/^Your role can't decline candidates; ask an owner/);
       expect((await act(hr, id, { action: "reject", reason: "not_a_match_experience" })).status).toBe(403);
-      const asRecruiter = await detail(recruiter, id);
-      expect(asRecruiter.allowedActions).toContain("reject");
-      expect(asRecruiter.allowedActions).not.toContain("record_outcome");
-      expect(asRecruiter.blockedReasons.record_outcome).toMatch(/record hiring outcomes/);
-      expect((await json(recruiter, "POST", `/api/v1/applications/${id}/outcome`, { outcome: "candidate_withdrew", confirm: true })).status).toBe(403);
       // the owner may do all of it, and is told before a decline what the candidate will get
       const asOwner = await detail(owner, id);
       expect(asOwner.allowedActions).toEqual(expect.arrayContaining(["reject", "hold", "record_outcome"]));
@@ -459,21 +448,21 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       expect(await (await json(owner, "POST", `/api/v1/applications/${withdrew}/outcome`, { outcome: "candidate_withdrew", confirm: true })).json()).not.toHaveProperty("candidateNotice");
     });
 
-    it("a finished screen whose scorecard could not be written says so, and that ITS was asked", async () => {
+    it("a finished screen whose scorecard could not be written says so, and ITS is alerted", async () => {
       const id = await seed("Sky");
       expect((await act(owner, id, { action: "invite_screen", channel: "web" })).status).toBe(200);
       await container.drain();
       const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, id));
       expect(scr.workflowRunId).toBeTruthy();
-      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "invited", scorecard: "none", recruiterAsked: false });
-      // the candidate finishes; the assistant's scorecard is unusable twice, so the run gives up and asks ITS
+      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "invited", scorecard: "none" });
+      // the candidate finishes; the assistant's scorecard is unusable twice, so the run gives up and ITS gets an alert
       await withTenant(container.db, companyId, async (tx) => {
         await tx.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.id, scr.id));
         await tx.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, id));
         await container.engine.signal(tx, { companyId, key: `screen:${scr.id}:completed` });
       });
       // finished, and the scorecard not written yet: the page says nothing is wrong
-      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "completed", scorecard: "writing", recruiterAsked: false });
+      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "completed", scorecard: "writing" });
       // The assistant's answer is unusable twice (the runner asks again once); the step says trying again cannot help, so
       // the run gives up on the first try instead of spending more model calls: no retry is ever scheduled.
       // (each of the SCORECARD_READINGS readings: the scorecard is read three times, Wave S5)
@@ -483,9 +472,8 @@ describe("the Talent page's actions: who may, why not, and what the candidate he
       const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, scr.workflowRunId!));
       expect(run.status).toBe("failed");
       expect(await container.db.select().from(events).where(and(eq(events.type, "workflow.retried"), eq(events.subjectId, run.id)))).toHaveLength(0);
-      expect(run.escalationId).toBeTruthy();
-      expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, run.escalationId!)))[0].applicationId).toBe(id);
-      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "completed", scorecard: "unavailable", recruiterAsked: true });
+      expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "workflow.failed"))).filter((a) => a.target?.id === run.id)).toHaveLength(1);
+      expect((await detail(owner, id)).screens[0]).toMatchObject({ status: "completed", scorecard: "unavailable" });
     });
   });
 });

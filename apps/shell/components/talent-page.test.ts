@@ -79,13 +79,13 @@ function detail(row: Row, over: Record<string, unknown> = {}) {
 const job = {
   id: "r1", title: "Dental Hygienist", status: "open", acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, closingDate: null, proposedPacket: null, packetApproval: { pending: null, latest: null },
   packetVersions: [{ version: 1, status: "approved", source: "intake_session", createdAt: daysAgo(8), createdBy: { kind: "user", id: "u1", name: "Dana Whitfield" }, changeSummary: null }],
-  counts: { waiting_on_you: 1, not_moving_forward: 1 }, boardsStillUp: [], boardsShowingOldVersion: [], whoPosts: "its", decisionMaker: null,
+  counts: { waiting_on_you: 1, not_moving_forward: 1 }, boardsStillUp: [], boardsShowingOldVersion: [], decisionMaker: null,
   currentPacket: { version: 1, status: "approved", packet: { identity: { locations: [{ city: "Irvine", region: "CA" }], employmentType: "full_time", remotePolicy: "onsite" }, compensation: { basis: "hourly", min: 40, max: 52, discloseRange: true } } },
 };
 
 function client(details: Array<ReturnType<typeof detail>>) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
-  qc.setQueryData(["me"], { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+  qc.setQueryData(["me"], { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } });
   qc.setQueryData(["roles"], [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), counts: { total: 2, waiting_on_you: 1, not_moving_forward: 1 }, stageCounts: counts.byOwnerStage, needsYou: 1, daysOpen: 7 }]);
   qc.setQueryData(["role", "r1"], job);
   qc.setQueryData(["applications", "r1"], { applications: [maria, luis], counts });
@@ -105,8 +105,7 @@ describe("the Candidates page", () => {
     expect(text(html)).toContain("Live");
     // one facts line, the same as on the job's other tabs (Wave S1)
     expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
-    // Bring in a recruiter and one More menu for the rest (pause, the accepting switch, close, edit, Candidate view, Compare)
-    expect(text(html)).toContain("Bring in a recruiter");
+    // one More menu for the rest (pause, the accepting switch, close, edit, Candidate view, Compare)
     expect(html).toContain('aria-haspopup="menu" aria-expanded="false" aria-label="More for this job"');
     // the job's one tab strip, Candidates first and current, the others on the job page
     expect(html).toContain('<nav aria-label="Job sections">');
@@ -309,7 +308,7 @@ describe("the Candidates page", () => {
   it("tells the people not told yet, on the list, that the safety net acts after 5 working days (D-03)", () => {
     nav.search = "ownerStage=not_moving_forward";
     const html = text(render(client([]), createElement(People)));
-    expect(html).toContain("1 person has not been told your decision. If nobody tells them within 5 working days, the standard message goes by itself (or an ITS recruiter is brought in, if your settings say so).");
+    expect(html).toContain("1 person has not been told your decision. If nobody tells them within 5 working days, the standard message goes by itself (or your team is reminded, if your settings say so).");
   });
 
   it("keeps a row to two chips beside the score and the stage button; the rest are counted and said in full", () => {
@@ -336,7 +335,6 @@ describe("the job page: the same header and tab strip as Candidates (Wave S1)", 
     expect(html).not.toContain("Job · Bright Dental");
     expect(html).toMatch(/<h1>Dental Hygienist<\/h1>/);
     expect(text(html)).toContain("Irvine, CA · full time · On site · $40–$52 an hour");
-    expect(text(html)).toContain("Bring in a recruiter");
     expect(html).toContain('aria-label="More for this job"');
     expect(html).toContain('<a href="/roles/r1?tab=share" class="tab" aria-current="page">');
     // Candidates first, with how many applied, a link to the job's own Candidates page
@@ -377,7 +375,6 @@ describe("the Jobs page (Wave S1; Wave S2: the Kanvis dashboard)", () => {
     // the title stands alone (fewer words, 23 Oct 2026): no company eyebrow, no line describing the page, no footnote
     expect(html).not.toContain('class="eyebrow"');
     expect(text(html)).not.toContain("Open a job to see who applied.");
-    expect(text(html)).not.toContain("Stuck? Bring in a recruiter from any job.");
     // the title is the row's link (its press area stretched over the row), styled by its class, never inline; the kit's
     // row title wraps on a phone by itself
     expect(html).toContain('<a href="/roles/r1/talent" class="list-row-title after:absolute after:inset-0 focus-visible:outline-hidden"><strong>Dental Hygienist</strong></a>');
@@ -618,7 +615,7 @@ describe("the Cancelled column (founder decisions 1A to 4A)", () => {
   it("never offers the batch to someone who may not manage interviews", () => {
     nav.search = "ownerStage=cancelled";
     const qc = withColumn(true);
-    qc.setQueryData(["me"], { user: { id: "u2", email: "hr@bright.test", name: "Hana Ruiz", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "hr" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } });
+    qc.setQueryData(["me"], { user: { id: "u2", email: "hr@bright.test", name: "Hana Ruiz", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "hr" }], activeCompanyId: "co1", ai: { provider: "fake" } });
     const html = plain(render(qc, createElement(People)));
     expect(html).toContain("Cleo Park");
     expect(html).not.toContain("Send new times…");

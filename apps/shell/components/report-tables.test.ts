@@ -22,7 +22,6 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 (globalThis as { React?: typeof React }).React = React;
 const { MustHavesCard, ReportFigures, ScreeningCard } = await import("@ros/web/src/pages/RoleReport");
-const { BoardSnapshotCard } = await import("@ros/web/src/pages/board/BoardSnapshot");
 const { CompareTable } = await import("@ros/web/src/pages/compare/ComparePanel");
 const { Interviews } = await import("@ros/web/src/pages/Interviews");
 const { Setup } = await import("@ros/web/src/pages/Setup");
@@ -37,7 +36,7 @@ const from = (html: string, start: string | RegExp) => {
   return html.slice(at);
 };
 
-const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", staffAccess: null, ai: { provider: "fake" } };
+const owner = { user: { id: "u1", email: "dana@bright.test", name: "Dana Whitfield", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role: "owner" }], activeCompanyId: "co1", ai: { provider: "fake" } };
 
 function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -60,41 +59,10 @@ const report = {
   interviews: { total: 1, requested: 0, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0, byRound: [{ roundKey: "working", title: "Working interview", total: 1, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0 }] },
   pendingDecisions: { count: 3, approvals: 0, candidates: 3, oldestDays: 2, list: [] },
   recommendationsVsDecisions: { assessed: 2, rows: [{ recommendation: "advance", label: "Invite to a screen", total: 2, invited: 1, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 }] },
-  overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, flaggedAssessments: 0, byAction: {} },
-  escalations: { total: 0, open: 0, resolved: 0, overdue: 0, medianResponseHours: null },
+  overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, byAction: {} },
   messages: { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 },
   outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 1, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [{ reason: "not_a_match_skills", label: "Skills not a match", count: 1 }] },
 };
-
-describe("the Report under a recruiter grant for one candidate (Wave S5)", () => {
-  const recruiter = { ...owner, user: { ...owner.user, id: "s2", email: "rae@its.test", name: "Rae Recruiter", platformRole: "its_recruiter" }, memberships: [], staffAccess: { grantId: "g1", kind: "escalation", purpose: "One candidate", expiresAt: "2026-10-20T00:00:00Z", companyName: "Bright Dental", scope: { escalationId: "e1", roleId: "r1", applicationId: "a1" } } };
-
-  it("says plainly that the figures count that one candidate, instead of nothing", async () => {
-    const { ReportTab, ONE_CANDIDATE_REPORT } = await import("@ros/web/src/pages/RoleReport");
-    const qc = client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]], recruiter);
-    const html = render(qc, createElement(ReportTab, { roleId: "r1" }));
-    expect(html.replace(/&#x27;/g, "'")).toContain(ONE_CANDIDATE_REPORT);
-    // the team's own view has no such line
-    const own = render(client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]]), createElement(ReportTab, { roleId: "r1" }));
-    expect(own).not.toContain("Your recruiter access covers one candidate");
-  });
-
-  it("explains the AI interview's refusal (403 staff_scope) in words, never 'Could not load' with a retry", async () => {
-    const { ApiError } = await import("@ros/web/src/api/client");
-    const { ScreeningCard: Card, ONE_CANDIDATE_SCREENING, isOneCandidateLimit } = await import("@ros/web/src/pages/RoleReport");
-    const refusal = new ApiError(403, "staff_scope", "Your access covers one candidate, so you can't see how the AI interview goes for the role's whole group.");
-    expect(isOneCandidateLimit(refusal)).toBe(true);
-    expect(isOneCandidateLimit(new ApiError(500, "internal", "Something went wrong."))).toBe(false);
-    expect(isOneCandidateLimit(new Error("network"))).toBe(false);
-    // the refusal as the page holds it once the request was answered (no new request while the server draws the page)
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Number.POSITIVE_INFINITY } } });
-    qc.setQueryData(["me"], recruiter);
-    qc.getQueryCache().build(qc, { queryKey: ["role", "r1", "screening"] }).setState({ status: "error", error: refusal, fetchStatus: "idle", errorUpdatedAt: Date.now(), errorUpdateCount: 1, fetchFailureCount: 1 });
-    const html = render(qc, createElement(Card, { roleId: "r1" })).replace(/&#x27;/g, "'");
-    expect(html).toContain(ONE_CANDIDATE_SCREENING);
-    expect(html).not.toContain("Could not load");
-  });
-});
 
 describe("the Report: figures right-aligned, figure tiles and day bars, and nothing that sorts", () => {
   it("right-aligns the must-have counts under right-aligned headings", () => {
@@ -168,17 +136,14 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
     expect(cards).toContain("Every one of these is recorded with the person&#x27;s name and reason");
     // the definitions under the tables moved into the Report tab's disclosure (fewer words, 23 Oct 2026)
     expect(cards).not.toContain("is the middle value");
-    expect(cards).not.toContain("Response time is clock hours");
     expect(cards).not.toContain("Everyone we tried to reach was reachable.");
     const tab = render(client([[["role", "r1", "report"], report], [["role", "r1", "screening"], { offered: 0, started: 0, finished: 0, unfinished: 0, stillApplying: 0, medianMinutes: null, personChosen: { contactMe: 0, sendWithout: 0 }, skipped: [] }]]), createElement(ReportTab, { roleId: "r1" }));
     expect(tab).toContain("Figures as of ");
     expect(tab).toMatch(/<details class="more"><summary>What these figures mean<\/summary>/);
     expect(tab).not.toMatch(/<details class="more" open/);
     expect(tab).toContain("Counts and days only; nothing here ranks or scores a candidate.");
-    expect(tab).toContain("Response time is clock hours from your request to a recruiter picking it up");
     // a role's own tab speaks of "this role" (the console's customer report says "across all roles")
     expect(tab).toContain("Every application to this role, by where the person came from");
-    expect(tab).toContain("Your requests for an ITS recruiter on this role:");
     expect(tab).not.toContain("across all roles");
     // the AI interview's entry says what its card counts, then what its "typical" is
     expect(tab).toContain("How many people were offered it, started it and finished it, the typical time to finish, who chose a person instead, and the questions people chose not to answer.");
@@ -189,17 +154,6 @@ describe("the Report: figures right-aligned, figure tiles and day bars, and noth
 });
 
 describe("tables elsewhere on a role", () => {
-  it("right-aligns the score on the board a recruiter is asked to check", () => {
-    const snapshot = { capturedAt: "2026-10-09T10:00:00.000Z", summary: { sentences: ["2 people on the board."], counts: { shortlist: 1 } }, people: [
-      { applicationId: "a1", name: "Maria Reyes", column: "shortlist", state: "suggested", score: 91, reason: "Match score 91.", needsYourEye: null, nextStep: "Interview" },
-      { applicationId: "a5", name: "Sofia Lind", column: null, state: "waiting", score: null, reason: "Still applying.", needsYourEye: null, nextStep: null },
-    ] };
-    const html = render(client(), createElement(BoardSnapshotCard, { snapshot: snapshot as never }));
-    expect(html).toContain('<th scope="col" class="num">Score</th>');
-    expect(html).toContain('<td class="small num">91/100</td>');
-    expect(html).toContain('<td class="small num">No score yet</td>');
-  });
-
   it("keeps Compare's row headers in view while the people scroll sideways, its headings still plain", () => {
     const cand = (id: string) => ({ applicationId: id, name: id === "a1" ? "Maria Reyes" : "Luis Ortega", stage: "triaged", stageLabel: "Ready", group: "waiting_on_you", mustHaves: {}, competencies: {}, screen: null, resume: null, unknownCount: 0, open: `/roles/r1/talent?open=${id}`, score: null, notes: [] });
     const data = { role: { id: "r1", title: "Dental Hygienist" }, mustHaves: [{ key: "mh_1", text: "Active CA RDH license" }], competencies: [{ key: "c1", name: "Patient care", definition: "Calm with patients", importance: "essential" }], max: 5, reminder: "People decide.", candidates: [cand("a1"), cand("a2")] };
@@ -249,7 +203,6 @@ describe("tables elsewhere on a role", () => {
       links: [{ id: "l9", url: "https://jobs.test/a/ref", source: "referral", sourceLabel: "Referral", sourceDetail: "Dr. Patel", label: "Referral: Dr. Patel", postingId: null, visits: 5, lastVisitedAt: null, createdAt: daysAgo(3), disabledAt: null, landing: "apply" }],
       boardsStillUp: [],
       publishing: { state: "ready", pollAfterSeconds: 10, message: "Everything is prepared.", checksPending: 0 },
-      whoPosts: "its",
       boards: [],
       closingDate: { closesOn: "2026-10-30", closesAt: "2026-10-31T07:00:00.000Z", applyBy: "Apply by Friday, October 30, 2026", timeZone: "America/Los_Angeles", requiredByLaw: false, defaultIfMissing: null, passed: false, applicationsClosedByDate: false },
     };
@@ -282,7 +235,7 @@ describe("Setup's tables", () => {
       [["me"], { user: { id: "u1" }, activeCompanyId: "co1", memberships: [{ companyId: "co1", role: "owner", companyName: "Bright Dental" }] }],
       [["public-profile"], { hiringContact: null, contactShown: { email: "help@its.test", name: null, kind: "its" } }],
     ];
-    if (audit) data.push([["audit-history", false], audit]);
+    if (audit) data.push([["audit-history"], audit]);
     return render(client(data), createElement(Setup));
   };
   const auditRow = (id: string, description: string, at: string, name: string | null) => ({ id, action: "company.updated", description, actor: { kind: "user", name }, reason: null, at, details: {} });

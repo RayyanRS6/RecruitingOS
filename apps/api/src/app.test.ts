@@ -1,16 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, recruiterEscalations, roles, screens, workflowRuns } from "@ros/db";
+import { aiRuns, applications, approvalRequests, assessments, candidates, communications, documents, entitlements, events, jobs, postings, roles, screens, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
-import { HOLD_DECIDED } from "@ros/core";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Slice 1 through the HTTP layer: sign up → company → intake conversation → packet → approval → publish →
- * apply (web and email-in) → acknowledgment → eligibility → brief → ask a recruiter → admin inspection.
+ * apply (web and email-in) → acknowledgment → eligibility → brief → admin inspection.
  */
 describe("Slice 1 API", () => {
   let container: Container;
@@ -323,12 +322,11 @@ describe("Slice 1 API", () => {
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, ana.id))).toHaveLength(0);
     const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
     expect(notes.some((n) => n.kind === "application.ineligible_review_due" && /Ana/.test(n.title))).toBe(true);
-    // after three days without a decision an ITS recruiter is brought in; still nothing is sent to Ana
+    // after three days without a decision the reminders end; she is still held, and still nothing is sent to Ana
     setClock(80 * 3600_000);
     await container.drain();
-    const held = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
-    expect(held.some((e) => e.kind === "review")).toBe(true);
     expect((await container.db.select().from(applications).where(eq(applications.id, ana.id)))[0].stage).toBe("ineligible");
+    expect((container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === "ana@example.com")).toHaveLength(1);
     // only a person declines; the decision is private (founder decision B6) and the message goes only when a person sends it
     const decline = await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "reject", reason: "eligibility", note: "No active license." });
     expect(decline.status).toBe(200);
@@ -336,9 +334,6 @@ describe("Slice 1 API", () => {
     const [anaRow] = await container.db.select().from(applications).where(eq(applications.id, ana.id));
     expect(anaRow.stage).toBe("rejected");
     expect(anaRow.rejectReason).toBe("eligibility");
-    // the recruiter's review of the hold needs nothing more once a person decided (review of the live-test fixes, #16)
-    const settled = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, ana.id));
-    expect(settled.filter((e) => e.kind === "review").map((e) => [e.status, e.resolution])).toEqual([["resolved", HOLD_DECIDED]]);
     outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
     expect(await (await json("POST", `/api/v1/applications/${ana.id}/actions`, { action: "send_decision" })).json()).toMatchObject({ dispositionSent: true, candidateNotice: "queued" });
@@ -445,22 +440,6 @@ describe("Slice 1 API", () => {
     expect(sent.providerMessageId).toBeTruthy();
     const outbox = (container.integrations.email as FakeEmailAdapter).sent;
     expect(outbox.filter((m) => m.to === "priya@example.com" && /^Thank you for applying: your next step/.test(m.subject))).toHaveLength(1);
-  });
-
-  it("escalates to a recruiter with full context and shows it in the brief", async () => {
-    const apps = (await (await json("GET", `/api/v1/roles/${roleId}/applications`)).json()) as Array<{ id: string }>;
-    const r = await json("POST", "/api/v1/escalations", { kind: "review", roleId, applicationId: apps[0].id, question: "Is Maria worth a working interview?" });
-    expect(r.status).toBe(201);
-    const outbox = (container.integrations.email as FakeEmailAdapter).sent;
-    const queueMail = outbox.find((m) => /^\[review\]/.test(m.subject));
-    expect(queueMail).toBeTruthy();
-    // correction 11: the queue notification never carries the customer's words
-    expect(queueMail!.text).not.toContain("Maria");
-    expect(queueMail!.text).toContain("Summary:");
-    const brief = (await (await json("GET", "/api/v1/brief")).json()) as { cards: Array<{ kind: string }> };
-    expect(brief.cards.some((c) => c.kind === "escalation")).toBe(true);
-    // the recruiter queue needs a platform role
-    expect((await json("GET", "/api/v1/escalations")).status).toBe(403);
   });
 
   it("rejecting on judgment requires a human with a reason, and is audited", async () => {

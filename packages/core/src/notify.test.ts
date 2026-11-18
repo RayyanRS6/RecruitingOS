@@ -19,18 +19,16 @@ describe("notification preferences", () => {
     expect(notifyGroupOf("calendar.needs_attention")).toBe("interviews");
     expect(notifyGroupOf("stuck.candidates_waiting")).toBe("stuck");
     expect(notifyGroupOf("volume.high")).toBe("stuck");
-    expect(notifyGroupOf("recruiter.resolved")).toBe("recruiter");
     expect(notifyGroupOf("message.sent")).toBe("messages");
     expect(notifyGroupOf("candidate.unreachable")).toBe("messages");
     expect(notifyGroupOf("company.verified")).toBe("account");
     // kinds added later land somewhere sensible
-    expect(notifyGroupOf("recruiter.replied")).toBe("recruiter");
     expect(notifyGroupOf("interview.moved_by_robot")).toBe("interviews");
     expect(notifyGroupOf("something.brand_new")).toBe("account");
   });
 
   it("uses the product's defaults until a person chooses: what waits on you at once, the rest in the morning", () => {
-    expect(cadencesFor({})).toEqual({ approvals: "immediate", candidates: "daily", interviews: "immediate", stuck: "daily", recruiter: "immediate", messages: "daily", account: "immediate" });
+    expect(cadencesFor({})).toEqual({ approvals: "immediate", candidates: "daily", interviews: "immediate", stuck: "daily", messages: "daily", account: "immediate" });
     expect(resolveNotifyCadence("approval.requested", {})).toEqual({ group: "approvals", cadence: "immediate", always: false, emailNow: true });
     expect(resolveNotifyCadence("candidate.recommended", {})).toEqual({ group: "candidates", cadence: "daily", always: false, emailNow: false });
     for (const g of NOTIFY_GROUPS) expect(NOTIFY_GROUP_INFO[g].label.length).toBeGreaterThan(3);
@@ -41,7 +39,7 @@ describe("notification preferences", () => {
     expect(resolveNotifyCadence("candidate.recommended", mine)).toMatchObject({ cadence: "immediate", emailNow: true });
     expect(resolveNotifyCadence("approval.requested", mine)).toMatchObject({ cadence: "off", emailNow: false });
     expect(resolveNotifyCadence("interview.decision", mine)).toMatchObject({ cadence: "weekly", emailNow: false });
-    expect(resolveNotifyCadence("recruiter.resolved", mine)).toMatchObject({ cadence: "immediate", emailNow: true });
+    expect(resolveNotifyCadence("company.plan_changed", mine)).toMatchObject({ cadence: "immediate", emailNow: true });
     expect(cadencesFor(mine)).toMatchObject({ candidates: "immediate", approvals: "off", interviews: "weekly", stuck: "daily" });
   });
 
@@ -50,9 +48,6 @@ describe("notification preferences", () => {
     expect(notifyGroupOf("calendar.needs_attention")).toBe("interviews");
     expect(NOTIFY_GROUP_INFO.interviews.description).toContain("calendar");
     expect(NOTIFY_GROUP_INFO.account.description).not.toContain("calendar");
-    // a recruiter writing back is in the recruiter group, and its description says so
-    expect(notifyGroupOf("recruiter.replied")).toBe("recruiter");
-    expect(NOTIFY_GROUP_INFO.recruiter.description).toContain("wrote to you");
   });
 
   it("never sends an email of its own for an update the people involved already got one for, or a test", () => {
@@ -74,8 +69,8 @@ describe("notification preferences", () => {
 describe("updates nobody can turn off", () => {
   const everythingOff = Object.fromEntries(NOTIFY_GROUPS.map((g) => [g, "off"]));
 
-  it("are a recruiter given access, ITS confirming the company, taking it back, accepting a request for access or giving access back, a candidate asking for a person, and an eligibility hold waiting", () => {
-    expect([...NOTIFY_ALWAYS.keys()].sort()).toEqual(["application.ineligible_hold", "application.ineligible_review_due", "company.access_accepted", "company.access_restored", "company.unverified", "company.verified", "recruiter.access_granted", "recruiter.claimed", "screen.human_requested"]);
+  it("are ITS confirming the company, taking it back, accepting a request for access or giving access back, a candidate asking for a person, and an eligibility hold waiting", () => {
+    expect([...NOTIFY_ALWAYS.keys()].sort()).toEqual(["application.ineligible_hold", "application.ineligible_review_due", "company.access_accepted", "company.access_restored", "company.unverified", "company.verified", "screen.human_requested"]);
     for (const a of NOTIFY_ALWAYS.values()) {
       expect(a.label.length).toBeGreaterThan(10);
       expect(a.why.length).toBeGreaterThan(10);
@@ -187,22 +182,9 @@ describe("the words of an email alert", () => {
   });
 
   it("has a headline for every kind, its group's when it has none of its own", () => {
-    expect(alertHeadline("recruiter.claimed")).toBe("An ITS recruiter now has access to your hiring");
+    expect(alertHeadline("company.plan_changed")).toBe("ITS changed your plan");
     expect(alertHeadline("interview.something_new")).toBe("There is news about an interview");
     expect(alertHeadline("whatever.else")).toBe("There is news about your account");
-  });
-
-  // The review of the live-test fixes (17 November 2026): a stopped step ITS ran again closed its request with no recruiter
-  // answering, and the email said "Your ITS recruiter answered your request" while Home said "Closed"
-  it("says a request Recruiting OS closed on its own was closed, never that a recruiter answered, in the recruiter group", () => {
-    const email = renderAlertEmail({ kind: "recruiter.request_closed", recipientName: "Dana Whitfield", companyName: "Harbor Dental Group", roleTitle: null, link: "https://app.example.test/?request=e1", appBaseUrl: "https://app.example.test" });
-    expect(email.subject).toBe("A request to ITS was closed");
-    expect(email.text).toContain("A request to ITS was closed.");
-    expect(`${email.subject} ${email.text}`).not.toMatch(/answered/);
-    expect(resolveNotifyCadence("recruiter.request_closed", {})).toEqual({ group: "recruiter", cadence: "immediate", always: false, emailNow: true });
-    expect(email.text).toContain('You get emails about "Your ITS recruiter" as they happen.');
-    // a recruiter's own answer reads as before
-    expect(alertHeadline("recruiter.resolved")).toBe("Your ITS recruiter answered your request");
   });
 
   it("links only into the app", () => {

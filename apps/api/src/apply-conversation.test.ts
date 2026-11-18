@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { BoardView, RolePacket, TapAnswer } from "@ros/contracts";
 import { CHAT_CAP_CLOSING, CHAT_WRAP_QUESTION, MOVED_ON_MESSAGE, REVIEW_MESSAGE, TURN_CAP_REVIEW_MESSAGE, answerWithdrawPrompt, chatClosingMessage, chatNextLine, conversationOverdue, detectStuckRoles, modelTurnCap } from "@ros/agents";
-import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, grantStaffAccess, tapFormatFor } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, companies, entitlements, events, notifications, recruiterEscalations, rolePackets, roles, screens, usageEvents, users, withPlatform, withTenant, workflowRuns } from "@ros/db";
+import { CHAT_WRAP_KEY, entitlements as allowance, chatCounter, tapFormatFor } from "@ros/core";
+import { adminAlerts, aiRuns, applications, assessments, companies, entitlements, events, notifications, rolePackets, roles, screens, usageEvents, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { createApplication } from "./services/applications";
 import { applyVisitNext, conversationEdit, conversationPerson, conversationStart, conversationSubmit, conversationTurn, conversationView, findConversation, interviewWaitFor, type ApplyVisitOutcome, type ConversationRef } from "./services/apply-conversation";
 import { screenDeps } from "./services/screens";
-import { signInAs, signInStaff, useOneVisitApplyFlow, usePlan } from "./test-helpers";
+import { signInAdmin, signInAs, useOneVisitApplyFlow, usePlan } from "./test-helpers";
 
 /**
  * Wave E over the API and the workflows, through the functions the apply page and the conversation page call (the pages
@@ -310,42 +310,18 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(await conversationPerson(container, ref, "send_without")).toBeNull(); // closed now
   });
 
-  it("E3: 'Have a person contact me' hands it to a recruiter and is counted; the recruiter's call notes finish it as notes, never as the candidate's words", async () => {
+  it("E3: 'Have a person contact me' tells the team and is counted; the conversation closes with nothing sent", async () => {
     const { outcome, applicationId } = await applyNow({ first: "Luis", last: "Ortega", email: "luis@onevisit.test" });
     const ref = await refOf(outcome);
     const r = await conversationPerson(container, ref, "contact_me");
-    expect(r?.message).toMatch(/A person from One Visit Dental will follow up with you (within four business hours|on the next business day)/);
+    expect(r?.message).toBe("Understood. The hiring team at One Visit Dental has been told you asked for a person. Thank you for your patience.");
     const scr = await screenOf(applicationId);
     expect(scr.status).toBe("human_requested");
-    expect((await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId)))).toHaveLength(1);
+    expect((await notesAbout("Luis Ortega")).filter((n) => n.kind === "screen.human_requested").map((n) => n.title)).toEqual(["Luis Ortega asked to talk to a person"]);
     expect((await container.db.select().from(usageEvents).where(eq(usageEvents.key, "screen_person_requests"))).filter((u) => u.ref.screenId === scr.id)).toMatchObject([{ ref: { choice: "contact_me" } }]);
     expect((await conversationView(container.db, ref))!).toMatchObject({ phase: "closed", status: "human_requested" });
-    // the page keeps the time promised when he asked, however much later it is opened, and says so once it has passed
-    const asked = (await conversationView(container.db, ref))!.personAsked!;
-    expect(asked.overdue).toBe(false);
-    expect(asked.dueWords).toMatch(/^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}/);
-    const later = (await conversationView(container.db, ref, new Date(Date.now() + 10 * 24 * HOUR)))!;
-    expect(later.personAsked).toEqual({ dueWords: asked.dueWords, overdue: true });
-    // "Talk to a person" still offers a new request in the words true when it is read
-    expect(later.personExpectation).toMatch(/^(within four business hours|on the next business day)/);
-    // the owner does not work recruiter requests; a recruiter does
-    const notes = { notes: [{ questionKey: questions[0].key, text: "Called him: license RDH54321 is active in California." }, { text: "Has done perio maintenance for six years; can start in two weeks." }] };
-    expect((await json("POST", `/api/v1/applications/${applicationId}/screen/recruiter-notes`, notes)).status).toBe(403);
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
-    const res = await json("POST", `/api/v1/applications/${applicationId}/screen/recruiter-notes`, notes, recruiter);
-    expect(res.status, await res.clone().text()).toBe(200);
-    await container.drain();
-    const done = await screenOf(applicationId);
-    expect(done.status).toBe("completed");
-    expect(done.transcript.filter((t) => t.role === "recruiter").map((t) => [t.source, t.questionKey ?? null])).toEqual([["recruiter_call", questions[0].key], ["recruiter_call", null]]);
-    expect((await reload(applicationId)).stage).toMatch(/screen_complete|interview_recommended/);
-    const asmt = (await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen"))))[0];
-    const result = asmt.result as { questionFindings: Array<{ evidence?: { source: string; quote?: string } }> };
-    // the recruiter's words appear only as recruiter notes
-    expect(result.questionFindings.filter((f) => f.evidence?.quote?.includes("Called him")).every((f) => f.evidence?.source === "recruiter_note")).toBe(true);
-    expect(result.questionFindings.some((f) => f.evidence?.source === "recruiter_note")).toBe(true);
-    // a finished conversation takes no more notes
-    expect((await json("POST", `/api/v1/applications/${applicationId}/screen/recruiter-notes`, notes, recruiter)).status).toBe(409);
+    // he never sent his answers, so nothing is read from them
+    expect(await container.db.select().from(assessments).where(and(eq(assessments.applicationId, applicationId), eq(assessments.kind, "screen")))).toHaveLength(0);
   });
 
   it("a conversation calls the model a limited number of times: messages that never answer a question stop at the cap and go to checking the answers", async () => {
@@ -397,7 +373,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await container.drain();
     let scr = await screenOf(applicationId);
     expect(scr.status).toBe("paused");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId))).toHaveLength(0);
+    expect((await notesAbout("Omar Haddad")).some((n) => n.kind === "screen.human_requested")).toBe(false);
     expect((await conversationView(container.db, ref))!).toMatchObject({ phase: "closed", status: "paused" });
     // the first retry failed too (the third failure); half an hour on, it answers
     await advance(31 * 60_000);
@@ -460,7 +436,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
 
   it("ITS's old switch is ignored (R20-12): a role or company set to 'form now, conversation later' still gets the waiting room and the AI interview; the saved setting stays readable", async () => {
     expect((await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: "form_then_screen", reason: "Pilot paused for this role" })).status).toBe(403);
-    const its = await signInStaff(app, container, "ops@its.test", "platform_admin");
+    const its = await signInAdmin(app, container, "ops@its.test");
     expect((await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: "form_then_screen" }, its)).status).toBe(400); // a reason is required
     const set = await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: "form_then_screen", reason: "Pilot paused for this role" }, its);
     expect(set.status).toBe(200);
@@ -562,7 +538,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(f.offered).toBeGreaterThanOrEqual(6);
     expect(f.finished).toBeGreaterThanOrEqual(2);
     expect(f.unfinished).toBe(2); // Priya, and Omar, who never came back after the outage while the clock moved on three days
-    expect(f.personChosen).toEqual({ contactMe: 0, sendWithout: 1 }); // Luis's request was finished by the recruiter
+    expect(f.personChosen).toEqual({ contactMe: 1, sendWithout: 1 }); // Luis asked for a person; Ana sent hers without the conversation
     expect(f.medianMinutes).not.toBeNull();
   });
 
@@ -576,7 +552,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     await container.drain();
     const intake = (await container.db.select().from(workflowRuns).where(eq(workflowRuns.workflowKey, "application_intake"))).find((r) => (r.state as { applicationId?: string }).applicationId === applicationId)!;
     expect(intake.status).toBe("completed");
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.applicationId, applicationId))).toHaveLength(0);
+    expect((await notesAbout("Remy Clark")).some((n) => n.kind === "screen.human_requested")).toBe(false);
   });
 
   it("E11: 'Skip' while the assistant follows up on an answer already given moves on and keeps that answer for the scorecard", async () => {
@@ -693,7 +669,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect((await screenOf(applicationId)).status).toBe("human_requested");
     const toPia = mail().filter((m) => m.to === "pia@onevisit.test");
     expect(toPia.filter((m) => /You can finish your AI interview/.test(m.subject))).toHaveLength(0);
-    expect(toPia.filter((m) => /^A person will contact you about/.test(m.subject))).toHaveLength(1);
+    expect(toPia.filter((m) => /^Your AI interview for /.test(m.subject) && m.text.includes("The hiring team at One Visit Dental has been told."))).toHaveLength(1);
     container.fake!.clearScripts();
   });
 
@@ -711,7 +687,7 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(stuck?.title).toMatch(/stuck in the AI interview/);
     expect(stuck?.body).toContain("Quinn Hale");
     // never sends the team looking for answers that stay hidden until they are sent (founder decision of 9 October 2026)
-    expect(stuck?.body).toContain("Their answers appear only once they send them; a recruiter can contact them.");
+    expect(stuck?.body).toContain("Their answers appear only once they send them.");
     expect(stuck?.body).not.toContain("see what they sent");
     // the rule: started and idle past the reminder and the close, paused past the hand-over, never started past the link
     const at = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * HOUR).toISOString();
@@ -724,41 +700,8 @@ describe("Wave E: applying and the conversation in one visit", () => {
     expect(conversationOverdue({ ...base, status: "completed", lastCandidateMessageAt: at(500) }, now)).toBe(false);
   });
 
-  it("a recruiter's notes on someone with no conversation finish the screening; they never leave an invitation nobody sent", async () => {
-    const recruiter = await signInAs(container, app, { companyId, role: "recruiter" });
-    // someone with no AI interview yet: they applied while the month's interviews were used up (Q17)
-    const [ent] = await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, "text_screens")));
-    await container.db.update(entitlements).set({ used: ent.limit ?? 10, limit: ent.limit ?? 10 }).where(eq(entitlements.id, ent.id));
-    const { outcome, applicationId: veraId } = await applyNow({ first: "Vida", last: "Holt", email: "vida@onevisit.test" });
-    await container.db.update(entitlements).set({ used: ent.used, limit: ent.limit }).where(eq(entitlements.id, ent.id));
-    expect(outcome).toEqual({ kind: "receipt", reason: "used_up" });
-    expect(await container.db.select().from(screens).where(eq(screens.applicationId, veraId))).toHaveLength(0);
-    const notes = { notes: [{ text: "Called her: active RDH license, five years of perio maintenance." }] };
-    const open = await json("POST", `/api/v1/applications/${veraId}/screen/recruiter-notes`, { ...notes, complete: false }, recruiter);
-    expect(open.status).toBe(409);
-    expect(((await open.json()) as { error: { code: string } }).error.code).toBe("no_conversation");
-    expect(await container.db.select().from(screens).where(eq(screens.applicationId, veraId))).toHaveLength(0);
-    const done = await json("POST", `/api/v1/applications/${veraId}/screen/recruiter-notes`, { ...notes, complete: true }, recruiter);
-    expect(done.status, await done.clone().text()).toBe(200);
-    await container.drain();
-    expect((await screenOf(veraId)).status).toBe("completed");
-  });
-
-  it("an ITS recruiter sees or changes how people apply for a role only under a grant that covers it; the screens say how each was offered", async () => {
+  it("the candidate's record names how each conversation was offered (the panel's \"Still applying\" reads it)", async () => {
     await signIn();
-    const its = await signInStaff(app, container, "rae@its.test", "its_recruiter", "Rae Recruiter");
-    expect((await json("GET", `/api/v1/roles/${roleId}/apply-mode`, undefined, its)).status).toBe(403);
-    const put = await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: "form_then_screen", reason: "Owner asked for the later path" }, its);
-    expect(put.status).toBe(403);
-    expect(((await put.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-    const [rae] = await container.db.select().from(users).where(eq(users.email, "rae@its.test"));
-    await withPlatform(container.db, (tx) => grantStaffAccess(tx, { userId: rae.id, userName: "Rae Recruiter", companyId, kind: "escalation", scope: { roleId }, purpose: "test: a request about this role", grantedBy: { kind: "system", id: "test" }, expiresAt: new Date(Date.now() + 24 * HOUR) }));
-    expect((await json("GET", `/api/v1/roles/${roleId}/apply-mode`, undefined, its)).status).toBe(200);
-    const ok = await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: "form_then_screen", reason: "Owner asked for the later path" }, its);
-    expect(ok.status).toBe(200);
-    expect(await ok.json()).toMatchObject({ applyMode: "form_then_screen", effective: "one_visit" });
-    expect((await json("PUT", `/api/v1/roles/${roleId}/apply-mode`, { applyMode: null, reason: "Back to the company's default" }, its)).status).toBe(200);
-    // GET /applications/:id names how each conversation was offered (the panel's "Still applying" reads it)
     const detail = (await (await json("GET", `/api/v1/applications/${mariaId}`)).json()) as { screens: Array<{ invitedVia: string | null }> };
     expect(detail.screens[0].invitedVia).toBe("with_application");
   });

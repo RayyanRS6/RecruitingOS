@@ -444,25 +444,24 @@ ${packet.communication.disclosureText || disclosureLine(company.name)}`;
 }
 
 /**
- * The candidate asked for a person (plan G8): an email that says when to expect them, from the business hours, so the
- * promise is in writing wherever they asked. `expectation` is "within four business hours (...)" or "on the next business
- * day (...)". One per request (`key`).
+ * The candidate asked for a person (plan G8): an email that says the hiring team has been told, so it is in writing
+ * wherever they asked. One per request (`key`).
  */
-export async function sendPersonRequestedNote(q: Queryable, integrations: Integrations, input: MessageInput & { expectation: string; key: string }): Promise<SendResult> {
+export async function sendPersonRequestedNote(q: Queryable, integrations: Integrations, input: MessageInput & { key: string }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-You asked to talk to a person about your application for the ${packet.identity.title} position at ${company.name}. A person working with the hiring team will contact you ${input.expectation}. Nothing else is needed from you; you can also reply to this email.
+You asked to talk to a person about your application for the ${packet.identity.title} position at ${company.name}. The hiring team at ${company.name} has been told. Nothing else is needed from you; you can also reply to this email.
 
 ${signature(packet, company)}
 
 ${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "person_requested", subject: `A person will contact you about ${packet.identity.title}`, text, idempotencyKey: `person_requested:${input.key}`, eventOnSent: "message.sent", to: candidate.email });
+  return deliver(q, integrations, { ...input, channel: "email", templateKey: "person_requested", subject: `You asked to talk to a person about ${packet.identity.title}`, text, idempotencyKey: `person_requested:${input.key}`, eventOnSent: "message.sent", to: candidate.email });
 }
 
 /**
  * Queues a text. Refuses without recorded consent or after an opt-out (TCPA, docs/08); the caller handles quiet hours.
- * Every attempt is a communications row, so the owner and the recruiter see what was said. The text itself leaves
+ * Every attempt is a communications row, so the owner sees what was said. The text itself leaves
  * through the outbox after the caller's transaction commits.
  */
 export async function deliverSms(

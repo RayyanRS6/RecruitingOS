@@ -264,7 +264,7 @@ describe("the Trial plan's 30 days", () => {
     expect(r.status).toBe(402);
     const err = await errorOf(r);
     expect(err).toMatchObject({ code: "limit_reached", message: TRIAL_ENDED_LINE });
-    expect(err.details).toMatchObject({ room: { ok: false, trialEnded: true, message: TRIAL_ENDED_LINE }, actions: [{ label: "Ask ITS to choose a plan", body: { kind: "ask", scope: "company", topic: "plan" } }] });
+    expect(err.details).toMatchObject({ room: { ok: false, trialEnded: true, message: TRIAL_ENDED_LINE }, actions: [{ label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/plans/request", body: { reason: "Our trial has ended. We would like to choose a plan." } }] });
     // no roles are listed to close: closing one would not help
     expect(await (await json(owner, "GET", "/api/v1/intake/room")).json()).toMatchObject({ ok: false, trialEnded: true, holding: [] });
   });

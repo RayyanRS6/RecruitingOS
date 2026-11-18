@@ -94,7 +94,7 @@ export type SessionContext = {
   user: { id: string; email: string; name: string | null; platformRole: string };
   memberships: Array<{ companyId: string; role: string; status: string }>;
   activeCompanyId: string | null;
-  /** When a second factor was last verified in this session (from the identity service's amr claim); unlocks break-glass (D25). */
+  /** When a second factor was last verified in this session (from the identity service's amr claim). */
   mfaVerifiedAt: string | null;
   /** How the session was opened: magic_link, azure, google, email. */
   identityProvider: string;

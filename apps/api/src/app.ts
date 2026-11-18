@@ -21,7 +21,7 @@ import { reportRoutes } from "./routes/reports";
 import { messageRoutes } from "./routes/messages";
 import { compareRoutes } from "./routes/compare";
 import { noteRoutes } from "./routes/notes";
-import { approvalRoutes, briefRoutes, escalationRoutes, eventRoutes } from "./routes/approvals-escalations-events";
+import { approvalRoutes, briefRoutes, eventRoutes } from "./routes/approvals-events";
 import { adminRoutes } from "./routes/admin";
 import { policyRoutes } from "./routes/policies";
 import { notificationRoutes } from "./routes/notifications";
@@ -40,7 +40,7 @@ import { draftPreviewPages, rolePreviewPages } from "./pages/preview";
 import { linkPages } from "./pages/links";
 import { publicFeeds } from "./pages/public-feeds";
 import { fileRoutes } from "./routes/files";
-import { screenApplicationRoutes, screenRoleRoutes } from "./routes/screen-routes";
+import { screenRoleRoutes } from "./routes/screen-routes";
 import { postmarkWebhook } from "./webhooks/postmark";
 import { POLICIES, apiRateLimit, rateLimit, webhookRateLimit } from "./middleware/rate-limit";
 import { API_FORM_PAGES, formPageReferrer, sameSiteChanges } from "./middleware/same-site";
@@ -158,7 +158,6 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/applications", noteRoutes);
   app.route("/api/v1/approvals", approvalRoutes);
-  app.route("/api/v1/escalations", escalationRoutes);
   app.route("/api/v1/events", eventRoutes);
   app.route("/api/v1/brief", briefRoutes);
   app.route("/api/v1/admin", adminRoutes);
@@ -174,7 +173,6 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/roles", roleInterviewRoutes);
   app.route("/api/v1/roles", roleNewTimesRoutes);
   app.route("/api/v1/roles", screenRoleRoutes);
-  app.route("/api/v1/applications", screenApplicationRoutes);
   app.route("/api/v1/me", meRoutes);
   app.route("/", schedulePages);
   app.route("/files", fileRoutes);
@@ -187,7 +185,7 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/", linkPages);
   app.route("/", publicFeeds);
 
-  /** Development only: what the fake email adapter would have sent (magic links, acknowledgments, escalations). */
+  /** Development only: what the fake email adapter would have sent (magic links, acknowledgments). */
   if (container.env.NODE_ENV !== "production" && container.integrations.email instanceof FakeEmailAdapter) {
     const fakeEmail = container.integrations.email;
     app.get("/dev/outbox", (c) => c.json(fakeEmail.sent.slice(-50).reverse()));

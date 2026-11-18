@@ -1,12 +1,11 @@
-import { and, desc, eq, inArray, like, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, createEscalation, decisionTold, disclosureLine, followUpParked, humanResponseExpectation, loadBusinessCalendar, noteCandidateWroteBack, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
+import { CANCEL_STAGES, DECISION_STAGES, createDataRequest, decisionTold, disclosureLine, followUpParked, notify, openFollowUpOf, raiseAlert, setAutoState } from "@ros/core";
 import { fromAddress, newTimesDayWords, queueCommunication, recordInbound, replyToFor, requestHuman, sendPrivacyAcknowledgment } from "@ros/agents";
-import { applications, candidates, communications, companies, dataRequests, inboundEmails, recruiterEscalations, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
+import { applications, candidates, communications, companies, dataRequests, inboundEmails, rolePackets, roles, screens, withPlatform, withTenant, type Tx } from "@ros/db";
 import type { InboundEmail } from "@ros/integrations";
 import { cancelNewTimesRuns, stopPreparedNewTimes } from "@ros/workflows";
 import type { Container } from "../container";
-import { emailHolderAboutCandidateReply, type HeldNote } from "./escalation-queue";
 import { screenDeps } from "./screens";
 import { optOutOfTalentPool } from "./talent-pool";
 
@@ -14,17 +13,15 @@ import { optOutOfTalentPool } from "./talent-pool";
  * A candidate's reply to one of our emails (docs/spec/21 F12, D9, H12). With the inbound mail domain configured, every
  * candidate email carries a per-application Reply-To address; the Postmark inbound webhook hands a message to that
  * address here. The reply is recorded on the application as an inbound communication, the team is told with a link
- * straight to the candidate, and a reply whose first line is HUMAN hands the conversation to a person exactly as the
- * HUMAN keyword does in a screening text, with an answer that says when (business hours) and carries the AI disclosure
- * (plan G8). Once the decision message reached them (or they were told), a first line of "no thanks" answers its offer
+ * straight to the candidate, and a reply whose first line is HUMAN stops an open AI interview exactly as asking for a
+ * person inside it does, tells the team they asked to talk to a person, and is answered with a line that says so and
+ * carries the AI disclosure (plan G8). Once the decision message reached them (or they were told), a first line of "no thanks" answers its offer
  * and keeps the person out of the talent pool; before that, the same words are passed to the team as they are. After a decision message, asking for
  * its reasons and a person's review (EXPLAIN, as Colorado's line says) goes to the ITS compliance queue (plan G5).
  * Nothing here ever creates an application or changes a stage.
  *
  * While the application is locked (the plans of 5 November 2026, Rule 2) the team may not read this person, so no notice goes
- * to them and nothing names them: a reply reaches ITS instead (`replyReachesIts`), and so does HUMAN. A request for a person
- * or an adjustment must reach a person (register item 12), and that is never limited: a later reply tells the recruiter holding
- * the request, never its words.
+ * to them and nothing names them: the reply is kept on the application, and nothing else happens.
  */
 type App = typeof applications.$inferSelect;
 type InboundRow = typeof inboundEmails.$inferSelect;
@@ -101,7 +98,7 @@ async function replyUnderCancelled(tx: Tx, container: Container, input: { app: A
     return { sentence: ` Their automatic new times${day ? `, due ${day},` : ""} were stopped: a person should arrange the next step with them. They are under Cancelled.`, stopped: true };
   }
   if (f.autoState === "preparing" && input.stops) {
-    const stopped = await stopPreparedNewTimes(tx, { followUp: f, reason: "candidate_replied", actor: input.actor, now: container.engine.clock() });
+    const stopped = await stopPreparedNewTimes(tx, { followUp: f, actor: input.actor, now: container.engine.clock() });
     if (stopped) return { sentence: " Their automatic new times were stopped before they went out: a person should arrange the next step with them. They are under Cancelled.", stopped: true };
   }
   if (followUpParked(f)) return { sentence: ` New times are due to go to them automatically${day ? ` on ${day}` : ""}. Open them under Cancelled to send them now or stop them.`, stopped: false };
@@ -123,54 +120,21 @@ async function noThanksMeansFutureRoles(tx: Tx, app: App): Promise<boolean> {
 }
 
 /**
- * A locked applicant wrote back, and nobody on the team may read it: ITS's queue gets it, with the words left on the thread,
- * so a person reads it. One request at a time: while one stands waiting, whoever picks it up reads this reply with the rest.
- * Someone already holding one is not looking for it, so its thread gets a wordless line, and the holders this returns are
- * emailed once the caller's transaction has committed (`tellHolders`).
- */
-async function replyReachesIts(tx: Tx, input: { app: App; roleTitle: string; name: string; now: Date; question?: string; actor?: Actor }): Promise<CandidateReplyHeld[]> {
-  const standing = await tx.select({ id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, status: recruiterEscalations.status, holderId: recruiterEscalations.assignedToUserId }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, input.app.id), notInArray(recruiterEscalations.status, ["resolved", "cancelled"])));
-  if (!standing.length) {
-    await createEscalation(tx, { companyId: input.app.companyId, roleId: input.app.roleId, applicationId: input.app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: input.question ?? `${input.name} wrote back about the ${input.roleTitle} role. The hiring team cannot read this application, so a person at ITS answers. Their message is on the application's thread.`, requestedBy: input.actor ?? EMAIL_REPLY_ACTOR, now: input.now });
-    return [];
-  }
-  const held: CandidateReplyHeld[] = [];
-  for (const e of standing) {
-    if (e.status === "open" || !e.holderId) continue;
-    const message = await noteCandidateWroteBack(tx, { escalation: e, candidateId: input.app.candidateId, now: input.now });
-    held.push({ escalationId: e.id, companyId: e.companyId, kind: e.kind, holderId: e.holderId, messageId: message.id });
-  }
-  return held;
-}
-
-/** A recruiter to tell that the candidate on the request they hold wrote back (`replyReachesIts`). */
-export type CandidateReplyHeld = HeldNote & { companyId: string };
-
-/** Tells the holders of what a reply found, after its transaction has committed. Never fails what called it. */
-export async function tellHolders(container: Container, held: readonly CandidateReplyHeld[] | undefined): Promise<void> {
-  for (const n of held ?? []) await emailHolderAboutCandidateReply(container, n);
-}
-
-/**
  * A text from someone with no conversation open (webhooks/twilio.ts), once it is on their thread. The fallback text promises
- * "Reply HUMAN for a person", so as with an email it reaches one: someone locked reaches ITS whatever they wrote, because nobody
- * on the team may read it; anyone else's team is told, and HUMAN also brings in a recruiter. Nothing goes back to them by text.
- * Returns who to tell once this transaction has committed (`tellHolders`).
+ * "Reply HUMAN for a person", so the team is told they asked to talk to a person; any other text is passed on as a reply.
+ * Someone locked is named to nobody: their text stays on their thread. Nothing goes back to them by text.
  */
-export async function textWithNoConversation(tx: Tx, container: Container, input: { app: App; candidate: { firstName: string; lastName: string }; text: string }): Promise<CandidateReplyHeld[]> {
+export async function textWithNoConversation(tx: Tx, input: { app: App; candidate: { firstName: string; lastName: string }; text: string }): Promise<void> {
   const { app, text } = input;
+  if (app.lockedAt) return;
   const [role] = await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const roleTitle = role?.title ?? "this";
   const name = `${input.candidate.firstName} ${input.candidate.lastName}`.trim() || "A candidate";
-  const at = { app, roleTitle, name, now: container.engine.clock(), actor: { kind: "system", id: "sms_inbound" } as const };
-  if (app.lockedAt) return replyReachesIts(tx, at);
   const wantsHuman = humanRequested(text);
-  const held = wantsHuman ? await replyReachesIts(tx, { ...at, question: `${name} replied HUMAN to a text about the ${roleTitle} role and needs a person. Please reach out by phone and pick up the conversation.` }) : [];
-  await notify(tx, { companyId: app.companyId, about: app.id, kind: wantsHuman ? "screen.human_requested" : "message.received", title: wantsHuman ? `${name} asked for a person` : `${name} wrote back`, body: wantsHuman ? `They replied HUMAN to a text about ${roleTitle}. A recruiter has the request; you can also call them.` : `By text, about ${roleTitle}: "${firstLine(text).slice(0, 140)}"`, action: { label: "Read it", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
-  return held;
+  await notify(tx, { companyId: app.companyId, about: app.id, kind: wantsHuman ? "screen.human_requested" : "message.received", title: wantsHuman ? `${name} asked to talk to a person` : `${name} wrote back`, body: wantsHuman ? `They replied HUMAN to a text about ${roleTitle}.` : `By text, about ${roleTitle}: "${firstLine(text).slice(0, 140)}"`, action: { label: "Read it", href: `/roles/${app.roleId}/talent?open=${app.id}` } });
 }
 
-export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk; holdersToTell?: CandidateReplyHeld[] }> {
+export async function handleCandidateReply(tx: Tx, container: Container, input: { app: App; mail: InboundEmail }): Promise<{ communicationId: string; humanRequested: boolean; talentPoolOptOut?: boolean; duplicate?: boolean; explanationRequested?: ExplanationAsk }> {
   const { app, mail } = input;
   // Postmark redelivers a message it thinks was not taken (a timeout after this transaction committed, for instance):
   // the same MessageID on this application is the same reply, recorded once, acted on once. A replay of a request for
@@ -205,37 +169,32 @@ export async function handleCandidateReply(tx: Tx, container: Container, input: 
   const quoted = `About ${role.title}: "${firstLine(text).slice(0, 140)}"`;
   const cancelled = await replyUnderCancelled(tx, container, { app, companyTimezone: company.timezone, stops: wantsHuman || (saidNoThanks && !aboutFutureRoles), actor: EMAIL_REPLY_ACTOR });
   // A "no thanks" that stopped their automatic new times changed something, so the notice never says nothing was.
-  const body = wantsHuman ? `They asked for a person about ${role.title}. A recruiter has been asked to follow up; you can also reply yourself.`
+  const body = wantsHuman ? `They asked to talk to a person about ${role.title}.`
     : optedOut ? `About ${role.title}: they replied "no thanks", so they will not be kept for future roles. They were sent a confirmation; nothing else changed.`
     : saidNoThanks && !aboutFutureRoles ? `${quoted}. This may mean they do not want to go ahead with this step.${cancelled.stopped ? " Reply to check with them." : " Nothing was changed; reply to check with them."}`
     : wantsExplanation ? `About ${role.title}: they asked for the reasons for your decision and for a person to review it. ITS's compliance team has the request and answers them; their message is on their page.`
     : quoted;
   await notify(tx, { companyId: app.companyId, about: app.id, kind: "message.received", title: `${name} wrote back`, body: `${body}${cancelled.sentence}`, action: { label: "Read it", href: open } });
   if (wantsExplanation) return { communicationId, humanRequested: false, explanationRequested: { candidateId: candidate.id, email: candidate.email ?? mail.from ?? null, companyName: company.name } };
-  if (!wantsHuman) {
-    // Saying no to being kept is done and confirmed; anything else they wrote needs someone who may read it.
-    const holdersToTell = app.lockedAt && !aboutFutureRoles ? await replyReachesIts(tx, { app, roleTitle: role.title, name, now: container.engine.clock() }) : [];
-    return { communicationId, humanRequested: false, talentPoolOptOut: optedOut, holdersToTell };
-  }
+  if (!wantsHuman) return { communicationId, humanRequested: false, talentPoolOptOut: optedOut };
+  // Nobody on the team may be told about someone locked, so nothing is answered on the team's behalf.
+  if (app.lockedAt) return { communicationId, humanRequested: false };
 
-  const now = container.engine.clock();
-  const calendar = await loadBusinessCalendar(tx, now);
   const signature = pv?.packet.communication.signature || `The hiring team at ${company.name}`;
   // An automatic answer, so it carries the AI disclosure like every other (plan G8).
   const disclosure = pv?.packet.communication.disclosureText || disclosureLine(company.name);
-  const reply = `Hi ${candidate.firstName},\n\nUnderstood. A person from ${company.name} will follow up with you ${humanResponseExpectation(now, calendar)}. Thank you for your patience.\n\n${signature}\n\n${disclosure}`;
+  const reply = `Hi ${candidate.firstName},\n\nUnderstood. The hiring team at ${company.name} has been told you asked for a person. Thank you for your patience.\n\n${signature}\n\n${disclosure}`;
   const [screen] = await tx.select({ id: screens.id }).from(screens).where(and(eq(screens.applicationId, app.id), inArray(screens.status, SCREEN_ACTIVE_STATUSES))).orderBy(desc(screens.updatedAt)).limit(1);
   if (screen) {
-    // The same hand-off as HUMAN in a screening text: the conversation stops, a recruiter gets the whole context, the team is told.
-    // The answer to their email below says when; the hand-off sends no second one.
+    // The same as asking for a person inside the AI interview: the conversation stops and the team is told.
+    // The answer to their email below says so; the conversation sends no second one.
     await requestHuman(tx, screenDeps(container), { screenId: screen.id, reason: "candidate asked for a person by email", actor: EMAIL_REPLY_ACTOR, reply, replyChannel: "web", confirmByEmail: false });
   } else {
-    await createEscalation(tx, { companyId: app.companyId, roleId: app.roleId, applicationId: app.id, kind: "candidate_issue", summaryOrigin: "candidate", question: `${name} replied HUMAN to an email about the ${role.title} role and needs a person. Please reach out by email${candidate.phone ? " or phone" : ""} and pick up the conversation.`, requestedBy: EMAIL_REPLY_ACTOR, now });
-    await notify(tx, { companyId: app.companyId, about: app.id, kind: "screen.human_requested", title: `${name} asked for a person`, body: `They replied HUMAN to an email about ${role.title}. A recruiter has the request; you can also reply directly.`, action: { label: "Open the candidate", href: open } });
+    await notify(tx, { companyId: app.companyId, about: app.id, kind: "screen.human_requested", title: `${name} asked to talk to a person`, body: `They replied HUMAN to an email about ${role.title}.`, action: { label: "Open the candidate", href: open } });
   }
   if (candidate.email) {
-    // The response-time sentence goes back the same way every candidate email does: through the outbox, after this transaction commits.
-    const subject = mail.subject?.trim() ? (/^re:/i.test(mail.subject.trim()) ? mail.subject.trim() : `Re: ${mail.subject.trim()}`) : `A person will follow up: ${role.title} at ${company.name}`;
+    // The answer goes back the same way every candidate email does: through the outbox, after this transaction commits.
+    const subject = mail.subject?.trim() ? (/^re:/i.test(mail.subject.trim()) ? mail.subject.trim() : `Re: ${mail.subject.trim()}`) : `You asked to talk to a person: ${role.title} at ${company.name}`;
     await queueCommunication(tx, container.integrations, { channel: "email", companyId: app.companyId, candidateId: candidate.id, applicationId: app.id, to: candidate.email, from: fromAddress(company, container.integrations), replyTo: replyToFor(app, container.integrations), subject, text: reply, templateKey: "human_requested_reply", idempotencyKey: mail.messageId ? `human_reply:${app.id}:${mail.messageId}` : `human_reply:${communicationId}`, tags: { template: "human_requested_reply", applicationId: app.id }, actor: EMAIL_REPLY_ACTOR, disclosureIncluded: true });
   }
   return { communicationId, humanRequested: true };
@@ -313,7 +272,6 @@ export async function receiveCandidateReply(container: Container, input: { inbou
     }
   }
   if (r.duplicate) return { status: 200, body: { ok: true, matched: true, reply: true, duplicate: true, applicationId: app.id, ...(explanationRequestId ? { explanationRequestId } : {}) } };
-  await tellHolders(container, r.holdersToTell);
   await container.kick();
   return { status: 200, body: { ok: true, matched: true, reply: true, applicationId: app.id, humanRequested: r.humanRequested, talentPoolOptOut: !!r.talentPoolOptOut, ...(explanationRequestId ? { explanationRequestId } : {}) } };
 }

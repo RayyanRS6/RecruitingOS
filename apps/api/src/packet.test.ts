@@ -51,6 +51,8 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     await container.drain();
     return compiled;
   };
+  /** This job's versions are approved by owners and admins only (Hiring rules can narrow the list), so a hiring manager may edit the job but not approve it. */
+  const ownersApprove = (roleId: string) => withTenant(container.db, companyId, (tx) => tx.insert(policies).values({ companyId, roleId, actionType: "role_packet.approve", level: "approval", approverRoles: ["owner", "admin"], createdBy: { kind: "system", id: "test" } }));
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
@@ -352,13 +354,14 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     const opened = await compileRole(owner);
     expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
     await container.drain();
-    // hr may not edit packets at all; a recruiter member may edit but not approve
+    // hr may not edit packets at all; a hiring manager may edit, and on this job only owners and admins approve
     const hr = await signInAs(container, app, { companyId, role: "hr", email: "hr@packet.test", name: "Hope HR" });
-    const rec = await signInAs(container, app, { companyId, role: "recruiter", email: "rae@packet.test", name: "Rae Recruiter" });
+    const rae = await signInAs(container, app, { companyId, role: "hiring_manager", email: "rae@packet.test", name: "Rae Manager" });
+    await ownersApprove(opened.roleId);
     const next = structuredClone(opened.packet);
     next.description.publicJobDescription = `${opened.packet.description.publicJobDescription} We also offer a sign-on bonus.`;
     expect((await json(hr, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: next, changeSummary: "Bonus" })).status).toBe(403);
-    const r = await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: next, changeSummary: "Mentioned the sign-on bonus" });
+    const r = await json(rae, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: next, changeSummary: "Mentioned the sign-on bonus" });
     expect(r.status).toBe(201);
     expect((await r.json()) as object).toMatchObject({ version: 2, status: "proposed", outcome: "proposed_pending_approval" });
     await container.drain();
@@ -382,7 +385,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     // a second proposed edit, sent back: the role stays on v2 and v3 is retired
     const third = structuredClone(next);
     third.compensation.max = next.compensation.max + 1;
-    expect((await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: third, changeSummary: "Max up by one" })).status).toBe(201);
+    expect((await json(rae, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: third, changeSummary: "Max up by one" })).status).toBe(201);
     await container.drain();
     const pend = await pendingRequest(opened.roleId);
     expect((await json(olive, "POST", `/api/v1/approvals/${pend!.id}/decide`, { decision: "reject", note: "Not now" })).status).toBe(200);
@@ -470,8 +473,9 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
 
   it("an edit saved while the job is paused is never dropped: an approver's wording is current at once, anyone else's waits for approval, a version kept earlier asks for approval on resume, and resuming publishes what is current (row 12)", async () => {
     const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
-    const rec = await signInAs(container, app, { companyId, role: "recruiter", email: "rae@packet.test", name: "Rae Recruiter" });
+    const rae = await signInAs(container, app, { companyId, role: "hiring_manager", email: "rae@packet.test", name: "Rae Manager" });
     const opened = await compileRole(owner);
+    await ownersApprove(opened.roleId);
     expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/approve`, { version: 1 })).status).toBe(200);
     await container.drain();
     expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/pause`, {})).status).toBe(200);
@@ -484,7 +488,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     // someone who may not approve: the edit waits for an approver, as on a live job, and approving it keeps the job paused
     const theirs = structuredClone(wording);
     theirs.description.publicJobDescription = `${wording.description.publicJobDescription} Uniforms provided.`;
-    expect(await (await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: theirs, changeSummary: "Uniforms" })).json()).toMatchObject({ version: 3, outcome: "proposed_pending_approval" });
+    expect(await (await json(rae, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: theirs, changeSummary: "Uniforms" })).json()).toMatchObject({ version: 3, outcome: "proposed_pending_approval" });
     await container.drain();
     d = await detail(olive, opened.roleId);
     expect(d.packetApproval.pending).toMatchObject({ version: 3, editWhileOpen: true });
@@ -497,7 +501,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     const [v3] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, opened.roleId), eq(rolePackets.version, 3)));
     const stranded = structuredClone(v3.packet);
     stranded.description.publicJobDescription = `${theirs.description.publicJobDescription} Paid lunch.`;
-    await withTenant(container.db, companyId, (tx) => tx.insert(rolePackets).values({ companyId, roleId: opened.roleId, version: 4, packet: stranded, status: "proposed", source: "human_edit", changeSummary: "Paid lunch", createdBy: { kind: "user", id: (v3.createdBy as { id: string }).id, name: "Rae Recruiter" } }));
+    await withTenant(container.db, companyId, (tx) => tx.insert(rolePackets).values({ companyId, roleId: opened.roleId, version: 4, packet: stranded, status: "proposed", source: "human_edit", changeSummary: "Paid lunch", createdBy: { kind: "user", id: (v3.createdBy as { id: string }).id, name: "Rae Manager" } }));
     expect((await json(olive, "POST", `/api/v1/roles/${opened.roleId}/resume`, {})).status).toBe(200);
     await container.drain();
     d = await detail(olive, opened.roleId);
@@ -530,7 +534,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
 
   it("L-01: flagged wording an approver keeps on a live job waits for a second approver; whoever kept it may not approve it; the named decision maker is told of wording-only edits that went live", async () => {
     const olive = await signInAs(container, app, { companyId, role: "owner", email: "olive@packet.test" });
-    const rec = await signInAs(container, app, { companyId, role: "recruiter", email: "rae@packet.test", name: "Rae Recruiter" });
+    const rae = await signInAs(container, app, { companyId, role: "hiring_manager", email: "rae@packet.test", name: "Rae Manager" });
     const hank = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hank@packet.test", name: "Hank Manager" });
     const hankId = (await me(hank)).user.id;
     const opened = await compileRole(owner, "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. Hank Manager makes the final decision. Must-haves: active CA RDH license. Just draft it.");
@@ -564,7 +568,7 @@ describe("role packets: editor, approval rules, sent back, interview plan, timel
     // a flag kept on the approval card by someone who did not write the version: they may not approve it either
     const gaps = structuredClone(keep);
     gaps.description.publicJobDescription = `${keep.description.publicJobDescription} No employment gaps.`;
-    const v5 = (await (await json(rec, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: gaps, changeSummary: "Gaps line" })).json()) as { version: number; packet: RolePacket };
+    const v5 = (await (await json(rae, "POST", `/api/v1/roles/${opened.roleId}/packets`, { packet: gaps, changeSummary: "Gaps line" })).json()) as { version: number; packet: RolePacket };
     expect(v5.version).toBe(5);
     await container.drain();
     const gapFlag = v5.packet.provenance.flags!.find((f) => !f.kept && f.rule === "employment_gaps")!;

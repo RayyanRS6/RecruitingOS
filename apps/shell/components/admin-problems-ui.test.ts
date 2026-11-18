@@ -26,7 +26,7 @@ const { ACK_FOR_ANOTHER, needsAPerson, PROBLEMS_EMPTY, PROBLEMS_PARTS, problemCo
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
-const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, staffAccess: null, ai: { provider: "fake" } };
+const admin = { user: { id: "s1", email: "ada@its.test", name: "Ada Admin", platformRole: "platform_admin" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [], activeCompanyId: null, ai: { provider: "fake" } };
 const noFailures = { failedRuns: [], failedJobs: [], failedAi: [], alerts: [], pendingDeletions: [] };
 const noCsp = { mode: "report-only", reports: [] };
 

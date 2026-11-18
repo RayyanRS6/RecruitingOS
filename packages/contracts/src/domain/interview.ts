@@ -127,7 +127,7 @@ export const AutoNewTimesState = z.enum(["none", "waiting", "waiting_check", "pr
 export type AutoNewTimesState = z.infer<typeof AutoNewTimesState>;
 /** Why no automatic set is armed (`none`), or why one did not go (`not_sent`). Plain sentences: `autoReasonText` in packages/core. */
 export const AutoNewTimesReason = z.enum([
-  "not_asked", "no_show", "switched_off", "already_used", "reschedules_used", "takeover", "was_on_hold",
+  "not_asked", "no_show", "switched_off", "already_used", "reschedules_used", "was_on_hold",
   "stopped_by_team", "team_acted", "left_process", "interview_changed", "company_not_checked", "no_interviewers", "no_email", "details_deleted",
   "candidate_replied", "no_hours",
 ]);

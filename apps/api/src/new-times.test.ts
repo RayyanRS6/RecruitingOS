@@ -1,22 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { activeFollowUpsFor, anonymizeCandidate, cancelledView, entitlements, grantStaffAccess } from "@ros/core";
+import { activeFollowUpsFor, anonymizeCandidate, cancelledView, entitlements } from "@ros/core";
 import { newTimesDayWords } from "@ros/agents";
-import { applications, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, recruiterEscalations, takeovers, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
+import { applications, candidates, communications, companies, events, interviewFollowups, interviewParticipants, interviews, notifications, users, withPlatform, withTenant, workflowRuns, type WaitCondition } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { unverifyCompany, verifyCompany } from "./services/company-trust";
 import { handleCandidateReply } from "./services/replies";
-import { signInAs, signInStaff } from "./test-helpers";
+import { signInAs } from "./test-helpers";
 
 /**
  * The Cancelled column end to end (founder decisions 1A to 4A, 9 October 2026), through the API, the candidate's pages
  * and the workflows, with the engine's clock moved to each promised day. A candidate who cancels and asks for new times
  * gets one automatic set after the working days: the interview a person approved is reopened, never a new one, and the
  * set counts as sent only once its email is on its way. Everything that should stop it does (a person's send, stop, a
- * decision, a takeover, a reply asking for a person, the ITS check, nobody left to interview, a deletion), and the
+ * decision, a reply asking for a person, the ITS check, nobody left to interview, a deletion), and the
  * candidate is never promised times that will not come. A no-show is never sent anything automatically; the team sends
  * new times for the same round. The team can send to one person or to many at once.
  */
@@ -497,23 +497,6 @@ describe("new times for people under Cancelled", () => {
     }
   });
 
-  it("a takeover started after arming: the set does not go, the team is told why, and the recruiter running the role is brought in", async () => {
-    const p = await book("Mae", "Cole");
-    const due = (await cancel(p, "new_times")).autoDueAt!;
-    const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning();
-    try {
-      await runAt(due);
-      expect(await followUp(p.id)).toMatchObject({ autoState: "not_sent", autoReason: "takeover" });
-      expect((await ivRow(p.ivId)).status).toBe("cancelled");
-      const told = (await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Mae Cole were not sent");
-      expect(told[0]?.body).toContain("An ITS recruiter is running this role, so nothing was sent automatically.");
-      const asked = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, p.id), eq(recruiterEscalations.kind, "candidate_issue")));
-      expect(asked.map((e) => e.question)).toEqual([`Mae Cole cancelled their interview for ${roleTitle} and asked for new times. An ITS recruiter is running this role, so no times went to them automatically. Please arrange the next interview time with Mae.`]);
-    } finally {
-      await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
-    }
-  });
-
   it("with nobody left who ran the interview, the set does not go, the team is told, and the team's send says to choose interviewers", async () => {
     const p = await book("Ned", "Ford", { interviewers: [graceId] });
     const due = (await cancel(p, "new_times")).autoDueAt!;
@@ -584,7 +567,7 @@ describe("new times for people under Cancelled", () => {
     };
     const human = await book("Raj", "Patel");
     const hf = await cancel(human, "new_times");
-    expect(await reply(human, "HUMAN")).toBe(`They asked for a person about ${roleTitle}. A recruiter has been asked to follow up; you can also reply yourself. Their automatic new times, due ${dayOf(hf.autoDueAt)}, were stopped: a person should arrange the next step with them. They are under Cancelled.`);
+    expect(await reply(human, "HUMAN")).toBe(`They asked to talk to a person about ${roleTitle}. Their automatic new times, due ${dayOf(hf.autoDueAt)}, were stopped: a person should arrange the next step with them. They are under Cancelled.`);
     expect(await followUp(human.id)).toMatchObject({ autoState: "not_sent", autoReason: "candidate_replied", resolvedAt: null });
     expect((await runOf(hf.autoRunId!)).status).toBe("cancelled");
 
@@ -611,7 +594,7 @@ describe("new times for people under Cancelled", () => {
     const offered = await ivRow(out.ivId);
     expect(await followUp(out.id)).toMatchObject({ autoState: "sent", timesSentCount: 1 });
     const email = await slotsEmail(out.ivId, offered.attempt);
-    expect(await reply(out, "HUMAN")).toBe(`They asked for a person about ${roleTitle}. A recruiter has been asked to follow up; you can also reply yourself. They are under Cancelled.`);
+    expect(await reply(out, "HUMAN")).toBe(`They asked to talk to a person about ${roleTitle}. They are under Cancelled.`);
     expect(await reply(out, "No thanks")).toBe(`About ${roleTitle}: "No thanks". This may mean they do not want to go ahead with this step. Nothing was changed; reply to check with them. They are under Cancelled.`);
     expect(await slotsEmail(out.ivId, offered.attempt)).toMatchObject({ id: email.id, status: email.status });
     expect(await ivRow(out.ivId)).toMatchObject({ status: "scheduling", attempt: offered.attempt });
@@ -642,7 +625,7 @@ describe("new times for people under Cancelled", () => {
       stoppedAttempt.set(human.ivId, reopened.attempt);
 
       // HUMAN while no times exist yet
-      expect(await reply(human, "HUMAN")).toBe(`They asked for a person about ${roleTitle}. A recruiter has been asked to follow up; you can also reply yourself. Their automatic new times were stopped before they went out: a person should arrange the next step with them. They are under Cancelled.`);
+      expect(await reply(human, "HUMAN")).toBe(`They asked to talk to a person about ${roleTitle}. Their automatic new times were stopped before they went out: a person should arrange the next step with them. They are under Cancelled.`);
       expect(await followUp(human.id)).toMatchObject({ autoState: "not_sent", autoReason: "candidate_replied", resolvedAt: null, timesSentCount: 0 });
       expect(await ivRow(human.ivId)).toMatchObject({ status: "cancelled", attempt: reopened.attempt + 1 });
       expect((await eventsOf(human.ivId, "interview.cancelled")).at(-1)?.payload).toMatchObject({ cause: "new_times_stopped", reason: "candidate_replied", candidateTold: false });
@@ -654,7 +637,7 @@ describe("new times for people under Cancelled", () => {
       expect(link).not.toContain('name="slotId"');
       promisesNothing((await statusPage(human.id)).line);
       // a second reply finds nothing left to stop: one cancellation of that interview, and one notice to its interviewers
-      expect(await reply(human, "HUMAN")).toBe(`They asked for a person about ${roleTitle}. A recruiter has been asked to follow up; you can also reply yourself. They are under Cancelled.`);
+      expect(await reply(human, "HUMAN")).toBe(`They asked to talk to a person about ${roleTitle}. They are under Cancelled.`);
       expect((await eventsOf(human.ivId, "interview.cancelled")).filter((e) => e.payload.cause === "new_times_stopped")).toHaveLength(1);
       expect((await notes("interview.cancelled")).filter((x) => x.body === "Vera replied to us before the new times went out, so they were stopped, and this interview is off. Nothing is booked on your calendar.")).toHaveLength(1);
       expect(await ivRow(human.ivId)).toMatchObject({ status: "cancelled", attempt: reopened.attempt + 1 });
@@ -690,37 +673,6 @@ describe("new times for people under Cancelled", () => {
     expect(await followUp(human.id)).toMatchObject({ autoState: "not_sent", autoReason: "candidate_replied", timesSentCount: 1, lastSentVia: "person" });
   });
 
-  it("an ITS takeover that starts while the set is being prepared: when the times are ready nothing is sent, the interview goes back to cancelled, the team is told and the recruiter brought in", async () => {
-    const p = await book("Xena", "Cruz");
-    const due = (await cancel(p, "new_times")).autoDueAt!;
-    await hours(owner, false);
-    let takeoverId = "";
-    try {
-      await runAt(due);
-      expect(await followUp(p.id)).toMatchObject({ autoState: "preparing", currentInterviewId: p.ivId });
-      const reopened = await ivRow(p.ivId);
-      const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning();
-      takeoverId = takeover.id;
-      // the interviewers' hours come in: the times are worked out, and stopped at the offer
-      await hours(owner, true);
-      await container.drain();
-      expect(await followUp(p.id)).toMatchObject({ autoState: "not_sent", autoReason: "takeover", resolvedAt: null, timesSentCount: 0 });
-      expect(await ivRow(p.ivId)).toMatchObject({ status: "cancelled", attempt: reopened.attempt + 1, offeredSlots: [] });
-      expect(await slotsEmail(p.ivId, reopened.attempt)).toBeUndefined();
-      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === reopened.attempt)).toHaveLength(0);
-      const told = (await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Xena Cruz were not sent");
-      expect(told).toHaveLength(1);
-      expect(told[0].body).toContain("An ITS recruiter is running this role, so nothing was sent automatically.");
-      const [asked] = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, p.id), eq(recruiterEscalations.kind, "candidate_issue")));
-      expect(asked?.question).toBe(`Xena Cruz cancelled their interview for ${roleTitle} and asked for new times. An ITS recruiter is running this role, so no times went to them automatically. Please arrange the next interview time with Xena.`);
-      expect(await viewOf(p.id)).toMatchObject({ times: "none", status: "Waiting for you", auto: { reasonText: "An ITS recruiter is running this role, so nothing was sent automatically." } });
-    } finally {
-      await hours(owner, true);
-      if (takeoverId) await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeoverId));
-      await container.drain();
-    }
-  });
-
   /** The automatic set reopens the interview on its day with nobody's hours known; ITS then takes its confirmation back and the hours come in, so the times email is written and held. */
   const heldAutomaticSet = async (p: Person) => {
     const due = (await cancel(p, "new_times")).autoDueAt!;
@@ -741,33 +693,6 @@ describe("new times for people under Cancelled", () => {
     await container.drain();
     return (await notes("message.received")).filter((x) => x.title === `${p.name} wrote back`).at(-1)?.body;
   };
-
-  it("an ITS takeover that starts while the automatic set's times wait for the ITS check: when ITS confirms, the email is withdrawn, the set ends not sent for the takeover, and the recruiter is brought in", async () => {
-    const p = await book("Zara", "Quill");
-    let takeoverId = "";
-    try {
-      const held = await heldAutomaticSet(p);
-      const mails = outbox().length;
-      const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning();
-      takeoverId = takeover.id;
-      await its(true);
-      // released and withdrawn in the same step: the candidate never gets those times
-      expect(await slotsEmail(p.ivId, held.attempt)).toMatchObject({ status: "cancelled", error: "an ITS recruiter is running the role now, so the automatic new times do not go" });
-      expect(outbox().slice(mails).filter((m) => m.to === p.email)).toHaveLength(0);
-      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === held.attempt)).toHaveLength(0);
-      expect(await followUp(p.id)).toMatchObject({ autoState: "not_sent", autoReason: "takeover", resolvedAt: null, timesSentCount: 0 });
-      expect(await ivRow(p.ivId)).toMatchObject({ status: "cancelled", attempt: held.attempt + 1, offeredSlots: [] });
-      expect((await notes("interview.new_times_sent")).filter((x) => x.title === "New times went to Zara Quill")).toHaveLength(0);
-      expect((await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Zara Quill were not sent")).toHaveLength(1);
-      const asked = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, p.id), eq(recruiterEscalations.kind, "candidate_issue")));
-      expect(asked.map((e) => e.question)).toEqual([`Zara Quill cancelled their interview for ${roleTitle} and asked for new times. An ITS recruiter is running this role, so no times went to them automatically. Please arrange the next interview time with Zara.`]);
-    } finally {
-      await hours(owner, true);
-      await its(true);
-      if (takeoverId) await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeoverId));
-      await container.drain();
-    }
-  });
 
   it("'no thanks' once ITS confirmed the company but before the released times email left: it is withdrawn in time and nothing reaches them", async () => {
     const p = await book("Noor", "Sato");
@@ -811,34 +736,29 @@ describe("new times for people under Cancelled", () => {
     }
   });
 
-  it("a takeover that starts once the automatic set's email is on its way changes nothing: the times stay out, a re-offer after 'none of these work' goes on, and nothing is withdrawn", async () => {
+  it("once the automatic set's email is on its way, 'none of these work' brings other times as a new attempt with their own email, and nothing is withdrawn", async () => {
     const p = await book("Lou", "Grant");
     const due = (await cancel(p, "new_times")).autoDueAt!;
     await runAt(due);
     const iv = await ivRow(p.ivId);
     expect(await followUp(p.id)).toMatchObject({ autoState: "sent", timesSentCount: 1 });
     const email = await slotsEmail(p.ivId, iv.attempt);
-    const [takeover] = await container.db.insert(takeovers).values({ companyId, roleId, recruiterUserId: ownerId, status: "active" }).returning();
-    try {
-      const none = await form(`/c/schedule/${p.token}/none-work`, { timezone: TZ, note: "Evenings would suit me better." });
-      expect(none.status).toBe(200);
-      await container.drain();
-      // the automatic set's run offers again after its wait, with the takeover on: nothing to stop, nothing thrown. The
-      // other times (a fresh window, two days on) are a new attempt with their own email; the set's email stays as it was
-      await runAt(Date.parse(due) + 49 * H);
-      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt)).toHaveLength(1);
-      expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt + 1)).toHaveLength(1);
-      expect(await slotsEmail(p.ivId, iv.attempt)).toMatchObject({ id: email.id, status: email.status });
-      expect(await slotsEmail(p.ivId, iv.attempt + 1)).toMatchObject({ subject: `Other times for your interview: ${roleTitle} at Harbor Dental` });
-      expect(await ivRow(p.ivId)).toMatchObject({ status: "scheduling", attempt: iv.attempt + 1 });
-      expect(await followUp(p.id)).toMatchObject({ autoState: "sent", timesSentCount: 1, resolvedAt: null });
-      expect((await eventsOf(p.ivId, "interview.cancelled")).filter((e) => e.payload.cause === "new_times_stopped")).toHaveLength(0);
-      expect((await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Lou Grant were not sent")).toHaveLength(0);
-      const run = (await scheduleRuns(p.ivId)).find((x) => x.idempotencyKey === `schedule:${p.ivId}:${iv.attempt}`)!;
-      expect(run).toMatchObject({ status: "waiting", state: expect.objectContaining({ via: "auto", attempt: iv.attempt + 1 }) });
-    } finally {
-      await container.db.update(takeovers).set({ status: "ended" }).where(eq(takeovers.id, takeover.id));
-    }
+    const none = await form(`/c/schedule/${p.token}/none-work`, { timezone: TZ, note: "Evenings would suit me better." });
+    expect(none.status).toBe(200);
+    await container.drain();
+    // the automatic set's run offers again after its wait: the other times (a fresh window, two days on) are a new
+    // attempt with their own email; the set's email stays as it was
+    await runAt(Date.parse(due) + 49 * H);
+    expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt)).toHaveLength(1);
+    expect((await eventsOf(p.ivId, "interview.slots_offered")).filter((e) => e.payload.attempt === iv.attempt + 1)).toHaveLength(1);
+    expect(await slotsEmail(p.ivId, iv.attempt)).toMatchObject({ id: email.id, status: email.status });
+    expect(await slotsEmail(p.ivId, iv.attempt + 1)).toMatchObject({ subject: `Other times for your interview: ${roleTitle} at Harbor Dental` });
+    expect(await ivRow(p.ivId)).toMatchObject({ status: "scheduling", attempt: iv.attempt + 1 });
+    expect(await followUp(p.id)).toMatchObject({ autoState: "sent", timesSentCount: 1, resolvedAt: null });
+    expect((await eventsOf(p.ivId, "interview.cancelled")).filter((e) => e.payload.cause === "new_times_stopped")).toHaveLength(0);
+    expect((await notes("interview.new_times_not_sent")).filter((x) => x.title === "New times for Lou Grant were not sent")).toHaveLength(0);
+    const run = (await scheduleRuns(p.ivId)).find((x) => x.idempotencyKey === `schedule:${p.ivId}:${iv.attempt}`)!;
+    expect(run).toMatchObject({ status: "waiting", state: expect.objectContaining({ via: "auto", attempt: iv.attempt + 1 }) });
   });
 
   it("a role paused after the cancel: the automatic set still goes on the promised day, as interviews already in motion carry on during a pause", async () => {
@@ -1007,28 +927,6 @@ describe("new times for people under Cancelled", () => {
     expect(again.status, await again.clone().text()).toBe(200);
     expect(await again.json()).toMatchObject({ via: "reopened", interviewId: p.ivId });
     expect((await ivRow(p.ivId)).scheduleToken).toBeTruthy();
-  });
-
-  it("an ITS recruiter whose access covers one candidate sends new times to that candidate only, and never sees anyone else's name", async () => {
-    const mine = await book("Ora", "Pell");
-    const other = await book("Pia", "Rand");
-    await cancel(mine, "not_interested");
-    await cancel(other, "not_interested");
-    const email = "sky@its.newtimes.test";
-    const cookie = await signInStaff(app, container, email, "its_recruiter", "Sky Recruiter");
-    const [u] = await container.db.select({ id: users.id }).from(users).where(eq(users.email, email));
-    await withPlatform(container.db, (tx) => grantStaffAccess(tx, { userId: u.id, userName: "Sky Recruiter", companyId, kind: "escalation", scope: { roleId, applicationId: mine.id }, purpose: "test: a request about one candidate", grantedBy: { kind: "system", id: "test" }, expiresAt: new Date(Date.now() + 365 * DAY) }));
-    expect((await json(cookie, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-    const r = await json(cookie, "POST", `/api/v1/roles/${roleId}/new-times`, { applicationIds: [mine.id, other.id] });
-    expect(r.status, await r.clone().text()).toBe(200);
-    const result = (await r.json()) as { results: Array<{ applicationId: string; name: string; ok: boolean; code?: string; message?: string }>; sent: number; notSent: number };
-    expect(result).toMatchObject({ sent: 1, notSent: 1 });
-    expect(result.results.map((x) => [x.applicationId, x.name, x.ok, x.code ?? null])).toEqual([[mine.id, "Ora Pell", true, null], [other.id, "This candidate", false, "staff_scope"]]);
-    expect(result.results[1].message).toBe("Your access covers one candidate, so you can send new times to them only.");
-    expect(JSON.stringify(result)).not.toContain("Pia");
-    expect((await ivRow(mine.ivId)).status).toBe("scheduling");
-    expect((await ivRow(other.ivId)).status).toBe("cancelled");
-    expect(await followUp(other.id)).toMatchObject({ timesSentCount: 0, currentInterviewId: null });
   });
 
   it("a decision taken back after the new times went: the interview that carried them is offered again by 'Send new times'", async () => {

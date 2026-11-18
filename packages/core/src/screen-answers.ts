@@ -4,8 +4,7 @@ import type { ScreenProgress, ScreenTranscriptEntry } from "@ros/contracts";
  * Where a screen's answers live. The packet's own answers are in `screens.answers`; an answer to one of the open
  * questions a screen started with ("Ask about this in a screen", docs/spec/21 section 7) is kept beside that question
  * in `screens.progress.focusQuestions`; the candidate page's "x of N answered" counts both places through here.
- * Every reader of what a candidate said in a screen (the scorecard, the interviewer's brief, the recruiter's context,
- * the owner's card) and every path that exports or removes it (an access request, an anonymization) goes through here,
+ * Every reader of what a candidate said in a screen (the scorecard, the interviewer's brief, the owner's card) and every path that exports or removes it (an access request, an anonymization) goes through here,
  * so the second place is never forgotten.
  */
 export type ScreenAnswerSource = { answers: Record<string, string>; progress: Pick<ScreenProgress, "focusQuestions"> | null | undefined };
@@ -46,8 +45,7 @@ export function withoutCandidateWords(progress: ScreenProgress): ScreenProgress 
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /**
- * Whether the hiring team (and an ITS recruiter working for it) may see what the candidate said in a screening
- * conversation: only once the candidate sent it. For the conversation offered with the application that is Send on
+ * Whether the hiring team may see what the candidate said in a screening conversation: only once the candidate sent it. For the conversation offered with the application that is Send on
  * "Check your answers", pressed by the candidate: nothing sends it for them, so someone who answered everything and never
  * pressed Send closes as unfinished like anyone else who did not send; for a conversation from an emailed invitation,
  * its normal end. Until then nothing they said, nor anything worked out from it (a reading, a score, a skip, how far they
@@ -97,8 +95,7 @@ export type ReadingLike = { id: string; kind: string; result?: unknown };
  * A reading that says itself it was written from a conversation the candidate did not send: before 9 October 2026 a
  * conversation closed part-way or sent without it was read for what it had, and every such scorecard carries an
  * "incomplete_screen" anomaly (no reading written since does: `assessScreen` reads only a sent conversation). However
- * the reading is reached later (its screen finished on a recruiter's call, which unlinks it; a request's older
- * snapshot), it stays hidden.
+ * the reading is reached later (its screen finished on a recruiter's call, which unlinks it), it stays hidden.
  */
 export function isUnsentConversationReading(r: Pick<ReadingLike, "kind" | "result">): boolean {
   if (r.kind !== "screen") return false;
@@ -199,8 +196,7 @@ export const HANDED_TO_A_PERSON = "the assistant handed the conversation to a pe
 
 /**
  * A hand-over reason written before 9 October 2026 ("candidate sounded distressed"), in the words used since: how the
- * candidate sounded is the assistant's reading of words they never sent. For the reason on a history entry and the
- * recruiter request's question, wherever the team or a recruiter reads them.
+ * candidate sounded is the assistant's reading of words they never sent. For the reason on a history entry.
  */
 export function withoutSentimentWords(text: string): string {
   return text.replace(/candidate sounded [a-z]+/gi, HANDED_TO_A_PERSON);
@@ -229,32 +225,4 @@ export function withoutUnsentRunOutput<R extends { task: string; inputRef: Recor
   if (!s || screenAnswersSent(s)) return run;
   if (run.task === "screen.assess" && s.status === "completed") return run;
   return { ...run, structuredOutput: { ...WITHHELD_RUN_OUTPUT } };
-}
-
-/**
- * An escalation's context as a recruiter may read it, for a context captured before 9 October 2026 or while a
- * conversation was under way: each captured conversation the team could not read then shows a recruiter's notes alone,
- * and the candidate's web messages go with it; a reading written from a conversation nobody sent is dropped
- * (`isUnsentConversationReading`), and so, in a context captured before 9 October 2026 (its screens do not say
- * `answersShared`) with nothing shown, are the history entries about a screening scorecard. Hand-over reasons are said
- * in today's words (`withoutSentimentWords`).
- */
-export function withoutUnsentInContext(ctx: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...ctx };
-  if (Array.isArray(ctx.assessments)) out.assessments = (ctx.assessments as Array<{ kind?: unknown; result?: unknown }>).filter((a) => !isUnsentConversationReading({ kind: String(a?.kind ?? ""), result: a?.result }));
-  const screens = Array.isArray(ctx.screens) ? (ctx.screens as Array<Record<string, unknown>>) : null;
-  if (!screens) return out;
-  const legacy = !screens.some((s) => typeof s.answersShared === "boolean");
-  const shown = (s: Record<string, unknown>) => (typeof s.answersShared === "boolean" ? s.answersShared : s.status === "completed");
-  const anyHidden = screens.some((s) => !shown(s));
-  out.screens = screens.map((s) => (shown(s) ? s : { ...s, answersShared: false, answers: {}, transcript: Array.isArray(s.transcript) ? (s.transcript as ScreenTranscriptEntry[]).filter(isRecruiterNoteEntry) : [] }));
-  if (anyHidden && Array.isArray(ctx.communications)) out.communications = (ctx.communications as Array<{ direction?: string; channel?: string }>).filter((m) => !(m.direction === "inbound" && m.channel === "web"));
-  if (Array.isArray(ctx.timeline)) {
-    const noneShown = !screens.some((s) => shown(s) && s.status === "completed");
-    out.timeline = (ctx.timeline as Array<{ type?: string; payload?: Record<string, unknown> }>)
-      .filter((t) => !(t?.type === "screen.assessed" && t.payload?.incomplete === true))
-      .filter((t) => !(legacy && anyHidden && noneShown && t?.type === "assessment.created" && t.payload?.kind === "screen"))
-      .map((t) => (typeof t?.payload?.reason === "string" ? { ...t, payload: { ...t.payload, reason: withoutSentimentWords(t.payload.reason) } } : t));
-  }
-  return out;
 }

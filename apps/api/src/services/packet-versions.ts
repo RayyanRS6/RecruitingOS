@@ -25,7 +25,7 @@ import { refuseCompanyQuestions } from "./packet-fields";
  * - a draft (sent back) role: the version is proposed; the person asks for approval again from the role page;
  * - a closed role: refused (409 `role_closed`), whichever route the edit came by.
  * Once a version of a running role becomes current, the boards posted by hand still show the old one (plan D4,
- * `markBoardsOutdated`): ITS gets an update task per board, or the team is told which boards to update.
+ * `markBoardsOutdated`): the team is told which boards to update.
  */
 
 /** The plain refusal every route that writes a new version gives for a closed role. */
@@ -187,7 +187,7 @@ export async function createPacketVersion(
     for (const v of versions) if (v.status === "approved") await tx.update(rolePackets).set({ status: "superseded" }).where(eq(rolePackets.id, v.id));
     await tx.update(roles).set({ currentPacketVersion: next, title: input.packet.identity.title }).where(eq(roles.id, role.id));
     await emit(tx, { type: "role_packet.approved", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${next}` }, payload: { roleId: role.id, version: next, via: "edit_while_open" } });
-    const outdated = await markBoardsOutdated(tx, { companyId: t.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: next, actor, now: container.engine.clock() });
+    const outdated = await markBoardsOutdated(tx, { companyId: t.companyId, roleId: role.id, previousVersion: role.currentPacketVersion, newVersion: next, actor });
     await tellDecisionMaker(tx, { tenant: t, role, packet, version: next, editorName, changeSummary: input.changeSummary });
     // A paused job shows the version only when it resumes: `paused` lets the page say so instead of "live" (additive).
     return { version: pv, outcome: "approved_current", approvalRunId: null, guardChanges, needsApproval: null, boardsShowingOldVersion: outdated, ...(role.status === "paused" ? { paused: true as const } : {}) };

@@ -95,7 +95,7 @@ async function queueInvitationEmail(tx: Tx, team: Team, input: { invitation: Inv
 /**
  * Creates the invitation and queues its one email. Refused: an owner invitation from anyone but an owner (the same rule
  * as a role change: accepting the invitation would make the person an owner), an address on an ITS staff domain
- * (recruiters join through a scoped grant, never as members) and an address that is already an active member. An older
+ * (ITS staff are never members of a company) and an address that is already an active member. An older
  * open invitation for the same address is replaced by the new one.
  */
 export async function inviteMember(team: Team, input: { body: InviteMember; inviterName: string }) {
@@ -103,7 +103,7 @@ export async function inviteMember(team: Team, input: { body: InviteMember; invi
   assertMayInviteAs(team, input.body.role);
   const email = normalizeEmail(input.body.email);
   const domain = email.split("@")[1] ?? "";
-  if (container.env.ITS_STAFF_EMAIL_DOMAINS.includes(domain)) throw new HttpError(400, "staff_domain", "That address belongs to ITS. Recruiters are not team members; they get access through Bring in a recruiter, for one request at a time.");
+  if (container.env.ITS_STAFF_EMAIL_DOMAINS.includes(domain)) throw new HttpError(400, "staff_domain", "That address belongs to ITS. ITS staff are not team members.");
   const now = container.engine.clock();
   const result = await withTenant(container.db, tenant.companyId, async (tx) => {
     const [member] = await tx.select({ id: memberships.id }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(and(eq(memberships.companyId, tenant.companyId), eq(memberships.status, "active"), eq(users.email, email))).limit(1);
@@ -327,11 +327,10 @@ async function endMembershipInTx(tx: Tx, team: Team, input: { userId: string; ta
  * active owner remains (409 `last_owner`). Leaving is a removal the person makes themselves, with the same effects
  * (`endMembershipInTx`), and the owners and admins are told. Afterwards this session moves to another company the person
  * still works in, if any, and their sessions working in this company end; with no other company they are signed out.
- * Closing a whole company stays a request to ITS. ITS staff under a grant are not members and cannot leave (409).
+ * Closing a whole company stays a request to ITS.
  */
 export async function leaveCompany(team: Team, input: { sessionId: string }) {
   const { container, tenant } = team;
-  if (tenant.staff) throw new HttpError(409, "not_a_member", "You work here through recruiter access, not as a member. Your access ends with the request.");
   const now = container.engine.clock();
   const outcome = await withTenant(container.db, tenant.companyId, async (tx) => {
     const [me] = await tx

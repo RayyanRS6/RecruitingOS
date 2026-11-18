@@ -1,18 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import { matchWeightOf, previewMatch, type BatchPreview, type BatchResult, type BoardView, type EvidenceAssessment, type MatchScore, type PoolAnswer, type RolePacket, type ScreenTranscriptEntry } from "@ros/contracts";
-import { anonymizeCandidate, entitlements, matchScore, readingPair } from "@ros/core";
+import { entitlements, matchScore, readingPair } from "@ros/core";
 import { FAKE_SAMPLE_RESUMES } from "@ros/agents";
-import { applicationMarks, applications, assessments, candidates, communications, escalationMessages, events, randomToken, recruiterEscalations, screens, withPlatform, withTenant } from "@ros/db";
+import { applicationMarks, applications, assessments, candidates, communications, events, randomToken, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInStaff, useLaterApplyFlow } from "./test-helpers";
+import { signInAs, useLaterApplyFlow } from "./test-helpers";
 
 /**
  * Wave F: the match score on every applicant (founder decision B2), the pool board and its summary (plan F6, F7),
  * Review and apply (F8; founder decision B4: private, each with their own reason, nobody emailed), the one-click
- * questions (F10), a recruiter's check of the board (F9), "Something wrong?" reaching ITS (F11), Today's pool card and
+ * questions (F10), Today's pool card and
  * latest-reading counts (F5, F7), importance on the packet (F3) and the version label (F4).
  */
 describe("the match score, the pool board, Review and apply and the one-click questions", () => {
@@ -282,94 +282,6 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect((await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { items: [{ applicationId: extra, action: "longlist" }, { applicationId: extra, action: "shortlist" }] })).status).toBe(400);
       expect((await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { items: [{ applicationId: extra, action: "promote" }] })).status).toBe(400);
     });
-
-    it("asks a recruiter about several people in one request about the role, counted once (F9)", async () => {
-      const a = await seed("Jo", resultOf([yes(0, "RDH license CA active")]));
-      const b = await seed("Kai", resultOf([yes(0, "RDH license CA active")]));
-      const items = [{ applicationId: a, action: "escalate" }, { applicationId: b, action: "escalate", note: "Two good backups?" }];
-      // before anything is sent, the preview says the request covers the role, so the recruiter will see all of its candidates
-      const preview = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items })).json()) as BatchPreview;
-      expect(preview.items[0].warnings.join(" ")).toMatch(/One request covers all 2, so it is about the role: once a recruiter picks it up they see this role and all of its candidates, until a day after they answer or 14 days at most\./);
-      const r = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { items })).json()) as BatchResult;
-      expect(r.results.map((x) => x.ok)).toEqual([true, true]);
-      expect(r.results[0].message).toContain("they see this role and all of its candidates");
-      const reqs = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.roleId, roleId), eq(recruiterEscalations.kind, "review")));
-      const mine = reqs.filter((e) => /Jo Pool, Kai Pool/.test(e.question));
-      expect(mine).toHaveLength(1);
-      expect(mine[0]).toMatchObject({ applicationId: null });
-      expect(mine[0].question).toContain("Two good backups?");
-      // about the role, so the recruiter opens the board as it stood
-      expect((mine[0].contextSnapshot as { board?: { people: Array<{ name: string }> } }).board?.people.map((p) => p.name)).toEqual(expect.arrayContaining(["Jo Pool", "Kai Pool"]));
-      expect(sent().some((m) => m.subject.startsWith("[review]"))).toBe(true);
-    });
-  });
-
-  describe("a recruiter's check and 'Something wrong?' (F9, F11)", () => {
-    it("a review of the role carries the board as it stood when asked", async () => {
-      const r = await json(owner, "POST", "/api/v1/escalations", { kind: "review", scope: "role", roleId, question: "Please check the board before I apply it." });
-      expect(r.status).toBe(201);
-      const { id } = (await r.json()) as { id: string };
-      const [e] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id));
-      const board = (e.contextSnapshot as { board: { summary: { sentences: string[] }; people: Array<{ name: string; column: string | null; reason: string; score: number | null; interview?: string | null; basis?: string | null }> } }).board;
-      expect(board.summary.sentences[0]).toMatch(/people on the board/);
-      // Cy was filed as not moving forward in Review and apply: the board shows where she is now
-      expect(board.people.find((p) => p.name === "Cy Pool")).toMatchObject({ column: "not_moving_forward", state: "done" });
-      expect(board.people.find((p) => p.name === "Dee Pool")).toMatchObject({ column: "longlist", state: "suggested", needsYourEye: expect.stringMatching(/could not assess/) });
-      // each score comes with whether the AI interview is in it, and its label, so the recruiter reads it as the team does (R20-9)
-      const scored = board.people.filter((p) => p.score !== null);
-      expect(scored.length).toBeGreaterThan(0);
-      for (const p of scored) expect([p.interview, p.basis], p.name).toEqual([expect.any(String), expect.stringMatching(/^(From the|Résumé only)/)]);
-    });
-
-    it("a candidate's deletion reaches the board kept on a role review: their row, their next step and their name go", async () => {
-      const rue = await seed("Rue", resultOf([yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")]), { stageChangedAt: new Date(Date.now() - 40 * 86_400_000).toISOString() });
-      const r = await json(owner, "POST", "/api/v1/escalations", { kind: "review", scope: "role", roleId, question: "Who should we call first?" });
-      const { id } = (await r.json()) as { id: string };
-      type Snapshot = { board: { people: Array<{ applicationId: string; name: string }>; summary: { longestWaiting: { applicationId: string; name: string } | null; nextSteps: Array<{ applicationId: string }>; sentences: string[] } } };
-      const snapshot = async () => (await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id)))[0].contextSnapshot as Snapshot;
-      const before = await snapshot();
-      expect(before.board.people.map((p) => p.name)).toContain("Rue Pool");
-      expect(before.board.summary.longestWaiting).toMatchObject({ applicationId: rue, name: "Rue Pool" });
-      expect(before.board.summary.sentences.join(" ")).toContain("Rue Pool has waited longest");
-      const [app] = await container.db.select().from(applications).where(eq(applications.id, rue));
-      await withPlatform(container.db, (tx) => anonymizeCandidate(tx, { companyId, candidateId: app.candidateId, actor: { kind: "user", id: "admin-test", name: "ITS admin" }, deleteFile: async () => {} }));
-      const after = await snapshot();
-      expect(JSON.stringify(after)).not.toContain("Rue");
-      expect(after.board.people.some((p) => p.applicationId === rue)).toBe(false);
-      expect(after.board.summary.longestWaiting).toBeNull();
-      expect(after.board.summary.nextSteps.some((s) => s.applicationId === rue)).toBe(false);
-      // everyone else is still there, and the request keeps its own words
-      expect(after.board.people.map((p) => p.name)).toEqual(expect.arrayContaining(["Ada Pool", "Ben Pool"]));
-      const [e] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, id));
-      expect(e.question).toBe("Who should we call first?");
-    });
-
-    it("a flag reaches the ITS queue as a review of that candidate's reading; a second flag adds a note to it", async () => {
-      const id = await seed("Lou", resultOf([yes(0, "RDH license CA active")]));
-      const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, id));
-      const before = sent().filter((m) => m.subject.startsWith("[review]")).length;
-      const first = (await (await json(owner, "POST", `/api/v1/applications/${id}/assessments/${asmt.id}/flag`, { kind: "false_negative", note: "She has years of perio work." })).json()) as { ok: boolean; review: { escalationId: string; created: boolean }; message: string };
-      expect(first).toMatchObject({ ok: true, review: { created: true } });
-      expect(first.message).toMatch(/ITS recruiter will check this AI review; follow it under Your recruiter requests on Home\./);
-      const [e] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, first.review.escalationId));
-      expect(e).toMatchObject({ kind: "review", applicationId: id, roleId });
-      expect(e.question).toContain("it rates the candidate too low");
-      expect(e.question).toContain("She has years of perio work.");
-      expect(sent().filter((m) => m.subject.startsWith("[review]")).length).toBe(before + 1);
-      // the queue email carries no customer words
-      expect(sent().filter((m) => m.subject.startsWith("[review]")).at(-1)!.text).not.toContain("perio work");
-      const second = (await (await json(owner, "POST", `/api/v1/applications/${id}/assessments/${asmt.id}/flag`, { kind: "wrong_evidence" })).json()) as { review: { escalationId: string; created: boolean } };
-      expect(second.review).toEqual({ escalationId: first.review.escalationId, created: false });
-      expect(await container.db.select().from(escalationMessages).where(eq(escalationMessages.escalationId, first.review.escalationId))).toHaveLength(1);
-      const [after] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, first.review.escalationId));
-      const flags = (after.contextSnapshot as { flags: Array<{ by: string; kind: string }> }).flags;
-      expect(flags).toHaveLength(2);
-      // the recruiter reads what was flagged, never who on the team flagged it
-      expect(flags.map((f) => f.by)).toEqual(["user", "user"]);
-      expect(JSON.stringify(flags)).not.toContain("Dana");
-      // the first answer says what the recruiter will see once they pick it up, and for how long
-      expect(first.message).toMatch(/they see this candidate and the role they applied for, until a day after they answer or 14 days at most/);
-    });
   });
 
   describe("importance (F3) and the version label (F4)", () => {
@@ -485,54 +397,6 @@ describe("the match score, the pool board, Review and apply and the one-click qu
       expect(after.placement).toMatchObject({ column: "longlist", confident: false, needsYourEye: "Read against version 1 of the role, and the must-haves have changed since. Check them against the role as it is now." });
       const p = (await (await json(owner, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items: [{ applicationId: oz, action: "not_moving_forward" }] })).json()) as BatchPreview;
       expect(p.items[0].warnings).toEqual(expect.arrayContaining([expect.stringContaining("must-haves have changed since"), "The board suggested Longlist."]));
-    });
-  });
-
-  describe("an ITS recruiter given one candidate sees that candidate only (staff scoping)", () => {
-    it("on the board, the questions, Review and apply and Today, and is refused another role", async () => {
-      const uma = await seed("Uma", resultOf([yes(0, "RDH license CA active"), yes(1, "Periodontal charting daily")]));
-      const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, uma));
-      const flagged = (await (await json(owner, "POST", `/api/v1/applications/${uma}/assessments/${asmt.id}/flag`, { kind: "false_positive" })).json()) as { review: { escalationId: string } };
-      const recruiter = await signInStaff(app, container, "ria@its.test", "its_recruiter", "Ria");
-      expect((await json(recruiter, "POST", `/api/v1/escalations/${flagged.review.escalationId}/claim`)).status).toBe(200);
-      expect((await json(recruiter, "POST", "/api/v1/auth/switch", { companyId })).status).toBe(200);
-      const others = ["Ada Pool", "Ben Pool", "Cy Pool", "Dee Pool", "Oz Pool"];
-      const leaks = (body: unknown) => others.filter((n) => JSON.stringify(body).includes(n));
-      // the board: Uma alone, and a summary built from her alone
-      const b = await get<BoardView>(`/api/v1/roles/${roleId}/board`, recruiter);
-      expect([...b.columns.shortlist, ...b.columns.longlist, ...b.columns.not_moving_forward, ...b.noAiInterview].map((c) => c.applicationId)).toEqual([uma]);
-      expect(b.summary.total).toBe(1);
-      expect(leaks(b)).toEqual([]);
-      // the questions answer over her alone, and Compare leaves out anyone else named
-      const missing = await get<PoolAnswer>(`/api/v1/roles/${roleId}/questions/missing_must_have`, recruiter);
-      expect(missing.lookedAt.people).toBe(1);
-      expect(leaks(missing)).toEqual([]);
-      const compare = await get<PoolAnswer & { compare: { candidates: Array<{ id?: string; name: string }> } }>(`/api/v1/roles/${roleId}/questions/compare?ids=${uma},${ids.ada}`, recruiter);
-      expect(compare.compare.candidates.map((c) => c.name)).toEqual(["Uma Pool"]);
-      expect(leaks(compare)).toEqual([]);
-      // Review and apply's preview names nobody outside the grant
-      const p = (await (await json(recruiter, "POST", `/api/v1/roles/${roleId}/batch`, { dryRun: true, items: [{ applicationId: uma, action: "longlist" }, { applicationId: ids.ada, action: "shortlist" }] })).json()) as BatchPreview;
-      expect(p.items.map((i) => [i.name, i.allowed])).toEqual([["Uma Pool", true], ["Unknown", false]]);
-      expect(p.items[1]).toMatchObject({ score: null, refusedReason: "Not a candidate of this role." });
-      // Today names nobody else
-      expect(leaks(await get<unknown>("/api/v1/brief", recruiter))).toEqual([]);
-      // another role is outside the grant altogether
-      const other = await json(recruiter, "GET", "/api/v1/roles/00000000-0000-7000-8000-000000000001/board");
-      expect(other.status).toBe(403);
-      expect(((await other.json()) as { error: { code: string } }).error.code).toBe("staff_scope");
-      expect((await json(recruiter, "GET", "/api/v1/roles/00000000-0000-7000-8000-000000000001/questions/overlooked")).status).toBe(403);
-    });
-
-    it("a later flag on a request the recruiter holds tells them there is a note, never its words", async () => {
-      const [held] = await container.db.select().from(recruiterEscalations).where(and(eq(recruiterEscalations.kind, "review"), eq(recruiterEscalations.status, "claimed")));
-      const [asmt] = await container.db.select().from(assessments).where(eq(assessments.applicationId, held.applicationId!));
-      const before = sent().length;
-      const r = (await (await json(owner, "POST", `/api/v1/applications/${held.applicationId}/assessments/${asmt.id}/flag`, { kind: "missing_context", note: "She trained at the clinic down the road." })).json()) as { review: { created: boolean } };
-      expect(r.review.created).toBe(false);
-      const mail = sent().slice(before).filter((m) => m.to === "ria@its.test");
-      expect(mail).toHaveLength(1);
-      expect(mail[0].subject).toBe("[review] The customer added a note to a request you hold");
-      expect(mail[0].text).not.toContain("clinic");
     });
   });
 

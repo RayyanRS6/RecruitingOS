@@ -105,21 +105,6 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
     await container.db.update(users).set({ platformRole: "none" }).where(eq(users.email, "dana@brightline.test"));
   });
 
-  it("a second factor in the session unlocks break-glass for a platform administrator; without it the door stays shut", async () => {
-    const [nadine] = await container.db.select().from(users).where(eq(users.email, "nadine@identifiedtalent.com"));
-    const { grantPlatformRole } = await import("@ros/core");
-    await grantPlatformRole(container.db, { userId: nadine.id, role: "platform_admin", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
-    const mfa = cookieOf(await session(idp().mint({ email: "nadine@identifiedtalent.com", provider: "azure", aal: "aal2" })));
-    const customer = cookieOf(await session(idp().mint({ email: "owner@glow.test", provider: "google" })));
-    const co = (await (await app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie: customer }, body: JSON.stringify({ name: "Glow Theory", vertical: "beauty", sizeBand: "50-99", locations: [{ city: "Los Angeles", region: "CA", country: "US" }] }) })).json()) as { id: string };
-    const r = await app.request("/api/v1/admin/break-glass", { method: "POST", headers: { "content-type": "application/json", cookie: mfa, "x-admin-reason": "test" }, body: JSON.stringify({ companyId: co.id, reason: "Investigating a reported data issue for the customer.", minutes: 30 }) });
-    expect(r.status).toBe(201);
-    const { grantId } = (await r.json()) as { grantId: string };
-    expect(grantId).toBeTruthy();
-    const ledger = (await (await app.request("/api/v1/admin/staff-access", { headers: { cookie: mfa, "x-admin-reason": "test" } })).json()) as Array<{ id: string; kind: string; mfaVerified: boolean }>;
-    expect(ledger.find((g) => g.id === grantId)).toMatchObject({ kind: "break_glass" });
-  });
-
   it("the browser flow: start sets the PKCE cookie, the consent page returns a code, the callback opens the session, and a code cannot be replayed", async () => {
     const start = await app.request("/api/v1/auth/start/azure");
     expect(start.status).toBe(302);

@@ -4,6 +4,7 @@ import { CompensationBasis, RolePacket } from "../domain/role-packet";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX } from "../domain/intake";
 import { AiInterviewGroup, ApplicationStage, DecisionWording, MarkKind, OwnerStage, PERSONAL_LINE_MAX, RejectReason, ToldState, type CancelledView, type CandidateNotice } from "../domain/stages";
 import { ActionType, PolicyLevel } from "../domain/policy";
+import { PUBLIC_PLAN_KEYS } from "../domain/plans";
 import { RequestInterview } from "../domain/interview";
 import { SetPublishChannels } from "./publishing";
 
@@ -17,7 +18,7 @@ export const ApiError = z.object({
 export const MagicLinkRequest = z.object({ email: z.email() });
 export const MagicLinkConsume = z.object({ token: z.string().min(10) });
 
-export const MembershipRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr", "recruiter"]);
+export const MembershipRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr"]);
 export type MembershipRole = z.infer<typeof MembershipRole>;
 
 /** The signed-in person as GET /api/v1/auth/me answers it; the API builds this shape and the web client reads it, so neither can drift. */
@@ -26,8 +27,6 @@ export const MeResponse = z.object({
   auth: z.object({ provider: z.string(), aal: z.enum(["aal1", "aal2"]), mfaVerifiedAt: z.string().nullable() }),
   memberships: z.array(z.object({ companyId: z.string(), companyName: z.string(), companySlug: z.string(), role: MembershipRole })),
   activeCompanyId: z.string().nullable(),
-  /** Present when an ITS recruiter is inside a customer under a scoped, time-limited grant. */
-  staffAccess: z.object({ grantId: z.string(), kind: z.string(), purpose: z.string(), expiresAt: z.string(), companyName: z.string().nullable(), scope: z.object({ escalationId: z.string().nullable(), roleId: z.string().nullable(), applicationId: z.string().nullable() }) }).nullable(),
   ai: z.object({ provider: z.string() }),
 });
 export type MeResponse = z.infer<typeof MeResponse>;
@@ -77,8 +76,6 @@ export const CompanySettingsInput = z.object({
   careersPage: z.object({ intro: z.string().trim().max(1000).optional() }).strict().optional(),
   businessHours: BusinessHoursInput.nullable().optional(),
   notices: z.partialRecord(NoticeKey, NoticeOverrideInput.nullable()).optional(),
-  /** Who posts the job on the boards (plan D3): an ITS recruiter from the company's own accounts (default), or the team. */
-  boardPosting: z.enum(["its", "self"]).optional(),
   /** The company has its own paid ZipRecruiter plan (Q11); only then is ZipRecruiter offered. */
   zipRecruiterPlan: z.boolean().optional(),
   /**
@@ -105,15 +102,11 @@ export const UpdateCompany = z.object({
 }).partial().strict();
 export type UpdateCompany = z.infer<typeof UpdateCompany>;
 
-/** The roles a team member can hold. `recruiter` is ITS staff under a scoped grant, never invited or assigned. */
-export const TeamRole = z.enum(["owner", "admin", "hiring_manager", "interviewer", "hr"]);
-export type TeamRole = z.infer<typeof TeamRole>;
-
-export const InviteMember = z.object({ email: z.email(), role: TeamRole, name: z.string().trim().min(1).max(120).optional() });
+export const InviteMember = z.object({ email: z.email(), role: MembershipRole, name: z.string().trim().min(1).max(120).optional() });
 export type InviteMember = z.infer<typeof InviteMember>;
 
 /** PATCH /companies/current/members/:userId: a new role, or removal. The route adds the last-owner and owner-only rules. */
-export const UpdateMember = z.object({ role: TeamRole.optional(), status: z.enum(["active", "removed"]).optional() });
+export const UpdateMember = z.object({ role: MembershipRole.optional(), status: z.enum(["active", "removed"]).optional() });
 export type UpdateMember = z.infer<typeof UpdateMember>;
 
 // Intake
@@ -423,87 +416,23 @@ export const DecideApproval = z.object({
   edits: z.record(z.string(), z.unknown()).optional(),
 });
 
-// Escalations
+// Plans
 /**
- * What a recruiter brought in for a request may see: one candidate (and the role they applied for), one role and its
- * candidates, or all of the company's hiring. The ids carry it; "company" must be chosen out loud, never inferred from
- * missing ids, so a request with no role and no candidate is refused unless it says `scope: "company"`.
+ * POST /api/v1/plans/request: a company asks ITS for a bigger plan. `planKey` is the plan asked for (none when nothing is
+ * above theirs), `reason` why the person got here (a line of ours), `note` their own words.
  */
-export const EscalationScope = z.enum(["application", "role", "company"]);
-export type EscalationScope = z.infer<typeof EscalationScope>;
-export const CreateEscalation = z.object({
-  kind: z.enum(["ask", "review", "takeover", "negotiation", "search_support", "candidate_issue"]),
-  scope: EscalationScope.optional(),
-  roleId: z.string().optional(),
-  applicationId: z.string().optional(),
-  question: z.string().min(1).max(4000),
-  /** Optional; the category sets a default. Shown to recruiters before acceptance (correction 11). */
-  urgency: z.enum(["low", "normal", "high", "critical"]).optional(),
-  /**
-   * "plan": a talk with ITS about the plan itself (more roles than it includes), offered when the plan refuses a new
-   * role. It is not a request for recruiting help, so it never counts against the plan's recruiter requests (Q33).
-   */
-  topic: z.enum(["plan"]).optional(),
-  /**
-   * A role still being drafted (C12): the recruiter's view of the request carries the whole conversation and the current
-   * draft. Only with `scope: "company"`, since a draft has no role yet; the asker must be able to open the draft.
-   */
-  intakeSessionId: z.string().min(1).max(64).optional(),
-});
-export type CreateEscalation = z.infer<typeof CreateEscalation>;
-export const ResolveEscalation = z.object({ resolution: z.string().min(1).max(4000), /** Recruiter effort, for capacity and pricing (founder decision F12). */ minutesSpent: z.number().int().min(0).max(1440).optional() });
-/** A note on a request: from the team while a recruiter works on it, or from the recruiter holding it (plan B5). */
-export const EscalationReply = z.object({ body: z.string().trim().min(1).max(4000) });
-/** "This didn't solve it": the team reopens an answered request and says why; the recruiter reads it (plan B5). */
-export const ReopenEscalation = z.object({ note: z.string().trim().min(5).max(4000) });
-/** The reply-by time a request would get if it were sent now (plan B6): the form shows it before anything is sent. */
-export const EscalationEstimateQuery = z.object({ kind: CreateEscalation.shape.kind.default("ask"), topic: CreateEscalation.shape.topic });
+export const PlanRequest = z.object({ planKey: z.enum(PUBLIC_PLAN_KEYS).optional(), reason: z.string().trim().max(300).optional(), note: z.string().trim().max(1000).optional() }).strict();
+export type PlanRequest = z.infer<typeof PlanRequest>;
+/** Its answer: when the company's open request was sent, and whether one was already open (nothing new was raised). */
+export type PlanRequestSent = { requestedAt: string; alreadyAsked: boolean };
 
-/**
- * One entry in a request's thread as the team reads it: what they asked, every note, every answer, every reopening.
- * `raisedBy` is on the opening question only when nobody on the team or at ITS raised the request: Recruiting OS on its
- * own ("system"), or a candidate (15 October 2026). It names nobody. It is also on the wordless line saying the candidate wrote
- * back to a request a recruiter holds ("candidate", 6 November 2026), whose words stay on the application's thread, and on
- * an entry Recruiting OS wrote itself ("system", 17 November 2026): its note, or its answer when it closed the request on
- * its own, which Home heads "Recruiting OS closed it", never as a recruiter's answer.
- */
-export type EscalationThreadEntry = { id: string; side: "customer" | "recruiter"; kind: "question" | "reply" | "answer" | "reopen"; body: string; by: string | null; at: string; raisedBy?: "system" | "candidate" };
-/**
- * A request as "Your recruiter requests" on Today shows it (plan B4): its state, the reply-by time, who picked it up and
- * the full answer. `askedBy.kind` is "you" for the reader's own requests; `recruiterName` is null until someone picks it up.
- */
-export type RecruiterRequestView = {
-  id: string; kind: string; status: string; urgency: string; summary: string; question: string;
-  scope: EscalationScope; roleId: string | null; roleTitle: string | null; applicationId: string | null; candidateName: string | null;
-  askedBy: { kind: "you" | "team" | "recruiter" | "system" | "candidate"; name: string | null };
-  createdAt: string; slaDueAt: string | null; firstResponseAt: string | null; resolvedAt: string | null; resolution: string | null; accessExpiresAt: string | null;
-  recruiterName: string | null; reopenedCount: number; thread: EscalationThreadEntry[];
-  /** About someone past the plan's candidates per job (Rule 3): their name, the words and the thread stay with ITS, and the team can add nothing to it. */
-  locked?: boolean;
-  /** A talk about the plan itself: it gives ITS no access to anything, so nothing on the page speaks of access. */
-  topic?: "plan";
-  /**
-   * "system" when Recruiting OS closed it on its own, with no recruiter answering: a held application a person decided, or a
-   * stopped step ITS ran again (its newest answer is the system's). Home says "Closed", never "Answered" (17 November 2026).
-   */
-  closedBy?: "system";
-};
-
-// Emergency access for platform administrators (founder decision F10): MFA, a recorded reason, a short expiry.
 export const PlanChange = z.object({ planKey: z.string().min(1), pilotDays: z.number().int().min(1).max(365).optional(), extendUntil: z.string().optional(), reason: z.string().max(500).optional() });
-
-export const BreakGlass = z.object({ companyId: z.string().min(1), reason: z.string().min(10).max(1000), minutes: z.number().int().min(5).max(60).default(30) });
 
 // Owner conversation: a thin wrapper that always drafts (C4); the first message of a draft may be a pasted ad.
 export const ConversationMessage = z.object({ message: z.string().trim().min(1).max(INTAKE_FIRST_MESSAGE_MAX) });
 
 // Notifications
 export const MarkNotificationsRead = z.object({ ids: z.array(z.string()).min(1).max(200) });
-
-// Learning loop: a one-click flag on an AI assessment with the founder context's taxonomy (§23).
-export const AssessmentFlagKind = z.enum(["wrong_evidence", "hallucination", "policy_error", "bias_concern", "poor_communication", "wrong_workflow_action", "false_negative", "false_positive", "missing_context"]);
-export type AssessmentFlagKind = z.infer<typeof AssessmentFlagKind>;
-export const FlagAssessment = z.object({ kind: AssessmentFlagKind, note: z.string().max(2000).optional() });
 
 // Candidate self-service on the status page
 export const CandidateSmsPreference = z.object({ pref: z.enum(["on", "off"]) });
@@ -522,7 +451,6 @@ export const BusinessCalendarInput = z.object({
   coverageChanges: z.array(z.object({ from: IsoDate, to: IsoDate, reason: z.string().min(1).max(200), hours: z.array(HoursWindowInput).max(4).nullable() }).refine((c) => c.from <= c.to, { message: "a coverage change must end on or after it starts" })).max(200).default([]),
   note: z.string().max(1000).optional(),
 });
-export const RecalculateDeadlines = z.object({ escalationIds: z.array(z.string().min(1)).max(500).optional(), reason: z.string().min(5).max(500) });
 
 // Candidate privacy requests (correction 7; docs/runbooks/privacy-requests.md)
 export const DataRequestKind = z.enum(["access", "correct", "delete", "sms_opt_out", "human_review", "withdrawal"]);
