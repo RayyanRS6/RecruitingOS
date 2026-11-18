@@ -216,7 +216,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     // the board is the team's to post, and the brief says so
     expect(brief.cards.find((c) => c.kind === "posting_action")?.title).toMatch(/: post it on Indeed from your own account$/);
     // every applicant gets the AI interview by itself, and the team hears once it is scored (R20-8): no per-person invitation ping
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(notes.some((n) => n.kind === "screen.invited")).toBe(false);
   });
 
@@ -280,7 +280,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect(await eventsOf("screen.completed")).toHaveLength(1);
     expect(await eventsOf("screen.assessed")).toHaveLength(1);
     expect(await eventsOf("candidate.recommended")).toHaveLength(1);
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(notes.filter((n) => /Maria/.test(n.title)).map((n) => n.title)).toEqual(["Maria Reyes finished the AI interview"]);
     expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).length).toBeGreaterThanOrEqual(1);
   });
@@ -336,7 +336,7 @@ describe("End-to-end hiring scenario: Brightline Dental Group hires a Registered
     expect((await json("PUT", "/api/v1/notifications/preferences", { preferences: [{ group: "stuck", cadence: "immediate" }] })).status).toBe(200);
     await advance(4 * days); // Maria has waited in New since her AI interview, with no owner action
     expect(await rungs()).toEqual(["brief"]);
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string }> }).items;
     expect(notes.some((n) => n.kind === "stuck.candidates_waiting")).toBe(true);
     await advance(24 * 3600_000); // inside the 48h cooldown
     expect(await rungs()).toEqual(["brief"]);

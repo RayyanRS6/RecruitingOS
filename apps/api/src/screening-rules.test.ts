@@ -187,7 +187,7 @@ describe("screening rules: the follow-up cap and the web hand-off to a person", 
     expect(notes.length).toBe(notesBefore + 1);
     expect(notes.at(-1)!.title).toBe("Luis Ortega asked to talk to a person");
     expect(notes.at(-1)!.body).not.toContain(answer); // the owner's notice never carries the candidate's words
-    const owner = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    const owner = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(owner.some((n) => n.kind === "screen.human_requested" && /Luis/.test(n.title))).toBe(true);
     expect((await container.db.select().from(applications).where(eq(applications.id, application.id)))[0].stage).toBe("screening"); // a person finishes it; nothing is decided
     // the candidate row is untouched: same person, same address

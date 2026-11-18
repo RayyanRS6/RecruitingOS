@@ -166,11 +166,11 @@ describe("by invitation over HTTP (SIGNUP_MODE=invite)", () => {
     const made = await create(olga, "Olga Dental");
     expect(made.status).toBe(201);
     const companyId = ((await made.json()) as { id: string }).id;
-    expect((await json(olga, "POST", "/api/v1/companies/current/members/invite", { email: "ivy@elsewhere.test", role: "interviewer" })).status).toBe(201);
+    expect((await json(olga, "POST", "/api/v1/companies/current/members/invite", { email: "ivy@elsewhere.test", role: "hiring_manager" })).status).toBe(201);
     const ivy = await google("ivy@elsewhere.test", "Ivy");
     const me = (await (await json(ivy, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string | null; memberships: Array<{ companyId: string; role: string }> };
     expect(me.activeCompanyId).toBe(companyId);
-    expect(me.memberships).toEqual([expect.objectContaining({ companyId, role: "interviewer" })]);
+    expect(me.memberships).toEqual([expect.objectContaining({ companyId, role: "hiring_manager" })]);
     const [row] = await container.db.select().from(invitations).where(eq(invitations.email, "ivy@elsewhere.test"));
     expect(row.status).toBe("accepted");
     // a member of that company now, and still not someone who may open one of their own

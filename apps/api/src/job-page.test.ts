@@ -213,11 +213,10 @@ describe("the job page and the careers page (plan D10)", () => {
       expect(form).not.toContain("three minutes");
     };
     await check();
-    // ITS's old "form now, conversation later" for the role, or a rule saved before: nothing changes (R20-12, R20-4)
+    // ITS's old "form now, conversation later" for the role: nothing changes (R20-12)
     await container.db.update(roles).set({ applyMode: "form_then_screen" }).where(eq(roles.id, roleId));
     await check();
     await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
-    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(400);
     await check();
   });
 
@@ -291,14 +290,11 @@ describe("the job page and the careers page (plan D10)", () => {
     await container.db.update(roles).set({ applicationsCloseOn: null }).where(eq(roles.id, roleId));
   });
 
-  it("a closing date: the structured data and the feeds end on it; once it passes a newcomer finds the form closed, while someone part-way through may still send theirs for a while", async () => {
+  it("a closing date: the structured data ends on it; once it passes a newcomer finds the form closed, while someone part-way through may still send theirs for a while", async () => {
     const closesOn = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
     resetSitemapCache(container);
     expect(jsonLdOf(await page(`/careers/${slug}/jobs/${roleId}`)).validThrough).toBe(closesOn);
-    const feed = (await (await app.request("/feeds/jobs.json")).json()) as { jobs: Array<{ referenceNumber: string; validThrough?: string }> };
-    expect(feed.jobs.find((j) => j.referenceNumber === roleId)?.validThrough).toBe(closesOn);
-    expect(await (await app.request("/feeds/jobs.xml")).text()).toContain(`<expirationdate><![CDATA[${closesOn}]]></expirationdate>`);
     // someone opens the form; then the date passes and applications stop (the closing-date timer's own change)
     const form = await page(`/careers/${slug}/jobs/${roleId}/apply`);
     const opened = form.match(/name="formOpened" value="([^"]+)"/)![1];

@@ -5,7 +5,6 @@ import { aiRuns, intakeSessions } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { fairSuggestions, suggestInput } from "./services/intake-suggest";
-import { signInAs } from "./test-helpers";
 
 /**
  * Suggestions for the quick start (Wave S3, G3): POST /api/v1/intake/suggestions. Only people who may start a draft ask;
@@ -16,7 +15,6 @@ describe("the quick start's suggestions", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
-  let interviewer = "";
   let companyId = "";
   const post = (cookie: string, body: unknown) => app.request("/api/v1/intake/suggestions", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify(body) });
   type Answer = { mustHaves: string[]; questions: string[]; unavailable?: boolean };
@@ -30,7 +28,6 @@ describe("the quick start's suggestions", () => {
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
     companyId = ((await (await app.request("/api/v1/companies", { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ name: "Lone Star Couriers", vertical: "logistics", sizeBand: "20-49", locations: [{ city: "Austin", region: "TX", country: "US" }] }) })).json()) as { id: string }).id;
     await entitlements.applyPlan(container.db, companyId, "growth");
-    interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
   });
   afterAll(async () => {
     await container.close();
@@ -70,8 +67,7 @@ describe("the quick start's suggestions", () => {
     expect(after.some((x) => x.status === "error")).toBe(true);
   });
 
-  it("is for people who may start a draft, and needs a title", async () => {
-    expect((await post(interviewer, { title: "Delivery driver" })).status).toBe(403);
+  it("needs a title, and reads only the job's facts", async () => {
     expect((await post(owner, { title: "  " })).status).toBe(400);
     // only the job's facts are read: anything else is refused
     expect((await post(owner, { title: "Driver", candidate: "Jane Doe" })).status).toBe(400);

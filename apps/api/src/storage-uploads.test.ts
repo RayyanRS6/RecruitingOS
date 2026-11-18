@@ -43,7 +43,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
   const apply = async (extra: (fd: FormData) => void, ip?: string) => {
     applicant++;
     const fd = new FormData();
-    fd.set("firstName", "Dana"); fd.set("lastName", `Example${applicant}`); fd.set("email", `dana${applicant}@example.com`); fd.set("smsConsent", "no"); fd.set("locationText", "Irvine, CA");
+    fd.set("firstName", "Dana"); fd.set("lastName", `Example${applicant}`); fd.set("email", `dana${applicant}@example.com`); fd.set("locationText", "Irvine, CA");
     for (const k of eligibilityKeys) fd.set(`elig_${k}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
     fd.set("acknowledged", "yes");

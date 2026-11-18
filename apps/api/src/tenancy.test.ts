@@ -113,7 +113,7 @@ describe("a second company of one's own", () => {
   });
 
   it("refuses someone invited into another company: they keep that company, and ITS opens a company of their own", async () => {
-    const ian = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "ian@second.test", name: "Ian" });
+    const ian = await signInAs(container, app, { companyId: firstCompany, role: "hiring_manager", email: "ian@second.test", name: "Ian" });
     const r = await create(ian, "Ian Dental");
     expect(r.status).toBe(409);
     expect(await r.json()).toMatchObject(refusal);
@@ -131,7 +131,7 @@ describe("a second company of one's own", () => {
   });
 
   it("lets someone who was removed from another person's company open their own", async () => {
-    const rex = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "rex@second.test", name: "Rex" });
+    const rex = await signInAs(container, app, { companyId: firstCompany, role: "hiring_manager", email: "rex@second.test", name: "Rex" });
     const rexId = ((await (await json(rex, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
     expect((await json(first, "PATCH", `/api/v1/companies/current/members/${rexId}`, { status: "removed" })).status).toBe(200);
     const again = await signInWithIdentity(app, container, { email: "rex@second.test", name: "Rex", provider: "google", aal2: false });

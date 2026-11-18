@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { aiRuns, applications, assessments, candidates, communications, documents, entitlements, events, jobs, screens, workflowRuns } from "@ros/db";
-import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { TRIAGE_READINGS } from "@ros/agents";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -22,12 +22,11 @@ describe("Slice 1 API", () => {
   const json = (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) =>
     app.request(path, { method, headers: { "content-type": "application/json", cookie, ...extra }, body: body ? JSON.stringify(body) : undefined });
 
-  // The engine clock: today at noon Pacific (inside SMS contact hours) plus whatever the test advances.
+  // The engine clock: today at noon Pacific plus whatever the test advances.
   const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })();
   const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
 
   beforeAll(async () => {
-    // Texting on: this file exercises the SMS screen path a consenting applicant gets (decision M2 keeps it off by default).
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     setClock(0);
@@ -167,7 +166,6 @@ describe("Slice 1 API", () => {
     form.set("lastName", "Reyes");
     form.set("email", "maria.reyes@example.com");
     form.set("phone", "(949) 555-0100");
-    form.set("smsConsent", "yes");
     form.set("locationText", "Tustin, CA");
     form.set("resume", new File([`Maria Reyes, RDH\nmaria.reyes@example.com | (949) 555-0100\n\nRegistered Dental Hygienist at Smile Bright Dental 2019 - present\nDental Hygienist at Coastal Family Dentistry 2015 - 2019\n\nLicenses: RDH license CA #RDH12345, active\nCertifications: BLS/CPR current\nSkills: Dentrix, periodontal charting, digital radiography`], "maria-reyes.txt", { type: "text/plain" }));
     const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string; type: string }> } } } };
@@ -215,7 +213,6 @@ describe("Slice 1 API", () => {
     expect(scr.channel).toBe("web");
     expect(scr.invitedVia).toBe("with_application");
     expect(waiting.headers.get("location")).toBe(`/c/screen/${scr.token}`);
-    expect((container.integrations.sms as FakeSmsAdapter).sent.filter((m) => m.to === "+19495550100")).toHaveLength(0);
     expect(a.extraction?.licenses.map((l) => l.name)).toContain("RDH");
     expect(a.extraction?.positions.length).toBeGreaterThanOrEqual(1);
     const outbox = (container.integrations.email as FakeEmailAdapter).sent;
@@ -290,7 +287,7 @@ describe("Slice 1 API", () => {
     expect(outbox.find((m) => m.to === "ana@example.com" && /Your application to/.test(m.subject))).toBeFalsy();
     expect(outbox.filter((m) => m.to === "ana@example.com")).toHaveLength(1);
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, ana.id))).toHaveLength(0);
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(notes.some((n) => n.kind === "application.ineligible_review_due" && /Ana/.test(n.title))).toBe(true);
     // after three days without a decision the reminders end; she is still held, and still nothing is sent to Ana
     setClock(80 * 3600_000);
@@ -323,7 +320,6 @@ describe("Slice 1 API", () => {
     form.set("lastName", "Reyes");
     form.set("email", "Maria.Reyes@example.com");
     form.set("phone", "(714) 555-0199");
-    form.set("smsConsent", "yes");
     form.set("locationText", "Somewhere Else, NV");
     form.set("resume", new File(["Not Maria at all"], "other.txt", { type: "text/plain" }));
     form.set("acknowledged", "yes");

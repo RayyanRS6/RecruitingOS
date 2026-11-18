@@ -621,9 +621,6 @@ describe("first sign-in asks for approval (SIGNUP_MODE=approval, COMPANY_CHECK=i
         expect(error.message, what).toMatch(/^This company/);
         expect(error.details.path, what).toBe(`/api/v1/admin/customers/${id}/access`);
       }
-      // reads answer, and say nothing odd
-      const report = await w.json(adminCookie, "GET", `/api/v1/admin/customers/${id}/report`);
-      expect(report.status).toBe(200);
       // signing the person out works, and is no door
       expect((await w.json(adminCookie, "POST", "/api/v1/admin/sessions/revoke", { email: (await w.container.db.select({ email: users.email }).from(memberships).innerJoin(users, eq(users.id, memberships.userId)).where(eq(memberships.companyId, id)))[0].email, reason: "A lost phone.", confirm: true })).status).toBe(200);
       expect((await w.json(cookie, "GET", "/api/v1/auth/me")).status).toBe(401);

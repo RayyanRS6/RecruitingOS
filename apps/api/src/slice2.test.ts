@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RolePacket } from "@ros/contracts";
-import { SCORECARD_READINGS, composeInterviewerBrief } from "@ros/agents";
+import { SCORECARD_READINGS } from "@ros/agents";
 import { and, eq } from "drizzle-orm";
-import { aiRuns, applications, approvalRequests, assessments, candidates, entitlements, events, screens, workflowRuns, companies, withTenant } from "@ros/db";
-import type { FakeEmailAdapter, FakeSmsAdapter } from "@ros/integrations";
+import { aiRuns, applications, assessments, candidates, entitlements, events, screens, workflowRuns, companies } from "@ros/db";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, useLaterApplyFlow, usePlan } from "./test-helpers";
+import { useLaterApplyFlow, usePlan } from "./test-helpers";
 
 /**
- * Slice 2 through the HTTP layer: evidence-based assessment → screening (web chat and SMS) → scorecard →
- * recommendation under policy → nudges when a role goes quiet. Every AI action is information; people decide.
+ * Slice 2 through the HTTP layer: evidence-based assessment → screening (web chat) → scorecard → recommendation.
+ * Every AI action is information; people decide.
  */
 describe("Slice 2 API: assessment, screening, nudges", () => {
   let container: Container;
@@ -28,13 +28,11 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   const form = (path: string, fields: Record<string, string>) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie: "" }, body: new URLSearchParams(fields) });
   const eventsOf = async (type: string) => container.db.select().from(events).where(eq(events.type, type));
   const emailOutbox = () => (container.integrations.email as FakeEmailAdapter).sent;
-  const smsOutbox = () => (container.integrations.sms as FakeSmsAdapter).sent;
 
-  async function apply(p: { first: string; last: string; email: string; phone?: string; sms?: boolean; resume?: string; noResume?: string; answers?: Record<string, string> }) {
+  async function apply(p: { first: string; last: string; email: string; phone?: string; resume?: string; noResume?: string; answers?: Record<string, string> }) {
     const fd = new FormData();
     fd.set("firstName", p.first); fd.set("lastName", p.last); fd.set("email", p.email);
     if (p.phone) fd.set("phone", p.phone);
-    if (p.sms) fd.set("smsConsent", "yes");
     if (p.resume) fd.set("resume", new File([p.resume], `${p.first.toLowerCase()}.txt`, { type: "text/plain" }));
     if (p.noResume) fd.set("noResume", p.noResume);
     for (const r of elig) fd.set(`elig_${r.key}`, p.answers?.[r.key] ?? "yes");
@@ -62,7 +60,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
   };
 
   beforeAll(async () => {
-    // Texting on: this file covers the SMS screening path (decision M2 keeps texting off by default).
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     setClock(0);
@@ -111,11 +108,8 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(mine[0].text).not.toMatch(/to qualify/i);
     expect(mine[0].text).toMatch(/HUMAN/);
     expect(mine[0].text).toMatch(/AI recruiting assistant/);
-    // texts were on and she gave no consent; an automatic interview never goes by text anyway (R20-6)
-    expect(smsOutbox().length).toBe(0);
-    // nobody approved anything and the team was not told per person: it hears once the interview is scored (R20-8)
-    expect(await container.db.select().from(approvalRequests).where(eq(approvalRequests.applicationId, a.id))).toHaveLength(0);
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    // the team was not told per person: it hears once the interview is scored (R20-8)
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(notes.filter((n) => /Maria Reyes/.test(n.title))).toHaveLength(0);
     expect(await eventsOf("application.triaged")).toHaveLength(1);
     expect(await eventsOf("screen.invited")).toHaveLength(1);
@@ -151,7 +145,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     // the scorecard is read three times and keeps the middle answer, like the résumé (Wave S5)
     expect(await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.assess"))).toHaveLength(SCORECARD_READINGS);
     // the team hears about Maria once, now that her interview is scored
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string; action: { label: string; href: string } }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string; action: { label: string; href: string } }> }).items;
     const told = notes.filter((n) => /Maria Reyes/.test(n.title));
     expect(told.map((n) => n.title)).toEqual(["Maria Reyes finished the AI interview"]);
     // the one notice opens her page, and never a step that sets an interview up
@@ -214,7 +208,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect(first[0].subject).toMatch(/^Thank you for applying: your next step for /);
     expect(first[0].text).toContain("We will email you its link as soon as it is ready.");
     expect(first[0].text).not.toContain("/c/screen/");
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string }> }).items;
     expect(notes.some((n) => n.kind === "entitlement.text_screens")).toBe(true);
     expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.status, "failed")))).toHaveLength(0);
     // more interviews are added: the run looks again within six hours and the link follows in an email of its own
@@ -231,11 +225,11 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
 
 
   it("lists notifications and marks them read", async () => {
-    const unread = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ id: string }>;
+    const unread = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ id: string }> }).items;
     expect(unread.length).toBeGreaterThan(3);
     const r = await json("POST", "/api/v1/notifications/read", { ids: unread.slice(0, 2).map((n) => n.id) });
     expect(((await r.json()) as { marked: number }).marked).toBe(2);
-    const after = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ id: string }>;
+    const after = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ id: string }> }).items;
     expect(after.length).toBe(unread.length - 2);
     void priyaId;
   });
@@ -250,7 +244,7 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const a = await apply({ first: "Lena", last: "Park", email: "lena.park@example.com", resume: "Lena Park\nRegistered Dental Hygienist at Coastal Dental 2018 - present\nRDH license CA active\nPerio therapy and patient education" });
     expect(a.stage).toBe("screen_invited");
     expect(await container.db.select().from(screens).where(eq(screens.applicationId, a.id))).toHaveLength(1);
-    const notes = (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Array<{ kind: string; title: string }>;
+    const notes = ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Array<{ kind: string; title: string }> }).items;
     expect(notes.some((n) => n.kind === "entitlement.text_screens" && /pilot/.test(n.title))).toBe(true);
     // The conversation counts at Lena's first answer (plan E9), never at the invitation; over the line, she carries on.
     expect((await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, co.id), eq(entitlements.key, "text_screens"))))[0].used).toBe(row.limit!);
@@ -295,7 +289,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     expect((await screenOf(applicationId)).status).toBe("completed");
     await container.drain();
   };
-  const companyIdOf = async () => (await container.db.select().from(companies).limit(1))[0].id;
 
   it("'Stop this screen invitation' takes back an invitation the candidate has not started: a short note, a friendly link, no reminder, back with the owner (plan A7)", async () => {
     const a = await apply({ first: "Rosa", last: "Diaz", email: "rosa@example.com", resume: "Rosa Diaz\nRegistered Dental Hygienist at Harbor Dental 2017 - present\nRDH license CA active\nPerio charting, Dentrix" });
@@ -303,10 +296,6 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const scr = await screenOf(a.id);
     const detail = (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { allowedActions: string[] };
     expect(detail.allowedActions).toContain("cancel_screen");
-    // HR may invite but not take an invitation back: the candidate is written to
-    const hr = await signInAs(container, app, { companyId: await companyIdOf(), role: "hr" });
-    const refused = await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: hr }, body: JSON.stringify({ action: "cancel_screen" }) });
-    expect(refused.status).toBe(403);
     const before = emailOutbox().filter((m) => m.to === "rosa@example.com").length;
     const r = await json("POST", `/api/v1/applications/${a.id}/actions`, { action: "cancel_screen", note: "Calling her instead." });
     expect(r.status, await r.clone().text()).toBe(200);
@@ -376,7 +365,5 @@ describe("Slice 2 API: assessment, screening, nudges", () => {
     const detail = (await (await json("GET", `/api/v1/applications/${a.id}`)).json()) as { assessments: Array<{ kind: string; result: { concerns: Array<{ claim: string }> } }> };
     expect(detail.assessments[0]!.kind).toBe("screen");
     expect(detail.assessments[0]!.result.concerns.map((c) => c.claim)).toEqual([notDiscussed, notActive, "Sees eight patients a day"]);
-    const brief = await withTenant(container.db, await companyIdOf(), (tx) => composeInterviewerBrief(tx, { applicationId: a.id, candidateFirstName: "Yara", packet, roundKey: packet.interviews.plan[0]!.key }));
-    expect(brief!.concerns.map((c) => c.claim)).toEqual(expect.arrayContaining([notDiscussed, notActive, "Sees eight patients a day"]));
   });
 });

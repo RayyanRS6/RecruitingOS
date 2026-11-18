@@ -6,7 +6,7 @@ import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { jobUrls } from "./services/job-urls";
-import { putOnInterview, signInAs } from "./test-helpers";
+import { signInAs } from "./test-helpers";
 
 /**
  * The authenticated preview of the job page (plan D1): the page and the apply form candidates get, drawn by the same
@@ -20,7 +20,6 @@ describe("the job-page preview (plan D1)", () => {
   let app: ReturnType<typeof createApp>;
   let owner = "";
   let manager = "";
-  let interviewer = "";
   let companyId = "";
   let slug = "";
   let roleId = "";
@@ -65,7 +64,6 @@ describe("the job-page preview (plan D1)", () => {
     slug = co.slug;
     await entitlements.applyPlan(container.db, companyId, "growth");
     manager = await signInAs(container, app, { companyId, role: "hiring_manager", name: "Hank Manager" });
-    interviewer = await signInAs(container, app, { companyId, role: "interviewer", name: "Ivy Interviewer" });
     // a draft beside the conversation, and a role waiting for its first approval
     draftId = ((await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: MESSAGE })).json()) as { session: IntakeSessionView }).session.id;
     expect((await json(owner, "POST", `/api/v1/intake/sessions/${draftId}/draft`)).status).toBe(200);
@@ -132,25 +130,18 @@ describe("the job-page preview (plan D1)", () => {
     for (const h of helps) expect(h).not.toMatch(/packet|intake|playbook|knock-?out|triage|the owner/i);
   });
 
-  it("needs the role and its pay: an interviewer, someone signed out, an unknown version or role each get a plain page", async () => {
-    // a role they do not interview for answers as one that does not exist; one they do needs the pay as well
-    expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview`)).status).toBe(404);
-    // opened in a tab, it is the preview's own plain page, never the API's JSON (Wave S5)
-    for (const path of [`/api/v1/roles/${roleId}/preview`, `/api/v1/roles/${roleId}/preview/page`]) {
-      const notOnIt = await tab(interviewer, path);
-      expect(notOnIt.status, path).toBe(404);
-      expect(notOnIt.headers.get("content-type"), path).toContain("text/html");
-      const html = decode(await notOnIt.text());
+  it("someone signed out, an unknown version or role each get a plain page", async () => {
+    // opened in a tab, a refusal is the preview's own plain page, never the API's JSON (Wave S5)
+    const noSuchRole = "00000000-0000-4000-8000-000000000000";
+    for (const path of [`/api/v1/roles/${noSuchRole}/preview`, `/api/v1/roles/${noSuchRole}/preview/page`]) {
+      const missing = await tab(owner, path);
+      expect(missing.status, path).toBe(404);
+      expect(missing.headers.get("content-type"), path).toContain("text/html");
+      const html = decode(await missing.text());
       // the title first, with no "Preview" eyebrow above it (23 October 2026)
       expect(html.slice(html.indexOf("<main>"))).toMatch(/^<main><h1>This preview cannot be shown<\/h1>/);
       expect(html).toContain("Role not found.");
     }
-    const onIt = await putOnInterview(container, app, { cookie: interviewer, roleId });
-    const asInterviewer = await tab(interviewer, `/api/v1/roles/${roleId}/preview`);
-    expect(asInterviewer.status).toBe(403);
-    expect(decode(await asInterviewer.text())).toContain("Seeing the job page before it is public needs access to the role and its pay.");
-    expect((await json(interviewer, "GET", `/api/v1/roles/${roleId}/preview/page`)).status).toBe(403);
-    await onIt.remove();
     const signedOut = await tab(null, `/api/v1/roles/${roleId}/preview`);
     expect(signedOut.status).toBe(401);
     expect(await signedOut.text()).toContain("Sign in to see this preview, then open it again.");

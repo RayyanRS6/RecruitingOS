@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { RolePacket } from "@ros/contracts";
 import { ASSESSMENT_UNAVAILABLE_TEXT, CLOSER_LOOK_LABEL, HIDDEN_TEXT_IN_CV, RESUME_UNREADABLE_TEXT, anonymizeCandidate, exportCandidateData } from "@ros/core";
-import { TRIAGE_READINGS, composeInterviewerBrief } from "@ros/agents";
+import { TRIAGE_READINGS } from "@ros/agents";
 import { applications, assessments, candidates, events, screens, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
@@ -38,7 +38,7 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
   const fixtures = (name: string) => new Uint8Array(readFileSync(new URL(`../../../packages/agents/src/fixtures/${name}`, import.meta.url)));
   const list = async (query = "") => (await (await json("GET", `/api/v1/roles/${roleId}/applications${query}`)).json()) as Row[];
   const detail = async (id: string) => (await (await json("GET", `/api/v1/applications/${id}`)).json()) as Detail;
-  const notes = async () => (await (await json("GET", "/api/v1/notifications?unread=1")).json()) as Note[];
+  const notes = async () => ((await (await json("GET", "/api/v1/notifications/history?filter=unread&limit=100")).json()) as { items: Note[] }).items;
   const screenOf = async (applicationId: string) => (await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
 
   async function apply(p: { first: string; last: string; email: string; resume?: string | File; noResume?: string }) {
@@ -338,24 +338,18 @@ describe("Intelligence: insufficient evidence, the closer look, and the one-clic
 
   it("the answers to the open questions are what a person reads, what an access request exports, and what an anonymization removes", async () => {
     const a = (await container.db.select().from(applications).where(eq(applications.id, rileyId)))[0];
-    const role = (await (await json("GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: RolePacket } };
-    const packet = role.currentPacket.packet;
     const licence = "Can you tell me about your active CA RDH license?";
     // while the conversation is still under way, nobody on the team reads them (founder decision of
     // 9 October 2026, "hide them until they send"; an emailed conversation is sent when it ends normally)
-    const open = await withTenant(container.db, a.companyId, (tx) => composeInterviewerBrief(tx, { applicationId: rileyId, candidateFirstName: "Riley", packet, roundKey: packet.interviews.plan[0].key }));
     expect((await screenOf(rileyId)).status).toBe("in_progress");
-    expect(JSON.stringify(open)).not.toContain("RDH55555");
     const d = await detail(rileyId);
     expect(JSON.stringify(d)).not.toContain("RDH55555");
     expect(d.screens[0].progress.focusQuestions?.map((f) => f.key)).toEqual(["unknown_1", "unknown_2"]);
     // the conversation ends normally (set directly here; the flow itself is tested with the screening suites). The AI
     // interview that went with the application was taken back before it started, so it has no answers
     await container.db.update(screens).set({ status: "completed", completedAt: new Date().toISOString() }).where(eq(screens.id, (await screenOf(rileyId)).id));
-    // what a person reads: the candidate's page and the interviewer's brief carry the answers, the brief with the questions in the words they were asked
+    // what a person reads: the candidate's page carries the answers
     expect(JSON.stringify(await detail(rileyId))).toContain("RDH55555");
-    const brief = await withTenant(container.db, a.companyId, (tx) => composeInterviewerBrief(tx, { applicationId: rileyId, candidateFirstName: "Riley", packet, roundKey: packet.interviews.plan[0].key }));
-    expect(brief?.screen?.answers.find((x) => x.question === licence)?.answer).toMatch(/RDH55555/);
     // what an access request exports: every answer, and the opening questions so the keys mean something
     const bundle = await withTenant(container.db, a.companyId, (tx) => exportCandidateData(tx, a.companyId, a.candidateId));
     const exported = (bundle.screens as Array<{ answers: Record<string, string>; openingQuestions: Array<{ key: string; question: string }> }>).find((x) => x.answers.unknown_1)!;

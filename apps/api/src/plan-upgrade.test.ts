@@ -85,8 +85,8 @@ describe("asking for a bigger plan", () => {
 
     it("any member reads it, nobody signed out does; a company on the private pilot or a retired plan has nothing marked", async () => {
       const co = await newCompany();
-      const interviewer = await signInAs(container, app, { companyId: co.id, role: "interviewer" });
-      expect((await json(interviewer, "GET", "/api/v1/plans")).status).toBe(200);
+      const member = await signInAs(container, app, { companyId: co.id, role: "hiring_manager" });
+      expect((await json(member, "GET", "/api/v1/plans")).status).toBe(200);
       expect((await app.request("/api/v1/plans")).status).toBe(401);
       await changePlan(co.id, "design_partner");
       expect((await plansOf(co.cookie)).plans.filter((p) => p.current)).toEqual([]);

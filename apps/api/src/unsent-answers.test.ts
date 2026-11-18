@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray } from "drizzle-orm";
 import type { RolePacket, TapAnswer } from "@ros/contracts";
-import { composeInterviewerBrief } from "@ros/agents";
 import { HANDED_TO_A_PERSON, emit, exportCandidateData } from "@ros/core";
 import { aiRuns, applications, assessments, communications, companies, events, notifications, rolePackets, roles, screens, withTenant } from "@ros/db";
 import { createApp } from "./app";
@@ -127,7 +126,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
   }
 
   /** The interviewer's brief for the plan's first round, as an interviewer would get it. */
-  const briefFor = (applicationId: string, firstName: string) => withTenant(container.db, companyId, async (tx) => composeInterviewerBrief(tx, { applicationId, candidateFirstName: firstName, packet, roundKey: packet.interviews.plan[0].key }));
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
@@ -188,8 +186,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     expect(compare.candidates[0]).toMatchObject({ applicationId: maria.applicationId, screen: null });
     // nobody is alerted about her yet
     expect(seen.alerts.filter((n) => n.title.includes("Maria") || n.body.includes("Maria"))).toHaveLength(0);
-    // an interviewer's brief has none of it either
-    expect(JSON.stringify(await briefFor(maria.applicationId, "Maria"))).not.toContain("ZQXM");
   });
 
   it("the moment she presses Send, her answers, her messages and the scorecard are there", async () => {
@@ -217,7 +213,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     const compare = seen.out.compare.body as { candidates: Array<{ screen: unknown }> };
     expect(compare.candidates[0].screen).not.toBeNull();
     expect(seen.alerts.some((n) => n.title.includes("Maria"))).toBe(true);
-    expect(JSON.stringify(await briefFor(maria.applicationId, "Maria"))).toContain("ZQXM-answer");
   });
 
   it("asking for a person: the team is told he asked, and nothing he typed before reaches them", async () => {
@@ -346,7 +341,6 @@ describe("answers the candidate has not sent stay hidden from the team", () => {
     // Today counts her by what her résumé shows, as the list and the board show her, not by the hidden one
     expect((after.out.today.body as { summary: string }).summary).toBe(beforeToday);
     expect(strongCount(after.out.today.body)).toBe(strongCount(baseline.out.today.body) + 1);
-    expect(JSON.stringify(await briefFor(priya.applicationId, "Priya"))).not.toContain("ZQXP");
   });
 
   it("a hand-over the assistant makes reads the same whatever it made of how the candidate sounded, and of an explicit ask", async () => {

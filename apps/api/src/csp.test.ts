@@ -45,7 +45,7 @@ describe("content-security policy on candidate pages", () => {
     await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
     const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
     const fd = new FormData();
-    fd.set("firstName", "Ivy"); fd.set("lastName", "Chen"); fd.set("email", "ivy.chen@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "no"); fd.set("locationText", "Tustin, CA");
+    fd.set("firstName", "Ivy"); fd.set("lastName", "Chen"); fd.set("email", "ivy.chen@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("locationText", "Tustin, CA");
     fd.set("resume", new File(["Ivy Chen, RDH"], "ivy.txt", { type: "text/plain" }));
     for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
     fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");

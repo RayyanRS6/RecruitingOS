@@ -996,10 +996,6 @@ describe("the AI credit", () => {
       expect(Object.values(detail.screens[0].answers)).toContain(ANSWER);
       expect(detail.placement).toMatchObject({ column: null, doneLabel: "AI interview not scored" });
       expect(detail.placement.reason).toMatch(/Read their answers/);
-      const board = await read<{ noAiInterview: Array<{ applicationId: string; placement: { doneLabel: string } }> }>(await json(job.cookie, "GET", `/api/v1/roles/${job.roleId}/board`));
-      expect(board.noAiInterview.find((c) => c.applicationId === a.id)?.placement.doneLabel).toBe("AI interview not scored");
-      const preview = await read<{ items: Array<{ applicationId: string; blockedReason?: string; reason?: string }> }>(await json(job.cookie, "POST", `/api/v1/roles/${job.roleId}/batch`, { dryRun: true, items: [{ applicationId: a.id, action: "shortlist" }] }));
-      expect(JSON.stringify(preview)).toContain("your plan's AI help is used up");
 
       // after an upgrade it is scored, the mark goes, and the team hears as usual
       await upgrade(job.id);
@@ -1408,17 +1404,6 @@ describe("the AI credit", () => {
       expect(await conversationSubmit(container, ref)).toBe(true);
       expect((await conversationView(container.db, ref))!.status).toBe("completed");
       expect((await runsOf(job.id)).filter((r) => r.task === "screen.turn" && r.status === "running")).toEqual([]);
-    });
-
-    it("a message's suggested line is simply not there, with no run to point at", async () => {
-      const job = await openJob();
-      const a = await apply(job, { first: "Jo", last: "Lind", email: "jo@ai-credit.test" });
-      await spend(job.id, "9.950000");
-      const before = (await runsOf(job.id)).length;
-      const r = await read<{ line: string | null; suggestionRunId: string | null; note: string }>(await json(job.cookie, "POST", `/api/v1/applications/${a.id}/messages/suggest`, { purpose: "update" }));
-      expect(r).toMatchObject({ line: null, suggestionRunId: null });
-      expect(r.note).toMatch(/Write your own line/);
-      expect((await runsOf(job.id)).length).toBe(before);
     });
   });
 

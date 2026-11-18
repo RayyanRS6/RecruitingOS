@@ -99,7 +99,7 @@ describe("repeat applications and lost links", () => {
 
   it("a repeat submission gets the same waiting room as a first application (Q14, kept in full on 21 Oct), changes nothing on the existing person, discards its upload, and the address on file gets its link once a day", async () => {
     const role = { id: roleId, eligibility };
-    const r1 = await applyTo(role, { phone: "(949) 555-0100", smsConsent: "yes" }, (fd) => fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist 2019 - present"], "maria.txt", { type: "text/plain" })));
+    const r1 = await applyTo(role, { phone: "(949) 555-0100" }, (fd) => fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist 2019 - present"], "maria.txt", { type: "text/plain" })));
     expect(r1.status).toBe(302);
     expect(r1.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
     const maria = await person("maria.reyes@example.com");
@@ -129,7 +129,7 @@ describe("repeat applications and lost links", () => {
     expect((await app.request(new URL(grant.url).pathname, { method: grant.method, headers: grant.headers, body: new TextEncoder().encode("A different person").buffer as ArrayBuffer })).status).toBe(200);
     const uploadKey = container.uploadGrants.open(grant.grant)!.key;
     expect(storage().has(uploadKey)).toBe(true);
-    const r2 = await applyTo(role, { firstName: "Mallory", lastName: "Stranger", email: "MARIA.REYES@example.com", phone: "(714) 555-0199", smsConsent: "yes", locationText: "Reno, NV", noResume: "Somebody else entirely." }, (fd) => fd.set("uploadGrant", grant.grant), "203.0.113.90");
+    const r2 = await applyTo(role, { firstName: "Mallory", lastName: "Stranger", email: "MARIA.REYES@example.com", phone: "(714) 555-0199", locationText: "Reno, NV", noResume: "Somebody else entirely." }, (fd) => fd.set("uploadGrant", grant.grant), "203.0.113.90");
     expect(r2.status).toBe(302);
     expect(r2.headers.get("location")).toBe(r1.headers.get("location"));
     const second = await receiptOf(r2);
@@ -214,7 +214,7 @@ describe("repeat applications and lost links", () => {
 
   it("an existing person applying to another role gets the new application, but their record stays exactly as it was", async () => {
     const maria = await person("maria.reyes@example.com");
-    const r = await applyTo({ id: otherRoleId, eligibility: otherEligibility }, { phone: "(714) 555-0177", smsConsent: "yes", locationText: "Reno, NV", noResume: "Front desk at Smile Bright since 2021; Dentrix scheduling." });
+    const r = await applyTo({ id: otherRoleId, eligibility: otherEligibility }, { phone: "(714) 555-0177", locationText: "Reno, NV", noResume: "Front desk at Smile Bright since 2021; Dentrix scheduling." });
     expect(r.status).toBe(302);
     expect(r.headers.get("location")).toBe(`/careers/${slug}/jobs/${otherRoleId}/applied`);
     const other = await applicationOf(maria.id, otherRoleId);

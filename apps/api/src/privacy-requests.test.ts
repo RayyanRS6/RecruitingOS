@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
 import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
@@ -84,8 +84,8 @@ describe("candidate privacy requests", () => {
     expect(ack).toBeTruthy();
     expect(ack.text).toContain("a copy of the information we hold about you");
     expect(ack.replyTo).toBe(container.env.PRIVACY_EMAIL);
-    // the customer sees that a request exists and its kind; not the words
-    const seen = (await (await json(owner, "GET", "/api/v1/events?type=candidate.data_request")).json()) as Array<{ payload: Record<string, unknown> }>;
+    // the company's history holds that a request exists and its kind; not the words
+    const seen = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.data_request")));
     expect(seen.length).toBeGreaterThanOrEqual(1);
     expect(JSON.stringify(seen)).not.toContain("everything you have on me");
     // the tenant role cannot read the table at all
@@ -136,7 +136,7 @@ describe("candidate privacy requests", () => {
     expect(confirmation.attachments?.[0].filename).toMatch(/your-information/);
     const actions = (await container.db.select().from(auditRecords).where(eq(auditRecords.companyId, companyId))).map((a) => a.action);
     expect(actions).toEqual(expect.arrayContaining(["data_request.created", "data_request.updated", "data.exported", "data_request.resolved"]));
-    const fulfilled = (await (await json(owner, "GET", "/api/v1/events?type=candidate.data_request_fulfilled")).json()) as Array<{ payload: { kind: string } }>;
+    const fulfilled = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.data_request_fulfilled"))).orderBy(desc(events.occurredAt));
     expect(fulfilled[0].payload.kind).toBe("access");
   });
 
@@ -440,7 +440,8 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.replayed"))).length).toBeGreaterThanOrEqual(1);
     // a request for a person's review never carries the candidate's words to the customer
     await form(`/c/status/${token}/privacy`, { kind: "human_review", details: "My manager at Coastal is the owner's cousin, please keep this private." });
-    for (const path of ["/api/v1/notifications", "/api/v1/events", "/api/v1/brief"]) expect(await (await json(owner, "GET", path)).text(), path).not.toContain("cousin");
+    expect(await (await json(owner, "GET", "/api/v1/notifications/history")).text()).not.toContain("cousin");
+    expect(JSON.stringify(await container.db.select().from(events).where(eq(events.companyId, companyId)))).not.toContain("cousin");
     // every creation is audited with the request id, and the token appears in no audit record, event or product event
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.created"));
     expect(audits.some((a) => (a.details as { requestId?: string }).requestId === created[0].id)).toBe(true);

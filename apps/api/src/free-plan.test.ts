@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { entitlements as allowance, correctOutcome } from "@ros/core";
+import { and, eq, inArray } from "drizzle-orm";
+import { entitlements as allowance } from "@ros/core";
 import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type PlanRoom } from "@ros/contracts";
-import { adminAlerts, aiRuns, approvalRequests, auditRecords, companies, entitlements, events, hiringOutcomes, intakeSessions, invitations, memberships, notifications, roles, rowsOf, users, withPlatform, withTenant, workflowRuns, type Tx } from "@ros/db";
+import { adminAlerts, aiRuns, auditRecords, companies, entitlements, events, intakeSessions, invitations, memberships, notifications, roles, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -34,20 +34,7 @@ describe("the Free plan's one job", () => {
   const room = async (cookie: string) => read<PlanRoom>(await json(cookie, "GET", "/api/v1/intake/room"));
   const current = async (cookie: string) => read<Current>(await json(cookie, "GET", "/api/v1/companies/current"));
   const roleOf = async (id: string) => (await container.db.select().from(roles).where(eq(roles.id, id)))[0];
-  const pendingOf = async (roleId: string) => (await container.db.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, roleId), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))))[0] ?? null;
   const runCount = () => container.db.select().from(aiRuns).then((r) => r.length);
-  /** Runs `fn` with the engine's clock two weeks and a day ahead, past a packet approval's 14 days, then puts it back. */
-  const pastTheApprovalWindow = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const engine = container.engine as unknown as { now: () => Date };
-    const real = engine.now;
-    const at = real().getTime() + 15 * DAY;
-    engine.now = () => new Date(at);
-    try {
-      return await fn();
-    } finally {
-      engine.now = real;
-    }
-  };
 
   /** A company of its own, under an owner of its own, on Free unless a suite moves it; each sign-in from an address of its own (the route's limit per address). */
   const newCompany = async () => {
@@ -73,7 +60,7 @@ describe("the Free plan's one job", () => {
     expect(r.status, await r.clone().text()).toBe(200);
     await container.drain();
   };
-  const close = (cookie: string, roleId: string) => json(cookie, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true, reason: "We changed our plans." });
+  const close = (cookie: string, roleId: string) => json(cookie, "POST", `/api/v1/roles/${roleId}/close`, { confirm: true });
   const closeOk = async (cookie: string, roleId: string) => {
     const r = await close(cookie, roleId);
     expect(r.status, await r.clone().text()).toBe(200);
@@ -302,167 +289,6 @@ describe("the Free plan's one job", () => {
     });
   });
 
-  describe("a closed role stays closed, on every plan", () => {
-    /** A company on an ordinary plan (two roles at a time), with one job waiting for approval. */
-    const waitingOnCore = async () => {
-      const { cookie, id } = await newCompany();
-      await usePlan(container, id, "core");
-      return { cookie, id, roleId: await jobWaiting(cookie) };
-    };
-    /** Closed the way a role was before closing withdrew its approval: the request and the run are still waiting. */
-    const closedBehindItsApproval = async (roleId: string, companyId: string) => withPlatform(container.db, (tx) => tx.update(roles).set({ status: "closed", closedAt: new Date().toISOString(), closeReason: "role_cancelled" }).where(and(eq(roles.id, roleId), eq(roles.companyId, companyId))));
-
-    it("a request left waiting on a closed role is refused both ways, whichever button is pressed", async () => {
-      const { cookie, id, roleId } = await waitingOnCore();
-      const req = (await pendingOf(roleId))!;
-      await closedBehindItsApproval(roleId, id);
-      for (const r of [await json(cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" }), await json(cookie, "POST", `/api/v1/approvals/${req.id}/decide`, { decision: "approve" }), await json(cookie, "POST", `/api/v1/approvals/${req.id}/decide`, { decision: "reject", note: "No." })]) {
-        expect(r.status).toBe(409);
-        expect(await errorOf(r)).toMatchObject({ code: "role_closed", message: "This role is closed, so it is not changed any more. Start a new role to hire again." });
-      }
-      expect((await pendingOf(roleId))?.id).toBe(req.id);
-      expect((await roleOf(roleId)).status).toBe("closed");
-    });
-
-    it("the open step refuses a closed role, whatever woke it", async () => {
-      const { id, roleId } = await waitingOnCore();
-      const req = (await pendingOf(roleId))!;
-      await closedBehindItsApproval(roleId, id);
-      await withPlatform(container.db, (tx) => tx.update(approvalRequests).set({ status: "approved" }).where(eq(approvalRequests.id, req.id)));
-      await withTenant(container.db, id, (tx) => container.engine.signal(tx, { companyId: id, key: `approval:${req.id}`, payload: { decision: "approved" } }));
-      await container.kick();
-      await container.drain();
-      const role = await roleOf(roleId);
-      expect(role).toMatchObject({ status: "closed", openedAt: null });
-      expect(await container.db.select().from(events).where(and(eq(events.type, "role.opened"), eq(events.subjectId, roleId)))).toHaveLength(0);
-      expect((await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, req.workflowRunId!)))[0].status).toBe("completed");
-    });
-
-    it("the 14 days running out never turn a closed role back into a draft", async () => {
-      const { id, roleId } = await waitingOnCore();
-      const req = (await pendingOf(roleId))!;
-      await closedBehindItsApproval(roleId, id);
-      await pastTheApprovalWindow(async () => {
-        await container.engine.tick(req.workflowRunId!, { kind: "manual" });
-        await container.drain();
-      });
-      expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.id, req.id)))[0].status).toBe("expired");
-      expect((await roleOf(roleId)).status).toBe("closed");
-      expect(await container.db.select().from(events).where(and(eq(events.type, "role.sent_back"), eq(events.subjectId, roleId)))).toHaveLength(0);
-    });
-
-    it("a run that reaches its first step after the role closed asks nobody", async () => {
-      const { id, roleId } = await waitingOnCore();
-      await closedBehindItsApproval(roleId, id);
-      await withTenant(container.db, id, (tx) => container.engine.start(tx, { workflowKey: "role_approval", companyId: id, subject: { type: "role", id: roleId }, state: { roleId, packetVersion: 1 }, idempotencyKey: `late:${roleId}`, actor: { kind: "system", id: "test" } }));
-      const before = (await container.db.select().from(approvalRequests).where(eq(approvalRequests.roleId, roleId))).length;
-      await container.kick();
-      await container.drain();
-      expect((await container.db.select().from(approvalRequests).where(eq(approvalRequests.roleId, roleId))).length).toBe(before);
-    });
-
-    const voidOutcomeOf = async (roleId: string) => {
-      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, roleId));
-      return { outcome, answer: await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "Closed by mistake, the owner says." }) };
-    };
-
-    it("on Free, a void that would make a second job is refused until the plan has room: nothing moves, and ITS is told to change the plan first", async () => {
-      const { cookie, id } = await newCompany();
-      const never = await jobWaiting(cookie);
-      await closeOk(cookie, never);
-      const live = await jobWaiting(cookie);
-      await approve(cookie, live);
-      expect((await roleOf(live)).status).toBe("open");
-
-      const { outcome, answer } = await voidOutcomeOf(never);
-      expect(answer.status).toBe(409);
-      expect(await errorOf(answer)).toMatchObject({ code: "no_room_on_plan", message: "Reopening this job needs a place on the company's plan, and none is free. Change the plan first, then void this outcome." });
-      expect((await roleOf(never)).status).toBe("closed");
-      expect((await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.id, outcome.id)))[0].correctedAt).toBeNull();
-      expect(await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.correctionOf, outcome.id))).toEqual([]);
-
-      // Basic has room, so the same void goes, and the job is a draft to ask for approval again
-      const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
-      expect(moved.status).toBe(200);
-      expect((await voidOutcomeOf(never)).answer.status).toBe(200);
-      expect((await roleOf(never)).status).toBe("draft");
-    });
-
-    it("on any plan: Basic with all 3 places in use cannot void a closed job into a 4th, and can once one closes", async () => {
-      const { cookie, id } = await newCompany();
-      const moved = await json(admin, "POST", `/api/v1/admin/customers/${id}/plan`, { planKey: "basic", reason: "They asked to upgrade." });
-      expect(moved.status).toBe(200);
-      const first = await jobWaiting(cookie);
-      await approve(cookie, first);
-      await closeOk(cookie, first);
-      const inUse: string[] = [];
-      for (let i = 0; i < 3; i++) {
-        const role = await jobWaiting(cookie);
-        await approve(cookie, role);
-        inUse.push(role);
-      }
-      expect((await room(cookie)).used).toBe(3);
-      expect((await voidOutcomeOf(first)).answer.status).toBe(409);
-      expect((await roleOf(first)).status).toBe("closed");
-      await closeOk(cookie, inUse[0]);
-      expect((await voidOutcomeOf(first)).answer.status).toBe(200);
-      expect((await roleOf(first)).status).toBe("open");
-      expect((await room(cookie)).used).toBe(3);
-    });
-
-    it("a correction that does not reopen the job needs no room: a closed job's reason can be put right with every place in use", async () => {
-      const { cookie } = await newCompany();
-      const never = await jobWaiting(cookie);
-      await closeOk(cookie, never);
-      const live = await jobWaiting(cookie);
-      await approve(cookie, live);
-      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, never));
-      const corrected = await json(admin, "POST", `/api/v1/admin/outcomes/${outcome.id}/correct`, { confirm: true, reason: "It was filled, not cancelled.", outcome: "filled_outside_platform" });
-      expect(corrected.status, await corrected.clone().text()).toBe(200);
-      expect((await roleOf(never)).status).toBe("closed");
-    });
-
-    it("on Free, the one job that went live and was closed by mistake comes back: the place it needs is its own, which it never gave up", async () => {
-      const { cookie } = await newCompany();
-      const job = await jobWaiting(cookie);
-      await approve(cookie, job);
-      await closeOk(cookie, job);
-      // it counts for good, so nothing new can start: 1 of Free's 1 job, and it is this one
-      expect(await room(cookie)).toMatchObject({ ok: false, upgrade: true });
-      expect((await voidOutcomeOf(job)).answer.status).toBe(200);
-      expect((await roleOf(job)).status).toBe("open");
-    });
-
-    it("a void takes the job's lock before the plan's row, in the order a change of plan takes them, and holds the row until it commits, so nothing can take that place meanwhile", async () => {
-      const { cookie, id } = await newCompany();
-      const job = await jobWaiting(cookie);
-      await closeOk(cookie, job);
-      const [outcome] = await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.roleId, job));
-      /** Whether this transaction holds the row a new job's room is read behind (POST /intake/sessions/:id/compile). */
-      const holdsThePlansRow = async (tx: Tx) => {
-        const [row] = rowsOf<{ xmax: string; me: string }>(await tx.execute(sql`select xmax::text as xmax, pg_current_xact_id()::text as me from entitlements where company_id = ${id} and key = 'active_roles'`));
-        return row.xmax === row.me;
-      };
-      const isJobLock = (statement: unknown) => (statement as { queryChunks?: Array<{ value?: unknown }> }).queryChunks?.some((c) => Array.isArray(c.value) && c.value.join("").includes("pg_advisory_xact_lock")) ?? false;
-      await withPlatform(container.db, async (tx) => {
-        const atEachJobLock: boolean[] = [];
-        const watched = new Proxy(tx, {
-          get(target, prop) {
-            if (prop !== "execute") return Reflect.get(target, prop);
-            return async (statement: Parameters<Tx["execute"]>[0]) => {
-              if (isJobLock(statement)) atEachJobLock.push(await holdsThePlansRow(target));
-              return target.execute(statement);
-            };
-          },
-        });
-        await correctOutcome(watched, { outcomeId: outcome.id, actor: { kind: "system", id: "test" }, reason: "Closed by mistake, the owner says." });
-        expect(atEachJobLock[0]).toBe(false);
-        expect(await holdsThePlansRow(tx)).toBe(true);
-      });
-      expect((await roleOf(job)).status).toBe("draft");
-    });
-  });
-
   describe("a change of plan", () => {
     it("any plan other than Trial and Design Partner reads as active, from Design Partner too", async () => {
       const { id } = await newCompany();
@@ -574,7 +400,7 @@ describe("the Free plan's one job", () => {
 
   describe("people, in the plan's words", () => {
     const seatWords = { full: "Your plan includes 2 people. Upgrade to add more.", signIn: "This company's plan includes 2 people. Ask the person who invited you to upgrade." };
-    const invite = (cookie: string, email: string) => json(cookie, "POST", "/api/v1/companies/current/members/invite", { email, role: "interviewer" });
+    const invite = (cookie: string, email: string) => json(cookie, "POST", "/api/v1/companies/current/members/invite", { email, role: "hiring_manager" });
 
     it("Free has two: the owner and one invitation; the next is refused in the plan's words, and nothing says trial", async () => {
       const { cookie } = await newCompany();
@@ -600,7 +426,7 @@ describe("the Free plan's one job", () => {
       // the second place goes to someone who joined outside an invitation
       await withPlatform(container.db, async (tx) => {
         const [joined] = await tx.insert(users).values({ email: "joined@free-plan.test", name: "Joined" }).returning();
-        await tx.insert(memberships).values({ companyId: id, userId: joined.id, role: "interviewer", status: "active" });
+        await tx.insert(memberships).values({ companyId: id, userId: joined.id, role: "hiring_manager", status: "active" });
       });
       const page = await app.request(sent.devLink.replace(container.env.APP_BASE_URL, ""));
       const inviteCookie = page.headers.getSetCookie().find((c) => c.startsWith("ros_invite="))?.split(";")[0] ?? "";

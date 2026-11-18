@@ -7,10 +7,10 @@ import { createContainer, type Container } from "./container";
 import { useOneVisitApplyFlow } from "./test-helpers";
 
 /**
- * The screening conversation's keyword commands (Wave 0 item 0.7), over HTTP and by text. Only a message that is the
+ * The screening conversation's keyword commands (Wave 0 item 0.7), over HTTP. Only a message that is the
  * command itself counts: an answer that starts with "Representative" or "Withdraw" is recorded as an answer. HUMAN hands
  * the conversation to a person at once. WITHDRAW withdraws nothing by itself: the candidate is asked, and confirms with
- * the button on the page (`POST /c/screen/:token/withdraw`) or by replying CONFIRM to a text; NO keeps the application.
+ * the button on the page (`POST /c/screen/:token/withdraw`); NO keeps the application.
  * The conversations here are the ones offered with the application (plan E1): the introduction, then Start.
  */
 describe("screening keywords: whole-message commands and a confirmed withdrawal", () => {
@@ -129,27 +129,5 @@ describe("screening keywords: whole-message commands and a confirmed withdrawal"
     expect((await form(`/c/screen/${token}/withdraw`, { confirm: "yes" })).status).toBe(302);
     expect((await container.db.select().from(events).where(and(eq(events.type, "application.withdrawn"), eq(events.subjectId, application.id))))).toHaveLength(1);
     expect((await form(`/c/screen/${"x".repeat(32)}/withdraw`, { confirm: "yes" })).status).toBe(404);
-  });
-
-  it("by text, WITHDRAW asks to reply CONFIRM, an ordinary answer lets the question lapse, and CONFIRM withdraws", async () => {
-    const { application } = await apply("Sami", "(949) 555-0144");
-    const text = (body: string, sid: string) => form("/webhooks/twilio/inbound", { From: "+19495550144", To: "+15550001111", Body: body, MessageSid: sid });
-    expect((await text("WITHDRAW", "SM-w1")).status).toBe(200);
-    let scr = await screenOf(application.id);
-    expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", channel: "sms", questionKey: WITHDRAW_CONFIRM_KEY });
-    expect(scr.transcript.at(-1)!.content).toContain("Reply CONFIRM to withdraw.");
-    expect((await applicationOf(application.id)).stage).toBe("screening");
-    // an ordinary answer instead: recorded, and the question lapses
-    await text("I have six years of hygiene experience in two practices.", "SM-w2");
-    scr = await screenOf(application.id);
-    expect(scr.answers[questions[0].key]).toBe("I have six years of hygiene experience in two practices.");
-    await text("CONFIRM", "SM-w3"); // nothing pending any more: just an answer
-    expect((await applicationOf(application.id)).stage).toBe("screening");
-    // asked again, and confirmed
-    await text("Withdraw", "SM-w4");
-    await text("confirm", "SM-w5");
-    scr = await screenOf(application.id);
-    expect(scr.status).toBe("abandoned");
-    expect((await applicationOf(application.id)).stage).toBe("withdrawn");
   });
 });

@@ -380,7 +380,7 @@ describe("public job surfaces: the apply form, the sitemap and structured data",
     expect(jsonLdOf(await (await app.request(path)).text())).not.toHaveProperty("validThrough");
     // closed: the page stays up, says so, and the block carries the closing day
     setClock(2 * 86_400_000);
-    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/outcome`, { outcome: "role_cancelled", confirm: true, reason: "Budget pulled." })).status).toBe(200);
+    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/close`, { confirm: true })).status).toBe(200);
     const closedRole = await roleRow();
     expect(closedRole.status).toBe("closed");
     const page = await app.request(path);
