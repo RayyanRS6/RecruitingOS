@@ -74,27 +74,23 @@ export async function createApplication(tx: Tx, container: Container, input: New
   const now = new Date().toISOString();
 
   let candidate = key ? (await tx.select().from(candidates).where(and(eq(candidates.companyId, input.companyId), eq(candidates.dedupeKey, key))).limit(1))[0] : undefined;
-  // Whether the company already had this person before this submission: the one-visit flow then never greets the name on
-  // file nor adds what was typed to their record without the address owner's say-so (services/apply-conversation.ts).
-  let knownPerson = !!candidate;
   if (!candidate) {
     const created = await insertCandidateOnce(tx, { companyId: input.companyId, firstName: input.firstName, lastName: input.lastName, email, phone, dedupeKey: key, firstSource: input.source, consent: consentOf(input, now) });
     candidate = created.candidate;
-    knownPerson = !created.inserted;
     if (created.inserted) await emit(tx, { type: "candidate.created", companyId: input.companyId, actor, subject: { type: "candidate", id: candidate.id }, payload: { source: input.source } });
   }
 
   const [existing] = await tx.select().from(applications).where(and(eq(applications.roleId, role.id), eq(applications.candidateId, candidate.id))).limit(1);
   if (existing) {
     await settleRepeatSubmission(tx, container, { input, actor, application: existing, candidate, roleTitle: role.title });
-    return { application: existing, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
+    return { application: existing, candidate, duplicate: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
   // A file the application received itself is stored before the job's lock, never behind it: a slow write would hold up everyone
   // applying to the job until they time out. Nothing keeps the file if what follows fails (`dropKept`), a lock timeout included,
   // or if the caller's transaction then does not commit (`opts.files`, from `withNewApplication`).
   const kept = input.resume?.kind === "bytes" ? await keepResumeBytes(container, input.companyId, role.id, input.resume) : null;
   try {
-    const placed = await placeApplication(tx, container, { input, actor, role, packetVersion: role.currentPacketVersion, candidate, knownPerson, kept });
+    const placed = await placeApplication(tx, container, { input, actor, role, packetVersion: role.currentPacketVersion, candidate, kept });
     if (kept && !placed.duplicate) opts.files?.push(kept);
     return placed;
   } catch (err) {
@@ -141,8 +137,8 @@ async function dropKept(container: Container, kept: KeptBytes | null): Promise<v
 }
 
 /** The new application behind the job's lock, with its place, its résumé and its intake (`createApplication`). */
-async function placeApplication(tx: Tx, container: Container, args: { input: NewApplication; actor: Actor; role: typeof roles.$inferSelect; packetVersion: number; candidate: Candidate; knownPerson: boolean; kept: KeptBytes | null }) {
-  const { input, actor, role, packetVersion, candidate, knownPerson, kept } = args;
+async function placeApplication(tx: Tx, container: Container, args: { input: NewApplication; actor: Actor; role: typeof roles.$inferSelect; packetVersion: number; candidate: Candidate; kept: KeptBytes | null }) {
+  const { input, actor, role, packetVersion, candidate, kept } = args;
   // Decided behind the job's lock, held until this commits: two people applying at the same moment take different places.
   const locked = await decideLock(tx, { companyId: input.companyId, roleId: role.id });
   // Two submissions for the same role and person at the same moment (a double press): the second waits for the first's
@@ -169,7 +165,7 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
     if (!raced) throw new Error("the application could not be recorded");
     await dropKept(container, kept);
     await settleRepeatSubmission(tx, container, { input, actor, application: raced, candidate, roleTitle: role.title });
-    return { application: raced, candidate, duplicate: true, knownPerson: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
+    return { application: raced, candidate, duplicate: true, onFile: await jobPastItsLimit(tx, { companyId: input.companyId, roleId: role.id }) };
   }
   let application = inserted;
 
@@ -206,7 +202,7 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
     await tellMoreApplied(tx, { companyId: input.companyId, roleId: role.id, roleTitle: role.title });
   }
   await container.engine.start(tx, { workflowKey: "application_intake", companyId: input.companyId, subject: { type: "application", id: application.id }, state: { applicationId: application.id, roleId: role.id }, idempotencyKey: `application_intake:${application.id}`, actor });
-  return { application, candidate, duplicate: false, knownPerson, onFile: !!locked };
+  return { application, candidate, duplicate: false, onFile: !!locked };
 }
 
 /** What the new person's consent record says: the apply form showed the application terms and the AI notice and the person ticked the box, so both are recorded with the versions shown. */
