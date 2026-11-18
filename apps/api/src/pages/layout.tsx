@@ -105,7 +105,7 @@ body { margin: 0; background-color: var(--ground); background-image: radial-grad
 main { width: min(680px, calc(100% - 32px)); margin: 40px auto 64px; padding: 40px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: var(--sh-xs); }
 main.wide { width: auto; max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; background: none; border: 0; border-radius: 0; box-shadow: none; }
 /* The page rises in, unless it comes back after each answer */
-main:not(:has(.thread, .wait, .reading)) { animation: rise 200ms ease-out backwards; }
+main:not(:has(.thread)) { animation: rise 200ms ease-out backwards; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 h1, h2, h3 { color: var(--ink); font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: anywhere; }
 h1 { margin: 0 0 10px; font-size: 34px; line-height: 1.08; letter-spacing: -0.035em; }

@@ -520,9 +520,9 @@ describe("the candidate pages' stylesheet", () => {
       else if (!OLDER_ONE_OFFS.has(name)) for (const d of durations(v)) expect(d, `animation ${v}`).toBeLessThanOrEqual(200);
     }
     // the guard finds what it guards: the page's one entrance, a 200ms rise that fills nothing after it ends, and not on
-    // a page that comes back after each answer or wait (a chat thread, the waiting room, the reading page)
+    // a page that comes back after each answer (a chat thread)
     expect(names.has("rise")).toBe(true);
-    expect(cand).toContain("main:not(:has(.thread, .wait, .reading)) { animation: rise 200ms ease-out backwards; }");
+    expect(cand).toContain("main:not(:has(.thread)) { animation: rise 200ms ease-out backwards; }");
     expect(cand).not.toMatch(/main \{[^}]*animation/);
   });
 
