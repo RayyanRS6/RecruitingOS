@@ -18,7 +18,8 @@
 --    rejected_at. declined (the candidate declined an offer) becomes withdrawn. No event is written for any of these:
 --    the history keeps the moves as they happened, under their old names.
 -- 4. An AI interview is open only for someone Shortlisted (screen_invited, screening) whose job is not closed. One left
---    open elsewhere is cancelled, as when a person cancels it; its person, if Shortlisted, goes back to New (triaged).
+--    open elsewhere is cancelled, the status the code gives an interview a person cancels or a closing job closes: its
+--    link reads as closed. Nobody is moved by it.
 -- 5. Emails that waited and must never go are cancelled, each recorded as message.cancelled: one held for the company
 --    check (a status that is gone), one queued for a template today's code does not write (among them every decision
 --    email of the old wordings, disposition:<wording>), and one queued for a text message.
@@ -83,14 +84,10 @@ UPDATE roles SET status = 'draft' WHERE status = 'pending_approval';
 --> statement-breakpoint
 UPDATE roles SET status = 'closed', closed_at = COALESCE(closed_at, updated_at) WHERE status NOT IN ('draft', 'open', 'paused', 'closed');
 --> statement-breakpoint
-WITH closed AS (
-  UPDATE screens s SET status = 'cancelled', completed_at = COALESCE(s.completed_at, now())
+UPDATE screens s SET status = 'cancelled', completed_at = COALESCE(s.completed_at, now())
   FROM applications a JOIN roles r ON r.id = a.role_id
   WHERE a.id = s.application_id AND s.status IN ('invited', 'reminded', 'in_progress')
-    AND (a.stage NOT IN ('screen_invited', 'screening') OR r.status = 'closed')
-  RETURNING s.application_id
-)
-UPDATE applications a SET stage = 'triaged' FROM closed c WHERE a.id = c.application_id AND a.stage IN ('screen_invited', 'screening');
+    AND (a.stage NOT IN ('screen_invited', 'screening') OR r.status = 'closed');
 --> statement-breakpoint
 WITH stopped AS (
   UPDATE communications SET status = 'cancelled', error = 'written before the simple product and never sent'

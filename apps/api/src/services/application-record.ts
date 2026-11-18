@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { RolePacket, ScreenTranscriptEntry } from "@ros/contracts";
 import { formAnswerSentences, formAnswersOf, screenAnswersSent } from "@ros/core";
-import { chatPacket } from "@ros/agents";
+import { chatPacket, screenPacketVersion } from "@ros/agents";
 import { rolePackets, screens, type Tx, type applications } from "@ros/db";
 
 /**
@@ -44,15 +44,29 @@ function chatLines(transcript: readonly ScreenTranscriptEntry[]): SentChatLine[]
   return transcript.filter((t) => (t.role === "assistant" || t.role === "candidate") && t.content.trim()).map((t) => ({ who: t.role === "candidate" ? "candidate" : "assistant", text: t.content.trim(), at: t.at }));
 }
 
-/** What the candidate sent, read back: the form's answers in the one wording every reader uses, and the newest AI interview they sent. */
-export function sentAnswersFor(input: { app: Pick<AppRow, "answers">; packet: RolePacket | null; screens: readonly ScreenRow[] }): SentAnswers {
+/**
+ * What the candidate sent, read back: the form's answers in the one wording every reader uses, and the newest AI
+ * interview they sent. `packet`: the job version they applied to, whose form they answered. `interviewPacket`: the
+ * version their sent interview asked about (`sentInterviewPacket`); the same as `packet` when left out.
+ */
+export function sentAnswersFor(input: { app: Pick<AppRow, "answers">; packet: RolePacket | null; interviewPacket?: RolePacket | null; screens: readonly ScreenRow[] }): SentAnswers {
   const { packet } = input;
   if (!packet) return { questions: [], chat: null };
   const sent = input.screens.find((s) => screenAnswersSent(s));
   return {
     questions: formAnswerSentences(packet.formQuestions, formAnswersOf(input.app.answers)).map((s) => s.sentence),
-    chat: sent ? { sentAt: sent.progress.submittedAt ?? sent.completedAt ?? null, answers: sentChatAnswers(packet, sent), lines: chatLines(sent.transcript) } : null,
+    chat: sent ? { sentAt: sent.progress.submittedAt ?? sent.completedAt ?? null, answers: sentChatAnswers(input.interviewPacket ?? packet, sent), lines: chatLines(sent.transcript) } : null,
   };
+}
+
+/**
+ * The job version the newest AI interview a person sent asked about: the job as it was when that interview was made.
+ * `applied` when it is the version they applied to, or when they sent none.
+ */
+export async function sentInterviewPacket(tx: Tx, app: Pick<AppRow, "roleId" | "packetVersion">, all: readonly ScreenRow[], applied: RolePacket | null): Promise<RolePacket | null> {
+  const sent = all.find((s) => screenAnswersSent(s));
+  const version = sent ? screenPacketVersion(sent, app) : app.packetVersion;
+  return version === app.packetVersion ? applied : (await packetOf(tx, app.roleId, version)) ?? applied;
 }
 
 /** The application's AI interviews, newest first. */

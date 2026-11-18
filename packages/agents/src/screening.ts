@@ -87,13 +87,17 @@ export function modelTurnCap(packet: Pick<RolePacket, "screening">): number {
   return 4 * packet.screening.questions.length + 5;
 }
 
-/** A new AI interview for an application: its link is open until `expiresAt`. One open interview per application: an open one is returned as it is. */
-export async function createScreen(q: Queryable, input: { companyId: string; applicationId: string; workflowRunId?: string | null; expiresAt: string; now: Date }): Promise<ScreenRow> {
+/**
+ * A new AI interview for an application: its link is open until `expiresAt`. `packetVersion`: the job's version at this
+ * moment, which the interview asks about to its end, whatever is edited later. One open interview per application: an
+ * open one is returned as it is, with the version it was made with.
+ */
+export async function createScreen(q: Queryable, input: { companyId: string; applicationId: string; packetVersion: number; workflowRunId?: string | null; expiresAt: string; now: Date }): Promise<ScreenRow> {
   const [open] = await q.select().from(screens).where(and(eq(screens.applicationId, input.applicationId), inArray(screens.status, [...SCREEN_ACTIVE_STATUSES]))).limit(1);
   if (open) return open;
   const [row] = await q
     .insert(screens)
-    .values({ companyId: input.companyId, applicationId: input.applicationId, status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null, progress: EMPTY_SCREEN_PROGRESS })
+    .values({ companyId: input.companyId, applicationId: input.applicationId, packetVersion: input.packetVersion, status: "invited", token: randomToken(24), invitedAt: input.now.toISOString(), expiresAt: input.expiresAt, workflowRunId: input.workflowRunId ?? null, progress: EMPTY_SCREEN_PROGRESS })
     .returning();
   return row;
 }
@@ -104,11 +108,18 @@ export async function latestScreen(q: Queryable, applicationId: string): Promise
   return rows[0] ?? null;
 }
 
+/** The job version an AI interview asks about: the one it was made with; for a row stored without one, the version the person applied to. */
+export function screenPacketVersion(screen: Pick<ScreenRow, "packetVersion">, app: Pick<ApplicationRow, "packetVersion">): number {
+  return screen.packetVersion ?? app.packetVersion;
+}
+
 /**
- * Everything the chat and its scorecard read about one AI interview. `rolePacket`: the job version the person applied
- * to. `packet`: the same with the questions this chat asks (`chatPacket`). `reading`: the CV reading that says which of
- * that version's must-haves the CV shows: their newest one against that version, else their newest one (made against a
- * later version of the job; a must-have it has no finding for is asked about). Null when the CV was never read.
+ * Everything the chat and its scorecard read about one AI interview. `rolePacket`: the job version the interview was
+ * made with (`packetVersion`), which is the job as it was when the person was shortlisted or sent a new link, not as
+ * it is now. `packet`: the same with the questions this chat asks (`chatPacket`). `appliedPacket`: the version the
+ * person applied to, whose form they answered. `reading`: the CV reading that says which of the interview's must-haves
+ * the CV shows: their newest one against that version, else their newest one (a must-have it has no finding for is
+ * asked about). Null when the CV was never read.
  */
 export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
@@ -118,12 +129,14 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [candidate] = await q.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
   const [role] = await q.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
-  const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
+  const packetVersion = screenPacketVersion(screen, app);
+  const versions = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), inArray(rolePackets.version, [packetVersion, app.packetVersion])));
+  const pv = versions.find((v) => v.version === packetVersion);
   if (!candidate || !role || !company || !pv) return null;
   const readings = await q.select({ packetVersion: assessments.packetVersion, result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt), desc(assessments.id));
-  const read = readings.find((r) => r.packetVersion === app.packetVersion) ?? readings[0];
+  const read = readings.find((r) => r.packetVersion === packetVersion) ?? readings[0];
   const reading = (read?.result as Pick<EvidenceAssessment, "requirementFindings"> | undefined) ?? null;
-  return { screen, app, candidate, role, company, rolePacket: pv.packet, packet: chatPacket(pv.packet, screen.progress), reading };
+  return { screen, app, candidate, role, company, packetVersion, rolePacket: pv.packet, appliedPacket: versions.find((v) => v.version === app.packetVersion)?.packet ?? pv.packet, packet: chatPacket(pv.packet, screen.progress), reading };
 }
 export type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
 
@@ -325,7 +338,7 @@ function turnContext(b: ScreenBundle, plan: ChatPlan, screen: Pick<ScreenRow, "p
     latestCandidateMessage: latest,
     // The same pay rule as the job page the candidate applied from.
     payShown: payShown(b.rolePacket.compensation, jobNoticesFor({ jobLocations: b.rolePacket.identity.locations, companyLocations: b.company.locations, overrides: b.company.settings.notices })),
-    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, chatFactsOf(b.rolePacket, b.app)),
+    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, chatFactsOf(b.appliedPacket, b.app)),
   };
 }
 

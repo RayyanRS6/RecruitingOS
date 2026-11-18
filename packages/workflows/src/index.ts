@@ -10,7 +10,7 @@ export * from "./types";
 export { WorkflowEngine };
 export { AI_HOLD_CHECK_EVERY_MS, AI_HOLD_CHECK_JOB_KIND, AI_HOLD_KEY, AI_OUTAGE_ALERT_KIND, HELD_RELEASE_SPACING_MS, JOB_RETRY_CAP_MS, NEWER_BUILD_PATIENCE_MS, NEWER_BUILD_RETRY_MS, OUTDATED_WORKER_ALERT_KIND, PROVIDER_OUTAGE_PATIENCE_MS, isProviderOutage, jobRetryDelayMs, outageAttempts, providerProblem, retryDelayMs } from "./engine";
 export { ROLE_CLOSING_DATE_KEY, armClosingDate } from "./definitions/closing-date";
-export { SCREEN_WORKFLOW_KEY, cancelAiInterview, startAiInterview } from "./definitions/screen";
+export { SCREEN_WORKFLOW_KEY, cancelAiInterview, closeAiInterviewsOfJob, startAiInterview } from "./definitions/screen";
 export { ALERT_TEMPLATE, emailNotifications } from "./notification-email";
 export { DISCARD_OBJECT_JOB_KIND, discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination, type QuarantineOutcome } from "./documents";
 export { unlockApplicants } from "./unlock-applicants";

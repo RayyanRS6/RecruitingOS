@@ -1,7 +1,7 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { CV_FILE_STATUS_LABEL, CandidateTab, RolePacket as RolePacketSchema, STAGE_TAB, TEXT_SCREENS, TOLD_STATE_LABEL, applySourceLabel, byCvScore, byInterviewScore, candidateActions, cvScoreSummary, formAnswerViews, interviewScoreSummary, noCvScore, noInterviewScore, quoteFrom, stageLabel, tabOf, type AiReview, type ApplicationStage, type CandidateActionFacts, type CandidateCounts, type CandidateDocument, type CandidateList, type CandidatePanel, type CandidateRow, type CvFileStatus, type CvNoScore, type CvScore, type EvidenceAssessment, type InterviewAnswer, type InterviewScore, type PlanStop, type RolePacket, type RoleStatus, type ScreenAssessment } from "@ros/contracts";
 import { aiCreditStanding, aiInterviewViewOf, audit, cvScoreFromReading, entitlements, formAnswersOf, interviewScoreFromScorecard, lockedAndWaiting, notLocked, remindedRecently, sameRequirements, screenAnswersSent } from "@ros/core";
-import { DECISION_TEMPLATE, askedQuestions, chatPacket } from "@ros/agents";
+import { DECISION_TEMPLATE, askedQuestions, chatPacket, screenPacketVersion } from "@ros/agents";
 import { applications, assessments, candidates, communications, documents, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import type { Actor } from "@ros/contracts";
 import type { Container } from "../container";
@@ -18,7 +18,7 @@ import { companyTrialStanding } from "./trial";
 type App = typeof applications.$inferSelect;
 type Candidate = typeof candidates.$inferSelect;
 /** An AI interview as the team's views read it: where it stands and what was recorded, never its transcript. */
-const SCREEN_COLUMNS = { id: screens.id, applicationId: screens.applicationId, status: screens.status, invitedAt: screens.invitedAt, expiresAt: screens.expiresAt, remindedAt: screens.remindedAt, startedAt: screens.startedAt, completedAt: screens.completedAt, createdAt: screens.createdAt, assessmentId: screens.assessmentId, workflowRunId: screens.workflowRunId, progress: screens.progress, answers: screens.answers };
+const SCREEN_COLUMNS = { id: screens.id, applicationId: screens.applicationId, packetVersion: screens.packetVersion, status: screens.status, invitedAt: screens.invitedAt, expiresAt: screens.expiresAt, remindedAt: screens.remindedAt, startedAt: screens.startedAt, completedAt: screens.completedAt, createdAt: screens.createdAt, assessmentId: screens.assessmentId, workflowRunId: screens.workflowRunId, progress: screens.progress, answers: screens.answers };
 type Screen = Pick<typeof screens.$inferSelect, keyof typeof SCREEN_COLUMNS>;
 
 /** Everything the team's views read about one person. */
@@ -76,7 +76,7 @@ export async function loadPeople(tx: Tx, apps: readonly App[]): Promise<Person[]
   });
 }
 
-/** What every row of one job shares: the job versions people applied to and were read against, the live one, and what the plan stops. */
+/** What every row of one job shares: the job versions people applied to, were read against and were interviewed about, the live one, and what the plan stops. */
 export type JobContext = { roleStatus: RoleStatus; packets: Map<number, RolePacket>; current: RolePacket | null; planStop: PlanStop | null; now: Date; emailStopped: (address: string) => boolean };
 
 export async function jobContext(tx: Tx, container: Pick<Container, "engine" | "emailStopped">, role: { id: string; companyId: string; status: string; currentPacketVersion: number | null }): Promise<JobContext> {
@@ -113,11 +113,16 @@ export function cvScoreOfPerson(p: Person, ctx: Pick<JobContext, "packets" | "cu
   return cvScoreFromReading(p.reading.result, packet, { earlierVersion: !!ctx.current && !sameRequirements(packet, ctx.current) });
 }
 
+/** The job version a person's newest AI interview asked about (the job as it was when the interview was made), or undefined without an interview. */
+function interviewPacketOf(p: Person, ctx: Pick<JobContext, "packets">): RolePacket | undefined {
+  return p.screen ? ctx.packets.get(screenPacketVersion(p.screen, p.app)) : undefined;
+}
+
 /** The interview score of one person: null until they sent their answers; then the scorecard's, or why there is none yet. */
 export function interviewScoreOfPerson(p: Person, ctx: Pick<JobContext, "packets">): InterviewScore | null {
   const { screen } = p;
   if (!screen || !screenAnswersSent(screen)) return null;
-  const packet = ctx.packets.get(p.app.packetVersion);
+  const packet = interviewPacketOf(p, ctx);
   if (p.scorecard && packet) return interviewScoreFromScorecard(p.scorecard, askedQuestions(screen, packet));
   return noInterviewScore(screen.progress.scoreWaitsForCredit ? "ai_used_up" : p.scoringOver ? "not_scored" : "being_scored");
 }
@@ -233,7 +238,9 @@ export async function candidatePanel(tx: Tx, container: Pick<Container, "engine"
   if (!app || !role || !p) return null;
   const ctx = await jobContext(tx, container, role);
   const row = rowOf(p, ctx);
+  // The form's answers belong to the version the person applied to; an interview's questions to the version it was made with.
   const packet = ctx.packets.get(app.packetVersion) ?? null;
+  const interviewPacket = interviewPacketOf(p, ctx) ?? null;
   const [doc] = app.resumeDocumentId ? await tx.select({ id: documents.id, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, status: documents.status, text: documents.textExtracted }).from(documents).where(eq(documents.id, app.resumeDocumentId)).limit(1) : [];
   const status = (doc && doc.status in CV_FILE_STATUS_LABEL ? doc.status : "deleted") as CvFileStatus;
   const cv: CandidateDocument | null = doc ? { id: doc.id, filename: doc.filename, mime: doc.mime, sizeBytes: doc.sizeBytes, status, statusLabel: CV_FILE_STATUS_LABEL[status], hasText: !!doc.text?.trim() } : null;
@@ -257,7 +264,7 @@ export async function candidatePanel(tx: Tx, container: Pick<Container, "engine"
     cvReview: p.reading ? reviewOf(p.reading.result) : null,
     screeningAnswers: packet ? formAnswerViews(packet.formQuestions, formAnswersOf(app.answers)) : [],
     // Nothing of an interview reaches the team before the candidate sent it: no score, no words, no answer.
-    aiInterview: row.aiInterview ? { ...row.aiInterview, score: interviewScoreOfPerson(p, ctx), review: sent && p.scorecard ? reviewOf(p.scorecard) : null, answers: sent && p.screen && packet ? interviewAnswers(p.screen, packet) : [] } : null,
+    aiInterview: row.aiInterview ? { ...row.aiInterview, score: interviewScoreOfPerson(p, ctx), review: sent && p.scorecard ? reviewOf(p.scorecard) : null, answers: sent && p.screen && interviewPacket ? interviewAnswers(p.screen, interviewPacket) : [] } : null,
     actions: row.actions,
   };
 }

@@ -241,8 +241,8 @@ describe("migrations 0040 and 0041: the rows and the storage of the build before
       expect(["invited", "reminded", "in_progress", "completed", "expired", "declined_by_candidate", "cancelled"]).toContain(s!.status);
       if (s!.status !== "invited" && s!.status !== "in_progress") expect(s!.completed_at ?? (s!.status === "completed" ? "sent" : null), s!.status).toBeTruthy();
     }
-    // the person whose interview closed with their job is back in New
-    expect(await one(sql`SELECT stage FROM applications WHERE id = ${app(A.invitedOnClosedJob)}`)).toEqual({ stage: "triaged" });
+    // a closed job closes the interview and moves nobody
+    expect(await one(sql`SELECT stage FROM applications WHERE id = ${app(A.invitedOnClosedJob)}`)).toEqual({ stage: "screen_invited" });
     // every interview asks about the job version its application was sent against
     expect(of(A.interviewBooked).packet_version).toBe(3);
     expect(Object.values(all).every((s) => s!.packet_version !== null)).toBe(true);

@@ -90,7 +90,7 @@ export async function conversationView(db: Db, ref: ConversationRef): Promise<Co
       review: phase === "review" ? reviewItems(screen, b.rolePacket) : null,
       withdrawPending: open && withdrawPending(screen.transcript),
       counter: chatCounter(screen.progress.chat),
-      formAnswers: chatFactsOf(b.rolePacket, b.app).formAnswers,
+      formAnswers: chatFactsOf(b.appliedPacket, b.app).formAnswers,
     };
   });
 }

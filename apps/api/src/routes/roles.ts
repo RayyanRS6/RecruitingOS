@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { CloseRole, PacketFieldEdit, ROLE_ACTION_BLOCKED, RolePacket as RolePacketSchema, RoleStatus, RoleStatusChange, SetClosingDate, appPaths, type ClosingDateAnswer, type PacketSaved, type RoleDetail } from "@ros/contracts";
 import { CLOSING_DATE_REASON, assertCan, audit, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, notify } from "@ros/core";
 import { companies, rolePackets, roles, withTenant, type Tx } from "@ros/db";
-import { armClosingDate } from "@ros/workflows";
+import { armClosingDate, closeAiInterviewsOfJob } from "@ros/workflows";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
@@ -131,6 +131,8 @@ for (const action of ["pause", "resume"] as const) {
 /**
  * Closes a job, for good: its page is no longer public, it takes no applications, and its place on the plan comes back.
  * Nobody is told anything by a close, and nobody's place in the process changes: a person tells a candidate a decision.
+ * An AI interview of the job that was still open closes with it, so no link works for a job that takes no more
+ * applications; an interview already sent keeps its answers and its score (`closeAiInterviewsOfJob`).
  * A second press answers the closed job as it stands.
  */
 roleRoutes.post("/:id/close", requireTenant, async (c) => {
@@ -148,6 +150,7 @@ roleRoutes.post("/:id/close", requireTenant, async (c) => {
       await emit(tx, { type: "role.closed", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { from: role.status } });
       // the timer that would stop applications on the closing date has nothing left to do
       await armClosingDate(tx, container.engine, { companyId: t.companyId, roleId: role.id, closesOn: null, actor });
+      await closeAiInterviewsOfJob(tx, container.engine, { roleId: role.id, actor, now: container.engine.clock() });
     }
     return detailOf(tx, container, t, role.id);
   });

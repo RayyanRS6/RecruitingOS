@@ -10,7 +10,7 @@ import { applications, candidates, communications, companies, dataRequests, even
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
-import { packetOf, screensOf, sentAnswersFor, type SentAnswers } from "../services/application-record";
+import { packetOf, screensOf, sentAnswersFor, sentInterviewPacket, type SentAnswers } from "../services/application-record";
 import { queueLinkRequest, recordWithdrawal, rotateStatusLink, withdrawApplication } from "../services/applications";
 import { contactLineFor } from "../services/company-settings-profile";
 import { CORRECTION_REQUEST, anonymizedFor, linkGone, maskEmail } from "./candidate-shared";
@@ -352,7 +352,7 @@ candidatePages.get("/c/status/:token", async (c) => {
     const packet = await packetOf(tx, app.roleId, app.packetVersion);
     // Only what left us: a close-out note still waiting has told them nothing yet.
     const closedOut = !!app.lockedAt && (await tx.select({ id: communications.id }).from(communications).where(and(eq(communications.applicationId, app.id), eq(communications.templateKey, CLOSE_OUT_TEMPLATE), inArray(communications.status, ["sent", "delivered", "opened", "clicked"]))).limit(1)).length > 0;
-    return { screens: all, packet, closedOut, sent: sentAnswersFor({ app, packet, screens: all }) };
+    return { screens: all, packet, closedOut, sent: sentAnswersFor({ app, packet, interviewPacket: await sentInterviewPacket(tx, app, all, packet), screens: all }) };
   });
   const newest = record.screens[0];
   const jobClosed = role?.status === "closed";

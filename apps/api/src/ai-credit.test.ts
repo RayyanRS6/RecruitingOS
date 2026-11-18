@@ -1002,6 +1002,54 @@ describe("the AI credit", () => {
       expect(await shown(`/c/screen/${ref.token}`)).toContain("Thanks, your answers are sent");
     });
 
+    it("an interview they sent is always scored, whatever became of them while its scorecard waited: marked Not selected, hired or withdrawn; Undo then brings them back with their score", async () => {
+      const job = await openJob();
+      const nia = await started(job, { first: "Nia", last: "Reed", email: "nia@ai-credit.test" });
+      const omar = await started(job, { first: "Omar", last: "Sy", email: "omar@ai-credit.test" });
+      const pia = await started(job, { first: "Pia", last: "Tran", email: "pia@ai-credit.test" });
+      await spend(job.id, "9.950000");
+      for (const { ref } of [nia, omar, pia]) {
+        expect((await answerToTheEnd(ref)).phase).toBe("review");
+        expect(await conversationSubmit(container, ref)).toBe(true);
+      }
+      await container.drain();
+      for (const { a } of [nia, omar, pia]) {
+        expect((await screenOf(a.id)).assessmentId).toBeNull();
+        expect(await runOf("screen", a.id)).toMatchObject({ status: "waiting", currentStep: "score" });
+      }
+      // while the scorecards wait: one is marked Not selected, one is hired, one withdraws from their own page
+      for (const [who, action] of [[nia, "reject"], [omar, "hire"]] as const) {
+        const r = await act(job, who.a.id, action);
+        expect(r.status, await r.clone().text()).toBe(200);
+      }
+      const withdrew = await app.request(`/c/status/${pia.a.statusToken}/withdraw`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "confirm=yes" });
+      expect(withdrew.headers.get("location")).toBe(`/c/status/${pia.a.statusToken}?withdrawn=1`);
+      await container.drain();
+      expect([(await applicationOf(nia.a.id)).stage, (await applicationOf(omar.a.id)).stage, (await applicationOf(pia.a.id)).stage]).toEqual(["rejected", "hired", "withdrawn"]);
+      // none of that ended a sent interview's run: each still waits for its scorecard
+      for (const { a } of [nia, omar, pia]) expect(await runOf("screen", a.id)).toMatchObject({ status: "waiting", currentStep: "score" });
+
+      await upgrade(job.id);
+      for (const { a } of [nia, omar, pia]) {
+        const scr = await screenOf(a.id);
+        expect(scr.status).toBe("completed");
+        expect(scr.assessmentId).toBeTruthy();
+        expect((await container.db.select().from(assessments).where(and(eq(assessments.applicationId, a.id), eq(assessments.kind, "screen")))).map((x) => x.id)).toEqual([scr.assessmentId]);
+        expect((await runOf("screen", a.id)).status).toBe("completed");
+      }
+      // where each person stands is as the team and the candidate left it
+      expect([(await applicationOf(nia.a.id)).stage, (await applicationOf(omar.a.id)).stage, (await applicationOf(pia.a.id)).stage]).toEqual(["rejected", "hired", "withdrawn"]);
+      // Undo: back under Interviewed, and the score is there
+      for (const who of [nia, omar]) {
+        const undone = await act(job, who.a.id, "undo_decision");
+        expect(undone.status, await undone.clone().text()).toBe(200);
+        const back = await panelOf(job, who.a.id);
+        expect(back).toMatchObject({ stage: "screen_complete", tab: "interviewed" });
+        expect(back.aiInterview?.score?.noScore).toBeNull();
+        expect(typeof back.aiInterview?.score?.score).toBe("number");
+      }
+    });
+
     /** An AI interview sent on a Basic job, the resume read and `settled` of the $20 spent, with `inFlight` held by a draft still running, its hold taken `heldAgoMs` ago. */
     const sentOnBasic = async (who: { first: string; last: string; email: string }, settled: string, inFlight: string | null, heldAgoMs = 0) => {
       const job = await openJob();
