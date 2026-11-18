@@ -13,7 +13,7 @@ import { reviewPages } from "./review-page";
  * - application-record.tsx: "Lost your link?", the status page and its forms;
  * - conversation-frame.tsx, chat-pages.tsx: the AI interview;
  * - review-page.tsx: "Check your answers" and sending them;
- * - candidate-shared.tsx: what they all share; journey.tsx: the AI interview's steps header.
+ * - candidate-shared.tsx: what they all share.
  * The names other files import from here are re-exported below.
  */
 export const candidatePages = new Hono<Vars>();

@@ -8,7 +8,6 @@ import { conversationPerson, conversationStart, conversationTurn, conversationVi
 import { linkGone, screenPath } from "./candidate-shared";
 import { AnswerForms, AsideActions, Bubble, CHAT_BUSY_NOTE, CHAT_CSS, ConversationPage, ErrorNote, WhereAnswersGo, assistantWords, openConversation, turnActionFrom, turnErrorCode, type Line } from "./conversation-frame";
 import { Icon } from "./icons";
-import { JOURNEY_CSS, Journey } from "./journey";
 import { ReviewPage } from "./review-page";
 import { PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
 
@@ -70,11 +69,6 @@ function WithdrawAsk(props: { view: ConversationView }) {
   );
 }
 
-/** The steps header on the chat's pages: Chat, then Review & send, with the chat's counter ("2 of 4 required"; never the questions in advance). */
-function ChatJourney(props: { view: ConversationView }) {
-  return <Journey steps={["chat", "review"]} current="chat" counter={props.view.counter} />;
-}
-
 /** Where the assistant's latest message is: the one to answer now. */
 function latestAssistant(lines: Line[]): number {
   for (let i = lines.length - 1; i >= 0; i--) if (lines[i].role === "assistant") return i;
@@ -82,10 +76,11 @@ function latestAssistant(lines: Line[]): number {
 }
 
 /**
- * The chat: the steps header with the counter, the chat's title, "where your answers go", the whole chat as a thread
- * (the assistant's latest message, the one to answer, in larger type), then the reply box (Yes and No, a date or a pay
- * range where the question asked takes one), the quiet skip, and a person. While the assistant reads a reply the page
- * says "Reading your reply…" and the box is locked (`SCREEN_BUSY_JS`); without script every form still works.
+ * The chat: its title, how far along it is ("2 of 4 required"; never the questions in advance), "where your answers
+ * go", the whole chat as a thread (the assistant's latest message, the one to answer, in larger type), then the reply
+ * box (Yes and No, a date or a pay range where the question asked takes one), the quiet skip, and a person. While the
+ * assistant reads a reply the page says "Reading your reply…" and the box is locked (`SCREEN_BUSY_JS`); without script
+ * every form still works.
  */
 function ChatPage(props: { view: ConversationView; error?: string | null }) {
   const { view } = props;
@@ -99,8 +94,9 @@ function ChatPage(props: { view: ConversationView; error?: string | null }) {
   // The reply box is named after what it answers: the question itself, or the follow-up on it.
   const about = asking && q && last?.content.includes(q.question) ? q.question : last ? assistantWords(last.content, true) : q?.question ?? "the chat";
   return (
-    <ConversationPage view={view} title="Your chat" header={<ChatJourney view={view} />} extraCss={`${JOURNEY_CSS}${CHAT_CSS}`} busyNote={CHAT_BUSY_NOTE}>
+    <ConversationPage view={view} title="Your chat" extraCss={CHAT_CSS} busyNote={CHAT_BUSY_NOTE}>
       <h1 class="chat-title">Your chat about the {view.roleTitle} role</h1>
+      {view.counter ? <p class="meta">{view.counter.label}</p> : null}
       <WhereAnswersGo companyName={view.companyName} />
       <ol class="thread" aria-label="Your chat">{lines.map((l, i) => <Bubble line={l} open now={i === at} />)}</ol>
       {view.withdrawPending ? <WithdrawAsk view={view} /> : null}
@@ -116,7 +112,7 @@ function closedWords(view: ConversationView): { title: string; lines: string[] }
   const co = view.companyName;
   switch (view.status) {
     case "completed":
-      return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision, and you will hear from them either way.`, "Everything you sent is on your application page. Its link is in the email we sent you when you applied.", "If anything else is needed from you, we will email you."] };
+      return { title: "Thanks, your answers are sent", lines: [`The hiring team at ${co} reads them with your application. People on the team make every decision.`, "Everything you sent is on your status page. Its link is in the email we sent you when you applied.", "Nothing more is needed from you here."] };
     case "declined_by_candidate":
       return { title: "The hiring team has been told", lines: [`The hiring team at ${co} has been told you would rather talk to a person than do the AI interview. They decide the next step.`, "Anything you answered here was not sent to the hiring team. Nothing else is needed from you here."] };
     case "expired":

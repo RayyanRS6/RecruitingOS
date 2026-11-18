@@ -7,15 +7,15 @@ import { Icon, type CandidateIconName } from "./icons";
 import { jobValidThrough } from "./job-structured-data";
 
 /**
- * The plain facts every public job surface states the same way (Wave 0 item 0.8, plan D10): every place, how, what
- * kind of job, the pay, the schedule and the day it was posted, and the one end date search engines are given. The labels are shared with the job builder's preview (services/job-preview.ts), so the preview names things as
- * the page does.
+ * The plain facts every public job surface states the same way: every place, how, what kind of job, the pay, the
+ * schedule and the day it was posted, and the one end date search engines are given. The labels are shared with the job
+ * builder's preview (services/job-preview.ts), so the preview names things as the page does.
  */
 
 /**
  * Whether a public page shows the pay range: when the owner chose to, and always where a pay transparency law covers the
  * job, because the notice on the same page tells the candidate the range is "shown above". The rule itself is
- * `payShown` in packages/core/src/compliance.ts, shared with the board packages, the screening assistant and the role page.
+ * `payShown` in packages/core/src/compliance.ts, shared with the AI interview and the job's own page in the app.
  */
 export function payShown(packet: RolePacket, notices: Notice[]): boolean {
   return payShownByRule(packet.compensation, notices);
@@ -73,7 +73,7 @@ type RoleDates = { status: string; closedAt: string | null; pausedAt: string | n
 
 /**
  * The role's `validThrough`: the closing day once closed; while paused or switched off, the earliest day it stopped
- * taking applications; while open, its closing date when one is set (plan D7), and nothing otherwise.
+ * taking applications; while open, its closing date when one is set, and nothing otherwise.
  */
 export function roleValidThrough(role: RoleDates): string | undefined {
   if (role.status === "closed") return jobValidThrough({ closedAt: role.closedAt ?? role.updatedAt });

@@ -32,9 +32,58 @@ function signature(packet: RolePacket, company: Company): string {
   return packet.communication.signature || `The hiring team at ${company.name}`;
 }
 
+/** A sentence that asks for a reply (or a text) with the keyword HUMAN. Nothing reads a reply for a keyword. */
+export const HUMAN_KEYWORD = /\b(?:[Rr]epl(?:y|ying)|[Tt]ext(?:ing)?|[Ss]end(?:ing)?)\b.*\bHUMAN\b/;
+
+/**
+ * `text` without the sentences one of `patterns` matches. `instead` takes the place of the first one (once), so a line
+ * that told the candidate how to reach a person still does. Line breaks are kept.
+ */
+export function replaceSentences(text: string, patterns: readonly RegExp[], instead: string | null): string {
+  let used = false;
+  const lines = text.split("\n").map((line) =>
+    line
+      .split(/(?<=[.!?])\s+/)
+      .flatMap((sentence) => {
+        if (!patterns.some((re) => re.test(sentence.trim()))) return [sentence];
+        if (instead && !used) {
+          used = true;
+          return [instead];
+        }
+        return [];
+      })
+      .join(" ")
+      .trimEnd(),
+  );
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * How to reach a person, as an email says it: the address the company gives candidates when it set one (the one its job
+ * page prints); otherwise a reply, which lands in the mailbox a person reads (`replyToFor`), the address the job page
+ * prints for such a company.
+ */
+export function personLine(company: Pick<Company, "settings">): string {
+  const own = company.settings.hiringContact?.email;
+  return own ? `To reach a person at any time, email ${own}.` : "To reach a person at any time, reply to this email.";
+}
+
+/**
+ * The job's own two lines under an automatic email, as the email carries them: how to reach a person, and the AI
+ * disclosure. A sentence in them that asks for a reply with the keyword HUMAN gives way to `personLine` (once: a second
+ * one is dropped). The stored job keeps its words.
+ */
+function linesOfTheJob(packet: RolePacket, company: Company): { person: string; disclosure: string } {
+  const instead = personLine(company);
+  const person = replaceSentences(packet.communication.humanAlternativeText, [HUMAN_KEYWORD], instead);
+  const disclosure = replaceSentences(packet.communication.disclosureText || disclosureLine(company.name), [HUMAN_KEYWORD], person.includes(instead) ? null : instead);
+  return { person, disclosure };
+}
+
 /** The lines under every email: how to reach a person, who it is from, and the AI disclosure. */
 function footer(packet: RolePacket, company: Company): string {
-  return `${packet.communication.humanAlternativeText}\n\n${signature(packet, company)}\n\n${packet.communication.disclosureText || disclosureLine(company.name)}`;
+  const lines = linesOfTheJob(packet, company);
+  return `${lines.person}\n\n${signature(packet, company)}\n\n${lines.disclosure}`;
 }
 
 /** The address already belonged to someone on the company's records: the email says it was sent using it. */
@@ -96,7 +145,8 @@ export const DECISION_TEMPLATE = "disposition";
  */
 export function decisionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { adverseDecisionLine: boolean }): { subject: string; text: string } {
   const { candidate, company, packet } = input;
-  const below = [packet.communication.humanAlternativeText, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, packet.communication.disclosureText || disclosureLine(company.name)].filter((x): x is string => !!x);
+  const lines = linesOfTheJob(packet, company);
+  const below = [lines.person, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, lines.disclosure].filter((x): x is string => !!x);
   const text = `Hi ${candidate.firstName},
 
 Thank you for your interest in the ${packet.identity.title} position at ${company.name}.

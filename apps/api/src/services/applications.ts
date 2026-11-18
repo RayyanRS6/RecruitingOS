@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, appPaths, inspectResumeFile, trialPaused, type Actor, type FormAnswers } from "@ros/contracts";
 import { fromAddress, queueCommunication, replyToFor, sendPrivacyCompletion, sendRepeatApplicationNotice, sendStatusLinks, statusUrlFor } from "@ros/agents";
 import { CANDIDATE_LOCK_ACTOR, CLOSING_DATE_REASON, audit, createDataRequest, decideLock, dedupeKey, emit, errorForLog, fulfilWithdrawal, jobPastItsLimit, mayWithdraw, normalizeEmailForDedupe, normalizePhone, notify, tellMoreApplied, transition } from "@ros/core";
-import { applications, candidates, companies, documents, events, lowercaseToken, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
+import { applications, candidates, companies, documents, events, randomToken, rolePackets, roles, screens, uuidv7, withPlatform, withTenant, type ApplicationAcknowledgment, type ConsentRecord, type Db, type Tx } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { cancelAiInterview } from "@ros/workflows";
 import type { Container } from "../container";
@@ -142,7 +142,7 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
   // Decided behind the job's lock, held until this commits: two people applying at the same moment take different places.
   const locked = await decideLock(tx, { companyId: input.companyId, roleId: role.id });
   // Two submissions for the same role and person at the same moment (a double press): the second waits for the first's
-  // row, finds it, and is settled as a repeat instead of failing on the unique key (known-bugs row 78).
+  // row, finds it, and is settled as a repeat instead of failing on the unique key.
   const [inserted] = await tx
     .insert(applications)
     .values({
@@ -154,8 +154,6 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
       stage: "applied",
       answers: { form: input.answers, noticeVersionsShown: input.noticeVersionsShown, acknowledgment: input.acknowledgment },
       statusToken: randomToken(24),
-      // The reply address's token (F12): its own random value, never the status token, lowercase because it travels in an email address.
-      replyToken: lowercaseToken(16),
       lockedAt: locked ? container.engine.clock().toISOString() : null,
     })
     .onConflictDoNothing({ target: [applications.roleId, applications.candidateId] })
@@ -198,7 +196,7 @@ async function placeApplication(tx: Tx, container: Container, args: { input: New
   if (locked) {
     await emit(tx, { type: "application.locked", companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, subject: { type: "application", id: application.id }, payload: locked });
     await audit(tx, { companyId: input.companyId, actor: CANDIDATE_LOCK_ACTOR, action: "application.locked", target: { type: "application", id: application.id }, details: locked });
-    // All the team hears of it (Rule 3): behind the job's lock, so two at the same moment send one.
+    // All the team hears of it: behind the job's lock, so two at the same moment send one.
     await tellMoreApplied(tx, { companyId: input.companyId, roleId: role.id, roleTitle: role.title });
   }
   await container.engine.start(tx, { workflowKey: "application_intake", companyId: input.companyId, subject: { type: "application", id: application.id }, state: { applicationId: application.id, roleId: role.id }, idempotencyKey: `application_intake:${application.id}`, actor });
@@ -248,7 +246,7 @@ async function settleRepeatSubmission(tx: Tx, container: Container, input: { inp
 }
 
 /**
- * A direct upload's grant attaches its file to one submission only (Wave 0 item 0.1). Used again, the apply page refuses
+ * A direct upload's grant attaches its file to one submission only. Used again, the apply page refuses
  * it like an expired one before the file is looked at. Otherwise the answer would depend on what the first submission
  * did with the file (a repeat discards it at once, a new application keeps it until the worker moves it) and so tell
  * whoever reused the grant whether the address they typed had applied before. The use is a fact on the role
@@ -267,7 +265,7 @@ export async function markUploadUsed(tx: Tx, input: { companyId: string; roleId:
 export const LINK_REQUEST_JOB_KIND = "candidate.link_request";
 
 /**
- * "Lost your link?" (Wave 0 item 0.1): the page only queues the request, the same single write whatever the address,
+ * "Lost your link?": the page only queues the request, the same single write whatever the address,
  * and answers at once; how long it takes says nothing about whether the address is known. The worker then runs
  * `emailStatusLinks`. The typed address lives in the job until the daily sweep removes finished jobs.
  */
@@ -302,7 +300,7 @@ export async function emailStatusLinks(deps: { db: Db; integrations: Integration
 }
 
 /**
- * The one address-matching rule for finding a person by a typed address (known-bugs row 68), shared by "Lost your link?"
+ * The one address-matching rule for finding a person by a typed address, shared by "Lost your link?"
  * and the public privacy form: the folded key the company de-duplicates on (case, Gmail's dots, a plus part), or the
  * exact address on file (a record written before its key was re-keyed). Null for something that is not an address.
  */
@@ -313,7 +311,7 @@ export function addressMatch(typedEmail: string): SQL | null {
 }
 
 /**
- * "Get a new link" on the status page (known-bugs row 48): the private link is replaced by a new random one, the old one
+ * "Get a new link" on the status page: the private link is replaced by a new random one, the old one
  * stops working at once, and the new one goes by email to the address on file, never to the page (whoever pressed the
  * button may be someone the link was forwarded to). The email is recorded like every other candidate email. Returns the
  * masked-ready address it went to, or null when there is no address on file (the page then says to reply to an email).
@@ -340,7 +338,7 @@ export async function rotateStatusLink(container: Container, applicationId: stri
 You asked for a new link to your application for ${roleTitle} at ${company.name}. Here it is:
 ${statusUrlFor(container.env.JOBS_BASE_URL, fresh)}
 
-The old link no longer works, so anyone you shared it with can no longer open your status page. The link in our earlier emails to your AI interview has changed too: open it from your application page. Keep this email: there is no account or password.
+The old link no longer works, so anyone you shared it with can no longer open your status page. The link in our earlier emails to your AI interview has changed too: open it from your status page. Keep this email: there is no account or password.
 
 If you did not ask for this, reply to this email and a person will look into it.
 

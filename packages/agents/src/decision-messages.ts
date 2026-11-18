@@ -1,4 +1,4 @@
-import { and, count, eq, gte, inArray, isNotNull, like, lte } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNotNull, like } from "drizzle-orm";
 import type { Actor, ToldState } from "@ros/contracts";
 import { CLOSE_OUT_SENDS_FROM_DAYS, adverseDecisionLineApplies } from "@ros/core";
 import { applications, candidates, communications, companies, rolePackets, roles, type Queryable } from "@ros/db";
@@ -34,6 +34,14 @@ export function statusUrlOf(baseUrl: string, app: Pick<App, "statusToken">): str
 }
 
 /**
+ * Whether the decision message carries Colorado's line: the job is in Colorado, or the candidate is. Where the candidate
+ * is: what is on file for them, else where their own resume says they are (the form does not ask).
+ */
+function coloradoLineApplies(parts: NonNullable<Awaited<ReturnType<typeof loadDecisionParts>>>, app: Pick<App, "extraction">): boolean {
+  return adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText ?? app.extraction?.locationText ?? null });
+}
+
+/**
  * The decision email exactly as "Email the decision" would send it now: who it goes to, the subject and the text.
  * Null when the person is not marked Not selected, or there is nothing to write it from.
  */
@@ -41,7 +49,7 @@ export async function decisionMessageDraft(q: Queryable, app: App): Promise<{ to
   if (app.stage !== "rejected") return null;
   const parts = await loadDecisionParts(q, app);
   if (!parts) return null;
-  const adverseDecisionLine = adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText });
+  const adverseDecisionLine = coloradoLineApplies(parts, app);
   return { to: parts.cand.email, ...decisionMessage({ candidate: parts.cand, company: parts.company, packet: parts.packet, adverseDecisionLine }), adverseDecisionLine };
 }
 
@@ -60,7 +68,7 @@ export async function queueDecisionMessage(q: Queryable, integrations: Integrati
   const parts = await loadDecisionParts(q, app);
   if (!parts || parts.cand.anonymizedAt) return { queued: false, toldState: "not_told" };
   const [missed] = await q.select({ n: count() }).from(communications).where(and(eq(communications.applicationId, app.id), like(communications.templateKey, `${DECISION_TEMPLATE}%`), inArray(communications.status, ["failed", "cancelled", "unknown", "bounced"]), gte(communications.createdAt, app.rejectedAt ?? app.stageChangedAt)));
-  const adverseDecisionLine = adverseDecisionLineApplies({ jobLocations: parts.packet.identity.locations, candidateLocationText: parts.cand.locationText });
+  const adverseDecisionLine = coloradoLineApplies(parts, app);
   const res = await sendDecisionMessage(q, integrations, { application: app, candidate: parts.cand, role: parts.role, company: parts.company, packet: parts.packet, actor: input.actor, attempt: Number(missed?.n ?? 0), adverseDecisionLine, sendAt: input.sendAt });
   if (res.status === "failed") return { queued: false, toldState: "not_told" };
   await q.update(applications).set({ toldState: "queued" }).where(and(eq(applications.id, app.id), eq(applications.toldState, "not_told")));
@@ -68,17 +76,19 @@ export async function queueDecisionMessage(q: Queryable, integrations: Integrati
 }
 
 /**
- * The one note to someone still locked when the latest date they were promised comes and their job is still open: their
- * application has not been reviewed, and we cannot say whether it will be. What makes "a real answer either way" true
- * for someone nobody may read. It declines nobody, moves no stage and tells the team nothing. Once per application, by
- * its key and by this look; never to someone who has left or whose details were deleted, nor to a person with no
- * address. Returns the applications noted.
+ * The one note to someone still locked when their job has closed, or when the latest date they were promised comes: their
+ * application has not been reviewed, and we cannot say whether it will be. It is what the on-file words promise ("we
+ * email you to say so when the job closes, or at the latest on" their date), for someone nobody may read. It declines
+ * nobody, moves no stage and tells the team nothing. Once per application, by its key and by this look; never to someone
+ * who has left or whose details were deleted, nor to a person with no address. Returns the applications noted.
  */
 export async function sendCloseOutNotes(q: Queryable, deps: { integrations: Integrations; statusBaseUrl: string; now: Date; actor: Actor }, companyId: string): Promise<string[]> {
-  const open = await q.select({ id: roles.id }).from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused"])));
-  if (!open.length) return [];
-  const cutoff = new Date(deps.now.getTime() - CLOSE_OUT_SENDS_FROM_DAYS * 86_400_000);
-  const due = await q.select().from(applications).where(and(inArray(applications.roleId, open.map((r) => r.id)), isNotNull(applications.lockedAt), inArray(applications.stage, ["applied", "received"]), lte(applications.createdAt, cutoff.toISOString())));
+  const jobs = await q.select({ id: roles.id, status: roles.status }).from(roles).where(and(eq(roles.companyId, companyId), inArray(roles.status, ["open", "paused", "closed"])));
+  if (!jobs.length) return [];
+  const closed = new Set(jobs.filter((r) => r.status === "closed").map((r) => r.id));
+  const cutoff = deps.now.getTime() - CLOSE_OUT_SENDS_FROM_DAYS * 86_400_000;
+  const unread = await q.select().from(applications).where(and(inArray(applications.roleId, jobs.map((r) => r.id)), isNotNull(applications.lockedAt), inArray(applications.stage, ["applied", "received"])));
+  const due = unread.filter((a) => closed.has(a.roleId) || Date.parse(a.createdAt) <= cutoff);
   if (!due.length) return [];
   const already = new Set((await q.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, due.map((a) => a.id)), eq(communications.templateKey, CLOSE_OUT_TEMPLATE)))).map((r) => r.applicationId ?? ""));
   const noted: string[] = [];

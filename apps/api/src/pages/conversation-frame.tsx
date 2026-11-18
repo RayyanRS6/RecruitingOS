@@ -36,34 +36,25 @@ export const CHAT_BUBBLE_CSS = `
 }
 `;
 /**
- * The conversation's own styles, on top of the page stylesheet (October 2026 redesign, the guided chat of the reference
- * screens): the line on top of every page saying it is the company's AI assistant, as a soft lavender note with its tag;
- * the introduction's points as rows with an icon chip; the question in large type; the assistant's messages on the left
- * in white bubbles and the candidate's own in peach on the right (`CHAT_BUBBLE_CSS`, which the status page shares); a
- * thin progress bar that runs from plum to coral (a native progress element, so no inline style); the tap answers as
- * tiles; the reply box drawn as one field with its Send button (`form.reply`); the quiet actions (skip, a person,
- * later) as plain text links; the line shown while an answer is on its way; the two equal choices; and "check your
- * answers" as the rows of one list with a pill for each mark. Buttons and their secondary look come from the page
- * stylesheet, like every other candidate page; tokens only.
+ * The AI interview's own styles, on top of the page stylesheet: the line on top of every page saying it is the
+ * company's AI assistant, as a soft lavender note with its tag; the introduction's points as rows with an icon chip; the
+ * question in large type; the assistant's messages on the left in white bubbles and the candidate's own in peach on the
+ * right (`CHAT_BUBBLE_CSS`, which the status page shares); the tap answers as tiles; the reply box drawn as one field
+ * with its Send button (`form.reply`); the quiet actions (skip, a person) as plain text links; the line shown while an
+ * answer is on its way; and "check your answers" as the rows of one list with a pill for each mark. Buttons and their
+ * secondary look come from the page stylesheet, like every other candidate page; tokens only.
  */
 export const SCREEN_CSS = `
 .ai-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 24px; padding: 12px 16px; border: 1px solid var(--tint-2); border-radius: 14px; background: var(--tint); color: var(--ink-2); font-size: 14px; line-height: 1.5; }
 .ai-tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 8px; border: 1px solid var(--tint-2); border-radius: var(--r-pill); background: var(--surface); color: var(--primary); font-size: 12px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
 .ai-tag::before { content: ""; flex: none; width: 10px; height: 10px; background: var(--accent); clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); }
 h1.question { margin: 14px 0 18px; font-size: 28px; line-height: 1.2; letter-spacing: -0.025em; }
-.lead-in { margin: 20px 0 0; color: var(--ink-2); }
 ${CHAT_BUBBLE_CSS}
 .points { display: grid; gap: 0; margin: 22px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
 .points li { display: flex; align-items: center; gap: 14px; margin: 0; padding: 12px 18px 12px 14px; color: var(--ink); font-size: 15px; line-height: 1.45; }
 .points li + li { border-top: 1px solid var(--line); }
 .points .icon { flex: none; box-sizing: content-box; width: 18px; height: 18px; margin: 0; padding: 9px; border-radius: 12px; background: var(--tint-2); color: var(--primary); }
 .points li > span { min-width: 0; padding-top: 0; overflow-wrap: anywhere; }
-.progress { display: flex; align-items: center; gap: 14px; margin: 0 0 8px; color: var(--ink-2); font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.progress label { flex: none; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
-.progress progress { flex: 1; min-width: 0; height: 6px; overflow: hidden; border: 0; border-radius: var(--r-pill); background: var(--line); color: var(--primary); -webkit-appearance: none; appearance: none; }
-.progress progress::-webkit-progress-bar { border-radius: var(--r-pill); background: var(--line); }
-.progress progress::-webkit-progress-value { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
-.progress progress::-moz-progress-bar { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }
 details.earlier, details.own-words { margin: 20px 0 0; }
 details.earlier > summary, details.own-words > summary { padding: 9px 0; color: var(--ink-2); font-size: 14.5px; font-weight: 600; cursor: pointer; }
 .days { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: 8px; margin-top: 10px; }
@@ -84,12 +75,6 @@ details.earlier > summary, details.own-words > summary { padding: 9px 0; color: 
 .sending { margin: 16px 0 0; color: var(--ink-2); font-size: 14px; }
 .sending:empty { margin: 0; }
 .aside-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--line); }
-.aside-actions > form { display: contents; }
-.paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 14px; margin: 22px 0; }
-.paths > section.card { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
-.paths > .card > h2 { margin: 0; font-size: 19px; line-height: 1.25; letter-spacing: -0.02em; }
-.paths > .card > p { margin: 0; }
-.paths > .card > form { margin-top: auto; padding-top: 10px; }
 .answers { margin: 20px 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); list-style: none; }
 .answer { padding: 16px 18px; }
 .answer + .answer { border-top: 1px solid var(--line); }
@@ -122,9 +107,9 @@ export async function openConversation(container: Container, token: string): Pro
 export type Line = ConversationView["transcript"][number];
 
 /**
- * What the assistant said, as this page shows it: a line written for email or text ("Reply HUMAN at any time…") reads
- * as this page's own way to a person (`open`: the "I'd rather talk to a person" button is on the page), or by email once
- * the conversation has closed (polish list). The transcript itself is not changed.
+ * What the assistant said, as this page shows it: a line written for email ("Reply HUMAN at any time…") reads as this
+ * page's own way to a person (`open`: the "I'd rather talk to a person" button is on the page), or by email once the AI
+ * interview has closed. The transcript itself is not changed.
  */
 export function assistantWords(content: string, open: boolean): string {
   return forTheWeb(content, open ? PERSON_ON_THE_WEB : PERSON_BY_EMAIL);
@@ -132,8 +117,8 @@ export function assistantWords(content: string, open: boolean): string {
 
 /**
  * One message: the assistant's on the left, the candidate's own on the right (their answers in their own words, taps
- * and changes included), a skipped question as a quiet note. `now` (the chat, Wave S7): the assistant's latest message,
- * the one to answer, marked for the eye and as the page's `#question`.
+ * and changes included), a skipped question as a quiet note. `now`: the assistant's latest message in the chat, the one
+ * to answer, marked for the eye and as the page's `#question`.
  */
 export function Bubble(props: { line: Line; open: boolean; now?: boolean }) {
   const { line } = props;
@@ -143,28 +128,24 @@ export function Bubble(props: { line: Line; open: boolean; now?: boolean }) {
   return <li class="msg assistant"><span class="sr-only">The assistant said: </span>{assistantWords(line.content, props.open)}</li>;
 }
 
-/** On top of every conversation page (plan E2): who the candidate is talking to, before anything else. */
+/** On top of every page of the AI interview: who the candidate is talking to, before anything else. */
 function AiLine(props: { companyName: string }) {
   return <p class="ai-line"><span class="ai-tag">AI assistant</span><span>This conversation is with {props.companyName}'s AI assistant, a software program, not a person. People on the hiring team make every decision.</span></p>;
 }
 
 /**
- * Every page of the conversation: the AI line, the page, the line that says an answer is on its way (empty until a
+ * Every page of the AI interview: the AI line, the page, the line that says an answer is on its way (empty until a
  * button is pressed), the AI notice, the privacy link, and the script that stops a second press. The AI line on top
- * already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the role's own AI wording on
- * the introduction) sits one click away under "How AI is used" (founder brief, 14 October 2026). No "Company · Job"
- * eyebrow (fewer words, 23 October 2026): the AI line names the company, and the browser tab names the job.
- *
- * Wave S7 (S7-0, nothing passes them yet): `header` is drawn directly under the AI line, which stays the first thing on
- * the page (the steps header, pages/journey.tsx); `extraCss` is a page's own styles, added to the conversation's in the
- * same style element (the candidate stylesheet's budget is in packages/ui/src/weight-guard.test.ts).
+ * already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the job's own AI wording on
+ * the introduction) sits one click away under "How AI is used". No "Company · Job" eyebrow: the AI line names the
+ * company, and the browser tab names the job. `extraCss` is a page's own styles, added to the AI interview's in the same
+ * style element.
  */
-export function ConversationPage(props: { view: ConversationView; title: string; aiMore?: string | null; header?: unknown; extraCss?: string; busyNote?: string | null; children?: unknown }) {
+export function ConversationPage(props: { view: ConversationView; title: string; aiMore?: string | null; extraCss?: string; busyNote?: string | null; children?: unknown }) {
   const { view } = props;
   return (
     <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={props.extraCss ? `${SCREEN_CSS}${props.extraCss}` : SCREEN_CSS}>
       <AiLine companyName={view.companyName} />
-      {props.header ? props.header : null}
       {props.children}
       {/* `busyNote` (the chat's "Reading your reply…"): what the line says while an answer is on its way. */}
       <p class="sending" id="sending" role="status" data-wait={props.busyNote ?? undefined} />
@@ -188,8 +169,8 @@ export function ConversationPage(props: { view: ConversationView; title: string;
  * can take a while; any later submit, from any form on the page, is stopped. The buttons are disabled a moment after the
  * submit, not during it, because a browser leaves a disabled button's own value (Yes, No, Skip) out of what it sends.
  * Coming back to the page with the Back button unlocks it. Plain ES5 with no inline handlers (the policy forbids them);
- * without script the forms still work as before. Wave S7: the chat's reply box is locked too (read-only, so what was
- * typed still goes), and the line says what the page asks for (`data-wait` on it: "Reading your reply…").
+ * without script the forms still work. The chat's reply box is locked too (read-only, so what was typed still goes),
+ * and the line says what the page asks for (`data-wait` on it: "Reading your reply…").
  */
 export const SCREEN_BUSY_JS = `(function(){
 var busy=false;var note=document.getElementById('sending');
@@ -219,19 +200,18 @@ window.addEventListener('pageshow',function(ev){if(ev.persisted){unlock();}});
 })();`;
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* The Kanvis-style chat (Wave S7, spec step 6)                                                                   */
+/* The chat                                                                                                       */
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** What the line under the forms says while the assistant reads a reply in the chat; the reply box is locked meanwhile. */
 export const CHAT_BUSY_NOTE = "Reading your reply… This can take up to a minute, so please keep this page open.";
 
 /**
- * The chat's own styles, passed as a page's `extraCss` (never into the candidate stylesheet, whose budget is spent):
- * tokens only, no button rules. The "where your answers go" line with its icon chip, the chat's title, the whole chat
- * in one soft panel (the guided conversation of the reference screens: lavender at the top, a touch of peach at the
- * foot), the latest message slightly larger and lifted (the question to answer now), and the bar at the chat's end as
- * the "your next step" card with its coral dot. The one motion on the page: the newest message fades in and rises 8px
- * once, in 200ms, only when motion is welcome (and the candidate stylesheet stops every animation for reduced motion).
+ * The chat's own styles, passed as a page's `extraCss`: tokens only, no button rules. The "where your answers go" line
+ * with its icon chip, the chat's title, the whole chat in one soft panel (lavender at the top, a touch of peach at the
+ * foot), and the latest message slightly larger and lifted (the question to answer now). The one motion on the page:
+ * the newest message fades in and rises 8px once, in 200ms, only when motion is welcome (and the candidate stylesheet
+ * stops every animation for reduced motion).
  */
 export const CHAT_CSS = `
 .where-go { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; color: var(--ink-2); font-size: 14px; line-height: 1.45; }
@@ -239,24 +219,18 @@ export const CHAT_CSS = `
 h1.chat-title { margin: 6px 0 8px; font-size: 26px; line-height: 1.2; letter-spacing: -0.025em; }
 .thread[aria-label="Your chat"] { margin: 18px 0 20px; padding: 20px 18px; border: 1px solid var(--line); border-radius: var(--r-panel); background: linear-gradient(165deg, var(--tint) 0%, var(--surface) 46%, var(--surface) 72%, var(--peach) 140%); }
 .thread .msg.assistant.now { border-color: var(--line-2); font-size: 16.5px; box-shadow: var(--sh-pop); }
-.chat-end { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px 20px; margin: 24px 0 0; padding: 24px; border: 1px solid var(--tint-2); border-radius: var(--r-panel); background: linear-gradient(115deg, var(--tint) 0%, var(--surface) 58%, var(--peach) 135%); }
-.chat-end p { display: flex; align-items: center; gap: 12px; margin: 0; color: var(--ink); font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
-.chat-end p::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
-.chat-end form { margin: 0; }
 @keyframes msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: no-preference) {
   .thread .msg.now { animation: msg-in 200ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both; }
 }
 @media (max-width: 600px) {
   .thread[aria-label="Your chat"] { padding: 14px 12px; border-radius: var(--r-card); }
-  .chat-end { padding: 20px 18px; }
-  .chat-end p { font-size: 20px; }
 }
 `;
 
 /**
- * "Where your answers go" (spec step 6), on every page of the chat: said plainly, true to the 9 October 2026 decision
- * ("hide them until they send"): the team sees nothing of the chat before Send.
+ * "Where your answers go", on every page of the chat, said plainly: the team sees nothing of the chat before the
+ * candidate presses Send my answers.
  */
 export function WhereAnswersGo(props: { companyName: string }) {
   // Each reply's own button sends it to the assistant only: the line names the button at the end that sends them on.
@@ -264,14 +238,14 @@ export function WhereAnswersGo(props: { companyName: string }) {
 }
 
 /**
- * "Skip this question" (E11): a second submit button that needs nothing typed, no check by the browser and no script.
+ * "Skip this question": a second submit button that needs nothing typed, no check by the browser and no script.
  * While the assistant follows up on an answer already given, the same button moves on and keeps that answer, and says so.
  */
 function SkipButton(props: { keepsAnswer?: boolean }) {
   return <button class="link-action" type="submit" name="action" value="skip" formnovalidate>{props.keepsAnswer ? "Keep my answer and move on" : "Skip this question"}</button>;
 }
 
-/** The typed answer. Its label names the question (or the follow-up) it answers, for a screen reader (E14). */
+/** The typed answer. Its label names the question (or the follow-up) it answers, for a screen reader. */
 function TypedAnswer(props: { action: string; about: string; submit: string; skip: boolean; keepsAnswer?: boolean; autofocus?: boolean; value?: string; label?: string }) {
   // `reply`: drawn as one field holding the words and the Send button (SCREEN_CSS).
   return (
@@ -287,7 +261,7 @@ function TypedAnswer(props: { action: string; about: string; submit: string; ski
 }
 
 /**
- * Tap answers (E12) for the factual questions: yes or no, the days of the week, a start date, a pay range. Recorded word
+ * Tap answers for the factual questions: yes or no, the days of the week, a start date, a pay range. Recorded word
  * for word without the model; typing stays possible below.
  */
 function TapAnswerForm(props: { action: string; tap: TapFormat; about: string; submit: string; skip: boolean }) {
@@ -391,7 +365,7 @@ const field = (body: FormBody, key: string): string => {
 };
 const fields = (body: FormBody, key: string): string[] => (Array.isArray(body[key]) ? (body[key] as unknown[]) : [body[key]]).filter((x): x is string => typeof x === "string");
 
-/** A tapped answer from the form (E12), checked against the contract; null when it does not parse (an empty pay box, no day ticked). */
+/** A tapped answer from the form, checked against the contract; null when it does not parse (an empty pay box, no day ticked). */
 function tapFrom(body: FormBody, kind: string): TapAnswer | null {
   const amount = (s: string) => (s.trim() ? Number(s.replace(/[$,\s]/g, "")) : undefined);
   const raw = kind === "yes_no" ? { kind, choice: field(body, "choice") } : kind === "days" ? { kind, days: fields(body, "days") } : kind === "start_date" ? { kind, date: field(body, "date") } : kind === "pay_range" ? { kind, min: amount(field(body, "min")), max: amount(field(body, "max")) } : null;
@@ -399,7 +373,7 @@ function tapFrom(body: FormBody, kind: string): TapAnswer | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** What the candidate did: pressed "Skip this question" (E11), tapped an answer (E12), or typed. Null for a tap that does not parse. */
+/** What the candidate did: pressed "Skip this question", tapped an answer, or typed. Null for a tap that does not parse. */
 export function turnActionFrom(body: FormBody): TurnAction | null {
   if (field(body, "action") === "skip") return { skip: true };
   const kind = field(body, "tap");

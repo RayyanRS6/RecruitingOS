@@ -163,7 +163,7 @@ export const ON_FILE_NOTICE_VERSION = "2026-11-05";
 /** How the line before Send is recorded among the notices shown. */
 export const ON_FILE_NOTICE = `on_file@${ON_FILE_NOTICE_VERSION}`;
 
-/** The job page's last step, on a job past its limit, in place of "A decision, and a real answer either way." */
+/** The job page's last step, on a job past its limit, in place of the steps that tell of a review. */
 export const ON_FILE_LAST_STEP = "We email you either way, at the latest 30 days after you apply.";
 
 /** The line before Send, on a job past its limit. */
@@ -192,15 +192,7 @@ export function onFileNoDateLine(companyName: string): string {
 /** The status page's next-step line once the close-out note went, or once the date above has passed without it reaching them: this is what it says. */
 export const CLOSED_OUT_STATUS_LINE = "Your application has not been reviewed, and we cannot say whether it will be. You do not need to do anything.";
 
-/** The close-out note: what makes "a real answer either way" true for someone nobody may read. It declines nobody and moves no stage. */
+/** The close-out note: what makes "we email you either way" true for someone nobody may read. It declines nobody and moves no stage. */
 export function closeOutNoteLine(input: { roleTitle: string; companyName: string; statusUrl: string }): string {
   return `Your application for ${input.roleTitle} at ${input.companyName} has not been reviewed, and we cannot say whether it will be. You do not need to do anything. If this changes, the team will contact you. You can withdraw or ask about your information from your page: ${input.statusUrl}`;
 }
-
-/** Beside what their earlier chats here added, on a job past its limit: nobody at the company may read what they keep unless their application is reviewed. */
-export function onFileEarlierFactsLine(companyName: string): string {
-  return `If ${companyName} reviews your application, they see what you keep.`;
-}
-
-/** The line above the messages on the status page while locked. */
-export const LOCKED_THREAD_LINE = "To write to us, reply to any of our emails.";

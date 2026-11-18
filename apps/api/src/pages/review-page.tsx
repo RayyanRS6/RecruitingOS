@@ -8,7 +8,6 @@ import { conversationEdit, conversationSubmit, conversationView, type Conversati
 import { CORRECTION_LINE, linkGone, screenPath } from "./candidate-shared";
 import { ANSWER_KEY, AnswerForms, AsideActions, Bubble, ConversationPage, ErrorNote, openConversation, turnActionFrom, turnErrorCode } from "./conversation-frame";
 import { Icon } from "./icons";
-import { JOURNEY_CSS, Journey } from "./journey";
 
 /**
  * "Check your answers" and sending them. The AI interview's own page (pages/chat-pages.tsx) shows `ReviewPage` once the
@@ -18,21 +17,14 @@ import { JOURNEY_CSS, Journey } from "./journey";
 const candidatePages = new Hono<Vars>();
 export { candidatePages as reviewPages };
 
-/** The steps header on these pages (pages/journey.tsx): the chat is done, this is the last step. */
-function JourneyHeader() {
-  return <Journey steps={["chat", "review"]} current="review" />;
-}
-
-/** These pages' own styles, passed as the page's own (`extraCss`): the form's answers as one soft card. Shared tokens only, no motion. */
-export const REVIEW_SEND_CSS = `
+/** "Check your answers" own styles, passed as the page's own (`extraCss`): the form's answers as one soft card. Shared tokens only, no motion. */
+const PAGE_CSS = `
 .send-part { margin: 32px 0 0; }
 .send-part > h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.02em; }
 .send-part > p { color: var(--ink-2); }
 .send-part > ul { margin: 12px 0; padding: 12px 18px 12px 34px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); font-size: 14.5px; }
 .send-part > ul > li + li { margin-top: 4px; }
 `;
-
-const PAGE_CSS = `${JOURNEY_CSS}${REVIEW_SEND_CSS}`;
 
 /** Both halves stay true and in the page: nothing goes before Send, and what happens without Send is one click away. */
 function WithoutSend() {
@@ -71,7 +63,7 @@ export function ReviewPage(props: { view: ConversationView; changed: string | nu
   const base = screenPath(view.token);
   const items = view.review ?? [];
   return (
-    <ConversationPage view={view} title="Check your answers" header={<JourneyHeader />} extraCss={PAGE_CSS}>
+    <ConversationPage view={view} title="Check your answers" extraCss={PAGE_CSS}>
       <h1>Check your answers</h1>
       <p class="lead">The hiring team sees your answers only once you send them.</p>
       <WithoutSend />
@@ -104,7 +96,7 @@ function EditPage(props: { view: ConversationView; item: ReviewItem; n: number; 
   const { view, item } = props;
   const base = screenPath(view.token);
   return (
-    <ConversationPage view={view} title="Change your answer" header={<JourneyHeader />} extraCss={PAGE_CSS}>
+    <ConversationPage view={view} title="Change your answer">
       <p class="back"><a href={`${base}#a-${item.key}`}><Icon name="arrow-left" />Back to your answers</a></p>
       <p class="meta">Question {props.n} of {props.total}</p>
       <h1 class="question" id="question">{item.question}</h1>

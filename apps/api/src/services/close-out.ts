@@ -8,9 +8,9 @@ export const CLOSE_OUT_JOB_KIND = "candidates.close_out_notes";
 
 /**
  * The close-out notes that are due, company by company: `sendCloseOutNotes` decides who (someone still past their
- * plan's candidates per job on an open or paused job when the latest date they were promised comes) and writes each
- * note once. It keeps the promise the on-file wording makes: "we email you either way, at the latest 30 days after you
- * apply". Only companies with someone locked and unread are visited. A company that fails does not stop the others;
+ * plan's candidates per job when their job has closed, or when the latest date they were promised comes) and writes
+ * each note once. It keeps the promise the on-file wording makes: "we email you either way, at the latest 30 days after
+ * you apply". Only companies with someone locked and unread are visited. A company that fails does not stop the others;
  * the first failure is thrown at the end, so the queue records it and runs the check again. Returns how many notes
  * were written.
  */

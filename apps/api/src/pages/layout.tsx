@@ -15,7 +15,7 @@ const MONO_FONTS = APP_FONTS.filter((f) => f.family === "IBM Plex Mono");
 
 /**
  * Candidate-facing pages are server-rendered, mobile-first, and need no JavaScript. They wear the application's look
- * (docs/07, the October 2026 redesign): a warm paper ground with a soft peach and lavender glow, a white sheet for the
+ * (docs/07): a warm paper ground with a soft peach and lavender glow, a white sheet for the
  * page's content, plum pill buttons, outlined secondary ones, small mono uppercase eyebrows, display headings, and
  * lavender notice boxes. The token values below are copied from packages/ui/src/styles.css (this page cannot import a
  * stylesheet; candidate-look.test.ts fails if the two drift), and the fonts come from this deployment's own origin
@@ -170,7 +170,7 @@ main:not(.wide) .card[role="status"] { border-color: var(--line-tint); border-ra
 @media (min-width: 600px) { .btn { display: inline-flex; width: auto; min-width: 200px; } form:not(.actions) > .btn + .btn { margin-left: 12px; } }
 @media (prefers-reduced-motion: no-preference) { .btn:active:not(:disabled) { transform: scale(0.97); } }
 
-/* Apply now (founder decision Q2 = A): on hover or keyboard focus the plum fill slides across (transform only) and
+/* Apply now: on hover or keyboard focus the plum fill slides across (transform only) and
    the words turn light as it passes them */
 .btn.go { position: relative; isolation: isolate; overflow: hidden; justify-content: flex-start; gap: 12px; min-height: 52px; padding: 4px 24px 4px 4px; border-color: var(--line-strong); background: var(--tint); color: var(--ink); transition: border-color 150ms ease, color 50ms linear 35ms, transform 150ms ease; }
 .go-fill { position: absolute; top: 4px; right: 4px; bottom: 4px; left: 4px; z-index: -1; border-radius: inherit; background: var(--primary); transform: translateX(calc(-100% - 4px)); }
@@ -302,19 +302,14 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
   .apply-card > p, .apply-card > .points { display: none; }
 }
 
-/* The signed-in preview's note (plan D1) */
+/* The signed-in preview's note */
 .preview-note { margin: 0 0 28px; padding: 14px 18px; border-radius: var(--r-card); background: var(--caution-soft); color: var(--caution); font-size: 14.5px; }
 .preview-note strong, .preview-note a, .preview-note p { color: inherit; }
 .preview-note ul { margin: 8px 0 0; padding-left: 20px; }
 
 /* Disclosures that work without script; each summary a 40px tap target */
-details.no-resume { margin: 20px 0 0; padding: 5px 16px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
-details.no-resume[open] { padding-bottom: 16px; }
-details.no-resume > summary, details.more > summary { padding: 9px 0; color: var(--ink); font-weight: 600; cursor: pointer; }
-details.no-resume fieldset > p { margin: 10px 0 0; }
-details.no-resume label { margin-top: 16px; }
 details.more { margin-top: 4px; }
-details.more > summary { color: var(--ink-2); }
+details.more > summary { padding: 9px 0; color: var(--ink-2); font-weight: 600; cursor: pointer; }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 26px 18px 28px; border-radius: var(--r-card); }
   main.wide { margin: 0 auto; padding: 28px 16px 48px; }
@@ -334,7 +329,7 @@ export function safeJsonLd(value: unknown): string {
 }
 
 /**
- * What a link to a public page shows when it is pasted into a chat or a post (plan D8/D10): the job and the employer,
+ * What a link to a public page shows when it is pasted into a chat or a post: the job and the employer,
  * the first words of the description, and the logo when there is one. Plain meta tags read by the app the link is pasted
  * into; nothing is loaded from those apps.
  */
