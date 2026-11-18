@@ -1,57 +1,48 @@
-# Runbook: candidate privacy requests (access, correction, deletion or anonymization)
+# Candidate privacy requests: access, correction, deletion
 
-Status: built with synthetic data on 18 September 2026 (admin console → Privacy requests; candidate status page form; `apps/api/src/privacy-requests.test.ts`); the human steps below remain the process, the console records them. Required before production candidate data. Automation may follow later. Counsel register item 6 governs the legal deadlines and item 9 the retention interactions; until counsel answers, the deadlines below are conservative defaults and no irreversible deletion is performed in production.
+The admin dashboard's **Privacy requests** records every step. The deadlines and the retention rules wait for a lawyer ([counsel-register.md](../legal-drafts/counsel-register.md), items 6 and 9): until then the deadline below is a cautious default, and nothing is deleted without a recorded lawyer's decision.
 
-## Roles
+## Who
 
-- Request intake and handling: the privacy handler (Nadine, or the person she designates), reading the shared mailbox `privacy@identifiedtalent.com`. Nobody else reads that mailbox.
-- Verification and recording: the platform administrator (Nadine or Paul), in the admin console (data-request record) or, until that view exists, in the `Recruiting OS Accounts` vault's "Privacy requests" log.
-- Conflicts involving employment-record retention, litigation holds, or a request from a person who was hired: escalated to counsel before any deletion.
+- The platform administrator handles every request, and reads the privacy mailbox (`PRIVACY_EMAIL`). Nobody else reads that mailbox.
+- A request that touches employment records, a legal hold, or someone who was hired goes to a lawyer before any deletion.
+- A company's team never sees a request's content.
 
-## How a candidate makes a request
+## How a candidate asks
 
-- The privacy page (`/privacy`) and the status page tell candidates to email `privacy@identifiedtalent.com` from the address they applied with.
-- Any message to the hiring reply address that says "privacy request", "delete my data", "access my data", or similar is forwarded to `privacy@` the same business day.
+- The form on their status page, which their emailed link opens.
+- The public form at `/c/privacy-request`, linked from `/privacy`, for someone without their link: it emails a confirmation link that works once, for 24 hours, and nothing is recorded before they press it.
+- An email to the privacy mailbox from the address they applied with. A message to any other mailbox that asks for access or deletion is forwarded there the same business day.
 
 ## Steps
 
-1. **Acknowledge** within one business day from `privacy@`: confirm receipt, state the expected completion date, and, if the sending address does not match the application, ask the requester to reply from the applying address or to confirm one detail only they would know (the role applied to and the approximate date). Do not ask for identity documents.
-2. **Record** the request: date received, requester address, company (tenant), application(s) found, request kind (access, correct, delete), verification method and date, deadline (45 days from receipt, extendable once by 45 days with notice, pending counsel), handler, status.
-3. **Verify** identity by the reply-from-applying-address rule, or by the detail check above. Record how it was verified.
-4. **Locate** the records: candidate, applications, documents (resume file and extracted text), assessments, screens (transcript and answers, the answers to a screen's opening questions included), communications, events and audit records naming the person, calendar invitations once scheduling exists.
-5. **Act**:
-   - Access: export the candidate's own data (application answers, resume, communications sent to them, screening transcript, the stage history). Do not include the assessment's internal rationale or other candidates' data; include the evidence-based reasons recorded with a human decision if one was made. Send it as a password-protected file with the password sent separately.
-   - Correction: correct the field the person identifies (name, contact details, an answer they say was entered in error). Record what changed and why. Corrections that would change an eligibility outcome are routed to the hiring team as a "review anyway" decision, never applied silently.
-   - Deletion or anonymization: in the pilot, **anonymize rather than delete** where a retention obligation may apply: replace name, email, phone, location, and free-text answers with tokens; delete the resume file and its extracted text from storage; keep the event skeleton (stage changes, dates, decision records) without personal fields. Full deletion only when counsel confirms no retention obligation applies. Never delete audit records; anonymize personal fields in their `details` if present.
-6. **Confirm completion** to the requester from `privacy@`, stating what was done and what was retained and why (in plain language).
-7. **Close the record** with the completion date, the handler, and a link to the confirmation.
+1. **Record** a request that came by email: **Privacy requests**, record a request from the privacy mailbox. One made on a form is already there.
+2. **Acknowledge** within one business day from the privacy mailbox. If the address does not match an application, ask the person to reply from the address they applied with, or to confirm the job and the rough date. Do not ask for identity documents.
+3. **Verify** who is asking, and record how. A request made through the person's own link or the confirmation link is verified already. Nothing can be done on a request before it is verified.
+4. **Act**, within 45 days of receipt. The dashboard warns ten days before the deadline and when it has passed.
+   - **Access**: Fulfil sends the person a copy of what they gave (their form answers, their resume, the messages sent to them, their AI interview) as a file attached to the completion email. It holds nothing about other candidates, and not the AI's own notes.
+   - **Correction**: name the field and the corrected value. The change is recorded with who made it and why.
+   - **Deletion**: the dashboard anonymizes, and never before a lawyer's decision is recorded on the request and the administrator confirms. It removes the person's words from every table that holds them and deletes the resume file; a hire and the findings of a reading stay, as codes with no words. Audit records are never deleted. No lawyer is engaged, so **a real deletion request cannot be finished today** ([DECISIONS.md](../DECISIONS.md), PQ-15): tell the owner on the day it comes in, because the 45 days are running.
+5. **Close.** Fulfil or Decline writes the outcome and emails the person what was done, what was kept and why, in plain words.
 
-## Someone who asked for access (6 November 2026)
+## Someone who asked for access to the product
 
-A person who signed in and sent the company form under `SIGNUP_MODE=approval`, waiting or declined, is not a candidate. The public form answers as if their company did not exist, so the privacy mailbox is how they reach us. **Record a request from the privacy mailbox** can record it against their company, but access, correction and deletion all need a candidate, which they are not, so the console cannot carry it out. What we keep about them and for how long is not decided (register item 35; `docs/DECISIONS.md`, AQ-1). Until it is, delete nothing by hand: tell the founder the same day, treat the 45 days as running, and say from `privacy@` what we hold.
+A person who sent the company form and is waiting or declined is not a candidate, and the public form answers as if their company did not exist. The privacy mailbox is how they reach us. What we keep about them and for how long is not decided ([DECISIONS.md](../DECISIONS.md), AQ-1). Until it is, delete nothing by hand: tell the owner the same day, treat the 45 days as running, and say from the privacy mailbox what we hold.
 
-## Someone locked (the plans of 5 November 2026)
+## Someone locked
 
-An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them, from the same console. Decided defaults, for counsel to confirm (register items 30, 31 and 33; `docs/DECISIONS.md`, PQ-6, PQ-13, PQ-15):
+An application past a plan's candidates per job is locked: the hiring team cannot read it, and no AI has. Every step above works the same for them. Defaults, for a lawyer to confirm ([DECISIONS.md](../DECISIONS.md), PQ-6, PQ-13, PQ-15):
 
-- **Nothing goes to the team while they are locked.** No notice names them, and their request does not show on the company's pages. Do not write to the company about them.
-- **Access.** The export runs on the platform side, so it holds everything they gave. Each application that was ever locked carries `hiringTeamCanSeeThis` (`false`, or `true` with `hiringTeamCanSeeThisSince`), in no plan's words.
-- **Correction.** Change the field as usual. The rule above sends a correction that changes an eligibility outcome to the hiring team, which cannot happen while they are locked: keep it as a note on the request. The team sees the corrected answer if a change of plan opens them, and it is read as any other answer then.
-- **Deletion.** The same anonymizing. A deletion frees no place, so it never reveals the next person, and the company's locked card for them stays a card with no name. The code refuses every deletion without a recorded counsel decision, and no counsel is engaged, so **a real deletion request cannot be finished today**: escalate it to the founder on the day it comes in, because the 45 days are running.
-- **A person's review.** It opens an ITS request whose record holds their name, email, résumé and answers, and a recruiter reads them only under a grant naming that application. ITS cannot unlock one card in this release, so say plainly what the review can and cannot do.
-- **What ITS may say.** If they ask why: "The employer did not review your application." Never name the plan, the limit or the money, on any channel. Do not say or hint how many applied or where they came in. Do not tell the employer who asked. If someone keeps asking for the reason, or the candidate is in Colorado, escalate to the founder and counsel before answering (register item 30).
-- **An employer's legal need.** If an agency or a lawsuit asks an employer for applicant records, it is never told "upgrade first": ITS produces locked records for a recorded legal reason, and a litigation hold stops deletion as above. Record the reason and who asked in the request's notes, and tell the founder.
+- **Nothing goes to the team while they are locked.** Do not write to the company about them.
+- **Access.** The copy holds everything they gave. Each application that was ever locked carries `hiringTeamCanSeeThis`, in no plan's words.
+- **Deletion.** A deletion frees no place, so it never reveals the next person, and the company's locked card for them stays a card with no name.
+- **What we may say.** If they ask why: "The employer did not review your application." Never name the plan, the limit or the money. Do not say or hint how many applied or where they came in. Do not tell the employer who asked. If someone keeps asking, or the candidate is in Colorado, go to the owner and a lawyer before answering.
+- **An employer's legal need.** If an agency or a lawsuit asks an employer for applicant records, the employer is never told "upgrade first": the platform produces locked records for a recorded legal reason. Record the reason and who asked in the request's notes, and tell the owner.
 
-## What we cannot reach (11 November 2026)
+## What we cannot reach
 
-- **The hosting provider's request logs.** Vercel records the full address of every request before our code runs. When someone's sign-in is refused (an outside Microsoft account with an unverified address), the address can carry their email address in `error_description`; our own logs cut it, but Vercel's copy stays for as long as the plan keeps request logs (`docs/legal-drafts/data-retention-matrix.md`, row 16; known-bugs row 159). We cannot delete one person's lines there. If an access or deletion request comes from someone who was refused at sign-in, say so plainly in the answer from `privacy@`, with how long the provider keeps those logs, and tell the founder.
+The hosting provider's request logs. Vercel records the full address of every request before our code runs. When someone's sign-in is refused, that address can carry their email address; our own logs cut it, but Vercel's copy stays for as long as the plan keeps request logs. We cannot delete one person's lines there. If a request comes from someone who was refused at sign-in, say so plainly in the answer, and tell the owner.
 
-## Restrictions
+## Before real candidate data
 
-- Only the privacy handler and the platform administrators see privacy requests. Customer users see only that a request was fulfilled on a candidate's record ("data request fulfilled"), never its content.
-- Requests are never handled through the general support inbox.
-- No deletion is performed on a candidate who is under a litigation hold, who was hired (employment records), or where the customer has told ITS of a dispute; counsel advises and the founder decides.
-
-## Test of this runbook (tabletop, to be repeated before real candidate data)
-
-Walk through one synthetic access request and one synthetic anonymization request end to end in staging: send the email, acknowledge, verify, locate, act, confirm, close, and check that the application, screen, documents, and communications no longer contain the synthetic person's details while the stage history remains. Record the date and the two handlers who performed it in the counsel register's evidence column for item 6.
+Walk one made-up access request and one made-up deletion end to end: ask, acknowledge, verify, act, close, and check that the person's words are gone from the application, the AI interview, the files and the messages while the stage history remains.
