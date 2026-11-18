@@ -119,7 +119,7 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   if (!candidate || !role || !company || !pv) return null;
-  const [read] = app.latestAssessmentId ? await q.select({ result: assessments.result }).from(assessments).where(eq(assessments.id, app.latestAssessmentId)).limit(1) : [];
+  const [read] = await q.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
   const reading = (read?.result as Pick<EvidenceAssessment, "requirementFindings"> | undefined) ?? null;
   return { screen, app, candidate, role, company, rolePacket: pv.packet, packet: chatPacket(pv.packet, screen.progress), reading };
 }
