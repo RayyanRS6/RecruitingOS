@@ -1,24 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { PROXY_RULES, companyQuestionProblemWords, companyQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
+import { PROXY_RULES, formQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
 
-/** A small valid packet; each test changes what it is about. */
+/** A small valid job record; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
   const p = RolePacket.parse({
     identity: { title: "Registered Dental Hygienist", locations: [{ city: "Irvine", region: "CA", country: "US" }], employmentType: "full_time" },
-    business: { reason: "replacement", timeline: {} },
-    compensation: { basis: "hourly", min: 45, max: 55, ceiling: 58, discloseRange: true },
+    compensation: { basis: "hourly", min: 45, max: 55, discloseRange: true },
     description: { publicJobDescription: "Brightline Dental is hiring a registered dental hygienist in Irvine to care for a loyal patient base, five days a week." },
-    requirements: { mustHaves: [{ key: "license", text: "Active CA RDH license", rationale: "Required by law.", evidencedBy: ["resume"] }], niceToHaves: [], eligibility: [] },
-    competencies: [1, 2, 3].map((i) => ({ key: `c${i}`, name: `Competency ${i}`, definition: "Does the work well.", weight: 4, evaluatedIn: "both", indicators: ["Example"] })),
-    evaluation: { criteria: ["Evidence for each must-have"], redFlags: [] },
+    requirements: { mustHaves: [{ key: "license", text: "Active CA RDH license", rationale: "Required by law." }], niceToHaves: [] },
+    competencies: [1, 2, 3].map((i) => ({ key: `c${i}`, name: `Competency ${i}`, definition: "Does the work well.", importance: "important", indicators: ["Example"] })),
     screening: { questions: ["Tell me about your perio charting.", "Which days can you work?", "What pay are you looking for?"].map((q, i) => ({ key: `q${i}`, question: q, kind: "skills" })) },
-    interviews: { plan: [{ key: "owner", title: "Conversation", purpose: "Fit.", durationMinutes: 30, format: "video", competencyKeys: ["c1"] }], scorecard: { scale: { min: 1, max: 4, labels: {} } } },
     communication: { companyBlurb: "A friendly practice.", signature: "The team", disclosureText: "This message was written with help from an AI assistant. Reply HUMAN to reach a person.", humanAlternativeText: "Reply HUMAN for a person." },
-    approvals: {},
     compliance: {},
-    sourcing: { summary: "Careers page.", channels: ["careers_page"] },
-    preferences: {},
     provenance: {},
   });
   over(p);
@@ -28,20 +22,20 @@ function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
 const ctx = { companyName: "Brightline Dental", companyLocations: [{ city: "Irvine", region: "CA", country: "US" }] };
 const dana: Actor = { kind: "user", id: "u-dana", name: "Dana" };
 
-describe("the packet guard's fixed rules (plan C1)", () => {
-  it("works out jurisdictions and notices, shows pay on every ad (founder decision Q9), and sets the ceiling and range right", () => {
-    const { packet: p, changes } = guardPacket(packet((x) => { x.compensation = { ...x.compensation, min: 60, max: 50, ceiling: 40, discloseRange: false }; }), ctx);
+describe("the guard's fixed rules", () => {
+  it("works out jurisdictions and notices, shows pay on every ad, and puts a reversed range the right way round", () => {
+    const { packet: p, changes } = guardPacket(packet((x) => { x.compensation = { ...x.compensation, min: 60, max: 50, discloseRange: false }; }), ctx);
     expect(p.compliance.jurisdictions).toEqual(["US-CA"]);
     expect(p.compliance.notices).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
-    expect(p.compensation).toMatchObject({ min: 50, max: 60, ceiling: 60, discloseRange: true });
-    expect(changes).toHaveLength(3);
+    expect(p.compensation).toMatchObject({ min: 50, max: 60, discloseRange: true });
+    expect(changes).toHaveLength(2);
   });
 
   it("puts the AI disclosure and the human alternative back, and keeps six must-haves at most", () => {
     const { packet: p } = guardPacket(packet((x) => {
       x.communication.disclosureText = "From the team.";
       x.communication.humanAlternativeText = " ";
-      x.requirements.mustHaves = Array.from({ length: 8 }, (_, i) => ({ key: `m${i}`, text: `Skill ${i}`, rationale: "r", evidencedBy: ["resume" as const] }));
+      x.requirements.mustHaves = Array.from({ length: 8 }, (_, i) => ({ key: `m${i}`, text: `Skill ${i}`, rationale: "r" }));
     }), ctx);
     expect(p.communication.disclosureText).toMatch(/AI recruiting assistant/);
     expect(p.communication.humanAlternativeText).toMatch(/HUMAN/);
@@ -56,43 +50,32 @@ describe("the packet guard's fixed rules (plan C1)", () => {
     expect(flags.map((f) => f.rule)).toEqual(["unconfirmed_pay"]);
   });
 
-  it("with pay set, the description may quote only the advertised range: an older figure or the private ceiling is flagged", () => {
+  it("with pay set, the description may quote only the advertised range: an older figure is flagged", () => {
     expect(guardPacket(packet((x) => { x.description.publicJobDescription += " Pay is $45 to $55 an hour."; }), ctx).flags).toEqual([]);
     // the pay changed after the words were written: the old figures no longer match
     const stale = guardPacket(packet((x) => { x.description.publicJobDescription += " Pay is $40 to $50 an hour, up to $58."; }), ctx);
     expect(stale.flags.map((f) => [f.rule, f.text])).toEqual([["pay_mismatch", "$40"], ["pay_mismatch", "$50"], ["pay_mismatch", "$58"]]);
     expect(unresolvedFlags(stale.packet)).toHaveLength(3);
   });
-
-  it("keeps a skill's 1-5 weight in step with the importance a person picked (plan F3), and leaves an unpicked one alone", () => {
-    const { packet: p, changes } = guardPacket(packet((x) => {
-      x.competencies[0].importance = "helpful";
-      x.competencies[1].importance = "essential";
-    }), ctx);
-    expect(p.competencies.map((c) => [c.importance ?? null, c.weight])).toEqual([["helpful", 1], ["essential", 5], [null, 4]]);
-    expect(changes).toEqual([]);
-  });
 });
 
-describe("what the owner was told could not be used never comes back (C1)", () => {
+describe("what the owner was told could not be used never comes back", () => {
   const declined = [{ requested: "recent grads", reason: "Age and proxies for age cannot be hiring criteria.", alternative: "Describe the skills instead." }];
 
-  it("takes it out of the lists, flags it everywhere else, and records it on the packet for later versions", () => {
+  it("takes it out of the lists, flags it everywhere else, and records it on the job for later versions", () => {
     const { packet: p, flags } = guardPacket(packet((x) => {
-      x.requirements.niceToHaves = [{ key: "n1", text: "Recent grads welcome", rationale: "r", evidencedBy: ["resume"] }, { key: "n2", text: "Dentrix", rationale: "r", evidencedBy: ["resume"] }];
-      x.preferences.dealBreakersInTheirWords = ["Recent grads only"];
+      x.requirements.niceToHaves = [{ key: "n1", text: "Recent grads welcome", rationale: "r" }, { key: "n2", text: "Dentrix", rationale: "r" }];
       x.description.publicJobDescription += " Perfect for recent grads!";
       x.screening.questions[1].question = "Are you one of our recent grads?";
     }), { ...ctx, declined });
     expect(p.requirements.niceToHaves.map((n) => n.text)).toEqual(["Dentrix"]);
-    expect(p.preferences.dealBreakersInTheirWords).toEqual([]);
     expect(p.provenance.declinedCriteria).toEqual([expect.objectContaining({ requested: "recent grads", rule: "recent_graduate" })]);
     const paths = flags.map((f) => f.path);
     expect(paths).toEqual(expect.arrayContaining(["description.publicJobDescription", "screening.questions[1].question"]));
     expect(flags.every((f) => f.declined)).toBe(true);
     // a later edit that drops the record still meets it: the previous version's list is passed in
-    const next = guardPacket(packet((x) => { x.evaluation.redFlags = ["Recent grads"]; }), { ...ctx, declined: p.provenance.declinedCriteria });
-    expect(next.packet.evaluation.redFlags).toEqual([]);
+    const next = guardPacket(packet((x) => { x.requirements.niceToHaves = [{ key: "n3", text: "Recent grads", rationale: "r" }]; }), { ...ctx, declined: p.provenance.declinedCriteria });
+    expect(next.packet.requirements.niceToHaves).toEqual([]);
   });
 
   it("never empties the must-haves: the last one is flagged instead", () => {
@@ -103,8 +86,8 @@ describe("what the owner was told could not be used never comes back (C1)", () =
 
   it("matches whole words only: a declined 'Age' never takes out 'Manage the front desk' or flags 'average' and 'language'", () => {
     const { packet: p, flags, changes } = guardPacket(packet((x) => {
-      x.requirements.mustHaves.push({ key: "desk", text: "Manage the front desk", rationale: "r", evidencedBy: ["resume"] });
-      x.requirements.niceToHaves = [{ key: "lang", text: "A second language", rationale: "r", evidencedBy: ["screen"] }];
+      x.requirements.mustHaves.push({ key: "desk", text: "Manage the front desk", rationale: "r" });
+      x.requirements.niceToHaves = [{ key: "lang", text: "A second language", rationale: "r" }];
       x.description.publicJobDescription += " Above-average wages and a message from the owner.";
     }), { ...ctx, declined: [{ requested: "Age", reason: "Age cannot be a hiring requirement." }] });
     expect(p.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Manage the front desk"]);
@@ -112,31 +95,29 @@ describe("what the owner was told could not be used never comes back (C1)", () =
     expect(flags).toEqual([]);
     expect(changes).toEqual([]);
     // a declined phrase is still matched as a phrase, wherever it sits in the words
-    const phrase = guardPacket(packet((x) => { x.requirements.niceToHaves = [{ key: "n", text: "Prefer recent grads, honestly", rationale: "r", evidencedBy: ["resume"] }]; }), { ...ctx, declined });
+    const phrase = guardPacket(packet((x) => { x.requirements.niceToHaves = [{ key: "n", text: "Prefer recent grads, honestly", rationale: "r" }]; }), { ...ctx, declined });
     expect(phrase.packet.requirements.niceToHaves).toEqual([]);
   });
 
   it("finds a declined request restated as the must-have it reads as too (review of the live test, 12 Nov 2026)", () => {
     const visa = [{ requested: "No visa permit", reason: "Limiting a job to citizens is unlawful unless a law requires it." }];
     const { packet: p, flags } = guardPacket(packet((x) => {
-      x.requirements.mustHaves.push({ key: "visa", text: "Valid visa permit", rationale: "r", evidencedBy: ["resume"] });
+      x.requirements.mustHaves.push({ key: "visa", text: "Valid visa permit", rationale: "r" });
       x.description.publicJobDescription += " A visa permit is a must.";
     }), { ...ctx, declined: visa });
     expect(p.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license"]);
     expect(flags).toEqual([expect.objectContaining({ path: "description.publicJobDescription", rule: "declined", text: "No visa permit", declined: true })]);
-    // its own words are still found as before
-    expect(guardPacket(packet((x) => { x.preferences.dealBreakersInTheirWords = ["No visa permit"]; }), { ...ctx, declined: visa }).packet.preferences.dealBreakersInTheirWords).toEqual([]);
     // only what it reads as: a declined "No children" never takes out work with children
-    const kids = guardPacket(packet((x) => { x.requirements.mustHaves.push({ key: "peds", text: "Experience with children", rationale: "r", evidencedBy: ["resume"] }); }), { ...ctx, declined: [{ requested: "No children", reason: "Family status and pregnancy cannot be hiring criteria." }] });
+    const kids = guardPacket(packet((x) => { x.requirements.mustHaves.push({ key: "peds", text: "Experience with children", rationale: "r" }); }), { ...ctx, declined: [{ requested: "No children", reason: "Family status and pregnancy cannot be hiring criteria." }] });
     expect(kids.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Experience with children"]);
     expect(kids.flags).toEqual([]);
   });
 });
 
-describe("a kept flag stays kept when the lists around it move (C1)", () => {
+describe("a kept flag stays kept when the lists around it move", () => {
   it("names the place by the item's key, not its position, so taking out an earlier must-have keeps the keep", () => {
     const flagged = guardPacket(packet((x) => {
-      x.requirements.mustHaves.push({ key: "spoken", text: "Native English speaker", rationale: "r", evidencedBy: ["screen"] });
+      x.requirements.mustHaves.push({ key: "spoken", text: "Native English speaker", rationale: "r" });
     }), ctx);
     const flag = flagged.flags[0];
     expect(flag.path).toBe("requirements.mustHaves[1].text");
@@ -152,7 +133,7 @@ describe("a kept flag stays kept when the lists around it move (C1)", () => {
   });
 });
 
-describe("wording that stands in for a protected trait is flagged anywhere a person reads it (C1)", () => {
+describe("wording that stands in for a protected trait is flagged anywhere a person reads it", () => {
   const cases: Array<[string, string]> = [
     ["age", "Ideal for candidates aged 25-35"],
     ["age", "Must be under 30"],
@@ -180,8 +161,8 @@ describe("wording that stands in for a protected trait is flagged anywhere a per
     }
   });
 
-  it("stores flags on the packet; approval waits until each is edited out or kept with a reason, and who kept it carries over", () => {
-    const flagged = guardPacket(packet((x) => { x.requirements.mustHaves.push({ key: "m2", text: "Native English speaker", rationale: "r", evidencedBy: ["screen"] }); }), ctx);
+  it("stores flags on the job; publishing waits until each is edited out or kept with a reason, and who kept it carries over", () => {
+    const flagged = guardPacket(packet((x) => { x.requirements.mustHaves.push({ key: "m2", text: "Native English speaker", rationale: "r" }); }), ctx);
     expect(unresolvedFlags(flagged.packet)).toHaveLength(1);
     const flag = flagged.flags[0];
     expect(flag).toMatchObject({ path: "requirements.mustHaves[1].text", rule: "language_origin" });
@@ -209,7 +190,7 @@ describe("wording that stands in for a protected trait is flagged anywhere a per
   });
 });
 
-describe("the questions every applicant answers pass the fairness check (Wave S7)", () => {
+describe("the application form's questions pass the fairness check", () => {
   const refused = [
     ["What is your gender?", "asks_sex"],
     ["What are your pronouns?", "asks_sex"],
@@ -250,7 +231,7 @@ describe("the questions every applicant answers pass the fairness check (Wave S7
   for (const [question, rule] of refused) {
     it(`refuses "${question}" (${rule})`, () => {
       expect(questionCheck(question)?.rule).toBe(rule);
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["A", "B"] }] })[0]).toMatchObject({ list: "quick", index: 0, key: "cq_x", part: "question", rule });
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["A", "B"] }])[0]).toMatchObject({ index: 0, key: "cq_x", part: "question", rule });
     });
   }
 
@@ -275,52 +256,49 @@ describe("the questions every applicant answers pass the fairness check (Wave S7
     for (const q of fine) expect(questionCheck(q), q).toBeNull();
   });
 
-  it("checks every part of a question: its help line, each answer offered and what a good answer shows", () => {
-    const problems = companyQuestionProblems({
-      quick: [
-        { key: "cq_shift", question: "Which shift suits you?", help: "Tell us how old are you too", options: ["Morning", "Evening"] },
-        { key: "cq_about", question: "Which describes you?", options: ["Male", "Female", "Prefer not to say"] },
-      ],
-      written: [{ key: "wq_story", question: "Tell us about a hard day at work.", lookFor: "Ideally married, with a stable home" }],
-    });
-    expect(problems.map((p) => [p.list, p.index, p.part, p.rule])).toEqual([
-      ["quick", 0, "help", "asks_age"],
-      ["quick", 1, "option", "asks_trait_option"],
-      ["quick", 1, "option", "asks_trait_option"],
-      ["written", 0, "lookFor", "asks_family"],
+  it("checks every part of a question: its help line and each answer offered", () => {
+    const problems = formQuestionProblems([
+      { key: "cq_shift", question: "Which shift suits you?", help: "Tell us how old are you too", options: ["Morning", "Evening"] },
+      { key: "cq_about", question: "Which describes you?", options: ["Male", "Female", "Prefer not to say"] },
+      { key: "cq_story", question: "Have you worked a front desk?", help: "Ideally married, with a stable home" },
     ]);
-    expect(companyQuestionProblemWords(problems[1])).toBe('Quick question 2, the answer "Male": An answer to choose from names a protected characteristic, so the question asks about it. Ask only about the work the job needs.');
-    // answers to choose from that are a protected trait, or an age bracket, are refused (the review's probes)
+    expect(problems.map((p) => [p.index, p.key, p.part, p.rule])).toEqual([
+      [0, "cq_shift", "help", "asks_age"],
+      [1, "cq_about", "option", "asks_trait_option"],
+      [1, "cq_about", "option", "asks_trait_option"],
+      [2, "cq_story", "help", "asks_family"],
+    ]);
+    expect(problems[1].words).toBe('Screening question 2, the answer "Male": An answer to choose from names a protected characteristic, so the question asks about it. Ask only about the work the job needs.');
+    expect(problems[0].words).toMatch(/^Screening question 1, its help line: /);
+    // answers to choose from that are a protected trait, or an age bracket, are refused
     for (const options of [["U.S. citizen", "Green card holder", "Work visa"], ["Under 30", "30-49", "50 or over"], ["Mr", "Mrs", "Ms"], ["Mother", "Father"], ["Veteran", "Not a veteran"]]) {
-      const found = companyQuestionProblems({ quick: [{ key: "cq_which", question: "Which one are you?", options }] });
+      const found = formQuestionProblems([{ key: "cq_which", question: "Which one are you?", options }]);
       // every answer offered is refused, each with the rule it breaks
       expect(found.map((p) => p.part), options.join(" / ")).toEqual(options.map(() => "option"));
     }
     // numbers that count something are not ages
-    expect(companyQuestionProblems({ quick: [{ key: "cq_n", question: "How many patients do you see a day?", options: ["Under 10", "10-20", "20 or more"] }] })).toEqual([]);
+    expect(formQuestionProblems([{ key: "cq_n", question: "How many patients do you see a day?", options: ["Under 10", "10-20", "20 or more"] }])).toEqual([]);
     // the phrase list's protected-characteristic rules are refused in a question, not only flagged
-    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your work.", lookFor: "Native English speakers only" }] })[0]).toMatchObject({ part: "lookFor" });
-    expect(companyQuestionProblems({ quick: [], written: [] })).toEqual([]);
-    expect(companyQuestionProblems(null)).toEqual([]);
+    expect(formQuestionProblems([{ key: "cq_x", question: "Tell us about your work.", help: "Native English speakers only" }])[0]).toMatchObject({ part: "help" });
+    expect(formQuestionProblems([])).toEqual([]);
+    expect(formQuestionProblems(null)).toEqual([]);
   });
 
-  it("flags phrase-list wording in the company's questions like any other words, and still reads a protected question that got in", () => {
+  it("flags phrase-list wording in the form's questions like any other words, and still reads a protected question that got in", () => {
     const p = packet((x) => {
-      x.companyQuestions = {
-        quick: [{ kind: "number", key: "cq_years", question: "How many years of experience do you have?", required: true }],
-        written: [
-          { key: "wq_gaps", question: "Walk us through your last job.", required: true, lookFor: "No employment gaps" },
-          { key: "wq_age", question: "How old are you?", required: true },
-        ],
-      };
+      x.formQuestions = [
+        { kind: "number", key: "cq_years", question: "How many years of experience do you have?", required: true },
+        { kind: "yes_no", key: "cq_gaps", question: "Did your last job run for a year or more?", help: "No employment gaps", required: true },
+        { kind: "yes_no", key: "cq_age", question: "How old are you?", required: true },
+      ];
     });
     const { flags } = guardPacket(p, ctx);
     expect(flags.map((f) => [f.path, f.rule])).toEqual([
-      ["companyQuestions.written[0].lookFor", "employment_gaps"],
-      ["companyQuestions.written[1].question", "asks_age"],
+      ["formQuestions[1].help", "employment_gaps"],
+      ["formQuestions[2].question", "asks_age"],
     ]);
-    expect(flags[0].id).toContain("companyQuestions.written[wq_gaps].lookFor");
-    // a packet without them is read as before
+    expect(flags[0].id).toContain("formQuestions[cq_gaps].help");
+    // a job without them is read as before
     expect(guardPacket(packet(), ctx).flags).toEqual([]);
   });
 });
@@ -357,12 +335,12 @@ describe("a ban on a criminal record is refused in any common wording, and a bac
   it("refuses a question about the candidate's own record, wherever a question is set", () => {
     for (const question of ["Are you a convicted felon?", "Any felony convictions?", "Have you ever been convicted of a crime?", "Are you on probation or parole?", "Are you felony-free?"]) {
       expect(questionCheck(question)?.rule, question).toBe("asks_record");
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["Yes", "No"] }])[0], question).toMatchObject({ part: "question", rule: "asks_record" });
     }
     // rebuilt from the final check (LT-31): neither is in production's words or a fixed phrase, so both are saved, as in production
     for (const question of ["Do you have a felony?", "Ever been arrested?"]) {
       expect(questionCheck(question), question).toBeNull();
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["Yes", "No"] }]), question).toEqual([]);
     }
   });
 
@@ -395,7 +373,7 @@ describe("a ban on a criminal record is refused in any common wording, and a bac
     // as it was saved: the description's ban was flagged under the words the rule found then, and a person kept it
     const keep = { id: "criminal_record:description.publicJobDescription:no_felonies", path: "description.publicJobDescription", rule: "criminal_record", text: "No felonies", reason, alternative, kept: { reason: "State law bars anyone with a felony from this licensed role.", by: dana, at: "2026-11-01T10:00:00.000Z" } };
     const saved = packet((x) => {
-      x.requirements.mustHaves.push({ key: "record", text: "No felony convictions", rationale: "r", evidencedBy: ["resume"] });
+      x.requirements.mustHaves.push({ key: "record", text: "No felony convictions", rationale: "r" });
       x.description.publicJobDescription += " No felonies or misdemeanors.";
       x.provenance.flags = [keep];
     });
@@ -466,7 +444,7 @@ describe("the review of the criminal-record fix: each common ban refused, and th
       "Have you served time in jail or prison?",
     ]) {
       expect(questionCheck(question)?.rule, question).toBe("asks_record");
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] })[0], question).toMatchObject({ part: "question", rule: "asks_record" });
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["Yes", "No"] }])[0], question).toMatchObject({ part: "question", rule: "asks_record" });
     }
     // rebuilt from the final check (LT-31): none of these holds production's words or a fixed phrase, so they are saved, as in production
     for (const question of [
@@ -475,11 +453,11 @@ describe("the review of the criminal-record fix: each common ban refused, and th
       "Is your record clean?", "Are you currently awaiting trial?",
     ]) {
       expect(questionCheck(question), question).toBeNull();
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["Yes", "No"] }]), question).toEqual([]);
     }
     // a ban's words in a help line or in what a good answer shows are refused too, never only flagged; rebuilt from the
     // final check (LT-31), the question rule reads a ban's words in every part, so it is the one that refuses them
-    expect(companyQuestionProblems({ written: [{ key: "wq_x", question: "Tell us about your last job.", lookFor: "We only hire people with a clean record" }] })[0]).toMatchObject({ part: "lookFor", rule: "asks_record", text: "clean record" });
+    expect(formQuestionProblems([{ key: "cq_x", question: "Tell us about your last job.", help: "We only hire people with a clean record" }])[0]).toMatchObject({ part: "help", rule: "asks_record", text: "clean record" });
   });
 
   it("never refuses a question about the work with records, the people it is with, or a bill's charges, beyond production's own words", () => {
@@ -490,10 +468,10 @@ describe("the review of the criminal-record fix: each common ban refused, and th
       "Do you have any DUI convictions?", "Can you pass a background check?",
     ]) {
       expect(questionCheck(question), question).toBeNull();
-      expect(companyQuestionProblems({ quick: [{ key: "cq_x", question, options: ["Yes", "No"] }] }), question).toEqual([]);
+      expect(formQuestionProblems([{ key: "cq_x", question, options: ["Yes", "No"] }]), question).toEqual([]);
     }
     // rebuilt from the final check (LT-31): production's bare "criminal record" in a question refuses it, as in production
-    expect(companyQuestionProblems({ quick: [{ key: "cq_x", question: "Have you worked with people who have a criminal record?", options: ["Yes", "No"] }] })[0]).toMatchObject({ part: "question", rule: "asks_record", text: "criminal record" });
+    expect(formQuestionProblems([{ key: "cq_x", question: "Have you worked with people who have a criminal record?", options: ["Yes", "No"] }])[0]).toMatchObject({ part: "question", rule: "asks_record", text: "criminal record" });
   });
 
   it("reads a record named on its own as a deal-breaker as the ban, and only as a deal-breaker", () => {
@@ -512,31 +490,32 @@ describe("the review of the criminal-record fix: each common ban refused, and th
     expect(screenDealBreaker("No recent grads")?.rule).toBe("recent_graduate");
   });
 
-  it("flags a saved job's ban as before the fix, a record named as a deal-breaker and the must-have in its words, and passes fair-chance words", () => {
+  it("flags a saved job's ban as before, and a must-have in the words of a deal-breaker refused for a record, and passes fair-chance words", () => {
     // as it was saved: the description's ban was flagged under the words the rule found then, and a person kept it
     const keep = { id: "criminal_record:description.publicJobDescription:clean_record", path: "description.publicJobDescription", ...RULE, text: "clean record", kept: { reason: "Our state licensing board requires it for this role.", by: dana, at: "2026-11-01T10:00:00.000Z" } };
     const saved = packet((x) => {
       x.description.publicJobDescription += " We only hire people with a clean record. We do not hold a criminal record against anyone who wants to work.";
-      x.preferences.dealBreakersInTheirWords = ["Felony convictions", "Cannot work Saturdays"];
-      x.requirements.mustHaves.push({ key: "record", text: "Felony convictions", rationale: "r", evidencedBy: ["resume"] }, { key: "saturdays", text: "Able to work Saturdays", rationale: "r", evidencedBy: ["screen"] });
+      x.requirements.mustHaves.push({ key: "record", text: "Felonies", rationale: "r" }, { key: "saturdays", text: "Able to work Saturdays", rationale: "r" });
       x.provenance.flags = [keep];
     });
-    const next = guardPacket(saved, { ...ctx, previousFlags: [keep] });
+    // the owner's deal-breaker "No felonies" was refused in the job builder; the job carries the refusal
+    const declined = [{ requested: "No felonies", ...RULE }];
+    const next = guardPacket(saved, { ...ctx, previousFlags: [keep], declined });
     // nothing is taken out or reworded: the job reads as it did and goes on running
     expect(next.packet.description.publicJobDescription).toBe(saved.description.publicJobDescription);
-    expect(next.packet.preferences.dealBreakersInTheirWords).toEqual(["Felony convictions", "Cannot work Saturdays"]);
-    expect(next.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Felony convictions", "Able to work Saturdays"]);
+    expect(next.packet.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Felonies", "Able to work Saturdays"]);
     expect(next.changes).toEqual([]);
-    // the keep holds; the deal-breaker and the must-have in its words wait for a person
+    // the keep holds; the must-have in the refused deal-breaker's words waits for a person
     expect(next.flags.map((f) => [f.path, f.rule, f.text, !!f.kept])).toEqual([
       ["description.publicJobDescription", "criminal_record", "clean record", true],
-      ["requirements.mustHaves[1].text", "criminal_record", "Felony convictions", false],
-      ["preferences.dealBreakersInTheirWords[0]", "criminal_record", "Felony convictions", false],
+      ["requirements.mustHaves[1].text", "criminal_record", "Felonies", false],
     ]);
-    expect(unresolvedFlags(next.packet)).toHaveLength(2);
-    // a company question in a ban's own words is refused when it is saved, with the reason a question gets
-    const problem = companyQuestionProblems({ quick: [{ key: "cq_record", question: "Do you have a clean record?", options: ["Yes", "No"] }] });
-    expect(companyQuestionProblemWords(problem[0])).toBe("Quick question 1: Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places. Leave any background check to the end of the process, after an offer, where the law allows it.");
+    expect(unresolvedFlags(next.packet)).toHaveLength(1);
+    // with no such deal-breaker refused, the same words are no ban
+    expect(guardPacket(saved, { ...ctx, previousFlags: [keep] }).flags.map((f) => f.path)).toEqual(["description.publicJobDescription"]);
+    // a form question in a ban's own words is refused when it is saved, with the reason a question gets
+    const problem = formQuestionProblems([{ key: "cq_record", question: "Do you have a clean record?", options: ["Yes", "No"] }]);
+    expect(problem[0].words).toBe("Screening question 1: Asking about arrests or convictions on an application breaks fair-chance hiring laws in many places. Leave any background check to the end of the process, after an offer, where the law allows it.");
   });
 });
 
@@ -558,11 +537,11 @@ describe("the criminal-record rules rebuilt from the final check: production's w
   /** What a field does with the words, through the code it runs: refused where they are set, flagged on a saved job, or allowed. */
   function read(field: Field, text: string): { result: Result; rule?: string; hit?: string } {
     if (field === "question") {
-      const problem = companyQuestionProblems({ quick: [{ key: "cq_x", question: text, options: ["Yes", "No"] }] })[0];
-      // the quick start's own question is read the same way
-      expect(questionCheck(text)?.rule ?? null, `${text} (the quick start's own question)`).toBe(problem?.rule ?? null);
+      const problem = formQuestionProblems([{ key: "cq_x", question: text, options: ["Yes", "No"] }])[0];
+      // one question on its own is read the same way
+      expect(questionCheck(text)?.rule ?? null, `${text} (one question on its own)`).toBe(problem?.rule ?? null);
       if (problem) return { result: "refused", rule: problem.rule, hit: problem.text };
-      const flag = guardPacket(packet((x) => { x.companyQuestions = { quick: [{ kind: "choice", key: "cq_x", question: text, options: ["Yes", "No"], required: true }], written: [] }; }), ctx).flags[0];
+      const flag = guardPacket(packet((x) => { x.formQuestions = [{ kind: "choice", key: "cq_x", question: text, options: ["Yes", "No"], required: true }]; }), ctx).flags[0];
       return flag ? { result: "flagged", rule: flag.rule, hit: flag.text } : { result: "allowed" };
     }
     if (field === "description") {
@@ -830,7 +809,7 @@ describe("the criminal-record rules rebuilt from the final check: production's w
   });
 
   it("refuses an answer offered in a ban's words, as a question in them, and passes a driving record's own words", () => {
-    const problems = companyQuestionProblems({ quick: [{ key: "cq_driving", question: "How would you describe your driving record?", options: ["Clean record", "One or two tickets", "Clean driving record"] }] });
+    const problems = formQuestionProblems([{ key: "cq_driving", question: "How would you describe your driving record?", options: ["Clean record", "One or two tickets", "Clean driving record"] }]);
     expect(problems.map((p) => [p.part, p.rule, p.text])).toEqual([["option", "asks_record", "Clean record"]]);
   });
 });
