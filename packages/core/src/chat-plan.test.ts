@@ -13,7 +13,7 @@ describe("the AI interview's plan (a counter and the section, never the question
       ["q_explain", "question", true, "open", "direct", 0], ["q_room", "question", true, "open", "direct", 0],
       ["mh_arduino", "gap", false, "open", "direct", 0], ["mh_teaching", "gap", false, "open", "direct", 0],
     ]);
-    expect(chatCounter(p)?.label).toBe("0 of 2 required · Required questions");
+    expect(chatCounter(p)?.label).toBe("Question 1 of 4");
     // no question at all: it starts with the must-haves; nothing at all: straight to the close
     expect(buildChatPlan({ questions: [], gaps: ["mh_a"], at }).section).toBe("experience");
     expect(buildChatPlan({ questions: [], gaps: [], at }).section).toBe("wrapping_up");
@@ -48,7 +48,7 @@ describe("the AI interview's plan (a counter and the section, never the question
     for (const yes of ["No, but at my last job I explained the X-ray to a nervous patient", "Not yet, though I shadowed it once", "Yes", "I built a pump controller", "", "Not exactly the same, similar though: I ran the front desk"]) expect(saysNotDone(yes), yes).toBe(false);
   });
 
-  it("moves on with the progress: asking, covered once passed, not known stays so, skipped; the section follows; the counter counts the job's questions that are settled", () => {
+  it("moves on with the progress: asking, covered once passed, not known stays so, skipped; the section follows; the counter says which question is being asked", () => {
     let p = plan();
     p = syncChatPlan(p, { askedKeys: ["q_explain"], currentQuestionKey: "q_explain" });
     expect(p).toMatchObject({ section: "required", current: "q_explain" });
@@ -58,11 +58,11 @@ describe("the AI interview's plan (a counter and the section, never the question
     expect(p.items[0]).toMatchObject({ state: "asking", pushes: 1 });
     // covered, on to the second question, which is then skipped
     p = syncChatPlan(p, { askedKeys: ["q_explain", "q_room"], currentQuestionKey: "q_room" }, { key: "q_explain", move: "covered" });
-    expect(chatCounter(p)?.label).toBe("1 of 2 required · Required questions");
+    expect(chatCounter(p)?.label).toBe("Question 2 of 4");
     p = syncChatPlan(p, { askedKeys: ["q_explain", "q_room", "mh_arduino"], currentQuestionKey: "mh_arduino", declined: ["q_room"] });
     expect(p.items.map((i) => i.state)).toEqual(["covered", "skipped", "asking", "open"]);
     expect(p.section).toBe("experience");
-    expect(chatCounter(p)?.label).toBe("2 of 2 required · About your experience");
+    expect(chatCounter(p)?.label).toBe("Question 3 of 4");
     // "No" all the way down: settled as not known, and it stays so once passed
     p = syncChatPlan(p, { askedKeys: ["q_explain", "q_room", "mh_arduino"], currentQuestionKey: "mh_arduino", declined: ["q_room"] }, { key: "mh_arduino", move: "analog" });
     expect(p.items[2]).toMatchObject({ state: "asking", step: "analog" });
@@ -70,16 +70,21 @@ describe("the AI interview's plan (a counter and the section, never the question
     expect(p.items.map((i) => i.state)).toEqual(["covered", "skipped", "unknown", "covered"]);
     expect(p).toMatchObject({ section: "wrapping_up", current: null });
     expect(p.items.every(chatItemSettled)).toBe(true);
+    expect(chatCounter(p)?.label).toBe("All 4 questions done");
   });
 
-  it("the counter counts the job's questions that are closed, never a must-have asked about, and names the section", () => {
+  it("the counter counts every question the chat asks, a must-have asked about included and the closing question never, and says when all are done", () => {
     const stored = (states: Array<["question" | "gap", boolean, "open" | "asking" | "covered" | "unknown" | "skipped"]>, section: "experience" | "required" | "wrapping_up" = "required") =>
       ChatPlan.parse({ v: 1, section, builtAt: at, items: states.map(([kind, required, state], i) => ({ key: `k${i}`, kind, required, state })) });
     expect(chatCounter(undefined)).toBeNull();
-    const p = stored([["gap", false, "covered"], ["question", true, "covered"], ["question", true, "unknown"], ["question", true, "asking"], ["question", true, "open"], ["question", false, "covered"]]);
-    expect(chatCounter(p)).toEqual({ done: 2, required: 4, section: "required", label: "2 of 4 required · Required questions" });
-    expect(chatCounter(stored([["gap", false, "asking"]], "experience"))?.label).toBe("About your experience");
-    expect(chatCounter(stored([["question", true, "skipped"]], "wrapping_up"))?.label).toBe("1 of 1 required · Wrapping up");
+    // answered, settled as not known and skipped are closed alike; the one being asked is the next
+    const p = stored([["gap", false, "covered"], ["question", true, "covered"], ["question", true, "unknown"], ["question", true, "asking"], ["question", true, "open"], ["question", false, "skipped"]]);
+    expect(chatCounter(p)).toEqual({ done: 4, total: 6, label: "Question 5 of 6" });
+    expect(chatCounter(stored([["gap", false, "asking"]], "experience"))?.label).toBe("Question 1 of 1");
+    // at the closing question: how many were asked, in plain words whatever the number
+    expect(chatCounter(stored([["question", true, "skipped"], ["gap", false, "unknown"]], "wrapping_up"))).toEqual({ done: 2, total: 2, label: "All 2 questions done" });
+    expect(chatCounter(stored([["question", true, "skipped"]], "wrapping_up"))?.label).toBe("All questions done");
+    expect(chatCounter(stored([], "wrapping_up"))?.label).toBe("One question");
   });
 });
 

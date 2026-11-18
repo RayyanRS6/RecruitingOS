@@ -48,7 +48,7 @@ export async function findConversation(db: Db, token: string): Promise<Conversat
  *   not to do it, or it was cancelled).
  * - `current`: the question being asked, the tap answer it offers, and whether it already has an answer (the assistant is
  *   following up: skipping then moves on and keeps it). `review`: one line per question.
- * - `counter`: the header's "2 of 4 required"; never the questions in advance.
+ * - `counter`: the line above the chat, "Question 2 of 6"; never the questions in advance.
  * - `formAnswers`: their answers on the application form, as the chat read them.
  * There is deliberately no status link here, and never a score.
  */

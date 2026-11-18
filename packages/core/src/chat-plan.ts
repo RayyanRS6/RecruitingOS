@@ -1,4 +1,4 @@
-import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, type ChatCounter, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningQuestion, type ScreenProgress, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_WRAP_KEY, type ChatCounter, type ChatItem, type ChatPlan, type ChatReading, type ChatSection, type RolePacket, type ScreeningQuestion, type ScreenProgress, type TapAnswer, type TapFormat } from "@ros/contracts";
 
 /**
  * The AI interview's plan and its tap answers: which items the chat must close and in what order, what the chat does
@@ -106,16 +106,17 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
 }
 
 /**
- * The chat header's counter: how many of the job's interview questions are closed (answered with something concrete,
- * settled as not known, or skipped), out of how many, and the section's name. Must-haves asked about never count. Null
- * before the chat has a plan.
+ * The one line above the chat: which question is being asked, of how many the chat asks ("Question 2 of 6"), and "All 6
+ * questions done" once every one is closed (answered, settled as not known, or skipped) and only the closing question
+ * is left. Every item of the plan counts, the job's interview questions and the must-haves asked about alike; the
+ * closing question never does. Null before the chat has a plan.
  */
 export function chatCounter(plan: ChatPlan | null | undefined): ChatCounter | null {
   if (!plan) return null;
-  const required = plan.items.filter((i) => i.kind === "question" && i.required);
-  const done = required.filter(chatItemSettled).length;
-  const section = CHAT_SECTION_LABEL[plan.section];
-  return { done, required: required.length, section: plan.section, label: required.length ? `${done} of ${required.length} required · ${section}` : section };
+  const total = plan.items.length;
+  const done = plan.items.filter(chatItemSettled).length;
+  const label = done < total ? `Question ${done + 1} of ${total}` : total > 1 ? `All ${total} questions done` : total === 1 ? "All questions done" : "One question";
+  return { done, total, label };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

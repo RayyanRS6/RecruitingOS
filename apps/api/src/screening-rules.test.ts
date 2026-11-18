@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import type { CandidatePanel, ScreenTurn } from "@ros/contracts";
+import { CHAT_WRAP_KEY, type CandidatePanel, type ScreenTurn } from "@ros/contracts";
 import { aiRuns, applications, candidates, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -94,7 +94,7 @@ describe("AI interview rules: the follow-up cap and choosing a person instead", 
     expect(page).toContain('<li class="msg candidate"><span class="sr-only">You said: </span>Yes</li>');
     expect(page).toContain('<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>Could you say a bit more about that?</li>');
     expect(page).toContain("Your reply<span class=\"sr-only\"> to: Could you say a bit more about that?</span>");
-    expect(page).toContain(`<p class="meta">1 of ${QUESTIONS.length} required · Required questions</p>`);
+    expect(page).toContain(`<p class="meta">Question 2 of ${QUESTIONS.length}</p>`);
     // a second push is not asked: the chat moves on, with the candidate's own words as the answer
     scr = await say("Yes.");
     expect(scr.progress.currentQuestionKey).toBe("patient");
@@ -107,15 +107,18 @@ describe("AI interview rules: the follow-up cap and choosing a person instead", 
     expect(scr.progress.askedKeys.slice(-3)).toEqual(["license", "charting", "patient"]);
     // every turn went through the model runner and was recorded
     expect(await runsOf()).toBe(runsBefore + 3);
-    // the page counts both as done
+    // the page counts both as done: the third is the one being asked
     const html = await pageOf(`/c/screen/${token}`);
-    expect(html).toContain(`<p class="meta">2 of ${QUESTIONS.length} required · Required questions</p>`);
+    expect(html).toContain(`<p class="meta">Question 3 of ${QUESTIONS.length}</p>`);
     expect(html).toContain(`<li class="msg assistant now" id="question"><span class="sr-only">The assistant said: </span>${QUESTIONS[2].question}</li>`);
     // the next answer is read afresh: the push count of the last question is not carried over
     expect((await form(`/c/screen/${token}`, { message: "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me." })).status).toBe(302);
     const later = await screenOf(application.id);
     expect(later.answers.patient).toMatch(/nervous patient/);
     expect(later.progress.chat?.items.find((i) => i.key === "patient")?.pushes).toBe(0);
+    // every question is closed and only the closing one is left: the line says so, in plain words
+    expect(later.progress.currentQuestionKey).toBe(CHAT_WRAP_KEY);
+    expect(await pageOf(`/c/screen/${token}`)).toContain(`<p class="meta">All ${QUESTIONS.length} questions done</p>`);
   });
 
   it("'I'd rather talk to a person' is one plain choice: it closes the AI interview as theirs, tells the team once with none of their words, changes nothing when pressed again, and is rate-limited per link", async () => {

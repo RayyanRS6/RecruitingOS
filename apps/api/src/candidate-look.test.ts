@@ -387,7 +387,8 @@ describe("candidate pages: the look, page by page", () => {
     const html = await page(`/c/screen/${screenToken}`);
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
     // the chat's title, how far along it is, the thread, the latest message the one to answer
-    expect(html).toMatch(/<h1 class="chat-title">Your chat about the [^<]+ role<\/h1><p class="meta">\d+ of \d+ required · [^<]+<\/p>/);
+    expect(html).toMatch(/<h1 class="chat-title">Your chat about the [^<]+ role<\/h1><p class="meta">Question 1 of \d+<\/p>/);
+    expect(html).not.toMatch(/\brequired ·|Required questions|Wrapping up/);
     expect(html).toMatch(/<li class="msg assistant now" id="question">[\s\S]+?<\/li>/);
     expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
     expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);

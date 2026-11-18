@@ -777,7 +777,7 @@ describe("what each turn of the chat is held to", () => {
     p = advanceProgress(p, d.turn, d.move);
     expect(p.chat?.items[1].state).toBe("unknown");
     expect(p.chat?.section).toBe("required");
-    expect(chatCounter(p.chat)?.label).toBe("0 of 2 required · Required questions");
+    expect(chatCounter(p.chat)?.label).toBe("Question 3 of 4");
   });
 
   it("records nothing while an item is still being asked, whatever the model put in answerRecorded (Wave S9: the real model recorded a bare 'yes' on the push)", () => {

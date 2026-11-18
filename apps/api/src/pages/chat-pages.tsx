@@ -76,7 +76,7 @@ function latestAssistant(lines: Line[]): number {
 }
 
 /**
- * The chat: its title, how far along it is ("2 of 4 required"; never the questions in advance), "where your answers
+ * The chat: its title, how far along it is ("Question 2 of 6"; never the questions in advance), "where your answers
  * go", the whole chat as a thread (the assistant's latest message, the one to answer, in larger type), then the reply
  * box (Yes and No, a date or a pay range where the question asked takes one), the quiet skip, and a person. While the
  * assistant reads a reply the page says "Reading your reply…" and the box is locked (`SCREEN_BUSY_JS`); without script
