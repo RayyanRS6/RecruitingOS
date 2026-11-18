@@ -208,7 +208,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
         kind: "worker.stale",
         severity: "critical",
         title: "The background worker has stopped polling",
-        body: `${worker ? `The last heartbeat was ${minutes} minute${minutes === 1 ? "" : "s"} ago (worker ${worker.workerId}).` : "No worker has ever written a heartbeat."} While the worker is down nothing queued runs: no email or text leaves, no application is processed, no reminder goes out. Check the Railway worker service (docs/runbooks/railway-worker.md, screen 4): its health check, its logs and whether it keeps restarting.`,
+        body: `${worker ? `The last heartbeat was ${minutes} minute${minutes === 1 ? "" : "s"} ago (worker ${worker.workerId}).` : "No worker has ever written a heartbeat."} While the worker is down nothing queued runs: no email leaves, no application is processed, no reminder goes out. Check the Railway worker service (docs/runbooks/railway-worker.md, screen 4): its health check, its logs and whether it keeps restarting.`,
         details: { workerId: worker?.workerId ?? null, lastSeenAt: worker?.lastSeenAt ?? null, queueDepth: worker?.queueDepth ?? null, version: worker?.version ?? null },
       }, { withinMs: HEALTH_ALERT_WINDOW_MS, now }));
       if (result.created) {
