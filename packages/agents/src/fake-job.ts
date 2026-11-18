@@ -1,6 +1,6 @@
 import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeMissingFact, type IntakeQuestion, type IntakeTurn, type JobPosts } from "@ros/contracts";
 import { ASKED_WORDS, type StructuredRequest } from "@ros/ai";
-import { normalizeCriterion } from "@ros/core";
+import { REACH_A_PERSON_LINE, disclosureLine, normalizeCriterion } from "@ros/core";
 
 /**
  * The stand-in provider's answers for the job builder (intake.turn, intake.compile, intake.extract) and for a published
@@ -298,7 +298,7 @@ export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePac
     competencies,
     screening: { questions, maxMinutes: 10 },
     formQuestions,
-    communication: { tone: "warm", companyBlurb: `${c.companyName} is a ${c.vertical} business that treats its team and its customers with respect.`, candidateMayBeTold: ["The posted pay range", "The schedule", "The steps of the process"], signature: `The hiring team at ${c.companyName}`, disclosureText: `This message was sent by the hiring team at ${c.companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`, humanAlternativeText: "Reply HUMAN at any time and a person from our team will follow up." },
+    communication: { tone: "warm", companyBlurb: `${c.companyName} is a ${c.vertical} business that treats its team and its customers with respect.`, candidateMayBeTold: ["The posted pay range", "The schedule", "The steps of the process"], signature: `The hiring team at ${c.companyName}`, disclosureText: disclosureLine(c.companyName), humanAlternativeText: REACH_A_PERSON_LINE },
     compliance: { jurisdictions: [], notices: ["ai_use", "privacy"] },
     provenance: { aiRunIds: [], assumptions },
   };

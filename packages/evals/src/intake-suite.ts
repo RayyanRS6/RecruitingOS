@@ -1,4 +1,4 @@
-import { screenCriterion } from "@ros/agents";
+import { HUMAN_KEYWORD, screenCriterion } from "@ros/agents";
 import { repeatsMustHave, rulesOut, type DraftRolePacket, type IntakeFacts, type IntakeTurn, type RolePacket } from "@ros/contracts";
 
 /**
@@ -129,9 +129,9 @@ export function draftSkillsNote(p: Pick<RolePacket, "requirements" | "competenci
 
 /**
  * What intake.compile asks of every job, read on the job as the model wrote it: a description of about 120 words or
- * more with no pay figure in it, the AI named in the disclosure line, three to six skills each with a definition and
- * something that shows it, an AI interview of at most twelve questions advertised as about ten minutes, at most five
- * questions on the application form, and at most five assumptions.
+ * more with no pay figure in it, the AI named in the disclosure line, no reply keyword in the two lines under every
+ * message, three to six skills each with a definition and something that shows it, an AI interview of at most twelve
+ * questions advertised as about ten minutes, at most five questions on the application form, and at most five assumptions.
  */
 export function writtenJobFailures(d: DraftRolePacket): string[] {
   const f: string[] = [];
@@ -140,6 +140,7 @@ export function writtenJobFailures(d: DraftRolePacket): string[] {
   if (words < 100) f.push(`the job description has ${words} words; about 120 or more expected`);
   if (/\$\s?\d/.test(description)) f.push("a pay figure is written into the job description");
   if (!/\bAI\b|artificial intelligence/i.test(d.communication.disclosureText)) f.push("the disclosure line does not mention AI");
+  if ([d.communication.disclosureText, d.communication.humanAlternativeText].some((line) => HUMAN_KEYWORD.test(line))) f.push("a line under every message asks for a reply with a keyword, which nothing reads");
   if (d.competencies.length < 3 || d.competencies.length > 6) f.push(`${d.competencies.length} skills; three to six expected`);
   for (const c of d.competencies) if (!c.definition.trim() || !c.indicators.length) f.push(`the skill "${c.name}" has no definition or nothing that shows it`);
   if (d.screening.questions.length > 12) f.push(`${d.screening.questions.length} questions in the AI interview; at most twelve expected`);

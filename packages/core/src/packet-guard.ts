@@ -1,5 +1,5 @@
 import { mustHaveOf, restatementsOf, type Actor, type DeclinedCriterion, type DraftRolePacket, type FormQuestionRefusal, type Location, type PacketFlag } from "@ros/contracts";
-import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./compliance";
+import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, resolveJurisdictions } from "./compliance";
 
 /**
  * The fairness guard on a job's wording. The deterministic guarantees every saved job record gets, whoever or whatever
@@ -496,7 +496,7 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     }
   }
   if (!packet.communication.disclosureText || !/\bAI\b|artificial intelligence/i.test(packet.communication.disclosureText)) packet.communication.disclosureText = disclosureLine(ctx.companyName);
-  if (!packet.communication.humanAlternativeText?.trim()) packet.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
+  if (!packet.communication.humanAlternativeText?.trim()) packet.communication.humanAlternativeText = REACH_A_PERSON_LINE;
   if (packet.requirements.mustHaves.length > 6) {
     packet.requirements.mustHaves = packet.requirements.mustHaves.slice(0, 6);
     changes.push("Must-haves were cut to six.");

@@ -11,7 +11,7 @@ function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
     requirements: { mustHaves: [{ key: "license", text: "Active CA RDH license", rationale: "Required by law." }], niceToHaves: [] },
     competencies: [1, 2, 3].map((i) => ({ key: `c${i}`, name: `Competency ${i}`, definition: "Does the work well.", importance: "important", indicators: ["Example"] })),
     screening: { questions: ["Tell me about your perio charting.", "Which days can you work?", "What pay are you looking for?"].map((q, i) => ({ key: `q${i}`, question: q, kind: "skills" })) },
-    communication: { companyBlurb: "A friendly practice.", signature: "The team", disclosureText: "This message was written with help from an AI assistant. Reply HUMAN to reach a person.", humanAlternativeText: "Reply HUMAN for a person." },
+    communication: { companyBlurb: "A friendly practice.", signature: "The team", disclosureText: "This message was written with help from an AI assistant.", humanAlternativeText: "Reply to any of our emails to reach a person." },
     compliance: {},
     provenance: {},
   });
@@ -31,14 +31,17 @@ describe("the guard's fixed rules", () => {
     expect(changes).toHaveLength(2);
   });
 
-  it("puts the AI disclosure and the human alternative back, and keeps six must-haves at most", () => {
+  it("puts the AI disclosure and the human alternative back, in words that ask for no reply keyword, and keeps six must-haves at most", () => {
     const { packet: p } = guardPacket(packet((x) => {
       x.communication.disclosureText = "From the team.";
       x.communication.humanAlternativeText = " ";
       x.requirements.mustHaves = Array.from({ length: 8 }, (_, i) => ({ key: `m${i}`, text: `Skill ${i}`, rationale: "r" }));
     }), ctx);
-    expect(p.communication.disclosureText).toMatch(/AI recruiting assistant/);
-    expect(p.communication.humanAlternativeText).toMatch(/HUMAN/);
+    expect(p.communication.disclosureText).toBe("This message was sent by the hiring team at Brightline Dental with help from an AI recruiting assistant.");
+    expect(p.communication.humanAlternativeText).toBe("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
+    // a job's own lines are kept as written
+    const own = guardPacket(packet(), ctx).packet.communication;
+    expect([own.disclosureText, own.humanAlternativeText]).toEqual(["This message was written with help from an AI assistant.", "Reply to any of our emails to reach a person."]);
     expect(p.requirements.mustHaves).toHaveLength(6);
   });
 

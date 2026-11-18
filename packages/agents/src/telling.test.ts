@@ -9,13 +9,20 @@ import { samplePacket } from "./fixtures/sample-packet";
  */
 const company = { id: "c1", name: "Harbor Dental", settings: {} } as never;
 const candidate = { firstName: "Ana" } as never;
-/** The job's own lines, as the sample job stores them, ask for a reply with a keyword; an email says these instead. */
-const PERSON_LINE = "To reach a person at any time, reply to this email.";
+/** The sample job's own two lines, which an email carries as they are stored. */
+const OWN_PERSON_LINE = "To reach a person at any time, reply to any of our emails or use the contact on the job page.";
 const DISCLOSURE = "This message was sent by the hiring team at Harbor Dental with help from an AI recruiting assistant.";
+/** What an email says where a job stored before asks for a reply with a keyword. */
+const PERSON_LINE = "To reach a person at any time, reply to this email.";
 
 describe("the decision message", () => {
   const packet = samplePacket();
-  const write = (adverseDecisionLine = false) => decisionMessage({ candidate, company, packet, adverseDecisionLine });
+  /** A job stored before: its two lines ask for a reply with a keyword, which nothing reads. */
+  const stored = samplePacket((p) => {
+    p.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
+    p.communication.disclosureText = `${DISCLOSURE} Reply HUMAN at any time to reach a person.`;
+  });
+  const write = (adverseDecisionLine = false, job = packet) => decisionMessage({ candidate, company, packet: job, adverseDecisionLine });
 
   it("says the decision in the one standard wording, under one template key, and never gives a reason", () => {
     expect(write().subject).toBe("Your application to Harbor Dental");
@@ -28,7 +35,8 @@ describe("the decision message", () => {
 
   it("ends with the locked footer: the signature, how to reach a person, Colorado's line when it applies, the AI disclosure", () => {
     const m = write(true);
-    const order = [packet.communication.signature, PERSON_LINE, ADVERSE_DECISION_LINE.text, DISCLOSURE].map((s) => m.text.indexOf(s));
+    expect([packet.communication.humanAlternativeText, packet.communication.disclosureText]).toEqual([OWN_PERSON_LINE, DISCLOSURE]);
+    const order = [packet.communication.signature, OWN_PERSON_LINE, ADVERSE_DECISION_LINE.text, DISCLOSURE].map((s) => m.text.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(m.text.endsWith(DISCLOSURE)).toBe(true);
@@ -43,15 +51,19 @@ describe("the decision message", () => {
     expect(replyToFor(integrations, { settings: { hiringContact: { email: "jobs@harbor.test", name: "Maya" } } } as never)).toBe("jobs@harbor.test");
   });
 
-  it("never asks for a reply with a keyword nothing reads: it names the company's own contact when it set one, else a reply, once", () => {
-    expect(packet.communication.humanAlternativeText).toMatch(/HUMAN/);
-    expect(packet.communication.disclosureText).toMatch(/HUMAN/);
-    expect(write().text).not.toMatch(/HUMAN/);
-    expect(write().text.match(/To reach a person at any time/g)).toHaveLength(1);
+  it("never asks for a reply with a keyword nothing reads: where a job stored before does, the email names the company's own contact when it set one, else a reply, once", () => {
+    expect(stored.communication.humanAlternativeText).toMatch(/HUMAN/);
+    expect(stored.communication.disclosureText).toMatch(/HUMAN/);
+    const old = write(false, stored).text;
+    expect(old).not.toMatch(/HUMAN/);
+    expect(old.match(/To reach a person at any time/g)).toHaveLength(1);
+    expect(old.endsWith(`${PERSON_LINE}\n\n${DISCLOSURE}`)).toBe(true);
     const withContact = { id: "c1", name: "Harbor Dental", settings: { hiringContact: { email: "jobs@harbor.test", name: "Maya" } } } as never;
-    const own = decisionMessage({ candidate, company: withContact, packet, adverseDecisionLine: false }).text;
+    const own = decisionMessage({ candidate, company: withContact, packet: stored, adverseDecisionLine: false }).text;
     expect(own).toContain("To reach a person at any time, email jobs@harbor.test.");
     expect(own).not.toMatch(/HUMAN|reply to this email/);
+    // a job written now asks for no keyword, and its lines go as they are stored, for a company with a contact of its own too
+    for (const sender of [company, withContact]) expect(decisionMessage({ candidate, company: sender, packet, adverseDecisionLine: false }).text.endsWith(`${OWN_PERSON_LINE}\n\n${DISCLOSURE}`)).toBe(true);
     // a job whose own lines ask for no keyword keeps them word for word
     const plain = structuredClone(packet);
     plain.communication.humanAlternativeText = "You can always ask for a person.";

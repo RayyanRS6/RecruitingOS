@@ -59,8 +59,8 @@ describe("intake.turn: the builder's conversation", () => {
 });
 
 describe("intake.compile: writing the job", () => {
-  it("is version 7 and asks for the sections the job record holds, and no other", () => {
-    expect(intakeCompilePrompt).toMatchObject({ key: "intake.compile", version: 7, task: "intake.compile", agent: "intake" });
+  it("is version 8 and asks for the sections the job record holds, and no other", () => {
+    expect(intakeCompilePrompt).toMatchObject({ key: "intake.compile", version: 8, task: "intake.compile", agent: "intake" });
     const c = compile();
     for (const section of ["identity:", "description.publicJobDescription:", "requirements.mustHaves:", "competencies:", "screening:", "formQuestions:", "communication:", "compliance:", "compensation:", "provenance:"]) expect(c, section).toContain(`- ${section}`);
     expect(c).toContain("requirements.niceToHaves: the owner's nice-to-haves, in the same shape.");
@@ -91,6 +91,14 @@ describe("intake.compile: writing the job", () => {
     expect(c).toContain("kind is yes_no, choice (with options) or number (with a unit)");
     expect(c).toContain("A No rejects nobody: the team sees it.");
     expect(c).toContain("Never ask about a protected characteristic.");
+  });
+
+  it("asks for the two lines under every message in words that are true: how to reach a person by a reply or the job page's contact, never by a keyword", () => {
+    const c = compile();
+    expect(c).toContain("disclosureText (it must say that AI assists and a person is available)");
+    expect(c).toContain("humanAlternativeText (one sentence on how to reach a person: reply to any of our emails, or use the contact on the job page)");
+    expect(c).toContain("Never ask for a reply with a keyword in either line: nothing reads a reply for one.");
+    expect(c).not.toMatch(/HUMAN/);
   });
 
   it("asks for a few plain assumptions, never field names or stored values", () => {

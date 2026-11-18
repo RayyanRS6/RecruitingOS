@@ -131,6 +131,9 @@ describe("the job builder", () => {
     expect(job.requirements.mustHaves.map((m) => m.text)).toEqual(["3 years of hands-on experience in Python and Flask"]);
     expect(job.description.publicJobDescription).toContain("Software Engineer");
     expect(job.screening.questions.length).toBeGreaterThanOrEqual(5);
+    // the two lines under every message: how to reach a person in words that are true, and no keyword to reply with
+    expect(job.communication.humanAlternativeText).toBe("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
+    expect(job.communication.disclosureText).toBe("This message was sent by the hiring team at Harbor Dental with help from an AI recruiting assistant.");
     expect(job.provenance.payConfirmedBy).toMatchObject({ via: "pay_card" });
     expect(draft.progress?.stage).toBe("done");
     expect(draft.flags).toEqual([]);

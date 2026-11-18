@@ -112,6 +112,7 @@ describe("intake.golden: the job as written", () => {
     const broken: DraftRolePacket = structuredClone(draft);
     broken.description.publicJobDescription = `${"We are hiring a careful hygienist for our Tustin office. ".repeat(6)}Pay is $45 an hour.`;
     broken.communication.disclosureText = "Sent by the hiring team.";
+    broken.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
     broken.competencies = [skill("Communication"), { ...skill("Reliability"), indicators: [] }];
     broken.screening.maxMinutes = 20;
     broken.provenance.assumptions = ["One.", "Two.", "Three.", "Four.", "Five.", "Six."];
@@ -119,6 +120,7 @@ describe("intake.golden: the job as written", () => {
       "the job description has 65 words; about 120 or more expected",
       "a pay figure is written into the job description",
       "the disclosure line does not mention AI",
+      "a line under every message asks for a reply with a keyword, which nothing reads",
       "2 skills; three to six expected",
       'the skill "Reliability" has no definition or nothing that shows it',
       "the AI interview is advertised as 20 minutes; about ten expected",

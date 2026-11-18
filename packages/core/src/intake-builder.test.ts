@@ -20,7 +20,7 @@ function written(more: (p: RolePacket) => void = () => {}): DraftRolePacket {
     description: { publicJobDescription: "Harbor Dental is hiring a registered dental hygienist in Tustin to care for a loyal patient base, five days a week." },
     requirements: { mustHaves: [{ key: "license", text: "Active CA RDH license" }] },
     screening: { questions: ["One?", "Two?", "Three?"].map((question, i) => ({ key: `q${i}`, question })) },
-    communication: { companyBlurb: "A friendly practice.", signature: "The team", disclosureText: "Written with help from an AI assistant.", humanAlternativeText: "Reply HUMAN for a person." },
+    communication: { companyBlurb: "A friendly practice.", signature: "The team", disclosureText: "Written with help from an AI assistant.", humanAlternativeText: "Reply to any of our emails to reach a person." },
     compliance: {},
     provenance: {},
   });

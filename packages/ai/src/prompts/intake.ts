@@ -112,7 +112,7 @@ The job record you return:
 - competencies: three to six skills the resume is read for beside the must-haves, each with a name, a one-sentence definition, an importance (essential, important or helpful) and one or two indicators (what shows it). Never a skill that is the same as a must-have under any name: the must-have already counts it.
 - screening: the questions of the AI interview shortlisted candidates do. The owner's own first (facts.screeningQuestions), then yours, five or six in all and never more than 12, each about the work this job describes and what it requires, with a kind and a modelAnswer (what a good answer shows; candidates never see it). Never ask about pay history. maxMinutes 10.
 - formQuestions: the application form's screening questions, answered with one tap or a number, at most five. One yes_no question for each line of facts.formQuestions; and where a must-have is a licence, a certification, the right to work or the schedule, one yes_no question asking it. kind is yes_no, choice (with options) or number (with a unit). help is one plain line written to the candidate, never mentioning "the owner". Never ask about a protected characteristic. A No rejects nobody: the team sees it.
-- communication: tone; companyBlurb (one or two sentences about the company from the facts given, nothing invented); candidateMayBeTold (the posted pay range, the schedule, the steps of the process); signature; disclosureText (it must say that AI assists and a person is available); humanAlternativeText.
+- communication: tone; companyBlurb (one or two sentences about the company from the facts given, nothing invented); candidateMayBeTold (the posted pay range, the schedule, the steps of the process); signature; disclosureText (it must say that AI assists and a person is available); humanAlternativeText (one sentence on how to reach a person: reply to any of our emails, or use the contact on the job page). Never ask for a reply with a keyword in either line: nothing reads a reply for one.
 - compliance: jurisdictions [] and notices ["ai_use", "privacy"]; the product fills them in from the job's places.
 - compensation: only the pay under "Confirmed pay", with discloseRange true and benefitsSummary when the owner gave benefits. When no pay is confirmed, leave compensation out.
 - provenance: aiRunIds [] and assumptions: at most five short plain sentences, for the owner, saying what you assumed. Never a field name, a code or a value as stored: write "You did not name any nice-to-haves, so none are listed", not "facts.niceToHaves is empty".
@@ -124,7 +124,7 @@ ${FAIRNESS_RULES}`;
 /** "Write the job": the job description and the structured posting, from the facts and the conversation. */
 export const intakeCompilePrompt: PromptDef<IntakeContext, DraftRolePacket> = {
   key: "intake.compile",
-  version: 7,
+  version: 8,
   task: "intake.compile",
   agent: "intake",
   schema: DraftRolePacket,

@@ -31,7 +31,7 @@ export function samplePacket(over: (p: RolePacket) => void = () => {}): RolePack
       maxMinutes: 15,
     },
     formQuestions: [{ kind: "yes_no", key: "schedule", question: "Are you available Monday to Friday, 8 to 5?", help: "The office hours", required: true }],
-    communication: { tone: "warm", companyBlurb: "A family practice in Irvine.", signature: "The team at Harbor Dental", disclosureText: "This message was sent by the hiring team at Harbor Dental with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.", humanAlternativeText: "Reply HUMAN at any time and a person from our team will follow up." },
+    communication: { tone: "warm", companyBlurb: "A family practice in Irvine.", signature: "The team at Harbor Dental", disclosureText: "This message was sent by the hiring team at Harbor Dental with help from an AI recruiting assistant.", humanAlternativeText: "To reach a person at any time, reply to any of our emails or use the contact on the job page." },
     compliance: {},
     provenance: {},
   });
