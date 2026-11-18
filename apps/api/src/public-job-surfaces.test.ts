@@ -175,11 +175,11 @@ describe("public job surfaces: the application form, the sitemap and structured 
     expect(several.status).toBe(400);
     expect(several.html).toContain("Please check the highlighted fields: your last name, a valid email address and a phone number of at least 7 digits, or leave it empty.");
     // the phone is optional: none at all is fine (this one goes through, below), and a real one is kept as typed on a form sent back
-    const noResume = await refused(applicationForm({ ...who, phone: "(949) 555-0142" }, null));
-    expect(noResume.status).toBe(400);
-    expect(noResume.html).toContain("Please attach your resume to send your application. Everything you entered is still here.");
-    expect(noResume.html.match(/<input id="resume"[^>]*>/)![0]).toContain('aria-invalid="true"');
-    expect(noResume.html).toContain('value="(949) 555-0142"');
+    const withoutFile = await refused(applicationForm({ ...who, phone: "(949) 555-0142" }, null));
+    expect(withoutFile.status).toBe(400);
+    expect(withoutFile.html).toContain("Please attach your resume to send your application. Everything you entered is still here.");
+    expect(withoutFile.html.match(/<input id="resume"[^>]*>/)![0]).toContain('aria-invalid="true"');
+    expect(withoutFile.html).toContain('value="(949) 555-0142"');
     // a required question left out, a choice the job does not offer, and a number outside its limits
     const unanswered = await refused(applicationForm({ ...who, q_shift: null }));
     expect(unanswered.status).toBe(400);
