@@ -519,8 +519,8 @@ describe("the AI credit", () => {
 
   /** A candidate's page as they read it: its words, without its styles and scripts (and without this suite's own mail domain, which says "credit"). */
   const shown = async (path: string) => (await (await app.request(path)).text()).replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<script[\s\S]*?<\/script>/g, " ").replace(/&#39;/g, "'").replace(/@ai-credit\.test/g, "@example.test");
-  /** What the builder's assistant answers when the plan's AI help stops its turn. */
-  const noTurn = (recovery: string, upgrade: boolean) => ({ error: "The assistant did not answer.", recovery, upgrade });
+  /** What the builder's assistant answers when the plan's AI help stops its turn: the line, and with `upgrade` the request to offer beside it. */
+  const noTurn = (recovery: string, upgrade: boolean, label = "Upgrade") => ({ error: "The assistant did not answer.", recovery, upgrade, ask: upgrade ? { label, reason: AI_HELP_UPGRADE_QUESTION } : null });
 
   describe("the job builder", () => {
     it("a new job stops before anyone types, in the plan's words, with an upgrade that asks about AI help", async () => {
@@ -761,7 +761,7 @@ describe("the AI credit", () => {
       // a turn on the draft: their words saved, and the way on is ITS
       const turn = await read<IntakeTurnResponse>(await json(cookie, "POST", `/api/v1/intake/sessions/${sessionId}/messages`, { message: "We also need Saturdays covered." }));
       const recovery = `Your plan's AI help is used up. Your draft is saved. ${way}`;
-      expect(turn.reply).toEqual(noTurn(recovery, true));
+      expect(turn.reply).toEqual(noTurn(recovery, true, "Talk to ITS"));
       said.push(recovery);
 
       // Write the job and the text about the company: 402, with the same button

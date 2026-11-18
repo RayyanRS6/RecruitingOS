@@ -5,12 +5,12 @@ import {
   type Actor, type DraftSaved, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
-import { IntakeEditError, aiCreditStanding, assertCan, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
+import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
 import { companies, entitlements as entitlementRows, events, intakeSessions, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
-import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, refusedForNow, type AiHelpWords } from "../services/ai-credit";
+import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, refusedForNow, type AiHelpWords } from "../services/ai-credit";
 import { applyFieldEdit } from "../services/packet-fields";
 import { limitReached, planRoom } from "../services/plan-room";
 import { draftChecks, draftClosingDate, publishResultOf, publishRole } from "../services/publish";
@@ -93,14 +93,14 @@ async function turn(container: Container, input: Parameters<typeof runIntakeTurn
 
 /**
  * The turn as the page reads it; a failed turn says what to do next. With no AI credit left nothing failed: the owner's
- * words are saved, and the way on is to upgrade (`upgrade`), never "try again". Refused only for money held by work
- * still running, the way on is to try again in a few minutes.
+ * words are saved, and the way on is to upgrade (`upgrade`, with the request this person may send), never "try again".
+ * Refused only for money held by work still running, the way on is to try again in a few minutes.
  */
-function turnReply(r: TurnOutcome): IntakeTurnReply {
+function turnReply(r: TurnOutcome, t: Pick<Tenant, "role">): IntakeTurnReply {
   if (!("error" in r)) return { assistantMessage: r.turn.assistantMessage, readyToCompile: r.turn.readyToCompile, takenFromAd: r.turn.takenFromAd, notARole: r.notARole };
-  if (r.busy) return { error: "The assistant did not answer.", recovery: AI_HELP_BUSY_LINE.turn, upgrade: false };
-  if (r.noCredit) return { error: "The assistant did not answer.", recovery: aiHelpLine("turn", r.words), upgrade: true };
-  return { error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false };
+  if (r.busy) return { error: "The assistant did not answer.", recovery: AI_HELP_BUSY_LINE.turn, upgrade: false, ask: null };
+  if (r.noCredit) return { error: "The assistant did not answer.", recovery: aiHelpLine("turn", r.words), upgrade: true, ask: can(t.role, "plan.request") ? askForAiHelpOn(r.words?.planKey) : null };
+  return { error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false, ask: null };
 }
 
 /** A company with no room for another job is refused before any model is called for a draft that is not a job yet. */
@@ -125,8 +125,8 @@ intakeRoutes.post("/sessions", requireTenant, async (c) => {
   const actor = actorOf(c);
   const started = await withTenant(container.db, t.companyId, (tx) => startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message: { content: body.initialMessage, kind: looksLikePastedAd(body.initialMessage) ? "pasted_ad" : "text" } }));
   const r = await turn(container, { companyId: t.companyId, sessionId: started.id, actor });
-  if (!("error" in r) && r.notARole) return c.json({ session: null, notARole: true, reply: turnReply(r) } satisfies IntakeStartResponse, 200);
-  return c.json({ session: await viewOf(container, t, started.id), notARole: false, reply: turnReply(r) } satisfies IntakeStartResponse, 201);
+  if (!("error" in r) && r.notARole) return c.json({ session: null, notARole: true, reply: turnReply(r, t) } satisfies IntakeStartResponse, 200);
+  return c.json({ session: await viewOf(container, t, started.id), notARole: false, reply: turnReply(r, t) } satisfies IntakeStartResponse, 201);
 });
 
 function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSummary {
@@ -173,7 +173,7 @@ intakeRoutes.post("/sessions/:id/messages", requireTenant, async (c) => {
   const body = IntakeMessageRequest.parse(await c.req.json());
   const container = c.get("container");
   const r = await turn(container, { companyId: t.companyId, sessionId: row.id, message: { content: body.message, kind: "text" }, actor: actorOf(c) });
-  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r), refused: [], summary: [] } satisfies IntakeTurnResponse);
+  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: [], summary: [] } satisfies IntakeTurnResponse);
 });
 
 /**
@@ -194,7 +194,7 @@ intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
     return sessionErrors(err);
   }
   const r = await turn(container, { companyId: t.companyId, sessionId: row.id, actor });
-  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r), refused: edit.refused, summary: edit.summary } satisfies IntakeTurnResponse);
+  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: edit.refused, summary: edit.summary } satisfies IntakeTurnResponse);
 });
 
 /**

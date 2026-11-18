@@ -322,17 +322,19 @@ describe("pay", () => {
 
 describe("a turn that fails", () => {
   it("says what to do, never the model's error, and offers the Upgrade when the plan's AI help is what ran out", () => {
-    const p = turnProblem({ error: "schema_violation: missing assistantMessage", recovery: "Try again.", upgrade: false });
+    const p = turnProblem({ error: "schema_violation: missing assistantMessage", recovery: "Try again.", upgrade: false, ask: null });
     expect(p).toEqual({ message: "The assistant could not reply just now. Try again.", ask: null });
     expect(p?.message).not.toMatch(/schema/);
-    // used up: the server's own line, the request to send, and never "try again"
-    const used = turnProblem({ error: "ai_credit_used_up", recovery: "Your plan's AI help is used up. Upgrade to keep going.", upgrade: true });
-    expect(used).toEqual({ message: "Your plan's AI help is used up. Upgrade to keep going.", ask: { label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION } });
+    // used up: the server's own line and the server's own request (on the top plan it is "Talk to ITS"), and never "try again"
+    const used = turnProblem({ error: "ai_credit_used_up", recovery: "Your plan's AI help is used up. Upgrade to keep going.", upgrade: true, ask: { label: "Talk to ITS", reason: AI_HELP_UPGRADE_QUESTION } });
+    expect(used).toEqual({ message: "Your plan's AI help is used up. Upgrade to keep going.", ask: { label: "Talk to ITS", reason: AI_HELP_UPGRADE_QUESTION } });
+    // someone who may not ask about the plan reads the line and gets no button
+    expect(turnProblem({ error: "ai_credit_used_up", recovery: "Your plan's AI help is used up.", upgrade: true, ask: null })).toEqual({ message: "Your plan's AI help is used up.", ask: null });
     const ok = { assistantMessage: "Got it.", readyToCompile: false, takenFromAd: [], notARole: false };
     expect(turnProblem(ok)).toBeNull();
     expect(turnProblem(null)).toBeNull();
     expect(replyWords(ok)).toBe("Got it.");
-    expect(replyWords({ error: "x", recovery: "Try again.", upgrade: false })).toBeNull();
+    expect(replyWords({ error: "x", recovery: "Try again.", upgrade: false, ask: null })).toBeNull();
     expect(replyWords(undefined)).toBeNull();
   });
 });

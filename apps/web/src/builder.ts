@@ -1,5 +1,5 @@
 import {
-  AI_HELP_UPGRADE_QUESTION, formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
+  formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
   type DraftRolePacket, type IntakeAnswer, type IntakeFacts, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
   type IntakeReadiness, type IntakeRefusal, type IntakeSessionView, type IntakeTurnReply,
 } from "@ros/contracts";
@@ -398,12 +398,12 @@ export function messageProblem(text: string, first: boolean): string | null {
 export type Problem = { message: string; ask: { label: string; reason: string } | null };
 
 /**
- * A turn the assistant could not take: what to say, and the Upgrade to offer when the plan's AI help is what ran out
- * (never "try again" then). The model's own error text is never shown; it means nothing to the person.
+ * A turn the assistant could not take: what to say, and the server's own request to offer when the plan's AI help is
+ * what ran out (never "try again" then). The model's own error text is never shown; it means nothing to the person.
  */
 export function turnProblem(reply: IntakeTurnReply | null | undefined): Problem | null {
   if (!reply || !("error" in reply)) return null;
-  if (reply.upgrade) return { message: reply.recovery, ask: { label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION } };
+  if (reply.upgrade) return { message: reply.recovery, ask: reply.ask };
   return { message: `The assistant could not reply just now. ${reply.recovery}`, ask: null };
 }
 
