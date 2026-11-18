@@ -35,9 +35,18 @@ export async function expectAccessible(page: Page, name: string) {
   await entrances();
   await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => undefined);
   await entrances();
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]).disableRules(["region"]).analyze();
-  const summary = results.violations.map((v) => `${v.id} (${v.impact}): ${v.help}\n  ${v.nodes.slice(0, 4).map((n) => `${n.target.join(" ")} :: ${n.html.slice(0, 120)}`).join("\n  ")}`).join("\n");
-  if (results.violations.length) throw new Error(`accessibility violations on ${name}:\n${summary}`);
+  // A row that arrives while axe is looking (a list that refreshes itself, an alert raised a moment ago) would still be
+  // caught part-way through its entrance and read as low contrast: on the admin's System page the dev server's own
+  // overlay keeps new security reports coming. Every entrance is for people who have not asked for less motion, so
+  // the look itself is taken with reduced motion: whatever mounts then is drawn as it ends.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  try {
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"]).disableRules(["region"]).analyze();
+    const summary = results.violations.map((v) => `${v.id} (${v.impact}): ${v.help}\n  ${v.nodes.slice(0, 4).map((n) => `${n.target.join(" ")} :: ${n.html.slice(0, 120)}`).join("\n  ")}`).join("\n");
+    if (results.violations.length) throw new Error(`accessibility violations on ${name}:\n${summary}`);
+  } finally {
+    await page.emulateMedia({ reducedMotion: null });
+  }
 }
 
 /** The page itself never scrolls sideways on this viewport. */
