@@ -16,7 +16,7 @@ describe("dedupe", () => {
 
 describe("permissions", () => {
   it("a member builds, edits and publishes jobs and acts on candidates; only an owner or an admin manages jobs, the company and its people", () => {
-    for (const p of ["role.create", "packet.edit", "role.publish", "application.read", "application.act", "application.reject", "compensation.read", "plan.request"] as const) {
+    for (const p of ["company.read", "role.read", "role.create", "packet.edit", "role.publish", "application.read", "application.act", "plan.request"] as const) {
       for (const role of ["owner", "admin", "hiring_manager"] as const) expect(can(role, p), `${role} ${p}`).toBe(true);
     }
     for (const p of ["role.manage", "company.update", "members.manage"] as const) {
@@ -24,7 +24,10 @@ describe("permissions", () => {
       expect(can("admin", p), p).toBe(true);
       expect(can("hiring_manager", p), p).toBe(false);
     }
+    // nobody without a team role may do any of it: someone signed out, or a role the product no longer has
     expect(can(null, "role.read")).toBe(false);
+    expect(can(undefined, "company.read")).toBe(false);
+    expect(can("recruiter" as never, "application.read")).toBe(false);
   });
 });
 
