@@ -32,7 +32,7 @@ test.describe("Settings", () => {
     const details = page.locator("#setup-company");
     await expect(details.locator("dl.glance")).toContainText(company);
     await expect(details.locator("dl.glance")).toContainText("Tustin, CA");
-    await expect(details.getByLabel("Careers page")).toHaveValue(/\/careers\/[a-z0-9-]+$/);
+    await expect(details.getByLabel("Careers page", { exact: true })).toHaveValue(/\/careers\/[a-z0-9-]+$/);
     await details.getByRole("button", { name: "Edit", exact: true }).first().click();
     await details.getByLabel("Website", { exact: true }).fill("firstlook.example");
     await details.getByLabel("Benefits", { exact: true }).fill("Health and dental cover, paid time off.");
@@ -55,7 +55,7 @@ test.describe("Settings", () => {
     const invited = team.getByRole("listitem").filter({ hasText: wes.name });
     await expect(invited).toContainText("Member");
     await expect(invited).toContainText(/Link works until /);
-    await expect(team.getByLabel("Invitation link")).toHaveValue(/^https?:\/\/\S+$/);
+    await expect(team.getByLabel("Invitation link", { exact: true })).toHaveValue(/^https?:\/\/\S+$/);
     await expectAccessible(page, "Settings with an invitation waiting");
 
     // the invitation's email, and joining through its link in a browser of their own

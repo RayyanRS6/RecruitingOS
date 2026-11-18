@@ -37,7 +37,7 @@ test.describe("when email does not arrive", () => {
     await team.getByLabel("Name (optional)").fill(wes.name);
     await team.getByRole("button", { name: "Invite", exact: true }).click();
     await expect(said(page, "Invited.")).toBeVisible({ timeout: 30_000 });
-    await expect(team.getByLabel("Invitation link")).toHaveValue(/^https?:\/\/\S+$/);
+    await expect(team.getByLabel("Invitation link", { exact: true })).toHaveValue(/^https?:\/\/\S+$/);
     await expect(team.getByRole("button", { name: `Copy the invitation link for ${wes.email}` })).toBeVisible();
 
     // once the send has failed, the invitation's row says so, and Send again offers the link again
@@ -46,9 +46,9 @@ test.describe("when email does not arrive", () => {
       await page.reload();
       await expect(invited).toContainText("Email did not arrive", { timeout: 5_000 });
     }).toPass({ timeout: 90_000, intervals: [3_000] });
-    await expect(team.getByLabel("Invitation link")).toHaveCount(0);
+    await expect(team.getByLabel("Invitation link", { exact: true })).toHaveCount(0);
     await invited.getByRole("button", { name: `Send the invitation to ${wes.email} again` }).click();
-    await expect(team.getByLabel("Invitation link")).toHaveValue(/^https?:\/\/\S+$/, { timeout: 30_000 });
+    await expect(team.getByLabel("Invitation link", { exact: true })).toHaveValue(/^https?:\/\/\S+$/, { timeout: 30_000 });
     await expectAccessible(page, "an invitation whose email did not arrive");
   });
 });

@@ -146,7 +146,7 @@ test.describe("making a job", () => {
       const post = card.getByLabel("Post", { exact: true });
       await expect(post, label).not.toHaveValue("", { timeout: 120_000 });
       expect(await post.inputValue(), `the ${label} carries its Apply link`).toContain(`${jobUrl}?src=${source}`);
-      await expect(card.getByLabel(`Apply link for the ${label}`)).toHaveValue(`${jobUrl}?src=${source}`);
+      await expect(card.getByLabel(`Apply link for the ${label}`, { exact: true })).toHaveValue(`${jobUrl}?src=${source}`);
       await expect(card.getByRole("button", { name: `Copy the ${label}` })).toBeEnabled();
       await expect(card.getByRole("button", { name: "Write again" })).toBeEnabled({ timeout: 30_000 });
     }

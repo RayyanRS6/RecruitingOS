@@ -406,11 +406,14 @@ export async function doTheAiInterview(cand: Page, says: Says, from: "the first 
   const sendAll = cand.getByRole("button", { name: "Send my answers" });
   const reply = cand.getByLabel(/^Your reply/);
   const tap = cand.getByRole("button", { name: "Yes", exact: true });
+  // a pay question takes two figures; days and a start date have boxes of their own, with the person's own words one click away
+  const payFrom = cand.getByLabel("From", { exact: true });
+  const ownWords = cand.getByText("Answer in your own words instead", { exact: true });
   const onward = cand.getByRole("button", { name: /^(Review and send|Check your answers)$/ }).or(cand.getByRole("link", { name: /^(Review and send|Check your answers)$/ })).first();
   const messages = cand.locator("li.msg.assistant");
   for (let turn = 0; turn < 40; turn++) {
     // whichever comes next: a question to answer, the way on to their answers, or the answers with Send
-    await expect.poll(async () => (await sendAll.isVisible()) || (await reply.isVisible()) || (await tap.isVisible()) || (await onward.isVisible()), { timeout: 60_000, message: "the AI interview's next step" }).toBe(true);
+    await expect.poll(async () => (await sendAll.isVisible()) || (await reply.isVisible()) || (await tap.isVisible()) || (await ownWords.isVisible()) || (await onward.isVisible()), { timeout: 60_000, message: "the AI interview's next step" }).toBe(true);
     if (await sendAll.isVisible()) break;
     if (await onward.isVisible()) {
       await onward.click();
@@ -419,7 +422,14 @@ export async function doTheAiInterview(cand: Page, says: Says, from: "the first 
       const asked = (await messages.count()) ? ((await messages.last().textContent()) ?? "").trim() : "";
       const aboutLicence = /licen[cs]e/i.test(asked);
       if (await tap.isVisible()) await cand.getByRole("button", { name: aboutLicence ? says.licence : "Yes", exact: true }).click();
-      else {
+      else if (await payFrom.isVisible()) {
+        // the pay they are looking for, inside the range the job posts
+        await payFrom.fill("48");
+        await cand.getByLabel("To (optional)", { exact: true }).fill("52");
+        await payFrom.locator("xpath=ancestor::form").getByRole("button", { name: "Send", exact: true }).click();
+      } else {
+        // days to tick or a date to pick: this candidate answers in their own words instead
+        if (!(await reply.isVisible())) await ownWords.click();
         await reply.fill(aboutLicence ? says.licenceWords : /nervous|patient|difficult|time when|a time/i.test(asked) ? says.story : says.work);
         await reply.locator("xpath=ancestor::form").getByRole("button", { name: "Send", exact: true }).click();
       }
