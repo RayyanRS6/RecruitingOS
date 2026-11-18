@@ -5,24 +5,22 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Avatar, Button, Card, Chip, cn, Drawer, ErrorState, Field, Icon, Menu, nextSort, Pill, Segmented, Skeleton, type SortDir, type SortKind, sortAnnouncement, sortRows, Table, type TableHead, TabPanel, Tabs } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { type AllowanceAlert, allowanceAlerts, allowanceChip } from "../../allowance";
-import { EVERY_APPLICANT_LINE, REASON_MIN, reasonReady } from "../../apply-flow";
 import { verticalWords, websiteHref } from "../../company-setup";
 import { focusLost } from "../../focus-after";
 import { useNavigate, useSearchParams } from "../../nav";
 import { useSignInWhenSessionEnds } from "../../session-ended";
 import { toast } from "../../toast";
-import { TODAY_REFRESH } from "../../today";
+import { KEEP_CURRENT } from "../../home";
 import { trialDate } from "../../trial";
-import { CustomerReportPanel } from "../AdminCustomerReport";
 import { adminKeys, adminReason, type AiCreditLine, type AlertRow, type CustomerRow, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
-import { activityWords, exactMoney, exactWhen, money, planStatusWords, planWords, trialWords, whenWords } from "./admin-words";
+import { activityWords, EVERY_APPLICANT_LINE, exactMoney, exactWhen, money, planStatusWords, planWords, REASON_MIN, reasonReady, trialWords, whenWords } from "./admin-words";
 import type { CustomerAccessAnswer, CustomerAccessChange, CustomerAccessRequest, TrialStanding, TrialTerm } from "@ros/contracts";
 import { Outcomes } from "./outcomes";
 
 /*
  * The console's Customers section (redesign spec 3.2, Wave S6): every customer in a five-column list with filter pills,
  * a search box and a Sort chip, and one drawer per customer (`?open=<id>&tab=…`) whose tabs hold the ITS check, the
- * plan, how its people apply and its report. The hiring outcomes are the section's second part.
+ * plan and how its people apply. The hiring outcomes are the section's second part.
  * Fewer words (founder, 23 Oct 2026): a fact is said once (the drawer's header carries the company's facts, a plan's
  * standing is left out when it only repeats the plan), and an explanation staff need folds under "How this works";
  * what the law asks for, what a change does to candidates and what the customer will see stay in view.
@@ -143,13 +141,12 @@ export function customerMatches(c: CustomerRow, query: string): boolean {
 }
 
 /** The customer drawer's tabs, each its own `&tab=` (none for the Overview). */
-export type CustomerTab = "overview" | "check" | "plan" | "apply" | "report";
+export type CustomerTab = "overview" | "check" | "plan" | "apply";
 export const CUSTOMER_TABS: Array<{ id: CustomerTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "check", label: "ITS check" },
   { id: "plan", label: "Plan" },
   { id: "apply", label: "How people apply" },
-  { id: "report", label: "Report" },
 ];
 
 export function customerTabFrom(value: string | null): CustomerTab {
@@ -425,9 +422,9 @@ export function Customers() {
   const nav = useNavigate();
   // A tab left open stays true, as the Overview's does (the review of 6 November 2026): on focus, and every minute while it
   // is visible, never in a hidden tab, because each read is recorded. A form in the drawer keeps what was typed.
-  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason), ...TODAY_REFRESH });
+  const q = useQuery({ queryKey: ["admin", "customers"], queryFn: () => api.get<CustomerRow[]>("/api/v1/admin/customers", reason), ...KEEP_CURRENT });
   // Companies at 80% of their screening conversations, or past them (Q17): from the alerts ITS was sent.
-  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason), ...TODAY_REFRESH });
+  const alerts = useQuery({ queryKey: ["admin", "alerts"], queryFn: () => api.get<AlertRow[]>("/api/v1/admin/alerts", reason), ...KEEP_CURRENT });
   // A tab left open past the staff session goes to sign in, as the Overview does (10 November 2026).
   useSignInWhenSessionEnds([q.error, alerts.error]);
   const low = allowanceAlerts(alerts.data ?? []);
@@ -596,12 +593,11 @@ function CustomerListRow({ c, low, now, onOpen }: { c: CustomerRow; low: Allowan
 const ACCESS_REQUEST_TABS: ReadonlySet<CustomerTab> = new Set(["overview", "check"]);
 
 /**
- * One customer (redesign spec 3.2): a 640 px drawer named by the company, its facts under the name, and five tabs: the
- * Overview, then the bodies of the four sheets the console had before (ITS check, Plan, How people apply, Report), with
- * the same actions; their words follow the fewer-words rule (23 Oct 2026). Every "Change" on the Overview switches to
- * its tab. The header is the one place the company's facts are said, so a missing website is said there too ("no
- * website given"): the ITS check asks staff to look at the website, so a real one is a link. Everything but the Report's
- * tables breaks a very long name or address anywhere rather than pushing the drawer sideways.
+ * One customer (redesign spec 3.2): a 640 px drawer named by the company, its facts under the name, and four tabs: the
+ * Overview, then the ITS check, the Plan and How people apply; their words follow the fewer-words rule (23 Oct 2026).
+ * Every "Change" on the Overview switches to its tab. The header is the one place the company's facts are said, so a
+ * missing website is said there too ("no website given"): the ITS check asks staff to look at the website, so a real one
+ * is a link. Everything breaks a very long name or address anywhere rather than pushing the drawer sideways.
  */
 function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: CustomerRow; low: AllowanceAlert | undefined; tab: CustomerTab; onTab: (tab: CustomerTab) => void; onClose: () => void }) {
   const website = company.settings.website?.trim();
@@ -623,14 +619,12 @@ function CustomerDrawer({ company, low, tab, onTab, onClose }: { company: Custom
       tabs={<Tabs idBase="customer-drawer" label="Customer sections" value={shown} onChange={(v) => onTab(customerTabFrom(v))} items={tabs} />}
     >
       <TabPanel key={company.id} idBase="customer-drawer" value={shown}>
-        {shown === "report" ? <CustomerReportPanel companyId={company.id} /> : (
-          <div className="wrap-anywhere">
-            {shown === "overview" ? <CustomerOverview c={company} low={low} onTab={switchTo} /> : null}
-            {shown === "check" ? (company.accessRequest ? <AccessRequestPanel company={company} request={company.accessRequest} /> : <CompanyCheckPanel company={company} />) : null}
-            {shown === "plan" ? <PlanPanel company={company} onDone={() => switchTo("overview")} /> : null}
-            {shown === "apply" ? <ApplyFlowPanel company={company} /> : null}
-          </div>
-        )}
+        <div className="wrap-anywhere">
+          {shown === "overview" ? <CustomerOverview c={company} low={low} onTab={switchTo} /> : null}
+          {shown === "check" ? (company.accessRequest ? <AccessRequestPanel company={company} request={company.accessRequest} /> : <CompanyCheckPanel company={company} />) : null}
+          {shown === "plan" ? <PlanPanel company={company} onDone={() => switchTo("overview")} /> : null}
+          {shown === "apply" ? <ApplyFlowPanel company={company} /> : null}
+        </div>
       </TabPanel>
     </Drawer>
   );
@@ -732,11 +726,6 @@ function CustomerOverview({ c, low, onTab }: { c: CustomerRow; low: AllowanceAle
           <dd>{c.heldMessages ? `${plural(c.heldMessages, "message", "messages")} to candidates` : "None"}</dd>
         </dl>
       </Card>
-      {access ? null : (
-        <div className="flex flex-wrap gap-2">
-          <Button icon="chart" onClick={() => onTab("report")}>See the report</Button>
-        </div>
-      )}
     </div>
   );
 }

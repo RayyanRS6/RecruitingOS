@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  activityWords, aiStatusTone, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
+  activityWords, aiStatusTone, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, reasonReady, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
 } from "../../apps/web/src/pages/admin/admin-words";
+import { ACK_FOR_ANOTHER, ackIsForAnother, retryDeletionToast } from "../../apps/web/src/pages/admin/problems";
 
 /** The ITS console's plain words (redesign spec 3.3), one file every console section imports (Wave S6, S6-0). */
 describe("the console's plain words", () => {
@@ -73,5 +74,30 @@ describe("the console's plain words", () => {
     expect(trialWords({ ...standing, ended: true, daysLeft: 0 }, "America/Los_Angeles")).toBe("ended Oct 31, paused");
     expect(trialWords({ ...standing, started: false, startedAt: null, endsAt: null, daysLeft: null })).toBe("starts at the ITS check");
     expect(trialWords(null)).toBe("");
+  });
+
+  it("needs a reason of five characters or more with a change", () => {
+    expect(reasonReady("why")).toBe(false);
+    expect(reasonReady("  Owner asked  ")).toBe(true);
+  });
+});
+
+describe("the admin console's alerts and retries", () => {
+  const alert = (kind: string, actorId: string | null, targetId: string | null) => ({ kind, details: actorId ? { actorId } : {}, target: targetId ? { type: "user", id: targetId } : null });
+
+  it("leaves acknowledging a platform-role alert about yourself to another administrator", () => {
+    expect(ackIsForAnother(alert("platform_role.granted", "s1", "u9"), "s1")).toBe(true);
+    expect(ackIsForAnother(alert("platform_role.bootstrapped", null, "s1"), "s1")).toBe(true);
+    expect(ackIsForAnother(alert("platform_role.granted", "s2", "u9"), "s1")).toBe(false);
+    // other alerts, and while it is not known who is signed in, keep the button (the server decides)
+    expect(ackIsForAnother(alert("secret.delete_failed", "s1", "s1"), "s1")).toBe(false);
+    expect(ackIsForAnother(alert("platform_role.granted", "s1", null), null)).toBe(false);
+    expect(ACK_FOR_ANOTHER).toMatch(/^Another administrator acknowledges this one/);
+  });
+
+  it("says a retried deletion was queued when it was, and deleted only when it was", () => {
+    expect(retryDeletionToast({ queued: true, deleted: false })).toEqual({ title: "Deletion queued.", detail: "It runs in the background in a moment. The alert closes once the credential is gone." });
+    expect(retryDeletionToast({ queued: true, deleted: false }).title).not.toMatch(/deleted/i);
+    expect(retryDeletionToast({ queued: false, deleted: true }).title).toBe("Credential deleted.");
   });
 });

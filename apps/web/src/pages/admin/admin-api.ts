@@ -1,10 +1,12 @@
 import type { CustomerAccessRequest, Location, TrialStanding, TrialTerm } from "@ros/contracts";
-import type { ApplyMode } from "../../apply-flow";
 
 /**
  * What every part of the ITS console shares (redesign spec 3.4): the reason header the API audits each read with, the
  * query keys, the rows the API answers with that more than one section reads, and the section contract.
  */
+
+/** How a company's applicants met the AI interview, as an older setting stored it. */
+export type ApplyMode = "one_visit" | "form_then_screen";
 
 /** Sent with every console call; the API writes it on the audit row of each read (routes/admin.ts). */
 export const reason = { headers: { "x-admin-reason": "admin console" } };

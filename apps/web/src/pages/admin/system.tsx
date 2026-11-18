@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, IconLabel, Menu, numHead, Segmented, Skeleton, Table, Tabs, Timeline, useTableSort } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { toast } from "../../toast";
-import { dayKey } from "../candidate-panel/helpers";
+import { dayKey } from "../../dates";
 import { adminKeys, partOf, reason, type SectionPart, type SectionProps } from "./admin-api";
 import { aiStatusTone, aiStatusWords, exactMoney, exactWhen, firstUpper, money, runStatusWords, STEP_STATUS_WORDS, whenWords, wordFor, workflowWords } from "./admin-words";
 

@@ -9,7 +9,7 @@ import { useIsClient } from "../../components/use-is-client";
 import { focusLost } from "../../focus-after";
 import { Link } from "../../nav";
 import { sessionEnded, useSignInWhenSessionEnds } from "../../session-ended";
-import { TODAY_REFRESH, firstName } from "../../today";
+import { KEEP_CURRENT, firstName } from "../../home";
 import { adminKeys, adminReason, type AlertRow, type CustomerRow, type DataRequest } from "./admin-api";
 import { activityWords, money, planWords, severityWords } from "./admin-words";
 import { AccessButtons, accessFacts, accessRequests, aiCreditDollars, customerOrder, FactsLine, type LineFact, realCustomers, waitingCustomers, waitingForCheck } from "./customers";
@@ -266,9 +266,9 @@ const CUSTOMERS_SHOWN = 5;
 /**
  * A tab left open stays true (the review of 6 November 2026): every source behind "Needs attention" and its "Nothing needs
  * you right now." is asked again when the window comes back into focus and every minute while the tab is visible, never in
- * a hidden one, as Home is (TODAY_REFRESH), because each read is recorded (admin.ts) and a request for access may be waiting.
+ * a hidden one, as Home is (KEEP_CURRENT), because each read is recorded (admin.ts) and a request for access may be waiting.
  */
-export const OVERVIEW_REFRESH = TODAY_REFRESH;
+export const OVERVIEW_REFRESH = KEEP_CURRENT;
 
 /** Whether the staff session ended under a tab left open (the review of 9 November 2026): session-ended.ts, shared with Home and Customers. */
 export { sessionEnded };

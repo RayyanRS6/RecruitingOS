@@ -134,3 +134,12 @@ export function activityWords(lastActivityAt: string | null, now: number = Date.
   if (idle > QUIET_AFTER_DAYS) return { state: "quiet", label: `quiet ${Math.round(idle)}d`, tone: "caution" };
   return { state: "active", label: "active", tone: "good" };
 }
+
+/** What the console says about how a customer's people apply. */
+export const EVERY_APPLICANT_LINE = "Every applicant: a short form, then the AI interview once their resume is read. It opens on the page right after the form, and its link comes by email too. Someone who answered No to a must-have question waits for the team's \"Keep them in\".";
+
+/** A reason typed with a change is required, five characters at least (the API's rule). */
+export const REASON_MIN = 5;
+export function reasonReady(reason: string): boolean {
+  return reason.trim().length >= REASON_MIN;
+}

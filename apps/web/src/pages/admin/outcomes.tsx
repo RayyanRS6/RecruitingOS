@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Chip, cn, Drawer, ErrorState, Field, Table } from "@ros/ui";
 import { api, ApiError } from "../../api/client";
 import { toast } from "../../toast";
-import { DECLINE_REASONS } from "../candidate-panel/helpers";
 import { reason } from "./admin-api";
 import { exactWhen, firstUpper, plainCode, whenWords } from "./admin-words";
 
@@ -15,6 +14,17 @@ import { exactWhen, firstUpper, plainCode, whenWords } from "./admin-words";
  */
 
 type OutcomeRow = { id: string; companyName: string; applicationId: string | null; roleId: string | null; milestone: string; outcome: string; hireDate: string | null; offerAcceptedAt: string | null; recordedBy: { name?: string; id: string }; recordedAt: string; correctionOf: string | null; correctedAt: string | null; correctionReason: string | null };
+
+/** The reasons a correction may give for a decline. */
+const DECLINE_REASONS: ReadonlyArray<[string, string]> = [
+  ["not_a_match_experience", "Experience isn't the right fit"],
+  ["not_a_match_skills", "Missing skills we need"],
+  ["compensation_mismatch", "Pay expectations don't match"],
+  ["location_or_schedule", "Location or schedule"],
+  ["position_filled", "Position filled"],
+  ["candidate_unresponsive", "They stopped responding"],
+  ["other", "Other"],
+];
 
 /** A correction being written: the corrected outcome (or "voided"), the hire date, the reason and the decline reason. */
 type Fix = { id: string; outcome: string; hireDate: string; reason: string; declineReason: string };

@@ -6,10 +6,8 @@ import type { SignupConfig, SignupRequest } from "@ros/contracts";
 import { useNavigate } from "../nav";
 import { Alert, Button, Field } from "@ros/ui";
 import { api, ApiError } from "../api/client";
-import { ACCESS_LOOK_MS, VERTICALS, ZONE_CHOICES, browserTimeZone, lookAtAccess, snapTimeZone, verticalHint } from "../company-setup";
+import { ACCESS_LOOK_MS, VERTICALS, ZONE_CHOICES, browserTimeZone, lookAtAccess, snapTimeZone } from "../company-setup";
 import { focusLost } from "../focus-after";
-import { browserStorage } from "../start-hire";
-import { clearAllQuickStarts } from "./new-role/quick-start";
 
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 
@@ -114,7 +112,6 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
     } catch {
       // signed out already, or the session had ended: the sign-in page is where they are going either way
     }
-    clearAllQuickStarts(browserStorage());
     qc.clear();
     nav("/login", { replace: true });
   };
@@ -149,7 +146,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
           <form onSubmit={submit} className="stack mt-7 gap-5 border-t border-line pt-7">
             <Field label="Company name" htmlFor="name"><input id="name" className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Your name" htmlFor="owner"><input id="owner" className="input" value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} /></Field>
-            <Field label="What kind of business" htmlFor="vertical" hint={verticalHint(form.vertical)}>
+            <Field label="What kind of business" htmlFor="vertical">
               <select id="vertical" className="select" value={form.vertical} onChange={(e) => setForm({ ...form, vertical: e.target.value })}>
                 {VERTICALS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
