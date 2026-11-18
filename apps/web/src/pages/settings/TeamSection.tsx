@@ -164,7 +164,7 @@ function MemberRow({ member: m, viewer, onChanged, onFailed }: { member: TeamMem
       {removing ? (
         <Alert tone="caution">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>Remove {who} from the team? They are signed out and can no longer open this company.</span>
+            <span>Remove {who} from the team? They can no longer open this company.</span>
             <span className="row">
               <Button size="sm" variant="danger" loading={change.isPending} onClick={() => change.mutate({ status: "removed" })}>Remove</Button>
               <Button size="sm" variant="ghost" disabled={change.isPending} onClick={() => setRemoving(false)}>Keep them</Button>
