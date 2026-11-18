@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { ACCESS_REQUEST_STATUSES, appPaths, oneLine, typedName, visibleLength, type Actor, type CompanyCreated, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
+import { ACCESS_REQUEST_STATUSES, appPaths, newTrialTerm, onTrialPlan, oneLine, trialTermOf, typedName, visibleLength, type Actor, type CompanyCreated, type CreateCompany, type CustomerAccessAnswer, type CustomerAccessChange, type CustomerAccessRequest, type SignupConfig, type SignupRequest } from "@ros/contracts";
 import { activeSuppression, audit, emit, errorForLog, notify, revokeInvitation, revokeSessionsForCompany, setCompanyLive } from "@ros/core";
 import { companies, events, invitations, memberships, users, withPlatform, type Queryable } from "@ros/db";
 import { mailbox, type OutboundEmail, type SendResult } from "@ros/integrations";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { createCompany, freeSlug, signupDoor, slugify } from "./companies";
+import { trialDateWords, writeTrialTerm } from "./trial";
 
 /**
  * The one gate (SIGNUP_MODE=approval). Anyone signed in who is not a platform administrator fills in the company form,
@@ -227,7 +228,7 @@ type RemovedPeople = { companyId: string; companyName: string; userIds: string[]
  */
 export async function decideAccess(tx: Queryable, input: { companyId: string; decision: CustomerAccessChange["decision"]; from?: CustomerAccessChange["from"]; actor: Actor; now: Date }): Promise<{ answer: CustomerAccessAnswer; declined: DeclinedNotice | null; removed: RemovedPeople | null }> {
   const { companyId, decision, actor, now } = input;
-  const [co] = await tx.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
+  const [co] = await tx.select({ id: companies.id, name: companies.name, planKey: companies.planKey, settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1).for("update");
   if (!co) throw new HttpError(404, "not_found", "Company not found.");
   const waiting = await tx
     .select({ id: memberships.id, userId: memberships.userId, role: memberships.role, status: memberships.status, email: users.email })
@@ -267,12 +268,21 @@ export async function decideAccess(tx: Queryable, input: { companyId: string; de
   // changed since, or one that needed four characters more, would move it.
   if (!restoring) await tx.update(companies).set({ slug: await freeSlug(tx, slugify(co.name), co.id) }).where(eq(companies.id, co.id));
   await setCompanyLive(tx, co.id, true, now);
+  // The Trial plan's 30 days start the day the company can go live. Dates already there are kept, so an Accept that
+  // brings a company back never restarts its trial.
+  const term = onTrialPlan(co.planKey) && !trialTermOf(co.settings) ? newTrialTerm(now, "its_check") : null;
+  if (term) {
+    await writeTrialTerm(tx, co.id, term, { keep: true });
+    await audit(tx, { companyId: co.id, actor, action: "trial.started", target: company, reason: "the 30-day trial starts when the company is accepted", details: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+    await emit(tx, { type: "trial.started", companyId: co.id, actor, subject: company, payload: { startedAt: term.startedAt, endsAt: term.endsAt, startedBy: term.startedBy } });
+  }
   await emit(tx, { type: "company.access_accepted", companyId: co.id, actor, subject: company, payload: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
   for (const m of waiting) await emit(tx, { type: "membership.changed", companyId: co.id, actor, subject: { type: "user", id: m.userId }, payload: { role: m.role, status: "active" } });
   await audit(tx, { companyId: co.id, actor, action: "company.access_accepted", target: company, reason: ACCEPTED_REASON, details: { from: owner.status, ...(restoring ? { restored: waiting.length } : {}) } });
   // The undo of a removal has a kind of its own, so its email says what the notice says ("Your access is back"): nobody in
   // it made a request, and a teammate never asked for anything.
-  await notify(tx, { companyId: co.id, ...(restoring ? { kind: "company.access_restored", title: "Your access is back", body: "You can sign in and pick up where you left off." } : { kind: "company.access_accepted", title: "Your request was approved", body: "You can start now." }), action: { label: "Open Home", href: appPaths.home }, userIds: waiting.map((m) => m.userId) });
+  const trialLine = term ? ` Your 30-day trial starts today and ends on ${trialDateWords(term.endsAt, co.timezone)}.` : "";
+  await notify(tx, { companyId: co.id, ...(restoring ? { kind: "company.access_restored", title: "Your access is back", body: `You can sign in and pick up where you left off.${trialLine}` } : { kind: "company.access_accepted", title: "Your request was approved", body: `You can start now.${trialLine}` }), action: { label: "Open Home", href: appPaths.home }, userIds: waiting.map((m) => m.userId) });
   return { answer: answer("active", true, restoring ? `${co.name} has access again.` : `${co.name} was accepted.`), declined: null, removed: null };
 }
 

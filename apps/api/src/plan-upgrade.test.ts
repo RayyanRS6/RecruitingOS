@@ -1,20 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type PlanRequestSent, type PublicPlans } from "@ros/contracts";
-import { adminAlerts, applications, candidates, notifications, randomToken, withTenant } from "@ros/db";
+import { MORE_JOBS_UPGRADE_QUESTION, PLAN_REQUEST_ALERT_KIND, type AdminCompany, type AdminFailures, type HomeView, type PlanRequestSent, type PublicPlans } from "@ros/contracts";
+import { adminAlerts, auditRecords, notifications } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, signInAs, usePlan } from "./test-helpers";
+import { plantApplicant, plantJob, signInAdmin, signInAs, usePlan } from "./test-helpers";
 
-const HIRE = "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it.";
 const WHY = "They asked to upgrade.";
 
 /**
  * The plans of 5 November 2026, Rule 5: the way to a bigger plan with no payment system. GET /plans lists the public
  * plans only, and when the company's open request was sent. A request about the plan is one open alert for the platform
  * administrators, with the plan asked for, why, the person's note and who asked; a second one answers with the first.
- * Change plan closes it, tells the owners and admins (and whoever asked) and shows in the customer's own history.
+ * Change plan closes it, tells the owners and admins (and whoever asked) and is audited with the reason.
  */
 describe("asking for a bigger plan", () => {
   let container: Container;
@@ -46,16 +45,8 @@ describe("asking for a bigger plan", () => {
     const co = await read<{ id: string; name: string }>(r);
     return { cookie, id: co.id, name: co.name, owner: `Owner ${made}` };
   };
-  /** A job that is live, its boards prepared. */
-  const openJob = async (cookie: string) => {
-    const s = await read<{ session: { id: string } }>(await json(cookie, "POST", "/api/v1/intake/sessions", { initialMessage: HIRE }));
-    const compiled = await json(cookie, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`);
-    expect(compiled.status, await compiled.clone().text()).toBe(201);
-    const { roleId } = await read<{ roleId: string }>(compiled);
-    expect((await json(cookie, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-    await container.drain();
-    return roleId;
-  };
+  /** A job that is live. */
+  const openJob = (companyId: string) => plantJob(container, { companyId, title: "Dental Hygienist" });
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
@@ -98,7 +89,7 @@ describe("asking for a bigger plan", () => {
   describe("a request about the plan", () => {
     it("is one open alert for ITS with the plan, why, the note and who asked; a second one answers with the first and raises nothing", async () => {
       const co = await newCompany();
-      await openJob(co.cookie);
+      await openJob(co.id);
       const before = emails().length;
       const r = await askPlan(co.cookie, { planKey: "pro", reason: MORE_JOBS_UPGRADE_QUESTION, note: "Please call after 3pm." });
       expect(r.status).toBe(201);
@@ -109,7 +100,7 @@ describe("asking for a bigger plan", () => {
       expect(alert).toMatchObject({ severity: "info", status: "open", target: { type: "company", id: co.id }, title: `${co.name} asked to move to the Pro plan`, body: `${co.owner} wrote: We would like to move to the Pro plan. We would like to post more jobs. Please call after 3pm.` });
       expect(alert.details).toMatchObject({ planKey: "pro", planName: "Pro", reason: MORE_JOBS_UPGRADE_QUESTION, note: "Please call after 3pm.", requestedBy: { name: co.owner } });
       // nothing of the company's hiring goes with it, and nothing is emailed
-      expect(JSON.stringify(alert)).not.toContain("hygienist");
+      expect(JSON.stringify(alert)).not.toMatch(/hygienist/i);
       expect(emails().length).toBe(before);
 
       const again = await askPlan(co.cookie, { planKey: "ultra" });
@@ -118,10 +109,8 @@ describe("asking for a bigger plan", () => {
       expect(await requestsOf(co.id)).toHaveLength(1);
       expect((await requestsOf(co.id))[0].details).toMatchObject({ planKey: "pro" });
       expect((await plansOf(co.cookie)).requestedAt).toBe(first.requestedAt);
-      // Home has no card about it, and it puts no hire at risk
-      const brief = await read<{ summary: string; cards: Array<{ kind: string; title: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"));
-      expect(brief.cards.map((c) => c.title).join(" ")).not.toMatch(/plan/i);
-      expect(brief.summary).toContain("· 0 at risk ·");
+      // Home has no notice about it
+      expect((await read<HomeView>(await json(co.cookie, "GET", "/api/v1/home"))).notices).toEqual([]);
       // anyone on the team may ask, and gets the same answer
       const hm = await signInAs(container, app, { companyId: co.id, role: "hiring_manager" });
       expect(await read(await askPlan(hm))).toEqual({ requestedAt: first.requestedAt, alreadyAsked: true });
@@ -155,9 +144,9 @@ describe("asking for a bigger plan", () => {
   });
 
   describe("Change plan", () => {
-    it("closes the open request, tells the owners and admins and whoever asked, and shows in the customer's own history; the next request is a new one", async () => {
+    it("closes the open request, tells the owners and admins and whoever asked, and is audited with the reason; the next request is a new one", async () => {
       const co = await newCompany();
-      const adminUser = await signInAs(container, app, { companyId: co.id, role: "admin", name: "Abe Admin" });
+      await signInAs(container, app, { companyId: co.id, role: "admin", name: "Abe Admin" });
       const hm = await signInAs(container, app, { companyId: co.id, role: "hiring_manager", name: "Hana Manager" });
       const hmId = (await read<{ user: { id: string } }>(await json(hm, "GET", "/api/v1/auth/me"))).user.id;
       expect((await askPlan(hm)).status).toBe(201);
@@ -167,14 +156,15 @@ describe("asking for a bigger plan", () => {
 
       const told = await container.db.select().from(notifications).where(and(eq(notifications.companyId, co.id), eq(notifications.kind, "company.plan_changed")));
       expect(told).toHaveLength(3);
-      expect(told[0]).toMatchObject({ title: "Your plan is now Pro", action: { label: "See plan", href: "/setup#setup-company" } });
+      expect(told[0]).toMatchObject({ title: "Your plan is now Pro", action: { label: "See plan", href: "/setup" } });
       expect(told[0].body).toBe("Your company is on the Pro plan now. The new limits apply at once.");
       expect(told.map((n) => n.userId)).toContain(hmId);
       expect((await requestsOf(co.id)).map((a) => a.status)).toEqual(["resolved"]);
 
-      // the customer's history says who changed what, from what, and why
-      const history = await read<Array<{ action: string; description: string; reason: string }>>(await json(adminUser, "GET", "/api/v1/companies/current/audit?actions=plan.changed"));
-      expect(history.map((h) => h.description)).toEqual([`ITS moved your company to the Pro plan from Free: ${WHY}.`]);
+      // the record says who changed what, from what, and why
+      const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, co.id), eq(auditRecords.action, "plan.changed")));
+      expect(audited).toHaveLength(1);
+      expect(audited[0]).toMatchObject({ reason: WHY, actor: { name: "Ada Admin" }, details: { from: "free", to: "pro", fromName: "Free", toName: "Pro", unlocked: 0 } });
 
       const plans = await plansOf(co.cookie);
       expect(plans.requestedAt).toBeNull();
@@ -191,29 +181,27 @@ describe("asking for a bigger plan", () => {
     });
   });
 
-  describe("the console", () => {
-    it("lists the plans in their order with their prices, and each customer's AI dollars, locked count and open plan request", async () => {
+  describe("the dashboard", () => {
+    it("lists the plans in their order with their prices, and each company's AI dollars, locked count and open plan request", async () => {
       const listed = await read<Array<{ key: string; prices: Record<string, number>; limits: Record<string, number | null> }>>(await json(admin, "GET", "/api/v1/admin/plans"));
       expect(listed.map((p) => p.key)).toEqual(["free", "basic", "pro", "ultra", "design_partner"]);
       expect(listed[1].prices.monthlyUsd).toBe(49);
       expect(listed[0].limits.ai_credit_total_cents).toBe(1000);
 
       const co = await newCompany();
-      const roleId = await openJob(co.cookie);
-      await withTenant(container.db, co.id, async (tx) => {
-        const [cand] = await tx.insert(candidates).values({ companyId: co.id, firstName: "Lena", lastName: "Lockwood", email: "lena.lockwood@people.test", firstSource: "direct" }).returning();
-        await tx.insert(applications).values({ companyId: co.id, roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "received", statusToken: randomToken(16), lockedAt: new Date().toISOString() });
-      });
-      type Row = { id: string; lockedApplicants: number; planRequestSince: string | null; aiCredit: { limitUsd: number; monthly: boolean } | null };
-      const row = async () => (await read<Row[]>(await json(admin, "GET", "/api/v1/admin/customers"))).find((c) => c.id === co.id)!;
-      expect(await row()).toMatchObject({ lockedApplicants: 1, planRequestSince: null, aiCredit: { limitUsd: 10, monthly: false } });
+      const roleId = await openJob(co.id);
+      await plantApplicant(container, { companyId: co.id, roleId, mark: "Lena", stage: "received", locked: true });
+      const row = async () => (await read<AdminCompany[]>(await json(admin, "GET", "/api/v1/admin/customers"))).find((c) => c.id === co.id)!;
+      expect(await row()).toMatchObject({ applicants: 1, lockedApplicants: 1, planRequest: null, aiCredit: { limitUsd: 10, monthly: false }, jobs: { open: 1, total: 1 } });
       const { requestedAt } = await read<PlanRequestSent>(await askPlan(co.cookie));
-      expect((await row()).planRequestSince).toBe(requestedAt);
-      // the request is among the console's alerts, with the company and what it asked for
-      const alerts = await read<Array<{ kind: string; companyId: string | null; title: string }>>(await json(admin, "GET", "/api/v1/admin/alerts"));
+      expect((await row()).planRequest).toEqual({ since: requestedAt, planKey: "pro", planName: "Pro", words: "We would like to move to the Pro plan.", requestedBy: co.owner });
+      // the request is among the dashboard's alerts, with the company and what it asked for
+      const { alerts } = await read<AdminFailures>(await json(admin, "GET", "/api/v1/admin/failures"));
       expect(alerts.filter((a) => a.kind === PLAN_REQUEST_ALERT_KIND && a.companyId === co.id).map((a) => a.title)).toEqual([`${co.name} asked to move to the Pro plan`]);
       await changePlan(co.id, "pro");
-      expect(await row()).toMatchObject({ lockedApplicants: 0, planRequestSince: null, aiCredit: { limitUsd: 60, monthly: true } });
+      expect(await row()).toMatchObject({ applicants: 1, lockedApplicants: 0, planRequest: null, aiCredit: { limitUsd: 60, monthly: true } });
+      // and nothing of the person who applied is on the row
+      expect(JSON.stringify(await row())).not.toMatch(/Lena|people\.test/);
     });
   });
 });

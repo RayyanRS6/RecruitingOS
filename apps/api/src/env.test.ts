@@ -4,10 +4,11 @@ import { loadEnv, type EnvRole } from "./env";
 /**
  * Audit remediation H7: in production each process names its own database role, and nothing falls back to PGlite.
  * These checks hold for staging and production alike, so the process here is named staging (every NODE_ENV=production
- * process names its deployment; the production deployment's own checks are below).
+ * process names its deployment; the production deployment's own checks are below). Every hosted app takes new companies
+ * by approval, so the fixture says so.
  */
 describe("production boot checks", () => {
-  const base = { NODE_ENV: "production", DEPLOY_ENV: "staging", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij" };
+  const base = { NODE_ENV: "production", DEPLOY_ENV: "staging", APP_BASE_URL: "https://app.example.test", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "x".repeat(40), AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij", SIGNUP_MODE: "approval" };
   const appUrl = "postgres://ros_app:pw@host/db";
   const workerUrl = "postgres://ros_worker:pw@host/db";
 
@@ -79,11 +80,11 @@ describe("production boot checks", () => {
  * VERCEL_ENV, tells them apart, and the production deployment also refuses what staging may still run on.
  */
 describe("the production deployment's own checks (DEPLOY_ENV)", () => {
-  // staging as it runs today: a Vercel Preview deployment with fake email, the fake scanner, the fallback addresses, no
-  // certificate, a short secret and salt, and its Sentry marker
-  const staging: Record<string, string | undefined> = { NODE_ENV: "production", VERCEL_ENV: "preview", APP_BASE_URL: "https://staging.example.test", DATABASE_URL: "postgres://ros_app:pw@host/db", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "a-short-staging-secret", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij", EMAIL_PROVIDER: "fake", SCAN_PROVIDER: "fake", SENTRY_ENVIRONMENT: "staging" };
+  // staging: a Vercel Preview deployment with fake email, the fake scanner, the fallback addresses, no certificate, a
+  // short secret and salt, its Sentry marker, and new companies by approval as on every hosted app
+  const staging: Record<string, string | undefined> = { NODE_ENV: "production", VERCEL_ENV: "preview", APP_BASE_URL: "https://staging.example.test", DATABASE_URL: "postgres://ros_app:pw@host/db", ANALYTICS_SALT: "salt-for-this-test-only", SESSION_SECRET: "a-short-staging-secret", AI_PROVIDER: "anthropic", AUTH_PROVIDER: "supabase", SUPABASE_URL: "https://p.supabase.co", SUPABASE_ANON_KEY: "k", WORKER_INLINE: "false", STORAGE_PROVIDER: "supabase", RATE_LIMIT_STORE: "upstash", UPSTASH_REDIS_REST_URL: "https://complete-narwhal-292092.upstash.io", UPSTASH_REDIS_REST_TOKEN: "upstash-token-for-tests-abcdefghij", EMAIL_PROVIDER: "fake", SCAN_PROVIDER: "fake", SENTRY_ENVIRONMENT: "staging", SIGNUP_MODE: "approval" };
   // the production app on a Vercel Production deployment, with every value the production deployment asks for
-  const production = { ...staging, VERCEL_ENV: "production", APP_BASE_URL: "https://hire.example.test", SESSION_SECRET: "x".repeat(40), ANALYTICS_SALT: "s".repeat(40), SENTRY_ENVIRONMENT: "production", EMAIL_PROVIDER: "postmark", POSTMARK_SERVER_TOKEN: "postmark-server-token-for-tests", POSTMARK_WEBHOOK_SECRET: "postmark-webhook-secret-for-tests", EMAIL_FROM_ADDRESS: "updates@hire.example.test", EMAIL_REPLY_TO: "recruiting@example.test", ITS_QUEUE_EMAIL: "recruiting@example.test", DATABASE_SSL_CA: "-----BEGIN CERTIFICATE-----\nthe CA\n-----END CERTIFICATE-----\n", ANTHROPIC_API_KEY: "anthropic-key-for-tests", SIGNUP_MODE: "invite" };
+  const production = { ...staging, VERCEL_ENV: "production", APP_BASE_URL: "https://hire.example.test", SESSION_SECRET: "x".repeat(40), ANALYTICS_SALT: "s".repeat(40), SENTRY_ENVIRONMENT: "production", EMAIL_PROVIDER: "postmark", POSTMARK_SERVER_TOKEN: "postmark-server-token-for-tests", POSTMARK_WEBHOOK_SECRET: "postmark-webhook-secret-for-tests", EMAIL_FROM_ADDRESS: "updates@hire.example.test", EMAIL_REPLY_TO: "recruiting@example.test", ITS_QUEUE_EMAIL: "recruiting@example.test", DATABASE_SSL_CA: "-----BEGIN CERTIFICATE-----\nthe CA\n-----END CERTIFICATE-----\n", ANTHROPIC_API_KEY: "anthropic-key-for-tests" };
   // the production worker on Railway: no VERCEL_ENV, so DEPLOY_ENV says it; its own connection string, ClamAV, no webhook secret, no sign-up mode
   const worker = { ...production, VERCEL_ENV: undefined, DEPLOY_ENV: "production", DATABASE_URL: undefined, WORKER_DATABASE_URL: "postgres://ros_worker:pw@host/db", POSTMARK_WEBHOOK_SECRET: undefined, SCAN_PROVIDER: "clamav", CLAMAV_HOST: "clamav.railway.internal", SIGNUP_MODE: undefined };
   /** The refusal's message, or null when the environment loads. */
@@ -136,12 +137,12 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(refusal({ NODE_ENV: "test" })).toBeNull();
   });
 
-  it("staging boots exactly as today, and so do a person's machine and the tests", () => {
+  it("staging boots on what it runs on, and so do a person's machine and the tests", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const rehearsal = { ...staging, RATE_LIMIT_OVERRIDES: '{"api.user":50}', COOKIE_DOMAIN: ".example.test", BOOTSTRAP_ADMIN_EMAILS: "first@example.test", MAGIC_LINK_ENABLED: "true" };
       const env = loadEnv(rehearsal);
-      expect(env).toMatchObject({ DEPLOY_ENV: "staging", EMAIL_PROVIDER: "fake", EMAIL_FROM_ADDRESS: "updates@mail.localhost", EMAIL_REPLY_TO: "recruiters@its.localhost", ITS_QUEUE_EMAIL: "recruiters@its.localhost", RATE_LIMIT_OVERRIDES: { "api.user": 50 }, MAGIC_LINK_ENABLED: true, SIGNUP_MODE: "open" });
+      expect(env).toMatchObject({ DEPLOY_ENV: "staging", EMAIL_PROVIDER: "fake", EMAIL_FROM_ADDRESS: "updates@mail.localhost", EMAIL_REPLY_TO: "recruiters@its.localhost", ITS_QUEUE_EMAIL: "recruiters@its.localhost", RATE_LIMIT_OVERRIDES: { "api.user": 50 }, MAGIC_LINK_ENABLED: true, SIGNUP_MODE: "approval" });
       expect(refusal({ ...rehearsal, DEPLOY_ENV: "staging" })).toBeNull();
       // staging's own Supabase project, a short webhook secret: staging's to keep
       const ref = "vjuaiyjmtrenbrmujvtc";
@@ -253,22 +254,36 @@ describe("the production deployment's own checks (DEPLOY_ENV)", () => {
     expect(refusal({ ...production, SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co", DATABASE_URL: `postgres://ros_app.abcdefghijklmnopqrst:pw@${pooler}`, STORAGE_S3_ENDPOINT: "https://abcdefghijklmnopqrst.storage.supabase.co/storage/v1/s3" })).toBeNull();
   });
 
-  it("refuses the production app without SIGNUP_MODE set on purpose, and the internal email link on any production process", () => {
-    expect(refusal({ ...production, SIGNUP_MODE: undefined })).toMatch(/^SIGNUP_MODE must be set on the production deployment: "invite"/);
-    expect(refusal({ ...production, SIGNUP_MODE: "" })).toMatch(/^SIGNUP_MODE must be set on the production deployment/);
-    for (const mode of ["invite", "open"]) expect(refusal({ ...production, SIGNUP_MODE: mode }), mode).toBeNull();
+  it("a hosted app takes new companies by approval only; a person's machine and the tests are open unless told otherwise", () => {
+    const notByApproval = /^SIGNUP_MODE must be "approval" in production: every company waits for a platform administrator to accept it/;
+    for (const hosted of [production, staging]) {
+      expect(refusal({ ...hosted, SIGNUP_MODE: undefined })).toMatch(notByApproval);
+      expect(refusal({ ...hosted, SIGNUP_MODE: "" })).toMatch(notByApproval);
+      expect(refusal({ ...hosted, SIGNUP_MODE: "open" })).toMatch(notByApproval);
+      expect(refusal({ ...hosted, SIGNUP_MODE: "approval" })).toBeNull();
+    }
+    // the two modes are the only ones: invitation-only is gone, and a misspelling starts nowhere
+    for (const mode of ["invite", "Approval", "closed"]) {
+      expect(refusal({ ...production, SIGNUP_MODE: mode }), mode).toMatch(/^SIGNUP_MODE must be "approval" or "open" \(it is ".+"\)/);
+      expect(refusal({ NODE_ENV: "development", SIGNUP_MODE: mode }), mode).toMatch(/^SIGNUP_MODE must be "approval" or "open"/);
+    }
     // the worker opens no company: not asked (its fixture leaves SIGNUP_MODE out)
     expect(worker.SIGNUP_MODE).toBeUndefined();
     expect(refusal(worker, "worker")).toBeNull();
+    expect(refusal({ ...worker, SIGNUP_MODE: "approval" }, "worker")).toBeNull();
+    expect(loadEnv({ NODE_ENV: "development" }).SIGNUP_MODE).toBe("open");
+    expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "" }).SIGNUP_MODE).toBe("open");
+    expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "open" }).SIGNUP_MODE).toBe("open");
+    expect(loadEnv({ NODE_ENV: "test", SIGNUP_MODE: "approval" }).SIGNUP_MODE).toBe("approval");
+    // the allow-list and the separate company check are read by nothing: set or not, they change nothing
+    expect(loadEnv({ NODE_ENV: "test", SIGNUP_ALLOWED_EMAILS: "a@example.test", COMPANY_CHECK: "its" })).not.toHaveProperty("SIGNUP_ALLOWED_EMAILS");
+    expect(loadEnv({ NODE_ENV: "test", SIGNUP_ALLOWED_EMAILS: "a@example.test", COMPANY_CHECK: "its" })).not.toHaveProperty("COMPANY_CHECK");
+  });
+
+  it("refuses the internal email link on any production process", () => {
     expect(refusal({ ...production, MAGIC_LINK_ENABLED: "true" })).toMatch(/^MAGIC_LINK_ENABLED must not be true on the production deployment/);
     expect(refusal({ ...worker, MAGIC_LINK_ENABLED: "true" }, "worker")).toMatch(/^MAGIC_LINK_ENABLED must not be true/);
     expect(refusal({ ...production, MAGIC_LINK_ENABLED: "false" })).toBeNull();
-  });
-
-  it("starts the production app and worker with SIGNUP_MODE=approval, and the words for a missing mode name it", () => {
-    expect(refusal({ ...production, SIGNUP_MODE: "approval" })).toBeNull();
-    expect(refusal({ ...worker, SIGNUP_MODE: "approval" }, "worker")).toBeNull();
-    expect(refusal({ ...production, SIGNUP_MODE: undefined })).toMatch(/"approval" \(anyone else signed in sends a request, which a platform administrator accepts or declines\)/);
   });
 
   it("refuses the production worker on the fake scanner or ClamAV without its host; the app, which never scans, is not asked", () => {

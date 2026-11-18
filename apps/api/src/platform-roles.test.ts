@@ -52,7 +52,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     second = await signInWithIdentity(app, container, { email: "second@identifiedtalent.com", name: "Second Person", provider: "azure", aal2: true });
     const [u] = await container.db.select().from(users).where(eq(users.email, "second@identifiedtalent.com"));
     expect(u.platformRole).toBe("none");
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const ignored = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "bootstrap.ignored"));
     expect(ignored.some((a) => a.target?.id === u.id)).toBe(true);
     // and the same for the first administrator signing in again: no second ledger row appears
@@ -69,11 +69,11 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     const [u] = await container.db.select().from(users).where(eq(users.email, "first@identifiedtalent.com"));
     const rows = await container.db.select().from(sessions).where(eq(sessions.userId, u.id));
     await container.db.update(sessions).set({ aal: "aal1" }).where(eq(sessions.id, rows[0].id));
-    const r = await admin(first, "GET", "/api/v1/admin/runs");
+    const r = await admin(first, "GET", "/api/v1/admin/queue");
     expect(r.status).toBe(403);
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("mfa_required");
     await container.db.update(sessions).set({ aal: "aal2" }).where(eq(sessions.id, rows[0].id));
-    expect((await admin(first, "GET", "/api/v1/admin/runs")).status).toBe(200);
+    expect((await admin(first, "GET", "/api/v1/admin/queue")).status).toBe(200);
   });
 
   it("nobody can grant themselves a role, and grants need a reason, a staff domain and a Microsoft sign-in", async () => {
@@ -97,7 +97,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     expect(r.status).toBe(201);
     secondGrantId = ((await r.json()) as { grantId: string }).grantId;
     // the existing session of the grantee gains access immediately
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(200);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(200);
     const ledger = await container.db.select().from(platformRoleGrants).where(eq(platformRoleGrants.id, secondGrantId));
     expect(ledger[0]).toMatchObject({ role: "platform_admin", source: "console", grantReason: "second administrator per the founder" });
     expect(ledger[0].grantedBy).toMatchObject({ kind: "user", name: "First Admin" });
@@ -119,18 +119,18 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     // the ledger, not the cached column, is what a request trusts: a column write without a ledger row grants nothing
     const [ghost] = await container.db.insert(users).values({ email: "ghost@identifiedtalent.com", name: "Ghost", authProvider: "azure", authSubject: "ghost-subject", platformRole: "platform_admin" }).returning();
     const ghostCookie = await signInWithIdentity(app, container, { email: "ghost@identifiedtalent.com", provider: "azure", aal2: true, subject: "ghost-subject" });
-    expect((await admin(ghostCookie, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(ghostCookie, "GET", "/api/v1/admin/queue")).status).toBe(403);
     expect(ghost.platformRole).toBe("platform_admin"); // the column said admin; the request said no
   });
 
   it("revocation is immediate, audited, alerted, and the last administrator cannot be removed", async () => {
     third = await signInWithIdentity(app, container, { email: "third@identifiedtalent.com", name: "Third", provider: "azure", aal2: true });
     const grant = (await (await admin(second, "POST", "/api/v1/admin/platform-roles", { email: "third@identifiedtalent.com", role: "platform_admin", reason: "covering the console this month", confirm: true })).json()) as { grantId: string };
-    expect((await admin(third, "GET", "/api/v1/admin/runs")).status).toBe(200);
+    expect((await admin(third, "GET", "/api/v1/admin/queue")).status).toBe(200);
     email().sent.length = 0;
     const rv = await admin(first, "POST", `/api/v1/admin/platform-roles/${grant.grantId}/revoke`, { reason: "left the team", confirm: true });
     expect(rv.status).toBe(200);
-    expect((await admin(third, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(third, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const [row] = await container.db.select().from(platformRoleGrants).where(eq(platformRoleGrants.id, grant.grantId));
     expect(row.revokedAt).toBeTruthy();
     expect(row.revokeReason).toBe("left the team");
@@ -152,7 +152,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     // the second, fourth and fifth administrators are revoked; then the first is the last one and cannot be revoked
     expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${quiet.grantId}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
     expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${secondGrantId}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const [fourthUser] = await container.db.select().from(users).where(eq(users.email, "fourth@identifiedtalent.com"));
     const [fourthGrant] = await container.db.select().from(platformRoleGrants).where(and(eq(platformRoleGrants.userId, fourthUser.id), isNull(platformRoleGrants.revokedAt)));
     expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${fourthGrant.id}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
@@ -172,7 +172,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     const cookie = await signInWithIdentity(legacyApp, legacy, { email: "legacy@identifiedtalent.com", provider: "azure", aal2: true });
     const me = (await (await legacyApp.request("/api/v1/auth/me", { headers: { cookie } })).json()) as { user: { platformRole: string } };
     expect(me.user.platformRole).toBe("none");
-    expect((await legacyApp.request("/api/v1/admin/runs", { headers: { cookie, "x-admin-reason": "x" } })).status).toBe(403);
+    expect((await legacyApp.request("/api/v1/admin/queue", { headers: { cookie, "x-admin-reason": "x" } })).status).toBe(403);
     expect(await legacy.db.select().from(platformRoleGrants)).toHaveLength(0);
     await legacy.close();
     // no personal staff address anywhere in the authorization code paths (a domain default is not an address)

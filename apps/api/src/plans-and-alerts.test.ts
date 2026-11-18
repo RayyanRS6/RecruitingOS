@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
+import type { AdminCompany, CompanyView, PlanChangeAnswer, UsageLine } from "@ros/contracts";
 import { ALERT_EMAIL_JOB_KIND, acknowledgeAlert, emailCriticalAlert, entitlements as allowance, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, setAlertEmails } from "@ros/core";
 import { adminAlerts, auditRecords, companies, entitlements, jobs, plans, users, withPlatform, withTenant } from "@ros/db";
 import { checkOperationalHealth } from "./maintenance";
@@ -10,7 +11,7 @@ import { signInAdmin, useTrial } from "./test-helpers";
 
 /**
  * Allowances, plans and alerts (Wave S2 F1, founder-visible blockers): a monthly allowance starts again from zero when
- * its period ends, with nobody at ITS doing anything; a platform admin changes a customer's plan from the console with a
+ * its period ends, with nobody at ITS doing anything; a platform admin changes a company's plan from the dashboard with a
  * reason; an acknowledged alert no longer silences the next one, a person can resolve one, and a critical one is emailed
  * to the platform administrators.
  */
@@ -24,6 +25,9 @@ describe("allowances, plans and alerts", () => {
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "test" }, body: body ? JSON.stringify(body) : undefined });
   const rowOf = async (key: string) => (await container.db.select().from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, key))))[0];
   const mail = () => (container.integrations.email as FakeEmailAdapter).sent;
+  /** The company's plan as its own people read it in Settings, and one of its usage lines. */
+  const plan = async () => ((await (await json(owner, "GET", "/api/v1/companies/current")).json()) as CompanyView).plan;
+  const line = (lines: UsageLine[], key: string) => lines.find((l) => l.key === key)!;
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
@@ -41,13 +45,16 @@ describe("allowances, plans and alerts", () => {
     await container.close();
   });
 
-  it("Setup's usage says when the monthly allowances start again; roles never reset", async () => {
-    const co = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { usage: Record<string, { used: number; limit: number | null; resetsAt?: string | null }> };
-    expect(co.usage.text_screens).toMatchObject({ used: 0, limit: 25 });
-    const resets = Date.parse(co.usage.text_screens.resetsAt ?? "");
+  it("Settings' usage lines say when the monthly allowances start again; jobs never reset", async () => {
+    const { usage } = await plan();
+    expect(line(usage, "text_screens")).toMatchObject({ label: "AI interviews", used: 0, limit: 25, unit: "count", words: "0 of 25 AI interviews this month" });
+    const resets = Date.parse(line(usage, "text_screens").resetsAt ?? "");
     expect(resets - Date.now()).toBeGreaterThan(29 * DAY);
     expect(resets - Date.now()).toBeLessThanOrEqual(30 * DAY);
-    expect(co.usage.active_roles).toEqual({ used: 0, limit: 1 });
+    expect(line(usage, "active_roles")).toEqual({ key: "active_roles", label: "Jobs at a time", used: 0, limit: 1, unit: "count", resetsAt: null, words: "0 of 1 jobs at a time" });
+    expect(line(usage, "seats")).toMatchObject({ used: 1, limit: 3, words: "1 of 3 people" });
+    // one line for each limit the plan sets, and none for one it does not
+    expect(usage.map((l) => l.key)).toEqual(["active_roles", "text_screens", "seats"]);
   });
 
   it("a trial company that used its 25 conversations last period has room again in the new one, counted from zero, reset once", async () => {
@@ -67,19 +74,21 @@ describe("allowances, plans and alerts", () => {
     expect(Date.parse(rolled.periodEnd!)).toBe(ended.getTime() + 30 * DAY);
     // the next one adds to it: no second reset
     expect((await withTenant(container.db, companyId, (tx) => allowance.recordScreenStart(tx, companyId, { test: 2 }))).used).toBe(2);
-    const co = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { usage: Record<string, { used: number; resetsAt?: string | null }> };
-    expect(co.usage.text_screens.used).toBe(2);
-    expect(Date.parse(co.usage.text_screens.resetsAt!)).toBe(ended.getTime() + 30 * DAY);
+    const screens = line((await plan()).usage, "text_screens");
+    expect(screens.used).toBe(2);
+    expect(Date.parse(screens.resetsAt!)).toBe(ended.getTime() + 30 * DAY);
   });
 
-  it("the console's customer row says how many AI interviews were used this period and when they start again", async () => {
-    const customers = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; screeningConversations: { used: number; limit: number | null; resetsAt: string | null } }>;
+  it("the dashboard's row carries the same usage lines the company reads, with how many AI interviews were used this period and when they start again", async () => {
+    const customers = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as AdminCompany[];
     const me = customers.find((c) => c.id === companyId)!;
-    expect(me.screeningConversations).toMatchObject({ used: 2, limit: 25 });
-    expect(me.screeningConversations.resetsAt).toBeTruthy();
+    expect(line(me.usage, "text_screens")).toMatchObject({ used: 2, limit: 25, words: "2 of 25 AI interviews this month" });
+    expect(line(me.usage, "text_screens").resetsAt).toBeTruthy();
+    expect(me.usage).toEqual((await plan()).usage);
+    expect(me).toMatchObject({ planKey: "trial", planName: "Trial", status: "active", statusLabel: "Active", accessRequest: null, accessDecisions: ["remove"], owner: { email: "owner@allowance.test" }, seats: { used: 1, limit: 3 } });
   });
 
-  it("a platform admin changes the plan from the console with a reason: new limits at once, this month's usage kept, audited", async () => {
+  it("a platform admin changes the plan from the dashboard with a reason: new limits at once, this month's usage kept, audited", async () => {
     const plans = (await (await json(admin, "GET", "/api/v1/admin/plans")).json()) as Array<{ key: string; name: string; limits: Record<string, number | null> }>;
     // what ITS may offer: the four public plans and the private pilot; the retired plans are gone from the list
     expect(plans.map((p) => p.key).sort()).toEqual(["basic", "design_partner", "free", "pro", "ultra"]);
@@ -96,7 +105,8 @@ describe("allowances, plans and alerts", () => {
     expect(usedUp?.created).toBe(true);
     const r = await json(admin, "POST", `/api/v1/admin/customers/${companyId}/plan`, { planKey: "design_partner", reason: "Signed the pilot agreement on the kick-off call." });
     expect(r.status).toBe(200);
-    expect(((await r.json()) as { planKey: string; status: string })).toMatchObject({ planKey: "design_partner", status: "design_partner" });
+    // the three facts the dashboard shows: the company was on Trial, nobody was locked, and this plan has no monthly AI credit
+    expect((await r.json()) as PlanChangeAnswer).toEqual({ trialEnded: true, unlocked: 0, aiCreditMonthStarted: false });
     const after = await rowOf(allowance.TEXT_SCREENS);
     expect(after).toMatchObject({ limit: 300, used: 25 });
     expect(after.periodEnd).toBe(ent.periodEnd); // the reset date does not move
@@ -105,9 +115,9 @@ describe("allowances, plans and alerts", () => {
     const audited = (await container.db.select().from(auditRecords).where(eq(auditRecords.action, "plan.changed"))).filter((a) => a.companyId === companyId);
     expect(audited).toHaveLength(1);
     expect(audited[0].reason).toBe("Signed the pilot agreement on the kick-off call.");
-    const co = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { planKey: string; usage: Record<string, { used: number; limit: number | null }> };
-    expect(co.planKey).toBe("design_partner");
-    expect(co.usage.text_screens).toMatchObject({ used: 25, limit: 300 });
+    const now = await plan();
+    expect(now).toMatchObject({ key: "design_partner", name: "Design Partner", trial: null });
+    expect(line(now.usage, "text_screens")).toMatchObject({ used: 25, limit: 300 });
   });
 
   it("acknowledging means seen: a condition still going on raises nothing new; its end (or a day) makes the next one new; a person resolves an alert and it stays on record", async () => {
@@ -237,9 +247,9 @@ describe("allowances, plans and alerts", () => {
 });
 
 /**
- * The Trial plan's 30 days from the console (founder decision L-02 B): ITS extends a trial by 1 to 90 days with a reason,
+ * The Trial plan's 30 days from the dashboard (founder decision L-02 B): ITS extends a trial by 1 to 90 days with a reason,
  * counted from the later of its end and now, audited, the "trial ended" alert resolved; and a change of plan to Trial
- * sets the customer's status to trial and starts new dates when the company is confirmed.
+ * starts a new 30 days.
  */
 describe("extending a trial, and putting a customer on Trial", () => {
   let container: Container;
@@ -257,7 +267,7 @@ describe("extending a trial, and putting a customer on Trial", () => {
     return (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
   };
   const create = async (cookie: string, name: string) => ((await (await json(cookie, "POST", "/api/v1/companies", { name, vertical: "dental", sizeBand: "1-19", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string }).id;
-  const settingsOf = async (id: string) => (await container.db.select({ settings: companies.settings, status: companies.status, planKey: companies.planKey }).from(companies).where(eq(companies.id, id)))[0];
+  const settingsOf = async (id: string) => (await container.db.select({ settings: companies.settings, planKey: companies.planKey }).from(companies).where(eq(companies.id, id)))[0];
   const extend = (id: string, body: Record<string, unknown>, cookie = admin) => json(cookie, "POST", `/api/v1/admin/customers/${id}/trial`, body);
   const codeOf = async (r: Response) => ((await r.json()) as { error: { code: string; message: string } }).error;
   const near = (iso: string | undefined, ms: number) => Math.abs(Date.parse(iso ?? "") - ms) < 60_000;
@@ -266,15 +276,14 @@ describe("extending a trial, and putting a customer on Trial", () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
     app = createApp(container);
     owner = await signIn("owner@extend.test");
-    // confirmed at sign-up here (COMPANY_CHECK=auto), so its 30 days run from now
+    // live when created (sign-up is open in tests), so its 30 days run from now
     trialCo = await create(owner, "Extend Dental");
     await useTrial(container, trialCo);
     growthCo = await create(await signIn("owner@growth-plan.test"), "Growth Dental");
     await withPlatform(container.db, (tx) => allowance.applyPlan(tx, growthCo, "growth"));
-    // a company on Trial still waiting for the ITS check: no dates yet
+    // a company put on Trial a moment ago: the hourly check has not given it dates yet
     waitingCo = await create(await signIn("owner@waiting.test"), "Waiting Dental");
-    await withPlatform(container.db, (tx) => tx.update(companies).set({ settings: sql`${companies.settings} - 'trial' - 'verifiedAt' - 'verifiedBy'` }).where(eq(companies.id, waitingCo)));
-    await useTrial(container, waitingCo);
+    await withPlatform(container.db, (tx) => allowance.applyPlan(tx, waitingCo, "trial", "trial"));
     admin = await signInAdmin(app, container, "ida.admin@identifiedtalent.com", "Ida Admin");
   });
   afterAll(async () => {
@@ -289,10 +298,10 @@ describe("extending a trial, and putting a customer on Trial", () => {
     expect((await extend("not-a-company", { days: 14, reason: "The kick-off call moved.", confirm: true })).status).toBe(404);
     const other = await extend(growthCo, { days: 14, reason: "The kick-off call moved.", confirm: true });
     expect(other.status).toBe(409);
-    expect(await codeOf(other)).toEqual({ code: "not_on_trial", message: "This customer is not on the Trial plan." });
+    expect(await codeOf(other)).toEqual({ code: "not_on_trial", message: "This company is not on the Trial plan." });
     const waiting = await extend(waitingCo, { days: 14, reason: "The kick-off call moved.", confirm: true });
     expect(waiting.status).toBe(409);
-    expect(await codeOf(waiting)).toEqual({ code: "trial_not_started", message: "The trial starts when ITS confirms the company, so there is nothing to extend yet." });
+    expect(await codeOf(waiting)).toEqual({ code: "trial_not_started", message: "The trial has not started yet, so there is nothing to extend." });
     expect(await container.db.select().from(auditRecords).where(eq(auditRecords.action, "trial.extended"))).toHaveLength(0);
   });
 
@@ -316,8 +325,8 @@ describe("extending a trial, and putting a customer on Trial", () => {
     const audited = await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, trialCo), eq(auditRecords.action, "trial.extended")));
     expect(audited.map((a) => a.reason)).toEqual(["The kick-off call moved.", "Waiting for the owner's decision."]);
     expect(audited[0].details).toMatchObject({ days: 10, from: before.endsAt, to: first.endsAt });
-    // the console's list shows where it stands, the dates with each extension, and the people used
-    const rows = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as Array<{ id: string; trial: { extendedDays: number } | null; trialTerm: { extensions: unknown[] } | null; seats: { used: number; limit: number | null } }>;
+    // the dashboard's list shows where it stands, the dates with each extension, and the people used
+    const rows = (await (await json(admin, "GET", "/api/v1/admin/customers")).json()) as AdminCompany[];
     const mine = rows.find((c) => c.id === trialCo)!;
     expect(mine.trial).toMatchObject({ started: true, ended: false, extendedDays: 15 });
     expect(mine.trialTerm?.extensions).toHaveLength(2);
@@ -325,8 +334,8 @@ describe("extending a trial, and putting a customer on Trial", () => {
     expect(rows.find((c) => c.id === growthCo)).toMatchObject({ trial: null, seats: { used: 1, limit: null } });
   });
 
-  it("a change of plan to Trial sets the status to trial and starts new dates when the company is confirmed; not before", async () => {
-    // Trial is retired, so the console no longer offers it; the code stays, for the day ITS brings it back
+  it("a change of plan to Trial starts a new 30 days; a company whose access was taken away has no plan to change", async () => {
+    // Trial is retired, so the dashboard no longer offers it; the code stays, for the day ITS brings it back
     const refused = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
     expect(refused.status).toBe(400);
     expect(await codeOf(refused)).toMatchObject({ code: "inactive_plan" });
@@ -334,20 +343,25 @@ describe("extending a trial, and putting a customer on Trial", () => {
     try {
       const r = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "trial", reason: "Back on Trial while they decide." });
       expect(r.status).toBe(200);
-      expect(await r.json()).toMatchObject({ planKey: "trial", status: "trial", trialEnded: false });
+      expect((await r.json()) as PlanChangeAnswer).toEqual({ trialEnded: false, unlocked: 0, aiCreditMonthStarted: false });
       const co = await settingsOf(growthCo);
       expect(co.settings.trial).toMatchObject({ startedBy: "plan_change" });
       expect(near(co.settings.trial?.startedAt, Date.now())).toBe(true);
       expect(Date.parse(co.settings.trial!.endsAt) - Date.parse(co.settings.trial!.startedAt)).toBe(30 * DAY);
       // and back off Trial: the trial has ended, nothing is written over the dates
       const off = await json(admin, "POST", `/api/v1/admin/customers/${growthCo}/plan`, { planKey: "pro", reason: "They chose Pro." });
-      expect(await off.json()).toMatchObject({ planKey: "pro", status: "active", trialEnded: true });
+      expect((await off.json()) as PlanChangeAnswer).toMatchObject({ trialEnded: true, unlocked: 0 });
+      expect((await settingsOf(growthCo)).planKey).toBe("pro");
       expect((await settingsOf(growthCo)).settings.trial).toEqual(co.settings.trial);
-      // a company still waiting for the ITS check gets its dates at the check, not now
-      await withPlatform(container.db, (tx) => allowance.applyPlan(tx, waitingCo, "growth"));
-      expect((await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/plan`, { planKey: "trial", reason: "Trial until the check." })).status).toBe(200);
-      expect((await settingsOf(waitingCo))).toMatchObject({ status: "trial", planKey: "trial" });
-      expect((await settingsOf(waitingCo)).settings.trial).toBeUndefined();
+      // a company whose access was taken away is a declined company: nobody is in, so its plan and its trial wait for Accept
+      expect((await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/access`, { decision: "remove", confirm: true })).status).toBe(200);
+      const before = await settingsOf(waitingCo);
+      const closed = await json(admin, "POST", `/api/v1/admin/customers/${waitingCo}/plan`, { planKey: "pro", reason: "They asked for Pro." });
+      expect(closed.status).toBe(409);
+      expect(await codeOf(closed)).toMatchObject({ code: "access_request_open", message: "This company's access was taken away. Accept it first if you want to let it in again." });
+      const extended = await extend(waitingCo, { days: 14, reason: "The kick-off call moved.", confirm: true });
+      expect([extended.status, (await codeOf(extended)).code]).toEqual([409, "access_request_open"]);
+      expect(await settingsOf(waitingCo)).toEqual(before);
     } finally {
       await container.db.update(plans).set({ active: false }).where(eq(plans.key, "trial"));
     }
