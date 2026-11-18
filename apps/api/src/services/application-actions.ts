@@ -56,7 +56,9 @@ export async function performAction(tx: Tx, container: Container, who: Who, inpu
   }
   await emit(tx, { type: "human.override", companyId: app.companyId, actor: who.actor, subject: { type: "application", id: app.id }, payload: { action: input.action } });
   const [now] = await tx.select({ stage: applications.stage, toldState: applications.toldState }).from(applications).where(eq(applications.id, app.id)).limit(1);
-  const aiInterview = aiInterviewViewOf(await latestScreen(tx, app.id));
+  // A new AI interview's row is written by its run's first step, right after this commits: until then the newest row is
+  // the one before it, so the answer names the interview that was just sent, never the one that closed.
+  const aiInterview = input.action === "shortlist" || input.action === "send_new_link" ? null : aiInterviewViewOf(await latestScreen(tx, app.id));
   const result: ActionResult = { ok: true, action: input.action, applicationId: app.id, stage: now.stage, tab: tabOf(now.stage), label: stageLabel(now.stage, aiInterview?.status), toldState: now.stage === "rejected" ? now.toldState : null, message: done.message, undoUntil: done.undoUntil };
   return { result, name: `${person.candidate.firstName} ${person.candidate.lastName}`.trim() };
 }

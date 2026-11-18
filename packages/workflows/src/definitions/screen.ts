@@ -137,7 +137,7 @@ const closesAt = (scr: Pick<ScreenRow, "invitedAt" | "createdAt" | "expiresAt">)
 
 /** Waits until `until`, or until the interview's signal says something changed, then goes on at `step`. */
 function waitFor(scr: Pick<ScreenRow, "id">, until: Date, step: "remind" | "close", state?: Partial<State>): StepResult<State> {
-  return { kind: "wait", wait: { kind: "event", eventTypes: [screenSignalKey(scr.id)], subjectId: scr.id, until: until.toISOString(), reason: step === "remind" ? "the AI interview's link is out: one reminder goes after 48 hours" : "the AI interview's link closes five days after it went" }, ...(state ? { state } : {}), resumeStep: step };
+  return { kind: "wait", wait: { kind: "event", eventTypes: [screenSignalKey(scr.id)], until: until.toISOString(), reason: step === "remind" ? "the AI interview's link is out: one reminder goes after 48 hours" : "the AI interview's link closes five days after it went" }, ...(state ? { state } : {}), resumeStep: step };
 }
 
 /** Where the run goes once the interview is no longer open: on to the scorecard when the answers were sent, otherwise it is over. Null while it is open. */
