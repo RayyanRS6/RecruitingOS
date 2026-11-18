@@ -177,6 +177,8 @@ export function roleActions(f: { status: RoleStatus; role: MembershipRole; trial
 export type RoleSummary = {
   id: string;
   title: string;
+  /** Where the job is, in words: its first place ("Tustin, CA"); null when it names none. */
+  place: string | null;
   status: RoleStatus;
   statusLabel: string;
   createdAt: string;

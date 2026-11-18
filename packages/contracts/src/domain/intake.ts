@@ -396,9 +396,10 @@ export type IntakeSessionSummary = {
 
 /**
  * Room on the plan for another job: checked when the builder opens and before any assistant run. `trialEnded`: the
- * company's trial has ended, so no new job starts until a plan is chosen; `message` says so.
+ * company's trial has ended, so no new job starts until a plan is chosen; `message` says so. `ask`: when there is no
+ * room, the button's words and the reason to send with POST /api/v1/plans/request; null while there is room.
  */
-export type PlanRoom = { ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }>; message: string | null; trialEnded?: boolean; /** The plan's jobs are all used for good, or its AI help is too low for a new job: closing one would not help, so the only way on is to upgrade. */ upgrade?: boolean; /** It is the AI help that ran out: the Upgrade asks about that (`AI_HELP_UPGRADE_QUESTION`). */ aiHelp?: boolean; /** On the last plan nothing is above theirs (`mayOfferUpgrade`): the same request opens the same sheet, and its button says "Talk to ITS". */ nothingAbove?: boolean };
+export type PlanRoom = { ok: boolean; limit: number | null; used: number; holding: Array<{ roleId: string; title: string; status: string }>; message: string | null; ask: { label: string; reason: string } | null; trialEnded?: boolean; /** The plan's jobs are all used for good, or its AI help is too low for a new job: closing one would not help, so the only way on is to upgrade. */ upgrade?: boolean; /** It is the AI help that ran out: the Upgrade asks about that (`AI_HELP_UPGRADE_QUESTION`). */ aiHelp?: boolean; /** On the last plan nothing is above theirs (`mayOfferUpgrade`): the same request opens the same sheet, and its button says "Talk to ITS". */ nothingAbove?: boolean };
 
 /** What the server refused from an answer or an edit: a value that failed the fairness check, with the reason and a lawful alternative. */
 export type IntakeRefusal = { field: string; text: string; reason: string; alternative: string | null };
