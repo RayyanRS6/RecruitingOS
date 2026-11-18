@@ -351,7 +351,7 @@ The hiring team at ${company.name}`;
       applicationId: app.id,
       to: candidate.email,
       from: fromAddress(company, container.integrations),
-      replyTo: replyToFor(container.integrations),
+      replyTo: replyToFor(container.integrations, company),
       subject: `Your new application link: ${company.name}`,
       text,
       templateKey: "status_link_new",

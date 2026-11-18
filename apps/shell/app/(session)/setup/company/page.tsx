@@ -13,5 +13,5 @@ export default async function CompanySetupPage() {
   const me = await getMe();
   if (!me) redirect("/login");
   if (me.activeCompanyId) redirect("/");
-  return <CompanySetup signup={await getSignup()} />;
+  return <CompanySetup signup={await getSignup()} person={{ email: me.user.email, name: me.user.name }} />;
 }

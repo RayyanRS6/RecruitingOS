@@ -36,10 +36,10 @@ const DECLINED_TITLE = "We can't offer access right now";
  * Someone who may not send the form and has no request (`signup.allowed` false) reads one line in its place, with the
  * inbox to ask. Without an answer about that the form shows, and the API still refuses whoever it should.
  */
-export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
+export function CompanySetup({ signup, person }: { signup?: SignupAnswer | null; /** The signed-in person: their name and address start two of the fields. */ person?: { email: string; name: string | null } | null }) {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: "", ownerName: "", vertical: "consumer", sizeBand: "", city: "", region: "", timezone: "", website: "" });
+  const [form, setForm] = useState({ name: "", ownerName: person?.name ?? "", contactEmail: person?.email ?? "", vertical: "consumer", sizeBand: "", city: "", region: "", timezone: "", website: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -91,7 +91,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
     setBusy(true);
     setError(null);
     try {
-      const answer = await api.post<CompanyCreated>("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
+      const answer = await api.post<CompanyCreated>("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, contactEmail: form.contactEmail.trim() || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
       if (answer.accessRequest) {
         setRequest(answer.accessRequest);
         return;
@@ -147,6 +147,8 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
           <form onSubmit={submit} className="stack mt-7 gap-5 border-t border-line pt-7">
             <Field label="Company name" htmlFor="name"><input id="name" className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Your name" htmlFor="owner"><input id="owner" className="input" value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} /></Field>
+            {/* shown on the job pages and where candidates' replies go: the company's own address from its first job, not the ITS inbox */}
+            <Field label="Email candidates can write to" htmlFor="contact"><input id="contact" type="email" className="input" required maxLength={254} autoComplete="email" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} /></Field>
             <Field label="What kind of business" htmlFor="vertical">
               <select id="vertical" className="select" value={form.vertical} onChange={(e) => setForm({ ...form, vertical: e.target.value })}>
                 {VERTICALS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ADVERSE_DECISION_LINE, adverseDecisionLineApplies, regionFromLocationText } from "@ros/core";
-import { DECISION_TEMPLATE, decisionMessage } from "./coordinator";
+import { DECISION_TEMPLATE, decisionMessage, replyToFor } from "./coordinator";
 import { samplePacket } from "./fixtures/sample-packet";
 
 /**
@@ -35,6 +35,12 @@ describe("the decision message", () => {
     // without Colorado the line is not there, and nothing else changes
     expect(write().text).not.toContain(ADVERSE_DECISION_LINE.text);
     expect(write().text).toBe(m.text.replace(`${ADVERSE_DECISION_LINE.text}\n\n`, ""));
+  });
+
+  it("a candidate's reply lands with the company's own contact when it set one, else in the mailbox ITS reads", () => {
+    const integrations = { env: { replyTo: "replies@its.test" } } as never;
+    expect(replyToFor(integrations, { settings: {} } as never)).toBe("replies@its.test");
+    expect(replyToFor(integrations, { settings: { hiringContact: { email: "jobs@harbor.test", name: "Maya" } } } as never)).toBe("jobs@harbor.test");
   });
 
   it("never asks for a reply with a keyword nothing reads: it names the company's own contact when it set one, else a reply, once", () => {

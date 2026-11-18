@@ -82,16 +82,27 @@ describe("the company details step: who may send the form", () => {
       expect(title(html), String(signup)).toBe("Tell us about your company");
       expect(html, String(signup)).toContain("<form");
       expect(words(html), String(signup)).toContain("Create my hiring workspace");
-      // company name, your name, kind of business, size, city and state, time zone, website
-      for (const id of ["name", "owner", "vertical", "size", "city", "region", "timezone", "web"]) expect(html, id).toContain(` id="${id}"`);
+      // company name, your name, the address candidates can write to, kind of business, size, city and state, time zone, website
+      for (const id of ["name", "owner", "contact", "vertical", "size", "city", "region", "timezone", "web"]) expect(html, id).toContain(` id="${id}"`);
     }
+  });
+
+  it("starts the person's name and the address candidates can write to from their sign-in, for them to change", () => {
+    const html = draw(createElement(CompanySetup, { signup: { allowed: true, contact: "recruiting@its.example" }, person: { email: "olive@harbor.example", name: "Olive Owner" } }));
+    expect(words(html)).toContain("Email candidates can write to");
+    expect(html).toMatch(/<input[^>]* id="owner"[^>]* value="Olive Owner"/);
+    expect(html).toMatch(/<input[^>]* id="contact"[^>]* value="olive@harbor.example"/);
+    // with no name from the sign-in, the name starts empty and the address is still theirs
+    const unnamed = draw(createElement(CompanySetup, { signup: null, person: { email: "sam@stranger.test", name: null } }));
+    expect(unnamed).toMatch(/<input[^>]* id="owner"[^>]* value=""/);
+    expect(unnamed).toMatch(/<input[^>]* id="contact"[^>]* value="sam@stranger.test"/);
   });
 });
 
 describe("the company details page asks the API, with the person's own cookie", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  const open = async () => (await page.default()) as ReactElement<{ signup: { mode?: string; allowed?: boolean; contact?: string; door?: string; request?: unknown } }>;
+  const open = async () => (await page.default()) as ReactElement<{ signup: { mode?: string; allowed?: boolean; contact?: string; door?: string; request?: unknown }; person?: { email: string; name: string | null } }>;
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "open", EMAIL_REPLY_TO: "recruiting@its.example" } });
@@ -108,6 +119,8 @@ describe("the company details page asks the API, with the person's own cookie", 
     const element = await open();
     expect(element.props.signup).toMatchObject({ mode: "open", allowed: true, contact: "recruiting@its.example" });
     expect(element.props.signup.request).toBeUndefined();
+    // the form starts from who signed in
+    expect(element.props.person).toMatchObject({ email: "sam@stranger.test" });
     const html = draw(element);
     expect(html).toContain("<form");
     expect(words(html)).toContain("Create my hiring workspace");

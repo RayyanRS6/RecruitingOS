@@ -249,4 +249,20 @@ describe("what candidates see about the company: the text about it, its logo, th
     expect(await jobPage()).toContain(`<a href="mailto:${container.env.EMAIL_REPLY_TO}">`);
     expect((await fieldsAudited()).slice(-1)).toEqual([["hiringContact"]]);
   });
+
+  it("the company details form asks for it, so a new company's candidates write to the company from its first job", async () => {
+    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "maya@second.test" }) });
+    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
+    const second = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
+    const details = { name: "Second Smile", vertical: "dental", sizeBand: "1-19", ownerName: "Maya Lopez", locations: [{ city: "Austin", region: "TX", country: "US" }] };
+    // not an address: refused before anything is made
+    expect((await json(second, "POST", "/api/v1/companies", { ...details, contactEmail: "not an address" })).status).toBe(400);
+    expect((await json(second, "POST", "/api/v1/companies", { ...details, contactEmail: "jobs@second.test" })).status).toBe(201);
+    const made = await current(second);
+    expect(made).toMatchObject({ hiringContact: { email: "jobs@second.test", name: "Maya Lopez" }, contactShown: { kind: "company", email: "jobs@second.test", name: "Maya Lopez" } });
+    const job = await plantJob(container, { companyId: made.id, title: "Dental Assistant" });
+    const page = (await (await app.request(`/careers/${made.slug}/jobs/${job}`)).text()).replace(/&#39;/g, "'");
+    expect(page).toContain('Questions? Email Maya Lopez at <a href="mailto:jobs@second.test">jobs@second.test</a> to reach a person.');
+    expect(page).not.toContain(container.env.EMAIL_REPLY_TO);
+  });
 });

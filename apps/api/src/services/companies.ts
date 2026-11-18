@@ -77,9 +77,11 @@ export async function createCompany(db: Db, input: CreateCompany, ownerUserId: s
     const id = randomUUID();
     const slug = await freeSlug(tx, opts.request ? requestSlug(id) : slugify(input.name));
     const ownerStatus = opts.request ? "requested" : "active";
+    // The address the form asked for, so candidates write to the company from its first job (not to the ITS inbox).
+    const hiringContact = input.contactEmail ? { email: input.contactEmail, name: input.ownerName?.trim() || null, setAt: (opts.now ?? new Date()).toISOString(), setBy: actor } : undefined;
     const [company] = await tx
       .insert(companies)
-      .values({ id, name: input.name, slug, vertical: input.vertical.toLowerCase(), sizeBand: input.sizeBand, timezone: input.timezone, locations: input.locations, settings: { website: input.website }, planKey: FREE_PLAN_KEY })
+      .values({ id, name: input.name, slug, vertical: input.vertical.toLowerCase(), sizeBand: input.sizeBand, timezone: input.timezone, locations: input.locations, settings: { website: input.website, ...(hiringContact ? { hiringContact } : {}) }, planKey: FREE_PLAN_KEY })
       .returning();
     await tx.insert(memberships).values({ companyId: company.id, userId: ownerUserId, role: "owner", status: ownerStatus });
     if (input.ownerName) await tx.update(users).set({ name: input.ownerName }).where(eq(users.id, ownerUserId));

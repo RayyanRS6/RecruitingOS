@@ -23,9 +23,12 @@ export function fromAddress(company: Company, integrations: Integrations): strin
   return mailbox(`${company.name} hiring team`, integrations.env.fromAddress);
 }
 
-/** Where a candidate's reply lands: the reply mailbox a person reads (EMAIL_REPLY_TO). */
-export function replyToFor(integrations: Integrations): string {
-  return integrations.env.replyTo;
+/**
+ * Where a candidate's reply lands: the address the company gives candidates when it set one (the one its job page
+ * prints), otherwise the reply mailbox ITS reads (EMAIL_REPLY_TO).
+ */
+export function replyToFor(integrations: Integrations, company: Pick<Company, "settings">): string {
+  return company.settings.hiringContact?.email ?? integrations.env.replyTo;
 }
 
 function signature(packet: RolePacket, company: Company): string {
@@ -60,8 +63,8 @@ export function replaceSentences(text: string, patterns: readonly RegExp[], inst
 
 /**
  * How to reach a person, as an email says it: the address the company gives candidates when it set one (the one its job
- * page prints); otherwise a reply, which lands in the mailbox a person reads (`replyToFor`), the address the job page
- * prints for such a company.
+ * page prints, and where a reply lands too); otherwise a reply, which lands in the mailbox ITS reads (`replyToFor`), the
+ * address the job page prints for such a company.
  */
 export function personLine(company: Pick<Company, "settings">): string {
   const own = company.settings.hiringContact?.email;
@@ -199,7 +202,7 @@ export async function deliver(q: Queryable, integrations: Integrations, input: M
     applicationId: application.id,
     to: input.to,
     from: fromAddress(company, integrations),
-    replyTo: replyToFor(integrations),
+    replyTo: replyToFor(integrations, company),
     subject: input.subject,
     text: input.text,
     templateKey: input.templateKey,
