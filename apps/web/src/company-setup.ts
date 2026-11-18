@@ -82,8 +82,8 @@ export const ZONE_CHOICES: ReadonlyArray<{ value: string; label: string; short: 
 ];
 
 /**
- * A zone in the sign-up form's words, never its id ("America/Los_Angeles" read as raw text on the owner's screens: live
- * test, 12 November 2026): its `label` ("Pacific time (Los Angeles)") where a zone is chosen or stated, its `short` name
+ * A zone in the sign-up form's words, never its id ("America/Los_Angeles" would read as raw text on the owner's
+ * screens): its `label` ("Pacific time (Los Angeles)") where a zone is chosen or stated, its `short` name
  * beside a time. A zone the form does not offer reads as the browser names it ("Eastern Time"), else as it is stored.
  */
 export function zoneName(zone: string, form: "label" | "short" = "label"): string {

@@ -18,7 +18,7 @@ function useTouch(): boolean {
 }
 
 /**
- * How the keys work at a desk (fewer words, 23 October 2026): no line on screen. The Send button announces Enter as its
+ * How the keys work at a desk: no line on screen. The Send button announces Enter as its
  * shortcut (the kit's `keyshortcuts`) and shows this as its tooltip, and the box itself is described by it for screen
  * readers (Enter normally starts a new line in a text box, so they hear it before they type). On a touch screen Enter is a
  * new line, so neither says it.

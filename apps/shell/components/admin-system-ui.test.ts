@@ -24,7 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 
 (globalThis as { React?: typeof React }).React = React;
 const { Administrators, AiRunDrawer, AiRuns, CalendarAdmin, Costs, costsSinceKey, monthStartIn, Queue, RunDrawer, Runs, RUNS_READ_LIMIT, SystemSection } = await import("@ros/web/src/pages/admin/system");
-const { dayKey } = await import("@ros/web/src/pages/candidate-panel/helpers");
+const { dayKey } = await import("@ros/web/src/dates");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));

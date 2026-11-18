@@ -161,9 +161,9 @@ function Empty({ view, onTab }: { view: EmptyView; onTab: (tab: CandidateTab) =>
 
 /**
  * The line above the list: "Select all", and once anyone is ticked, how many are and one button for each action the
- * API allows for some of them. "Email the decision" for several asks once before it sends.
+ * API allows for some of them. "Email the decision" for several asks once before it sends. (Exported for its tests.)
  */
-function SelectionBar(props: { total: number; ticked: number; buttons: BulkButton[]; confirming: BulkButton | null; busy: string | null; onToggleAll: () => void; onRun: (button: BulkButton) => void; onCancel: () => void }) {
+export function SelectionBar(props: { total: number; ticked: number; buttons: BulkButton[]; confirming: BulkButton | null; busy: string | null; onToggleAll: () => void; onRun: (button: BulkButton) => void; onCancel: () => void }) {
   const { ticked, total, confirming } = props;
   const some = ticked > 0;
   return (

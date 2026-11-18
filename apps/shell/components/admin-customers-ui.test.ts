@@ -53,24 +53,6 @@ function client(data: Array<[unknown[], unknown]> = [], me: unknown = owner) {
   return qc;
 }
 
-/** A role report as the API answers it (apps/api/src/services/role-report.ts), trimmed to a few people. */
-const report = {
-  generatedAt: "2026-10-10T09:00:00.000Z",
-  role: null,
-  applicants: {
-    total: 3, last30Days: 3, timeZone: "America/Los_Angeles",
-    bySource: [{ source: "careers_page", label: "Careers page", sourceDetail: null, count: 2 }, { source: "referral", label: "Referral", sourceDetail: "Dr. Patel", count: 1 }],
-    byDay: [{ day: "2026-10-08", count: 0 }, { day: "2026-10-09", count: 2 }, { day: "2026-10-10", count: 1 }],
-  },
-  stages: { total: 3, byStage: [{ stage: "triaged", label: "Ready for your review", group: "waiting_on_you", count: 3 }], byGroup: { waiting_on_you: 3 }, byOwnerStage: { new: 3 } },
-  timeInStage: { byStage: [{ stage: "triaged", label: "Ready for your review", group: "waiting_on_you", completed: 0, medianDays: null, averageDays: null, nowHere: 3, longestDays: 2 }], waitingOnYou: { count: 3, averageDays: 1, medianDays: 1, longestDays: 2 } },
-  interviews: { total: 1, requested: 0, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0, offerExpired: 0, rescheduledByCandidate: 0, awaitingDecision: 0, byRound: [{ roundKey: "working", title: "Working interview", total: 1, scheduled: 1, completed: 0, noShow: 0, noShowCandidate: 0, noShowInterviewer: 0, cancelled: 0 }] },
-  pendingDecisions: { count: 3, approvals: 0, candidates: 3, oldestDays: 2, list: [] },
-  recommendationsVsDecisions: { assessed: 2, rows: [{ recommendation: "advance", label: "Invite to a screen", total: 2, invited: 1, interviewed: 0, shortlisted: 0, declined: 0, held: 0, noActionYet: 1 }] },
-  overrides: { eligibilityOverrides: 0, reviewAnyway: 0, holds: 0, byAction: {} },
-  messages: { total: 0, sent: 0, failed: 0, bounced: 0, unknown: 0, pending: 0, candidatesAffected: 0 },
-  outcomes: { statement: "Outcomes are what people recorded.", hired: 0, withdrew: 0, declinedByEmployer: 1, declinedOffer: 0, noHire: 0, talentPool: 0, corrections: 0, role: null, rolesByOutcome: {}, declineReasons: [{ reason: "not_a_match_skills", label: "Skills not a match", count: 1 }] },
-};
 
 const company = (id: string, name: string, over: Record<string, unknown> = {}) => ({
   id, name, slug: id, vertical: "dental", sizeBand: "20-49", planKey: "starter", status: "active", roles: 1, applications: 0, aiCostUsd: 0, lastActivityAt: daysAgo(1), createdAt: daysAgo(30),
@@ -236,7 +218,8 @@ describe("the customers list", () => {
     expect(customersSearch(new URLSearchParams("view=all&open=co1&tab=plan"), { open: null })).toBe("?view=all");
     expect(customersSearch(new URLSearchParams("show=low"), { show: "all" })).toBe("");
     expect(customersSearch(new URLSearchParams(""), { show: "quiet" })).toBe("?show=quiet");
-    expect(customerTabFrom("report")).toBe("report");
+    // an older link to a tab the drawer no longer has lands on the Overview
+    expect(customerTabFrom("report")).toBe("overview");
     expect(customerTabFrom("nonsense")).toBe("overview");
     expect(customerTabFrom(null)).toBe("overview");
     expect(customerFilterFrom("low")).toBe("low");
@@ -263,7 +246,8 @@ describe("the customer drawer", () => {
     const html = render(client(data(), admin), Customers("open=co1"));
     expect(html).toContain('role="dialog" aria-modal="true" aria-label="Bright Dental"');
     expect(html).toContain('<div role="tablist" aria-label="Customer sections"');
-    for (const tab of ["Overview", "ITS check", "Plan", "How people apply", "Report"]) expect(html).toContain(`data-label="${tab}"`);
+    for (const tab of ["Overview", "ITS check", "Plan", "How people apply"]) expect(html).toContain(`data-label="${tab}"`);
+    expect(html).not.toContain('data-label="Report"');
     expect(html).toMatch(/id="customer-drawer-tab-overview" class="tab" aria-selected="true"/);
     const words = text(html);
     // the company's facts, said once in the drawer's header; a missing website is said too (the ITS check looks at it)
@@ -279,7 +263,6 @@ describe("the customer drawer", () => {
     expect(html).not.toContain('aria-label="Change how people apply"');
     expect(words).toContain("2 jobs · 3 applicants");
     expect(words).toContain("Messages held None");
-    expect(words).toContain("See the report");
     // the facts are the kit's glance rows
     expect(html).toContain('<dl class="glance">');
   });
@@ -300,44 +283,21 @@ describe("the customer drawer", () => {
   });
 
   it("holds the plan and how people apply on their own tabs", () => {
-    const qc = client([...data(), [["admin", "plans"], [{ key: "starter", name: "Starter", limits: { active_roles: 3 } }, { key: "growth", name: "Growth", limits: { active_roles: 10 } }]], [["admin", "customer-report", "co1"], { roles: [{ id: "r1", title: "Dental Hygienist", status: "open" }] }]], admin);
+    const qc = client([...data(), [["admin", "plans"], [{ key: "starter", name: "Starter", limits: { active_roles: 3 } }, { key: "growth", name: "Growth", limits: { active_roles: 10 } }]]], admin);
     const plan = render(qc, Customers("open=co1&tab=plan"));
     expect(text(plan)).toContain("Pick a plan");
     expect(plan).toContain('<select id="plan-pick" class="select">');
     // the ITS switch is gone (R20-12): the one way everyone applies, said once
     const apply = render(qc, Customers("open=co1&tab=apply"));
-    expect(text(apply)).toContain("Every applicant: a short form, then the AI interview once their résumé is read.");
+    expect(text(apply)).toContain("Every applicant: a short form, then the AI interview once their resume is read.");
     expect(text(apply)).not.toContain("The company's default");
     expect(text(apply)).not.toContain("Each role");
-  });
-
-  it("gives the administrator's view of a customer's report the same figures on its Report tab, and right-aligns the roles' counts", () => {
-    const customer = { company: { id: "co1", name: "Bright Dental", status: "active", planKey: "starter" }, roles: [{ id: "r1", title: "Dental Hygienist", status: "open", openedAt: daysAgo(7), closedAt: null, applicants: 3, waitingOnYou: 2, hired: 0 }], report };
-    const html = render(client([...data(), [["admin", "customer-report", "co1"], customer]], admin), Customers("open=co1&tab=report"));
-    expect(html).toMatch(/id="customer-drawer-tab-report" class="tab" aria-selected="true"/);
-    expect(html).toContain('<th scope="col" class="num">Waiting on them</th>');
-    expect(html).toMatch(/<td>Dental Hygienist<\/td><td><span class="pill good sm">.*?open<\/span><\/td><td class="num">3<\/td><td class="num">2<\/td><td class="num">0<\/td>/);
-    expect(html).toContain('<div class="daybars" role="img"');
-    expect(html.match(/<div class="stat-row">/g)).toHaveLength(2);
-    // what the figures mean ("typical", "average") is the role page's closed disclosure, here too
-    expect(html).toMatch(/<details class="more"><summary>What these figures mean<\/summary>/);
-    expect(html).not.toMatch(/<details class="more" open/);
-    expect(text(html)).toContain('"Typical" is the middle value; "average" adds every stay up and divides.');
-    expect(text(html)).toContain("Counts and days only; no candidate is named here.");
-    // the definitions speak of every role of the customer, never of "this role"
-    expect(text(html)).toContain("Every application across all roles, by where the person came from");
-    expect(text(html)).toContain("Emails and texts to candidates across all roles:");
-    expect(text(html)).not.toMatch(/(to|on|about) this role/);
-    // it defines only the figures on this panel: the must-haves and the AI interview are one role's cards
-    expect(html).toContain("<dt>Outcomes</dt>");
-    expect(html).not.toContain("<dt>The must-haves</dt>");
-    expect(html).not.toContain("<dt>The AI interview</dt>");
   });
 
   it("S7-1: the Overview says whether applicants see their match score (on unless ITS turned it off), and How people apply holds the switch with its reason", async () => {
     const { candidateScoreOn, candidateScoreToast, candidateScoreWords } = await import("@ros/web/src/pages/admin/customers");
     const rows = three().map((c) => (c.id === "co3" ? { ...c, candidateScoreShown: false, settings: { candidateScoreSetBy: { at: "2026-10-15T09:00:00.000Z", by: { id: "s1", name: "Ada Admin" }, reason: "Waiting for counsel" } } } : c));
-    const qc = client([[["admin", "customers"], rows], [["admin", "alerts"], []], [["admin", "customer-report", "co3"], { roles: [] }]], admin);
+    const qc = client([[["admin", "customers"], rows], [["admin", "alerts"], []]], admin);
     // absent from an older answer reads as on
     expect(text(render(qc, Customers("open=co1")))).toContain("Applicants' match score Shown to applicants after they send Change");
     expect(render(qc, Customers("open=co1"))).toContain('aria-label="Change whether applicants see their match score"');
@@ -485,12 +445,12 @@ describe("first sign-in asks for approval, on the Customers page", () => {
       const overview = page(`open=${id}`);
       expect(overview).toMatch(/id="customer-drawer-tab-overview" class="tab" aria-selected="true"/);
       expect(overview).toContain('data-label="ITS check"');
-      for (const tab of ["Plan", "How people apply", "Report"]) expect(overview, tab).not.toContain(`data-label="${tab}"`);
-      for (const control of ["Change plan", "Change whether applicants see their match score", "See the report", "Change the ITS check"]) expect(overview, control).not.toContain(control);
+      for (const tab of ["Plan", "How people apply"]) expect(overview, tab).not.toContain(`data-label="${tab}"`);
+      for (const control of ["Change plan", "Change whether applicants see their match score", "Change the ITS check"]) expect(overview, control).not.toContain(control);
       expect(text(overview)).toContain("Review");
       expect(text(overview)).toContain("Plan Free");
       // a link to a tab it does not have lands on the check, not on a form the API refuses
-      for (const tab of ["plan", "apply", "report"]) {
+      for (const tab of ["plan", "apply"]) {
         const html = page(`open=${id}&tab=${tab}`);
         expect(html, tab).toMatch(/id="customer-drawer-tab-check" class="tab" aria-selected="true"/);
         expect(html, tab).toContain("Accept</button>");
@@ -505,7 +465,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
   it("a company once accepted is an ordinary customer again: every tab, the check as ever", () => {
     const accepted = company("co8", "Harbor Dental", { accessRequest: null });
     const html = page("open=co8&tab=check", [accepted]);
-    for (const tab of ["Overview", "ITS check", "Plan", "How people apply", "Report"]) expect(html).toContain(`data-label="${tab}"`);
+    for (const tab of ["Overview", "ITS check", "Plan", "How people apply"]) expect(html).toContain(`data-label="${tab}"`);
     expect(text(html)).toContain("Take back the confirmation");
     expect(html).not.toContain("Accept</button>");
   });
@@ -589,7 +549,7 @@ describe("first sign-in asks for approval, on the Customers page", () => {
     const list = from(page("", [asking("co8", long, { vertical: long })]), '<section class="table-wrap"');
     // the list's name and its second line break anywhere, in a column that keeps room for an ordinary name on a phone
     expect(list).toMatch(new RegExp(`<div class="grid min-w-36 justify-items-start gap-0\\.5 wrap-anywhere"><button type="button" class="[^"]*\\bwrap-anywhere\\b[^"]*">${long}</button>`));
-    // the drawer's tabs, the Report's tables apart, break anywhere too
+    // the drawer's tabs break anywhere too
     expect(page("open=co8", [asking("co8", long)])).toMatch(/<div class="wrap-anywhere"><div class="stack gap-5">/);
     expect(page("open=co8&tab=check", [asking("co8", long)])).toMatch(/<div class="wrap-anywhere"><section class="card">/);
   });

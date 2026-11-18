@@ -424,9 +424,9 @@ describe("Home and the console's Customers page left open (10 November 2026)", (
   const ended = new ApiError(401, "unauthorized", "Sign in to continue.");
 
   it("Home goes to sign in once a look answers 401, the way the console's Overview does", () => {
-    expect(comeBack(Home, ["brief"], ended)).toEqual([["/login"]]);
+    expect(comeBack(Home, ["home"], ended)).toEqual([["/login"]]);
     expect(comeBack(Home, ["me"], ended)).toEqual([["/login"]]);
-    for (const other of [new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch")]) expect(comeBack(Home, ["brief"], other)).toEqual([]);
+    for (const other of [new ApiError(500, "error", "Something went wrong. It has been logged."), new ApiError(403, "mfa_required", "Confirm it's you."), new TypeError("Failed to fetch")]) expect(comeBack(Home, ["home"], other)).toEqual([]);
   });
 
   it("so does the console's Customers page, and it stays on any other failure", () => {
