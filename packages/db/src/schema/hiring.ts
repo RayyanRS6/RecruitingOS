@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, numeric, pgTable, text, uniqueIndex, uuid, vector, date } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid, vector, date } from "drizzle-orm/pg-core";
 import type {
   Actor,
   ApplicationStage,
@@ -311,7 +311,6 @@ export const applications = pgTable(
     answers: jsonb("answers").$type<ApplicationAnswers>().notNull().default({}),
     eligibility: jsonb("eligibility").$type<Record<string, unknown> | null>(),
     extraction: jsonb("extraction").$type<ResumeExtraction | null>(),
-    latestAssessmentId: uuid("latest_assessment_id"),
     statusToken: text("status_token").notNull(),
     /** The per-application reply address's token (migration 0023): lowercase, random, never the status token. The code sets it at creation; the database default covers direct inserts. */
     replyToken: text("reply_token").notNull().default(sql`substr(replace(gen_random_uuid()::text, '-', ''), 1, 16)`),
@@ -368,6 +367,12 @@ export const applicationMarks = pgTable(
   ],
 );
 
+/**
+ * The AI's readings of an application: `kind` "triage" is a resume reading, "screen" the scorecard of an AI interview.
+ * `result` is the reading itself, findings and words; both scores are worked out from it in code. A person's resume
+ * score comes from their newest "triage" row and the job version it was made against (`packetVersion`, which is not
+ * always the version they applied to: they are read again when the job's must-haves or skills change).
+ */
 export const assessments = pgTable(
   "assessments",
   {
@@ -378,10 +383,6 @@ export const assessments = pgTable(
     packetVersion: integer("packet_version").notNull(),
     aiRunId: uuid("ai_run_id"),
     result: jsonb("result").$type<EvidenceAssessment | ScreenAssessment>().notNull(),
-    overall: text("overall").notNull(),
-    confidence: text("confidence").notNull(),
-    secondaryScore: numeric("secondary_score", { precision: 5, scale: 2 }),
-    supersededBy: uuid("superseded_by"),
     createdAt: createdAt(),
   },
   (t) => [index("assessments_application_idx").on(t.applicationId, t.createdAt)],

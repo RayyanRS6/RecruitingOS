@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { AI_CREDIT_AVAILABLE, EARLIER_VERSION_LINE, RolePacket, SCORE_FINDING_LABEL, cvScoreOf, cvScoreSummary, type ActionResult, type CandidateList, type CandidatePanel, type RoleDetail } from "@ros/contracts";
+import { AI_CREDIT_AVAILABLE, EARLIER_VERSION_LINE, RolePacket, SCORE_FINDING_LABEL, cvScoreOf, cvScoreSummary, interviewScoreOf, interviewScoreSummary, type ActionResult, type CandidateList, type CandidatePanel, type RoleDetail } from "@ros/contracts";
 import { aiRuns, applications, assessments, candidates, entitlements, rolePackets, roles, screens, withPlatform, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -231,21 +231,72 @@ describe("the resume score of a job's candidates", () => {
     expect((await list("new")).rows.map((r) => [r.name, r.cvScore.score, r.cvScore.earlierVersion])).toEqual([["Top Tester", 67, false], ["Late Tester", 67, false], ["Zed Tester", 42, false], ["Abe Tester", 42, false], ["Held Tester", 33, false], ["Scan Tester", null, false]]);
   });
 
+  /** Shortlists a person and presses Start on their AI interview; answers the plan the chat then has. */
+  const startInterview = async (who: string) => {
+    const sent = await call("POST", `/api/v1/applications/${ids[who]}/actions`, { action: "shortlist" });
+    expect(sent.status, await sent.clone().text()).toBe(200);
+    await container.drain();
+    const [invited] = await container.db.select().from(screens).where(eq(screens.applicationId, ids[who]));
+    expect((await app.request(`/c/screen/${invited.token}/start`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "" })).status).toBe(302);
+    const [started] = await container.db.select().from(screens).where(eq(screens.id, invited.id));
+    return started.progress.chat?.items.map((i) => [i.key, i.kind]);
+  };
+
   it("an AI interview asks about the must-haves of the job version the person applied to that their resume reading did not find shown", async () => {
-    const planOf = async (who: string) => {
-      const sent = await call("POST", `/api/v1/applications/${ids[who]}/actions`, { action: "shortlist" });
-      expect(sent.status, await sent.clone().text()).toBe(200);
-      await container.drain();
-      const [invited] = await container.db.select().from(screens).where(eq(screens.applicationId, ids[who]));
-      expect((await app.request(`/c/screen/${invited.token}/start`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "" })).status).toBe(302);
-      const [started] = await container.db.select().from(screens).where(eq(screens.id, invited.id));
-      return started.progress.chat?.items.map((i) => [i.key, i.kind]);
-    };
     // Top's reading against the version they applied to shows both of its must-haves: the chat has only the job's own questions
-    expect(await planOf("Top")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"]]);
+    expect(await startInterview("Top")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"]]);
     // Zed's did not show one of them; the must-have the job gained later is not theirs to be asked about
-    expect(await planOf("Zed")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"], ["mh_chairside", "gap"]]);
+    expect(await startInterview("Zed")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"], ["mh_chairside", "gap"]]);
     // Late was first read after the job changed: the must-have that reading says nothing about is asked about
-    expect(await planOf("Late")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"], ["mh_chairside", "gap"]]);
+    expect(await startInterview("Late")).toEqual([["recent", "question"], ["nervous", "question"], ["available", "question"], ["mh_chairside", "gap"]]);
+  });
+
+  /**
+   * An interview as sent, with the scorecard given (none: it is still being scored). Written straight into the tables:
+   * the chat and the writing of a scorecard are tested where they live, and the scenario test walks both.
+   */
+  const sendInterview = async (who: string, asked: string[], findings: Array<[key: string, meets: "yes" | "partially" | "unknown"]> | null) => {
+    const [screen] = await container.db.select().from(screens).where(eq(screens.applicationId, ids[who]));
+    const answers = Object.fromEntries(asked.map((key) => [key, `My answer about ${key}, in some detail.`]));
+    await withPlatform(container.db, async (tx) => {
+      const questionFindings = (findings ?? []).map(([questionKey, meetsModelAnswer]) => ({ questionKey, answered: true, finding: `About ${questionKey}.`, meetsModelAnswer, ...(meetsModelAnswer === "unknown" ? {} : { evidence: { source: "screen" as const, quote: answers[questionKey] } }) }));
+      const [card] = findings ? await tx.insert(assessments).values({ companyId, applicationId: ids[who], kind: "screen", packetVersion: 1, result: { summary: "What the interview showed.", strengths: [], concerns: [], unknowns: [], questionFindings } }).returning({ id: assessments.id }) : [];
+      await tx.update(screens).set({ status: "completed", completedAt: container.engine.clock().toISOString(), answers, progress: { ...screen.progress, askedKeys: asked }, assessmentId: card?.id ?? null }).where(eq(screens.id, screen.id));
+      await tx.update(applications).set({ stage: "screen_complete" }).where(eq(applications.id, ids[who]));
+    });
+  };
+
+  it("lists the Interviewed tab by interview score, then resume score, with an interview still being scored last, and never merges the two numbers", async () => {
+    await startInterview("Abe");
+    const QUESTIONS = ["recent", "nervous", "available"];
+    await sendInterview("Zed", [...QUESTIONS, "mh_chairside"], [["recent", "yes"], ["nervous", "yes"], ["available", "yes"], ["mh_chairside", "yes"]]);
+    await sendInterview("Top", QUESTIONS, [["recent", "yes"], ["nervous", "partially"], ["available", "unknown"]]);
+    await sendInterview("Abe", QUESTIONS, [["recent", "partially"], ["nervous", "yes"], ["available", "unknown"]]);
+    await sendInterview("Late", QUESTIONS, null);
+    const interviewed = await list("interviewed");
+    expect(interviewed.rows.map((r) => [r.name, r.interviewScore?.score, r.interviewScore?.bandLabel, r.cvScore.score])).toEqual([
+      ["Zed Tester", 100, "Very high", 42],
+      // the same interview score: the higher resume score first
+      ["Top Tester", 50, "Low", 67],
+      ["Abe Tester", 50, "Low", 42],
+      ["Late Tester", null, null, 67],
+    ]);
+    expect(interviewed.rows.at(-1)?.interviewScore).toMatchObject({ noScore: "being_scored", noScoreLabel: "Scoring the AI interview" });
+    // the per-question table the number comes from: each question asked, its finding in the same words as a resume finding, and the quote
+    const top = await panel("Top");
+    const score = top.aiInterview!.score!;
+    expect(score).toMatchObject({ score: 50, band: "low", answered: { met: 1, total: 3 }, answeredLine: "1 of 3 questions answered to the job's standard" });
+    expect(score.questions.map((q) => [q.key, q.finding, q.findingLabel, q.quote, q.note])).toEqual([
+      ["recent", "shown", SCORE_FINDING_LABEL.shown, "My answer about recent, in some detail.", "About recent."],
+      ["nervous", "partly", SCORE_FINDING_LABEL.partly, "My answer about nervous, in some detail.", "About nervous."],
+      ["available", "not_shown", SCORE_FINDING_LABEL.not_shown, null, "About available."],
+    ]);
+    expect(interviewScoreOf(score.questions.map(({ findingLabel: _label, ...q }) => q))).toEqual(score);
+    expect(interviewed.rows.find((r) => r.id === ids.Top)?.interviewScore).toEqual(interviewScoreSummary(score));
+    // the interview did not move the resume score
+    expect(top.cvScore.score).toBe(67);
+    // a must-have the interview asked about is one of its questions, after the job's own
+    expect((await panel("Zed")).aiInterview!.score!.questions.map((q) => q.key)).toEqual(["recent", "nervous", "available", "mh_chairside"]);
+    expect(JSON.stringify([top, interviewed])).not.toMatch(/"(?:overall|recommendation|confidence|fit|closerLook|needsCloserLook|secondaryScore)"\s*:/);
   });
 });

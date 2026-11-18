@@ -161,9 +161,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           await emit(ctx.q, { type: "ai.output_invalid", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { error: out.error, reason: out.reason }, correlationId: ctx.run.id });
           return unscored(ctx, app, "not_scored");
         }
-        // `overall` and `confidence` are columns nothing reads any more: a reading carries neither.
-        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: prepared.version, aiRunId: out.runId, result: out.output, overall: "", confidence: "" }).returning({ id: assessments.id });
-        await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, app.id));
+        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: prepared.version, aiRunId: out.runId, result: out.output }).returning({ id: assessments.id });
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { kind: "triage", assessmentId: row.id }, correlationId: ctx.run.id });
         await toTriaged(ctx, app, { assessmentId: row.id, noScore: null });
         return { kind: "complete" };

@@ -120,8 +120,7 @@ export const screen: WorkflowDefinition<State> = {
           return { kind: "fail", error: `the scorecard could not be written: ${out.error}`, retryable: false };
         }
         const [app] = await ctx.q.select({ packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, scr.applicationId)).limit(1);
-        // `overall` and `confidence` are columns nothing reads any more: a scorecard carries neither.
-        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: scr.applicationId, kind: "screen", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: "", confidence: "" }).returning({ id: assessments.id });
+        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: scr.applicationId, kind: "screen", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output }).returning({ id: assessments.id });
         await ctx.q.update(screens).set({ assessmentId: row.id, progress }).where(eq(screens.id, scr.id));
         await emit(ctx.q, { type: "screen.assessed", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "screen", id: scr.id }, payload: { assessmentId: row.id }, correlationId: ctx.run.id });
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "screening", runId: out.runId }, subject: { type: "application", id: scr.applicationId }, payload: { kind: "screen", assessmentId: row.id }, correlationId: ctx.run.id });

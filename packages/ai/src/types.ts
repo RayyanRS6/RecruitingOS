@@ -12,9 +12,7 @@ export type TaskKey =
   | "resume.extract"
   | "triage.assess"
   | "screen.turn"
-  | "screen.assess"
-  | "brief.compose"
-  | "owner.reply";
+  | "screen.assess";
 
 export type SystemBlock = { text: string; cache?: boolean };
 

@@ -16,7 +16,6 @@ export function isAllowedModel(model: string): model is AllowedModel {
  * Which tier each task needs. "judgment" runs on Sonnet 5.5 and holds only the writing of the whole job
  * (intake.compile): one long reply, the job description and about a hundred values across four levels that must agree
  * with each other. Everything else is short or checked in code afterwards, and runs on Haiku 5.5.
- * The tasks with no prompt yet (brief, owner reply) start on Haiku too.
  */
 export const TASK_TIER: Record<TaskKey, Tier> = {
   // The owner's job-building chat: a short reply and up to three cards; fairness is re-checked in code.
@@ -32,8 +31,6 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
   "triage.assess": "standard",
   "screen.turn": "standard",
   "screen.assess": "standard",
-  "brief.compose": "standard",
-  "owner.reply": "standard",
 };
 
 /**
