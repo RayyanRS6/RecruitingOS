@@ -400,7 +400,7 @@ export async function scrubCandidateAiData(q: Queryable, input: { companyId: str
     inArray(aiRuns.id, anyOf(runIds)),
     inArray(sql`${aiRuns.inputRef}->>'applicationId'`, anyOf(appIds)),
     inArray(sql`${aiRuns.inputRef}->>'screenId'`, anyOf([...screenIds, ...unconfirmedIds])),
-    // the one-visit apply chat records its turns against the unconfirmed screen, with no workflow run (apply-conversation.ts)
+    // a chat stored in `unconfirmed_screens` has its turns logged against that row, with no workflow run
     inArray(sql`${aiRuns.inputRef}->>'unconfirmedScreenId'`, anyOf(unconfirmedIds)),
     inArray(sql`${aiRuns.inputRef}->>'documentId'`, anyOf(docIds)),
     inArray(sql`${aiRuns.inputRef}->>'candidateId'`, [candidateId]),
