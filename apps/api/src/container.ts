@@ -108,7 +108,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       const scannerStatus = await integrations.scanner.check();
       if (scannerStatus !== "live") console.warn(`[scanner] ${integrations.scanner.id} did not answer the boot check (${scannerStatus}); quarantined files wait until it does (CLAMAV_HOST, CLAMAV_PORT; docs/runbooks/resume-storage.md)`);
     }
-    // The real-data gate (docs/readiness/20 blocker 8): a production worker on the fake scanner raises one standing alert (scanner-gate.ts).
+    // The real-data gate (docs/runbooks/resume-storage.md): a production worker on the fake scanner raises one standing alert (scanner-gate.ts).
     await checkScannerForProduction(handle.db, { nodeEnv: env.NODE_ENV, role, scannerStatus: integrations.scanner.status, scannerId: integrations.scanner.id });
     // The same for email: production on the fake adapter sends nothing while the pages say it went, so one standing alert (email-gate.ts).
     await checkEmailForProduction(handle.db, { nodeEnv: env.NODE_ENV, role, emailStatus: integrations.email.status, emailId: integrations.email.id });

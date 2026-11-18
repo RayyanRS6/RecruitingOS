@@ -7,7 +7,7 @@ import { cspReports, type Queryable } from "@ros/db";
  * server-rendered and need no JavaScript, so the policy allows nothing by default: no external origin at all, styles and
  * the structured-data script only with the per-request nonce, inline event handlers never. Analytics never widen this
  * policy; candidate pages load no analytics (founder decision, correction 14). Report-only first; enforcement waits for
- * a review of the reports (docs/readiness/18).
+ * a review of the reports (docs/14-deployment-and-environment.md).
  */
 export type CspMode = "report-only" | "enforce";
 

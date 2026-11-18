@@ -216,7 +216,7 @@ export function Security() {
       {csp.data ? (
         <details className="more mb-4">
           <summary><Icon name="shield" size={16} className="text-primary" />Policy: {wordFor(CSP_MODE_WORDS, csp.data.mode || "report-only")}</summary>
-          <p className="small muted max-w-[75ch]">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/readiness/18). Paths and origins only; never candidate data.</p>
+          <p className="small muted max-w-[75ch]">Browsers report what the policy would block. Review every unexplained report before enforcement is switched on (docs/14-deployment-and-environment.md). Paths and origins only; never candidate data.</p>
         </details>
       ) : null}
       {csp.isLoading ? <Skeleton lines={3} /> : csp.error ? <ErrorState message="Could not load the content-security reports." onRetry={() => csp.refetch()} /> : reports.length ? (

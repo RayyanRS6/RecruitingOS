@@ -17,7 +17,7 @@ export async function checkEmailForProduction(db: Db, input: { nodeEnv: string; 
     await resolveAlertsOfKind(db, "email.fake", { reason: `the real email provider (${input.emailId}) is in use` }).catch((err) => console.warn(`[email] could not resolve the earlier alert: ${errorForLog(err)}`));
     return { raised: false };
   }
-  console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/spec/17-staging-handoff.md)`);
+  console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/runbooks/production-setup.md)`);
   try {
     const alert = await raiseAlertOnce(db, {
       kind: "email.fake",

@@ -90,7 +90,7 @@ export function payShown(compensation: { discloseRange: boolean }, notices: Noti
 
 /**
  * The notices a candidate page renders as text. One key stays defined but is never shown as a notice: `recording` is
- * for a feature release 1 does not have (docs/readiness/20 section F), and does not belong in the versions recorded as
+ * for a feature release 1 does not have (docs/DECISIONS.md, "Put off"), and does not belong in the versions recorded as
  * shown.
  */
 export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording"];

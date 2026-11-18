@@ -2,7 +2,7 @@
  * Content-security policy for the authenticated application (21 Sep, item 6). Dependency-free so the Next.js middleware
  * can use it. A per-request nonce covers the scripts Next.js emits and any script the shell adds. No outside origin at
  * all: the fonts are served from this deployment's own /fonts/ folder (app/fonts.css). Report-only until the staging
- * reports have been reviewed (docs/readiness/18).
+ * reports have been reviewed (docs/14-deployment-and-environment.md).
  */
 export type AppCspMode = "report-only" | "enforce";
 

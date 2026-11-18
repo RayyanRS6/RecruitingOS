@@ -5,7 +5,7 @@ import { createHmac } from "node:crypto";
  * answers "how many hits has this key had in this window" and nothing else. Locally the store is in-process memory; for
  * staging and production a shared store is configured so several API processes see the same counters. No paid provider
  * is selected here; the shared implementation runs on a counter interface with Redis semantics (INCR + PEXPIRE) and a
- * fake counter for tests. A real adapter is a few lines against that interface (see docs/readiness/15).
+ * fake counter for tests. A real adapter is a few lines against that interface (see docs/14-deployment-and-environment.md).
  *
  * Keys are keyed hashes of the policy and the subject: no address, token, email or id is ever stored in a limiter.
  */
@@ -104,7 +104,7 @@ export class FakeSharedCounter implements SharedCounter {
  * step, so no key can outlive its window. Keys are the keyed hashes the store builds; the token is sent as a bearer
  * header and never appears in a key, a URL or a log.
  *
- * Fail-safe, documented here and in docs/readiness/15: if the service cannot be reached or refuses (network error,
+ * Fail-safe, documented here and in docs/14-deployment-and-environment.md: if the service cannot be reached or refuses (network error,
  * 5xx, 429), the counter keeps counting the affected keys in this process's own memory for the rest of the window and
  * reports the degradation once an hour through `onDegraded`. Limits then apply per process, never nowhere; nothing is
  * ever refused because the shared store is down, and nothing is ever let through without being counted.
@@ -168,7 +168,7 @@ export function createRateLimitStore(cfg: RateLimitConfig, opts: { fetch?: typeo
     if (!cfg.UPSTASH_REDIS_REST_URL || !cfg.UPSTASH_REDIS_REST_TOKEN) throw new Error("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN");
     return new SharedRateLimitStore(new UpstashSharedCounter({ url: cfg.UPSTASH_REDIS_REST_URL, token: cfg.UPSTASH_REDIS_REST_TOKEN, fetch: opts.fetch, onDegraded: opts.onDegraded }));
   }
-  throw new Error(`RATE_LIMIT_STORE must be "memory", "upstash" or "fake", got "${cfg.RATE_LIMIT_STORE}" (docs/readiness/15-rate-limiting-provider.md)`);
+  throw new Error(`RATE_LIMIT_STORE must be "memory", "upstash" or "fake", got "${cfg.RATE_LIMIT_STORE}" (docs/14-deployment-and-environment.md)`);
 }
 
 /** Keyed hash (HMAC with a deployment secret) of policy and subject; the limiter never sees the subject, and nobody without the secret can guess a key. */

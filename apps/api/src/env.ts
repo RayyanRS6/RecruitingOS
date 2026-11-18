@@ -236,7 +236,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     // shared store. At run time an unreachable Upstash still degrades to per-process counting with an alert (packages/core rate-limit.ts).
     // The worker answers no request and counts none, so a missing Upstash value never stops the queue; it may not use the test stand-in.
     if (role === "app" && env.RATE_LIMIT_STORE !== "upstash") throw new Error(`RATE_LIMIT_STORE must be "upstash" in production (it is "${env.RATE_LIMIT_STORE}"): "memory" counts in one process only and "fake" is a test stand-in. Set RATE_LIMIT_STORE=upstash with UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (docs/runbooks/staging-environment-variables.md)`);
-    if (role === "app" && (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN)) throw new Error("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in production: the database's REST endpoint and its token (docs/runbooks/staging-environment-variables.md)");
+    if (role === "app" && (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN)) throw new Error("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in production: the database's REST endpoint and its token (docs/14-deployment-and-environment.md)");
     if (env.RATE_LIMIT_STORE === "fake") throw new Error("RATE_LIMIT_STORE=fake is a test stand-in; production uses \"upstash\" (the worker may also use \"memory\")");
     // The one gate: on a hosted app nothing of a company works or is public until an administrator accepts it. Only the
     // app opens companies; the worker reads no sign-up mode.
@@ -280,7 +280,7 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     // The internal email link opens sessions outside the identity service and the checks made on its sign-ins.
     if (env.MAGIC_LINK_ENABLED) throw new Error("MAGIC_LINK_ENABLED must not be true on the production deployment: the identity service handles sign-in, and the internal email link would open sessions outside its checks. Remove it");
     // Needed once, for the first administrator's first sign-in, so a warning on every start rather than a refusal.
-    if (env.BOOTSTRAP_ADMIN_EMAILS.length) console.warn("[env] WARNING: BOOTSTRAP_ADMIN_EMAILS is set on the production deployment. It is for the first administrator's first sign-in only: remove it as soon as that administrator exists (docs/readiness/13-administrator-bootstrap.md).");
+    if (env.BOOTSTRAP_ADMIN_EMAILS.length) console.warn("[env] WARNING: BOOTSTRAP_ADMIN_EMAILS is set on the production deployment. It is for the first administrator's first sign-in only: remove it as soon as that administrator exists (docs/runbooks/production-setup.md, under First administrator).");
   }
   return env;
 }
