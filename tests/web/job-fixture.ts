@@ -32,7 +32,7 @@ export function jobCounts(byTab: Partial<CandidateCounts["byTab"]> = {}, locked 
 export function jobSummary(id: string, status: RoleStatus, over: Partial<RoleSummary> = {}): RoleSummary {
   const published = status === "draft" ? null : "2026-11-10T16:00:00.000Z";
   return {
-    id, title: "Dental Assistant", status, statusLabel: ROLE_STATUS_LABEL[status], createdAt: "2026-11-08T16:00:00.000Z", openedAt: published, closedAt: status === "closed" ? "2026-11-17T16:00:00.000Z" : null,
+    id, title: "Dental Assistant", place: "Irvine, CA", status, statusLabel: ROLE_STATUS_LABEL[status], createdAt: "2026-11-08T16:00:00.000Z", openedAt: published, closedAt: status === "closed" ? "2026-11-17T16:00:00.000Z" : null,
     daysOpen: published ? 8 : null, lastActivityAt: "2026-11-17T16:00:00.000Z", closesOn: null, acceptingApplications: status === "open", counts: jobCounts(), ...over,
   };
 }

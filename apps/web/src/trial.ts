@@ -25,6 +25,3 @@ export function trialPlanLine(trial: TrialStanding | null | undefined, timeZone?
   if (!trial?.started || !trial.endsAt) return null;
   return trial.ended ? `Trial ended on ${trialDate(trial.endsAt, timeZone)}` : `Trial until ${trialDate(trial.endsAt, timeZone)}`;
 }
-
-/** Why ITS is asked to choose a plan once a trial has ended: sent with the request from the upgrade sheet. */
-export const TRIAL_ASK = "We would like to choose a plan to keep hiring after our trial.";

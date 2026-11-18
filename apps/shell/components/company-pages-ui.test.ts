@@ -19,6 +19,12 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactNode } & Record<string, unknown>) => createElement("a", props, props.children) }));
+/** Every Upgrade a page drew, as the page gave it: its button's words, and the reason that goes with the request. Drawn as it is. */
+const upgrades = vi.hoisted(() => [] as Array<{ label?: string; reason?: string }>);
+vi.mock("@ros/web/src/components/Upgrade", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@ros/web/src/components/Upgrade")>();
+  return { ...real, Upgrade: (props: Parameters<typeof real.Upgrade>[0]) => { upgrades.push(props); return createElement(real.Upgrade, props); } };
+});
 
 (globalThis as { React?: typeof React }).React = React;
 const { Home } = await import("@ros/web/src/pages/Home");
@@ -30,8 +36,8 @@ const { Settings } = await import("@ros/web/src/pages/Settings");
 const plain = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
 const text = (html: string) => plain(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 const me = (role: MembershipRole) => ({ user: { id: "u1", email: "owner@bright.test", name: "Sam Sample", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
-const room: PlanRoom = { ok: true, limit: 3, used: 1, holding: [], message: null };
-const draft = (over: Partial<IntakeSessionSummary> = {}): IntakeSessionSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range"], ...over });
+const room: PlanRoom = { ok: true, limit: 3, used: 1, holding: [], message: null, ask: null };
+const draft =(over: Partial<IntakeSessionSummary> = {}): IntakeSessionSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range"], ...over });
 
 function client(role: MembershipRole, seed: Array<[unknown[], unknown]> = []): QueryClient {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Number.POSITIVE_INFINITY } } });
@@ -52,6 +58,7 @@ describe("Home", () => {
   });
   const draw = (view: HomeView, role: MembershipRole = "owner") => {
     at("/");
+    upgrades.length = 0;
     return render(client(role, [[["home"], view]]), createElement(Home));
   };
 
@@ -76,19 +83,32 @@ describe("Home", () => {
     for (const gone of ["Needs you", "Getting started", "Recent activity", "Interviews"]) expect(words, gone).not.toContain(gone);
   });
 
-  it("shows the plan's notices above everything, with Upgrade only when the API offers it", () => {
-    const html = draw(home({ notices: [{ kind: "trial_ending", title: "Your trial ends on November 30.", body: "Choose a plan to keep hiring.", upgrade: true }, { kind: "ai_help_warning", title: "80% of your plan's AI help is used.", body: "Nothing has stopped.", upgrade: false }] }));
+  it("shows the plan's notices above everything, each with the request the API offers: its words on the button, its reason with the request", () => {
+    const choosePlan = { label: "Ask ITS to choose a plan", reason: "Our trial has ended. We would like to choose a plan." };
+    const moreAiHelp = { label: "Upgrade", reason: "We would like more AI help." };
+    const html = draw(home({ notices: [{ kind: "trial_ending", title: "Your trial ends on November 30.", body: "Choose a plan to keep hiring.", upgrade: true, ask: choosePlan }, { kind: "ai_help_warning", title: "80% of your plan's AI help is used.", body: "Nothing has stopped.", upgrade: true, ask: moreAiHelp }] }));
     const words = text(html);
-    expect(words).toContain("Your trial ends on November 30. Choose a plan to keep hiring. Upgrade");
-    expect(words).toContain("80% of your plan's AI help is used. Nothing has stopped.");
+    expect(words).toContain("Your trial ends on November 30. Choose a plan to keep hiring. Ask ITS to choose a plan");
+    expect(words).toContain("80% of your plan's AI help is used. Nothing has stopped. Upgrade");
+    expect(html.match(/>Ask ITS to choose a plan<\/button>/g)).toHaveLength(1);
     expect(html.match(/>Upgrade<\/button>/g)).toHaveLength(1);
+    expect(upgrades.map((u) => ({ label: u.label, reason: u.reason }))).toEqual([choosePlan, moreAiHelp]);
   });
 
-  it("holds the start box with the plan's own line when there is no room for another job", () => {
-    const full: PlanRoom = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
+  it("shows a notice with no request (the API offers none to this person) as its words alone", () => {
+    const html = draw(home({ notices: [{ kind: "ai_help_used_up", title: "Your plan's AI help is used up.", body: "It starts again on December 1.", upgrade: true, ask: null }] }));
+    expect(text(html)).toContain("Your plan's AI help is used up. It starts again on December 1.");
+    expect(html).not.toContain(">Upgrade</button>");
+    expect(upgrades).toEqual([]);
+  });
+
+  it("holds the start box with the plan's own line and the request the plan's room carries when there is no room for another job", () => {
+    const ask = { label: "Talk to ITS about more jobs", reason: "We would like to open more jobs than our plan includes. Can we talk about adding more?" };
+    const full: PlanRoom = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Dental Assistant", status: "open" }, { roleId: "r2", title: "Office Manager", status: "paused" }], message: "Your plan includes 2 jobs at a time, and all are in use.", ask };
     const html = draw(home({ room: full }));
-    expect(text(html)).toContain("Your Free plan includes one job. Upgrade to post more.");
+    expect(text(html)).toContain("Your plan includes 2 jobs at a time, and all are in use. Dental Assistant Office Manager Talk to ITS about more jobs");
     expect(html).toMatch(/<textarea[^>]*disabled=""/);
+    expect(upgrades.map((u) => ({ label: u.label, reason: u.reason }))).toEqual([ask]);
   });
 
   it("with no jobs and no drafts yet, is the greeting and the start box alone", () => {
@@ -105,11 +125,11 @@ describe("Jobs", () => {
     return render(client("owner", [[["roles"], jobs], [["intake", "sessions", "all"], { sessions, room }]]), createElement(Jobs));
   };
 
-  it("lists every job with its status word, when it was published and its people, and Start a hire", () => {
+  it("lists every job with its status word, where it is, when it was published and its people, and Start a hire", () => {
     const html = draw([
       jobSummary("r1", "open", { counts: jobCounts({ new: 3, shortlisted: 1 }) }),
       { ...jobSummary("r2", "closed"), title: "Office Manager" },
-      { ...jobSummary("r3", "draft"), title: "Front Desk Lead" },
+      { ...jobSummary("r3", "draft"), title: "Front Desk Lead", place: null },
     ], [draft({ id: "s2", title: null })]);
     expect(html).toContain("<h1>Jobs</h1>");
     expect(html).toMatch(/<a href="\/roles\/new" class="btn primary"><svg(?:(?!<\/svg>)[\s\S])*<\/svg>Start a hire<\/a>/);
@@ -117,7 +137,9 @@ describe("Jobs", () => {
     expect(html).toMatch(/<a href="\/roles\/r1\/talent" class="list-row-title[^"]*">Dental Assistant<\/a>/);
     expect(html).toMatch(/<a href="\/roles\/r3" class="list-row-title[^"]*">Front Desk Lead<\/a>/);
     const words = text(html);
-    expect(words).toMatch(/Published [A-Z][a-z]{2} \d+ 8 days open 4 applicants 3 new 1 shortlisted/);
+    // the place is the API's own words for it, before the dates; a job that names none shows none
+    expect(words).toMatch(/Dental Assistant Irvine, CA Published [A-Z][a-z]{2} \d+ 8 days open 4 applicants 3 new 1 shortlisted/);
+    expect(words).toMatch(/Front Desk Lead Created [A-Z][a-z]{2} \d+/);
     expect(html).toContain('<span class="pill good sm"><span class="dot" aria-hidden="true"></span>Open</span>');
     expect(html).toContain('<span class="pill neutral sm"><span class="dot" aria-hidden="true"></span>Closed</span>');
     // the drafts not yet written into a job, each continuing in the builder
@@ -266,6 +288,7 @@ describe("Settings", () => {
     about: { text: "A family dental practice in Irvine, open since 2009.", approvedAt: "2026-11-01T10:00:00.000Z", aiAssisted: false }, aboutDraft: null, benefitsSummary: "Health, dental and paid time off",
     hiringContact: null, contactShown: { email: "hiring@its.example", name: null, kind: "its" }, careersUrl: "https://jobs.test/careers/bright-dental",
     plan: { key: "basic", name: "Basic", usage: [{ key: "jobs_total" as never, label: "Jobs", used: 1, limit: 3, unit: "count", resetsAt: null, words: "1 of 3 jobs" }, { key: "ai_credit" as never, label: "AI help", used: 40, limit: 100, unit: "percent", resetsAt: null, words: "AI help: 40% used" }], aiCredit: null, trial: null, mayUpgrade: true, upgradeRequestedAt: null },
+    viewer: { mayEdit: true },
     ...over,
   });
   const team = (role: MembershipRole, over: Partial<TeamView> = {}): TeamView => {
@@ -282,9 +305,10 @@ describe("Settings", () => {
     };
   };
   const prefs = { emailUpdates: true, email: "owner@bright.test", alwaysEmailedLine: "Notices about your account, your plan and your team are always emailed." };
+  /** The page as the API answers this person: the company and the team each say what they may do with it. */
   const draw = (role: MembershipRole, seed: { company?: CompanyView; team?: TeamView; search?: string } = {}) => {
     at("/setup", {}, seed.search ?? "");
-    return render(client(role, [[["company"], seed.company ?? company()], [["team"], seed.team ?? team(role)], [["notifications", "preferences"], prefs]]), createElement(Settings));
+    return render(client(role, [[["company"], seed.company ?? company({ viewer: { mayEdit: role !== "hiring_manager" } })], [["team"], seed.team ?? team(role)], [["notifications", "preferences"], prefs]]), createElement(Settings));
   };
 
   it("is one page with four sections, in order, and no tabs", () => {
@@ -295,7 +319,7 @@ describe("Settings", () => {
     expect(html).not.toContain('role="tablist"');
   });
 
-  it("shows the company's details, what candidates read about it, who they write to and the careers link; an owner may change them", () => {
+  it("shows the company's details, what candidates read about it, who they write to and the careers link; whoever the API says may change them gets the controls", () => {
     const html = draw("owner");
     const words = text(html);
     expect(words).toContain("Name Bright Dental Website brightdental.example Location Irvine, CA Time zone Pacific time (Los Angeles) People 1-19 Benefits Health, dental and paid time off");
@@ -310,6 +334,11 @@ describe("Settings", () => {
     expect(member).not.toContain(">Edit</button>");
     expect(member).not.toContain('type="file"');
     expect(member).not.toContain("Take it off the job pages");
+    // the controls follow the company's own answer (`viewer.mayEdit`), never the role the frame knows the person by
+    const section = (page: string) => page.slice(page.indexOf('id="setup-company"'), page.indexOf('id="setup-team"'));
+    const told = (as: MembershipRole, mayEdit: boolean) => section(draw(as, { company: company({ viewer: { mayEdit } }) }));
+    expect(told("owner", false)).not.toMatch(/>Edit<\/button>|type="file"|Take it off the job pages/);
+    expect(told("hiring_manager", true).match(/>Edit<\/button>/g)).toHaveLength(3);
   });
 
   it("lets someone who manages the team invite with the roles the API allows, change a person it marks, and see the open invitations", () => {

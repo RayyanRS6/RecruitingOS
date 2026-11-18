@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { AI_HELP_UPGRADE_QUESTION, MORE_JOBS_UPGRADE_QUESTION, type PlanRoom, type PublicPlan } from "../../packages/contracts/src/index";
 import { ApiError, errorCode, errorWords, isCandidateLocked, planLimitOf } from "../../apps/web/src/api/client";
-import { TRIAL_ASK } from "../../apps/web/src/trial";
-import { firstChoice, moreLockedWords, planFacts, priceWords, requestSentWords, roomAsk } from "../../apps/web/src/upgrade";
+import { firstChoice, moreLockedWords, planFacts, priceWords, requestSentWords } from "../../apps/web/src/upgrade";
 
 /**
  * The upgrade path's words and rules, as a page reads them without a browser. The sheet compares the plans with prices
- * in dollars and the AI help in words, never in dollars; a refusal by the plan carries the request to offer; and running
- * out of AI help or of jobs offers an upgrade, never "try again".
+ * in dollars and the AI help in words, never in dollars; and a refusal by the plan carries the request to offer, which
+ * the page shows as it is. (The room alert, with the request the plan's room itself carries, is drawn in
+ * apps/shell/components/plans-ui.test.ts.)
  */
 const plan = (over: Partial<PublicPlan>): PublicPlan => ({ key: "basic", name: "Basic", monthlyUsd: 49, activeRoles: 3, jobsTotal: null, candidatesPerJob: 25, seats: 3, aiHelp: "About 600 candidates a month", current: false, ...over });
 const free = plan({ key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit" });
@@ -58,8 +58,9 @@ describe("a refusal by the plan", () => {
   });
 
   it("carries the plan's room with it when the API sends it", () => {
-    const room: PlanRoom = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
-    expect(planLimitOf(new ApiError(402, "limit_reached", room.message ?? "", { upgrade: true, ask: null, room }))?.room).toEqual(room);
+    const ask = { label: "Upgrade", reason: MORE_JOBS_UPGRADE_QUESTION };
+    const room: PlanRoom = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", ask, upgrade: true };
+    expect(planLimitOf(new ApiError(402, "limit_reached", room.message ?? "", { upgrade: true, ask, room }))).toEqual({ upgrade: true, ask, room });
   });
 
   it("says the API's own sentence for a refusal, and a line about the connection when there is none", () => {
@@ -74,20 +75,6 @@ describe("a refusal by the plan", () => {
     expect(isCandidateLocked(new ApiError(402, "candidate_locked", "Upgrade to view more candidates."))).toBe(true);
     expect(isCandidateLocked(new ApiError(402, "limit_reached", "x"))).toBe(false);
     expect(isCandidateLocked(new ApiError(404, "not_found", "x"))).toBe(false);
-  });
-});
-
-describe("no room for another job, as the start box says it", () => {
-  const room = (over: Partial<PlanRoom>): PlanRoom => ({ ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", ...over });
-
-  it("offers an upgrade for more jobs, or for more AI help when that is what ran out", () => {
-    expect(roomAsk(room({ upgrade: true }))).toEqual({ label: "Upgrade", reason: MORE_JOBS_UPGRADE_QUESTION });
-    expect(roomAsk(room({ upgrade: true, aiHelp: true }))).toEqual({ label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION });
-  });
-
-  it("asks ITS to choose a plan once a trial has ended, and to talk when no plan is above theirs", () => {
-    expect(roomAsk(room({ trialEnded: true }))).toEqual({ label: "Ask ITS to choose a plan", reason: TRIAL_ASK });
-    expect(roomAsk(room({ nothingAbove: true }))).toEqual({ label: "Talk to ITS", reason: MORE_JOBS_UPGRADE_QUESTION });
   });
 });
 

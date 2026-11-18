@@ -10,9 +10,9 @@ import { Link } from "../nav";
 import { LINKED_ROW, ROW_TITLE } from "./look";
 
 /**
- * Jobs: every job of the company, newest first, each with its status, when it was published and how many people it has
- * tab by tab; and the drafts not yet published. A job opens on its candidates once it has been published. "Start a
- * hire" leads to the job builder.
+ * Jobs: every job of the company, newest first, each with its status, where it is, when it was published and how many
+ * people it has tab by tab; and the drafts not yet published. A job opens on its candidates once it has been published.
+ * "Start a hire" leads to the job builder.
  */
 export function Jobs() {
   const roles = useQuery({ queryKey: ["roles"], queryFn: () => api.get<RoleSummary[]>("/api/v1/roles") });

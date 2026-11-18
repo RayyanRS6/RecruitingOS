@@ -30,7 +30,7 @@ const { ApiError } = await import("@ros/web/src/api/client");
 const plain = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
 const text = (html: string) => plain(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 const me = (role: MembershipRole) => ({ user: { id: "u1", email: "owner@bright.test", name: "Sam Sample", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "co1", companyName: "Bright Dental", companySlug: "bright-dental", role }], activeCompanyId: "co1", ai: { provider: "fake" } });
-const room: PlanRoom = { ok: true, limit: 3, used: 1, holding: [], message: null };
+const room: PlanRoom = { ok: true, limit: 3, used: 1, holding: [], message: null, ask: null };
 
 const q = (over: Partial<IntakeQuestion> & Pick<IntakeQuestion, "id" | "field" | "mode">): IntakeQuestion => ({ prompt: "A question?", options: [], allowOwn: true, why: "Because.", ...over });
 const arrangement = q({ id: "q1", field: "remote_policy", mode: "single", prompt: "Where is the work done?", options: [{ label: "On site", value: "onsite", origin: "assistant" }, { label: "Hybrid", value: "hybrid", origin: "owner" }] });
@@ -85,11 +85,16 @@ describe("the builder's first page", () => {
     expect(html.match(/<textarea/g)).toHaveLength(1);
   });
 
-  it("holds the box with the plan's own line when there is no room for another job", () => {
-    const html = drafts([], { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true });
+  it("holds the box with the plan's own line when there is no room for another job, with the request the plan's room carries", () => {
+    const full: PlanRoom = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", ask: { label: "Upgrade", reason: "We would like to post more jobs." }, upgrade: true };
+    const html = drafts([], full);
     expect(text(html)).toContain("Your Free plan includes one job. Upgrade to post more. Upgrade");
     expect(html).toMatch(/<textarea[^>]*disabled=""/);
     expect(html).not.toContain("<h2>Your drafts</h2>");
+    // the button says the room's own words: once the trial has ended, the way on is ITS choosing a plan
+    const ended = drafts([], { ok: false, limit: 3, used: 1, holding: [], message: "Your trial has ended.", ask: { label: "Ask ITS to choose a plan", reason: "Our trial has ended. We would like to choose a plan." }, trialEnded: true });
+    expect(text(ended)).toContain("Your trial has ended. Ask ITS to choose a plan");
+    expect(ended).not.toContain(">Upgrade</button>");
   });
 });
 

@@ -4,10 +4,8 @@ import { type ReactNode, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { CompanyView } from "@ros/contracts";
 import { Alert, Card, ErrorState, PageHeader, Skeleton } from "@ros/ui";
-import { api, type Me } from "../api/client";
+import { api } from "../api/client";
 import { useSearchParams } from "../nav";
-import { activeCompanyOf } from "../rail";
-import { managesCompany } from "../roles";
 import { useSignInWhenSessionEnds } from "../session-ended";
 import { reauthLine } from "../settings";
 import { CompanySection } from "./settings/CompanySection";
@@ -22,15 +20,14 @@ function Section({ id, children }: { id: string; children: ReactNode }) {
 
 /**
  * Settings: one page with four sections, Company, Team, Plan and Email updates. Everyone on the team reads all four;
- * an owner or an admin changes the company and the team; each person sets their own email switch.
+ * who may change the company and the team comes with each from the API (an owner or an admin); each person sets their
+ * own email switch.
  */
 export function Settings() {
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
   const company = useQuery({ queryKey: ["company"], queryFn: () => api.get<CompanyView>("/api/v1/companies/current") });
-  useSignInWhenSessionEnds([company.error, me.error]);
+  useSignInWhenSessionEnds([company.error]);
   const [params] = useSearchParams();
   const confirmed = reauthLine(params.get("reauth"));
-  const mayEdit = managesCompany(activeCompanyOf(me.data).role);
   // A link to one section lands on it once the page has its sections: until then there is nothing to scroll to.
   const drawn = !!company.data;
   useEffect(() => {
@@ -43,7 +40,7 @@ export function Settings() {
       <PageHeader title="Settings" className="mb-0" />
       {confirmed ? <Alert tone={confirmed.tone}>{confirmed.text}</Alert> : null}
       <Section id="setup-company">
-        {company.isLoading ? <Card title="Company"><Skeleton lines={5} /></Card> : company.error || !company.data ? <Card title="Company"><ErrorState message="Could not load the company." onRetry={() => company.refetch()} /></Card> : <CompanySection company={company.data} mayEdit={mayEdit} />}
+        {company.isLoading ? <Card title="Company"><Skeleton lines={5} /></Card> : company.error || !company.data ? <Card title="Company"><ErrorState message="Could not load the company." onRetry={() => company.refetch()} /></Card> : <CompanySection company={company.data} />}
       </Section>
       <Section id="setup-team"><TeamSection /></Section>
       {company.data ? <Section id="setup-plan"><PlanSection plan={company.data.plan} timeZone={company.data.timezone} /></Section> : null}

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AI_HELP_UPGRADE_QUESTION, type HomeJob } from "../../packages/contracts/src/index";
-import { KEEP_CURRENT, firstName, greeting, homeJobRow, noticeAsk } from "../../apps/web/src/home";
-import { TRIAL_ASK } from "../../apps/web/src/trial";
+import type { HomeJob } from "../../packages/contracts/src/index";
+import { KEEP_CURRENT, firstName, greeting, homeJobRow } from "../../apps/web/src/home";
 
 /**
  * Home: it keeps itself current while it is in view (the app's default stays off for every other page), greets by
- * first name, and lists each open or paused job with the counts that lead into its candidates.
+ * first name, and lists each open or paused job with the counts that lead into its candidates. (Its notices, each with
+ * the request the API offers, are drawn in apps/shell/components/company-pages-ui.test.ts.)
  */
 const home = readFileSync(new URL("../../apps/web/src/pages/Home.tsx", import.meta.url), "utf8");
 const providers = readFileSync(new URL("../../apps/shell/components/Providers.tsx", import.meta.url), "utf8");
@@ -59,14 +59,5 @@ describe("a job on Home", () => {
   it("says a job's status only when it is paused, in the API's word", () => {
     expect(homeJobRow(job({ status: "paused", statusLabel: "Paused" })).status).toBe("Paused");
     expect(homeJobRow(job({ status: "open", statusLabel: "Open" })).status).toBeNull();
-  });
-});
-
-describe("a notice's Upgrade", () => {
-  it("says why it is asked: a plan after the trial, or more AI help", () => {
-    expect(noticeAsk("trial_ending")).toBe(TRIAL_ASK);
-    expect(noticeAsk("trial_ended")).toBe(TRIAL_ASK);
-    expect(noticeAsk("ai_help_warning")).toBe(AI_HELP_UPGRADE_QUESTION);
-    expect(noticeAsk("ai_help_used_up")).toBe(AI_HELP_UPGRADE_QUESTION);
   });
 });

@@ -26,9 +26,15 @@ describe("where a job opens, and its status", () => {
 });
 
 describe("a row of the Jobs page", () => {
-  it("shows the title, the API's status word, when it was published, how long it has been open and its people tab by tab", () => {
+  it("shows the title, the API's status word, where the job is, when it was published, how long it has been open and its people tab by tab", () => {
     const row = jobRow(jobSummary("r1", "open", { openedAt: new Date(2026, 10, 10, 9).toISOString(), counts: jobCounts({ new: 3, shortlisted: 2, interviewed: 1, hired: 1, not_selected: 4 }) }), now);
-    expect(row).toEqual({ id: "r1", title: "Dental Assistant", href: "/roles/r1/talent", statusLabel: "Open", tone: "good", facts: ["Published Nov 10", "8 days open"], counts: ["11 applicants", "3 new", "2 shortlisted", "1 interviewed", "1 hired"] });
+    expect(row).toEqual({ id: "r1", title: "Dental Assistant", href: "/roles/r1/talent", statusLabel: "Open", tone: "good", facts: ["Irvine, CA", "Published Nov 10", "8 days open"], counts: ["11 applicants", "3 new", "2 shortlisted", "1 interviewed", "1 hired"] });
+  });
+
+  it("says where the job is in the API's own words, and nothing for a job that names no place", () => {
+    const openedAt = new Date(2026, 10, 10, 9).toISOString();
+    expect(jobRow(jobSummary("r1", "open", { openedAt, place: "Remote, US" }), now).facts).toEqual(["Remote, US", "Published Nov 10", "8 days open"]);
+    expect(jobRow(jobSummary("r1", "open", { openedAt, place: null }), now).facts).toEqual(["Published Nov 10", "8 days open"]);
   });
 
   it("says a job opened today, one day, and the day to apply by", () => {
@@ -39,9 +45,9 @@ describe("a row of the Jobs page", () => {
 
   it("shows a draft with the day it was created and no counts, and a closed job with the day it closed", () => {
     const draft = jobRow(jobSummary("r1", "draft", { createdAt: new Date(2026, 10, 8, 9).toISOString() }), now);
-    expect(draft).toMatchObject({ href: "/roles/r1", statusLabel: "Draft", tone: "neutral", facts: ["Created Nov 8"], counts: [] });
+    expect(draft).toMatchObject({ href: "/roles/r1", statusLabel: "Draft", tone: "neutral", facts: ["Irvine, CA", "Created Nov 8"], counts: [] });
     const closed = jobRow(jobSummary("r1", "closed", { openedAt: new Date(2026, 10, 10, 9).toISOString(), closedAt: new Date(2026, 10, 17, 9).toISOString(), closesOn: "2026-11-30" }), now);
-    expect(closed.facts).toEqual(["Published Nov 10", "Closed Nov 17"]);
+    expect(closed.facts).toEqual(["Irvine, CA", "Published Nov 10", "Closed Nov 17"]);
   });
 
   it("counts everyone who applied, each tab that has someone, and the people the plan keeps locked", () => {

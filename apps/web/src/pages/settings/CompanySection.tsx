@@ -24,10 +24,12 @@ function useCompanySaved() {
 /**
  * Settings, Company: the details candidates and the job builder read (name, website, places, time zone, size, the
  * benefits line), the logo, the text about the company on its job pages, the address candidates write to, and the
- * careers page's link. An owner or an admin changes them; a member reads them.
+ * careers page's link. Whoever the API says may change them (`viewer.mayEdit`: an owner or an admin) gets the
+ * controls; anyone else reads them.
  */
-export function CompanySection({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean }) {
+export function CompanySection({ company: c }: { company: CompanyView }) {
   const [editing, setEditing] = useState(false);
+  const { mayEdit } = c.viewer;
   return (
     <Card title="Company" aside={mayEdit && !editing ? <Button size="sm" icon="edit" onClick={() => setEditing(true)}>Edit</Button> : null}>
       <div className="stack gap-6">
@@ -41,9 +43,9 @@ export function CompanySection({ company: c, mayEdit }: { company: CompanyView; 
             <dt>Benefits</dt><dd className="whitespace-pre-wrap">{c.benefitsSummary || "None written"}</dd>
           </dl>
         )}
-        <Logo company={c} mayEdit={mayEdit} />
-        <About company={c} mayEdit={mayEdit} />
-        <Contact company={c} mayEdit={mayEdit} />
+        <Logo company={c} />
+        <About company={c} />
+        <Contact company={c} />
         <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
           <Field label="Careers page" htmlFor="careers-link"><input id="careers-link" className="input" readOnly value={c.careersUrl} onFocus={(e) => e.currentTarget.select()} /></Field>
           <CopyButton text={c.careersUrl} ariaLabel="Copy the careers page's link" />
@@ -97,7 +99,8 @@ function DetailsForm({ company: c, onClose }: { company: CompanyView; onClose: (
 }
 
 /** The logo on the careers page and the job pages: a picture to upload, change or remove. */
-function Logo({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean }) {
+function Logo({ company: c }: { company: CompanyView }) {
+  const { mayEdit } = c.viewer;
   const saved = useCompanySaved();
   const [problem, setProblem] = useState<string | null>(null);
   const upload = useMutation({
@@ -150,7 +153,8 @@ function Logo({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean 
  * The text about the company on its job pages. A person approves every word of it: their own text, or a draft the
  * assistant wrote from their notes, which is never public until someone approves it.
  */
-function About({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean }) {
+function About({ company: c }: { company: CompanyView }) {
+  const { mayEdit } = c.viewer;
   const saved = useCompanySaved();
   const [text, setText] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -215,7 +219,8 @@ function About({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean
 }
 
 /** The address candidates can write to. Until the company sets its own, the ITS inbox answers. */
-function Contact({ company: c, mayEdit }: { company: CompanyView; mayEdit: boolean }) {
+function Contact({ company: c }: { company: CompanyView }) {
+  const { mayEdit } = c.viewer;
   const saved = useCompanySaved();
   const [form, setForm] = useState<{ email: string; name: string } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);

@@ -3,16 +3,14 @@
 import { appPaths, type PlanRoom } from "@ros/contracts";
 import { Alert } from "@ros/ui";
 import { Link } from "../nav";
-import { roomAsk } from "../upgrade";
 import { Upgrade } from "./Upgrade";
 
 /**
  * The plan has no room for another job: the server's own line, the jobs holding the places when closing one would give
- * a place back (each a link to it), and the way to ask for more. `ask`: the request a refusal by the API carried; the
- * room read with a page carries none, so it is worked out from what ran out (`roomAsk`).
+ * a place back (each a link to it), and the request the room itself offers (`room.ask`): its button's words, and its
+ * reason sent with the request.
  */
-export function RoomAlert({ room, ask }: { room: PlanRoom; ask?: { label: string; reason: string } | null }) {
-  const request = ask ?? roomAsk(room);
+export function RoomAlert({ room }: { room: PlanRoom }) {
   return (
     <Alert tone="caution">
       <div className="grid gap-2">
@@ -22,7 +20,7 @@ export function RoomAlert({ room, ask }: { room: PlanRoom; ask?: { label: string
             {room.holding.map((r) => <li key={r.roleId}><Link to={appPaths.job(r.roleId)}>{r.title}</Link></li>)}
           </ul>
         ) : null}
-        <div className="row"><Upgrade label={request.label} size="sm" reason={request.reason} /></div>
+        {room.ask ? <div className="row"><Upgrade label={room.ask.label} size="sm" reason={room.ask.reason} /></div> : null}
       </div>
     </Alert>
   );

@@ -28,11 +28,14 @@ export function jobHref(job: Pick<RoleSummary, "id" | "status" | "openedAt">): s
 /* The Jobs page                                                                                                  */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** One job on the Jobs page: where it opens, its status, when it was published and how many people it has, tab by tab. */
+/**
+ * One job on the Jobs page: where it opens, its status, where the job is (the API's `place`, when it names one), when
+ * it was published and how many people it has, tab by tab.
+ */
 export type JobRow = { id: string; title: string; href: string; statusLabel: string; tone: Tone; facts: string[]; counts: string[] };
 
 export function jobRow(job: RoleSummary, now: Date = new Date()): JobRow {
-  const facts: string[] = [];
+  const facts: string[] = job.place ? [job.place] : [];
   if (job.openedAt) facts.push(`Published ${shortDay(job.openedAt, now)}`);
   else facts.push(`Created ${shortDay(job.createdAt, now)}`);
   if (job.status === "closed" && job.closedAt) facts.push(`Closed ${shortDay(job.closedAt, now)}`);

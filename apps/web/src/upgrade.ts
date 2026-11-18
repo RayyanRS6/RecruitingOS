@@ -1,6 +1,5 @@
-import { AI_HELP_UPGRADE_QUESTION, MORE_JOBS_UPGRADE_QUESTION, type PlanRoom, type PublicPlan } from "@ros/contracts";
+import type { PublicPlan } from "@ros/contracts";
 import { longDay } from "./dates";
-import { TRIAL_ASK } from "./trial";
 
 /**
  * The upgrade sheet's words and rules, kept free of React so they can be tested. A customer reads prices in dollars and
@@ -41,15 +40,4 @@ export function requestSentWords(requestedAt: string): string {
 /** A group of locked people folded into one line under a job's candidates. */
 export function moreLockedWords(n: number): string {
   return `${n} more ${n === 1 ? "candidate is" : "candidates are"} locked`;
-}
-
-/**
- * The request about the plan to offer when it has no room for another job: the button's words and the reason sent
- * with the request. A refusal by the API carries its own (`PlanLimitDetails.ask`); the room read with a list of drafts
- * or with Home carries none, so it is worked out from what ran out.
- */
-export function roomAsk(room: Pick<PlanRoom, "trialEnded" | "upgrade" | "aiHelp" | "nothingAbove">): { label: string; reason: string } {
-  if (room.trialEnded) return { label: "Ask ITS to choose a plan", reason: TRIAL_ASK };
-  const label = room.nothingAbove ? "Talk to ITS" : "Upgrade";
-  return { label, reason: room.aiHelp ? AI_HELP_UPGRADE_QUESTION : MORE_JOBS_UPGRADE_QUESTION };
 }

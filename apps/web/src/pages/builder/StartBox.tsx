@@ -44,7 +44,8 @@ function useStartDraft() {
     },
     onError: (err) => {
       const limit = planLimitOf(err);
-      if (limit?.room && !limit.room.ok) setRoom(limit.room);
+      // the room a refusal carries offers the refusal's own request (none for someone who may not ask)
+      if (limit?.room && !limit.room.ok) setRoom({ ...limit.room, ask: limit.ask });
       setProblem({ message: errorWords(err), ask: limit?.ask ?? null });
     },
   });
@@ -62,7 +63,7 @@ export function StartBox({ room, size }: { room: PlanRoom | null | undefined; si
   const full = s.room ?? (room && !room.ok ? room : null);
   return (
     <div className="grid min-w-0 gap-3">
-      {full ? <RoomAlert room={full} ask={s.problem?.ask} /> : null}
+      {full ? <RoomAlert room={full} /> : null}
       {s.said ? (
         <div className="flex min-w-0 items-start gap-2.5 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]">
           <AssistantMark />

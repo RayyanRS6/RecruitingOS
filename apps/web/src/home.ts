@@ -1,9 +1,8 @@
-import { AI_HELP_UPGRADE_QUESTION, appPaths, type HomeJob, type HomeNotice } from "@ros/contracts";
-import { TRIAL_ASK } from "./trial";
+import { appPaths, type HomeJob } from "@ros/contracts";
 
 /**
- * Home's pure pieces, kept out of the page so they can be checked without a browser: the greeting, a job's row with
- * its counts and where each leads, and the request a notice's Upgrade sends.
+ * Home's pure pieces, kept out of the page so they can be checked without a browser: the greeting, and a job's row
+ * with its counts and where each leads.
  */
 
 /**
@@ -47,9 +46,4 @@ export function homeJobRow(job: HomeJob): HomeJobRow {
     interviewed: job.interviewed > 0 ? { text: `${job.interviewed} finished the AI interview`, href: appPaths.candidates(job.id, "interviewed") } : null,
     applicants: job.applicants > 0 ? counted(job.applicants, "applicant", "applicants") : "No applicants yet",
   };
-}
-
-/** Why a notice's Upgrade is asked for: sent with the request from the upgrade sheet. */
-export function noticeAsk(kind: HomeNotice["kind"]): string {
-  return kind === "trial_ending" || kind === "trial_ended" ? TRIAL_ASK : AI_HELP_UPGRADE_QUESTION;
 }

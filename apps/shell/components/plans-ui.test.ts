@@ -120,30 +120,35 @@ describe("the one Upgrade and its sheet", () => {
     expect(render(client(), createElement(Upgrade, { requestedAt: null, label: "Talk to ITS" }))).toContain(">Talk to ITS<");
   });
 
-  it("the room alert: no roles to close and the plan's words, with the Upgrade", () => {
-    const room = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", upgrade: true };
-    const html = render(client(), createElement(RoomAlert, { room, ask: null }));
+  it("the room alert: no roles to close and the plan's words, with the request the room carries", () => {
+    const room = { ok: false, limit: 1, used: 1, holding: [], message: "Your Free plan includes one job. Upgrade to post more.", ask: { label: "Upgrade", reason: "We would like to post more jobs." }, upgrade: true };
+    const html = render(client(), createElement(RoomAlert, { room }));
     expect(text(html)).toContain("Your Free plan includes one job. Upgrade to post more.");
     expect(html).toContain(">Upgrade<");
     expect(html).not.toContain("Talk to ITS");
-    // a plan with places at a time keeps its own words and names the jobs holding them, each a link; a request the
-    // API's refusal carried is the one offered
-    const full = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Front Desk", status: "open" }], message: "Your plan includes 2 jobs at a time." };
-    const held = render(client(), createElement(RoomAlert, { room: full, ask: { label: "Talk to ITS about more jobs", reason: "We would like to post more jobs." } }));
+    // a plan with places at a time keeps its own words and names the jobs holding them, each a link; the button says
+    // the words of the room's own request
+    const full = { ok: false, limit: 2, used: 2, holding: [{ roleId: "r1", title: "Front Desk", status: "open" }], message: "Your plan includes 2 jobs at a time.", ask: { label: "Talk to ITS about more jobs", reason: "We would like to open more jobs than our plan includes. Can we talk about adding more?" } };
+    const held = render(client(), createElement(RoomAlert, { room: full }));
     expect(text(held)).toContain("Your plan includes 2 jobs at a time. Front Desk");
     expect(held).toContain('<a href="/roles/r1">Front Desk</a>');
     expect(held).toContain(">Talk to ITS about more jobs<");
+    expect(held).not.toContain(">Upgrade<");
+    // a room that carries no request offers none: the words and the jobs alone
+    const none = render(client(), createElement(RoomAlert, { room: { ...full, ask: null } }));
+    expect(text(none)).toContain("Your plan includes 2 jobs at a time. Front Desk");
+    expect(none).not.toContain("<button");
   });
 
   it("the room alert on the last plan, with no AI help left for a new job: no Upgrade, but Talk to ITS, which opens the same sheet", () => {
     const words = "Your plan's AI help is used up. Talk with ITS, or wait until your AI help starts again on Friday, December 4.";
-    const room = { ok: false, limit: 30, used: 2, holding: [], message: words, upgrade: true, aiHelp: true, nothingAbove: true };
-    const html = render(client(), createElement(RoomAlert, { room, ask: null }));
+    const room = { ok: false, limit: 30, used: 2, holding: [], message: words, ask: { label: "Talk to ITS", reason: "We would like more AI help." }, upgrade: true, aiHelp: true, nothingAbove: true };
+    const html = render(client(), createElement(RoomAlert, { room }));
     expect(text(html)).toContain(words);
     expect(html).toContain(">Talk to ITS<");
     expect(html).not.toContain(">Upgrade<");
-    // with somewhere to go, the same room says Upgrade
-    expect(render(client(), createElement(RoomAlert, { room: { ...room, nothingAbove: undefined }, ask: null }))).toContain(">Upgrade<");
+    // the words are the request's own, never worked out here from what ran out: the same room whose request says Upgrade says Upgrade
+    expect(render(client(), createElement(RoomAlert, { room: { ...room, ask: { ...room.ask, label: "Upgrade" } } }))).toContain(">Upgrade<");
   });
 });
 

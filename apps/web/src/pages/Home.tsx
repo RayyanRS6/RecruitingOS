@@ -8,7 +8,7 @@ import { DraftRows } from "../components/DraftRows";
 import { OwnRequest } from "../components/OwnRequest";
 import { Upgrade } from "../components/Upgrade";
 import { useIsClient } from "../components/use-is-client";
-import { greeting, homeJobRow, KEEP_CURRENT, noticeAsk } from "../home";
+import { greeting, homeJobRow, KEEP_CURRENT } from "../home";
 import { Link } from "../nav";
 import { useSignInWhenSessionEnds } from "../session-ended";
 import { StartBox } from "./builder/StartBox";
@@ -66,13 +66,16 @@ export function Home() {
   );
 }
 
-/** A line about the plan: the trial ending or ended, the AI help running low or used up, with the way to ask for more. */
+/**
+ * A line about the plan: the trial ending or ended, the AI help running low or used up, with the request the API offers
+ * with it (`ask`): its button's words, and its reason sent with the request.
+ */
 function Notice({ notice }: { notice: HomeNotice }) {
   return (
     <Alert tone="caution">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="min-w-0"><strong>{notice.title}</strong> {notice.body}</span>
-        {notice.upgrade ? <Upgrade size="sm" reason={noticeAsk(notice.kind)} /> : null}
+        {notice.ask ? <Upgrade label={notice.ask.label} size="sm" reason={notice.ask.reason} /> : null}
       </div>
     </Alert>
   );
