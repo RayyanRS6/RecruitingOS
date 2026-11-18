@@ -70,8 +70,13 @@ const QUOTE_FROM: Partial<Record<EvidenceSource, string>> = {
  * interview. Just the quote for a source with no such words.
  */
 export function quoteWithSource(quote: string, source: string | null | undefined): string {
-  const from = source ? QUOTE_FROM[source as EvidenceSource] : undefined;
+  const from = quoteFrom(source);
   return from ? `"${quote}", ${from}` : `"${quote}"`;
+}
+
+/** Where a quote is from, in words ("from the resume", "in the AI interview"); null for a source with no such words. */
+export function quoteFrom(source: string | null | undefined): string | null {
+  return (source ? QUOTE_FROM[source as EvidenceSource] : undefined) ?? null;
 }
 
 /**

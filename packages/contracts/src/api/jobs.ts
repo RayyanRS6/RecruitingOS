@@ -267,8 +267,12 @@ export type EditPost = z.infer<typeof EditPost>;
 /** One open or paused job on Home: how many are new to review and how many finished the AI interview. */
 export type HomeJob = { id: string; title: string; status: RoleStatus; statusLabel: string; toReview: number; interviewed: number; applicants: number };
 
-/** A line above everything on Home: the trial ending or ended, the plan's AI help at 80% or used up. `upgrade`: offer the Upgrade request with it. */
-export type HomeNotice = { kind: "trial_ending" | "trial_ended" | "ai_help_warning" | "ai_help_used_up"; title: string; body: string; upgrade: boolean };
+/**
+ * A line above everything on Home: the trial ending or ended, the plan's AI help at 80% or used up. `upgrade`: offer the
+ * Upgrade request with it. `ask`: that request's button words and the reason to send with POST /api/v1/plans/request;
+ * null when the notice offers none, or this person may not ask.
+ */
+export type HomeNotice = { kind: "trial_ending" | "trial_ended" | "ai_help_warning" | "ai_help_used_up"; title: string; body: string; upgrade: boolean; ask: { label: string; reason: string } | null };
 
 /**
  * GET /api/v1/home: the open and paused jobs, the one with the most to review first; this person's unfinished drafts;
