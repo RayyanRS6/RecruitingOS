@@ -80,15 +80,12 @@ export function quoteFrom(source: string | null | undefined): string | null {
 }
 
 /**
- * A claim must point at where it came from. Quotes are verified against the source text in code.
- * `context` (date, role, employer) lets the reader judge the evidence, not just find it.
+ * A claim must point at where it came from: the source, and the words quoted from it. Quotes are verified against the
+ * source text in code. A reading stored before carries more fields here; they are dropped on parse.
  */
 export const Evidence = z.object({
   source: EvidenceSource,
   quote: z.string().optional(),
-  ref: z.string().optional(),
-  confidence: Confidence.optional(),
-  context: z.string().optional(),
   /** Set in code, never trusted from the model: a claim about the candidate with nothing verified quoted from them. */
   unquoted: z.boolean().optional(),
 });

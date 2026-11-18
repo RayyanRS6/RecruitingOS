@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { EvidenceAssessment, ScreenAssessment } from "./assessment";
 import { EventType } from "./events";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, ScreenProgress, ScreenStatus, ScreenTranscriptEntry, aiInterviewStatusOf } from "./screen";
@@ -47,6 +48,14 @@ describe("what the AI writes about a candidate", () => {
     const scorecard = ScreenAssessment.parse(stored);
     expect(Object.keys(scorecard).sort()).toEqual(["concerns", "questionFindings", "strengths", "summary", "unknowns"]);
     expect(scorecard.questionFindings.map((q) => [q.questionKey, q.meetsModelAnswer])).toEqual([["sq_1", "yes"], ["sq_2", "unknown"]]);
+  });
+
+  it("a quote is its source and the words quoted: the model is asked for no confidence, verdict or number, and none is kept", () => {
+    const stored = { ...words, strengths: [{ claim: "Licensed", evidence: { ...evidence, confidence: "high", context: "Coastal, 2019", ref: "line 3" } }], questionFindings: [{ questionKey: "sq_1", answered: true, finding: "Gave a concrete day.", evidence: { source: "screen", quote: "We saw 40 patients", confidence: "low" } }] };
+    expect(EvidenceAssessment.parse(stored).strengths[0]?.evidence).toEqual(evidence);
+    expect(ScreenAssessment.parse(stored).questionFindings[0]?.evidence).toEqual({ source: "screen", quote: "We saw 40 patients" });
+    // the shape each reading is asked for, as the model is sent it
+    for (const asked of [EvidenceAssessment, ScreenAssessment]) expect(JSON.stringify(z.toJSONSchema(asked))).not.toMatch(/"(?:confidence|context|ref|overall|recommendation|score|rationale|anomalies)"/);
   });
 
   it("never quotes a source the product no longer has", () => {
