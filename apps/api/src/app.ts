@@ -14,7 +14,8 @@ import { planRoutes } from "./routes/plans";
 import { authSessionRoutes } from "./routes/auth-sessions";
 import { privacyRequestPages } from "./pages/privacy-request";
 import { intakeRoutes } from "./routes/intake";
-import { applicationRoutes, roleRoutes } from "./routes/roles";
+import { roleRoutes } from "./routes/roles";
+import { applicationRoutes, candidateRoleRoutes } from "./routes/candidates";
 import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { adminRoutes } from "./routes/admin";
 import { notificationRoutes } from "./routes/notifications";
@@ -136,6 +137,7 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/roles", rolePreviewPages);
   app.route("/api/v1/roles", roleRoutes);
   app.route("/api/v1/roles", rolePacketRoutes);
+  app.route("/api/v1/roles", candidateRoleRoutes);
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/admin", adminRoutes);
   app.route("/api/v1/admin/data-requests", privacyRequestRoutes);
