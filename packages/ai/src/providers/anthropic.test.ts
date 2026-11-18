@@ -132,18 +132,12 @@ describe("the Anthropic adapter", () => {
     expect(JSON.stringify(sent[0]!.output_config?.format)).toContain('"expectation":{"type":"object","properties":{},"additionalProperties":false');
   });
 
-  it("gives the role packet's records their keys in the instructions (intake.compile and packet.revise always go unconstrained)", () => {
-    const records: unknown[] = [];
-    const walk = (v: unknown) => {
-      if (!v || typeof v !== "object") return;
-      for (const [k, x] of Object.entries(v)) {
-        if (k === "expectation" || k === "labels") records.push(x);
-        walk(x);
-      }
-    };
-    walk(JSON.parse(instructionSchema(DraftRolePacket)));
-    expect(records).toHaveLength(2);
-    for (const r of records) expect(r).toMatchObject({ type: "object", additionalProperties: {} });
+  it("writes the whole job record into the instructions for intake.compile: every object names its keys, and the must-haves keep their maximum", () => {
+    const schema = instructionSchema(DraftRolePacket);
+    expect(Object.keys((JSON.parse(schema) as { properties: Record<string, unknown> }).properties)).toEqual(["schemaVersion", "identity", "compensation", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "compliance", "provenance"]);
+    expect(schema).not.toContain('"additionalProperties":{}');
+    expect(schema).not.toContain('"properties":{},"additionalProperties":false');
+    expect(schema).toContain('"maxItems":6');
   });
 
   it("falls back the same way for the too-many-optional-parameters refusal (intake.compile on staging)", async () => {

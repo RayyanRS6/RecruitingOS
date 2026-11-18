@@ -13,16 +13,16 @@ export function isAllowedModel(model: string): model is AllowedModel {
 }
 
 /**
- * Which tier each task needs. "judgment" runs on Sonnet 5.5 and holds only the whole job draft (intake.compile): one
- * long reply of about 180 fields across five levels that must agree with each other, written without a grammar because
- * the schema is too large for one. Everything else is short or checked in code afterwards, and runs on Haiku 5.5.
+ * Which tier each task needs. "judgment" runs on Sonnet 5.5 and holds only the writing of the whole job
+ * (intake.compile): one long reply, the job description and about a hundred values across four levels that must agree
+ * with each other. Everything else is short or checked in code afterwards, and runs on Haiku 5.5.
  * The tasks with no prompt yet (brief, owner reply) start on Haiku too.
  */
 export const TASK_TIER: Record<TaskKey, Tier> = {
   // The owner's job-building chat: a short reply and up to three cards; fairness is re-checked in code.
   "intake.turn": "standard",
   "intake.compile": "judgment",
-  // The cheap first read of a pasted job ad (C5): title, place, basis and pay before the market check.
+  // The cheap first read of a pasted job ad: the title, the place, the type, the schedule and the pay it states.
   "intake.extract": "fast",
   // A few sentences about the company for its job pages (D10); a person edits and approves them in Setup.
   "company.about": "standard",
