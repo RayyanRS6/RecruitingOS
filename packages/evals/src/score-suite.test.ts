@@ -188,7 +188,11 @@ describe("the scorecard's checks, with no model", () => {
   });
 
   it("screen.assess has a case for the skip, a finding for every question, each licence answer and whose words are quoted", () => {
-    expect(screenAssessCases.map((c) => c.id)).toEqual(["skipped_question_stays_unknown", "one_finding_for_every_question_asked", "licence_lapsed_in_the_chat", "licence_not_held_said_plainly", "licence_held_in_their_own_words", "recorded_answers_are_not_the_candidate"]);
+    expect(screenAssessCases.map((c) => c.id)).toEqual(["skipped_question_stays_unknown", "one_finding_for_every_question_asked", "licence_lapsed_in_the_chat", "licence_not_held_said_plainly", "licence_held_in_their_own_words", "plain_yes_to_a_closed_question", "recorded_answers_are_not_the_candidate"]);
+    // the yes-or-no question is asked first, and "Yes" is all the candidate sent for it
+    const closed = screenAssessCases.find((c) => c.id === "plain_yes_to_a_closed_question")!.build(packet);
+    expect(closed.screen.progress.chat?.items[0]).toMatchObject({ key: "licence_active", kind: "question" });
+    expect(closed.screen.answers.licence_active).toBe("Yes");
     // the case with a question nobody answered: asked, no answer, no reply in the chat
     const unanswered = screenAssessCases.find((c) => c.id === "one_finding_for_every_question_asked")!.build(packet);
     const last = unanswered.screen.progress.chat?.items.at(-1)?.key ?? "";

@@ -759,6 +759,9 @@ const payQuestion = (packet: RolePacket): ScreeningQuestion => packet.screening.
 /** The must-have of the job that names a licence. */
 const licenceKey = (packet: RolePacket): string => [...credentialMustHaves(packet)][0] ?? "";
 
+/** A yes-or-no interview question as an owner may write one. */
+const CLOSED_QUESTION: ScreeningQuestion = { key: "licence_active", question: "Is your RDH license active in California?", kind: "eligibility" };
+
 /** An interview in which the chat asked about the licence must-have, which the CV did not show, and the candidate answered `answer`. */
 const licenceInterview = (packet: RolePacket, answer: string): EvalInterview => sentInterview(packet, { gaps: [licenceKey(packet)], reply: (_q, kind) => (kind === "gap" ? answer : undefined) });
 
@@ -836,6 +839,16 @@ export const screenAssessCases: ScreenAssessCase[] = [
     provenance: "synthetic",
     build: (packet) => licenceInterview(packet, "Yes, I hold an active California RDH license; I renewed it in March 2025."),
     expectShown: (shown, interview) => shownLicenceFailures(shown, interview, "yes", { quoted: true }),
+  },
+  {
+    // a yes-or-no question of the job's own, answered "Yes": that one word is the whole answer, and it counts, quoted
+    id: "plain_yes_to_a_closed_question",
+    provenance: "synthetic",
+    build: (packet) => sentInterview({ ...packet, screening: { ...packet.screening, questions: [CLOSED_QUESTION, ...packet.screening.questions] } }, { reply: (q) => (q.key === CLOSED_QUESTION.key ? "Yes" : undefined) }),
+    expectShown: (shown) => {
+      const f = shown.questionFindings.find((x) => x.questionKey === CLOSED_QUESTION.key);
+      return f?.answered && f.meetsModelAnswer === "yes" && f.evidence?.quote ? [] : [`a plain "Yes" to a yes-or-no question is shown as ${f ? `${f.answered ? "answered" : "not answered"}, ${f.meetsModelAnswer}${f.evidence?.quote ? "" : ", nothing quoted"}` : "nothing"}`];
+    },
   },
   {
     id: "recorded_answers_are_not_the_candidate",
