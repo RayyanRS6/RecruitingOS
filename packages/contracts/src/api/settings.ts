@@ -37,6 +37,11 @@ export const CreateCompany = z.object({
   locations: z.array(Location).min(1),
   ownerName: z.string().min(1).optional(),
   website: z.string().optional(),
+  /**
+   * The address candidates may write to: the job pages show it and their replies go to it (`hiringContact`). The form
+   * asks for it; left out, the ITS inbox answers until the company sets its own in Settings.
+   */
+  contactEmail: z.email().max(254).optional(),
 });
 export type CreateCompany = z.infer<typeof CreateCompany>;
 
