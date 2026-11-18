@@ -35,7 +35,7 @@ describe("company details, re-authentication and the privacy-request form", () =
   let roleId = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     setClock(0);
     owner = await signInWithIdentity(app, container, { email: "dana@settings.test", name: "Dana Owner", provider: "google", aal2: false });

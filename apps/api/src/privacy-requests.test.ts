@@ -37,7 +37,7 @@ describe("candidate privacy requests", () => {
   let candidateId = "";
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     const company = await seedCompany(app, { email: "owner@harbor.test", name: "Harbor Dental" });
     ({ owner, companyId } = company);

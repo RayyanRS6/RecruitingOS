@@ -24,7 +24,7 @@ describe("outbox: messages leave after commit, once, and failures are visible", 
   const draft = (key: string, extra: Partial<Parameters<typeof queueCommunication>[2]> = {}) => ({ channel: "email" as const, companyId, to: "person@example.com", from: "Test <updates@test.localhost>", subject: `Subject ${key}`, text: "Hello", templateKey: "test", idempotencyKey: key, actor, ...extra });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     setClock(0);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@outbox.test" }) });

@@ -93,7 +93,7 @@ function worldOf(container: Container, app: ReturnType<typeof createApp>) {
 }
 
 async function boot(extra: Env = {}): Promise<World> {
-  const container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", EMAIL_REPLY_TO: "recruiting@its.example", ITS_QUEUE_EMAIL: "queue@its.example", RATE_LIMIT_OVERRIDES: NO_LIMITS, ...extra }));
+  const container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", EMAIL_REPLY_TO: "recruiting@its.example", ITS_QUEUE_EMAIL: "queue@its.example", RATE_LIMIT_OVERRIDES: NO_LIMITS, ...extra }));
   return worldOf(container, createApp(container));
 }
 
