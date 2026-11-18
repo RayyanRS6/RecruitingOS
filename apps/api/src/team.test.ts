@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import type { InviteAnswer, MemberChanged, TeamView } from "@ros/contracts";
-import { applications, auditRecords, candidates, events, invitations, memberships, notifications, randomToken, users, withPlatform, withTenant } from "@ros/db";
+import { applications, auditRecords, candidates, communications, events, invitations, memberships, notifications, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -342,6 +342,23 @@ describe("team invitations, members and roles", () => {
     expect(asMember.members.map((m) => m.userId)).toEqual(expect.arrayContaining(asOwner.members.map((m) => m.userId)));
     // and nothing of how anyone signs in, or of an invitation's link
     expect(JSON.stringify([asOwner, asAdmin, asMember])).not.toMatch(/tokenHash|token_hash|authSubject|token=/);
+  });
+
+  it("an invitation whose email did not arrive says so on its row, and the one who invited still has its link to copy", async () => {
+    const sent = (await (await invite(owner, { email: "kim.unreached@teamtest.test", role: "hiring_manager" })).json()) as InviteAnswer;
+    expect(sent.link).toMatch(/\/api\/v1\/auth\/invite\?token=/);
+    const row = async () => (await team(owner)).invitations.find((i) => i.id === sent.invitation.id);
+    expect(await row()).toMatchObject({ email: "kim.unreached@teamtest.test", emailState: "sent" });
+    // its email failed for good: the row says so, and the link answered at the invitation still opens it
+    await container.db.update(communications).set({ status: "failed", error: "postmark 422: refused" }).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "invite"), eq(communications.toAddress, "kim.unreached@teamtest.test")));
+    expect((await row())?.emailState).toBe("failed");
+    expect(await (await app.request(pathOf(sent.link))).text()).toContain("Join Teamtest Dental");
+    // sent again: a fresh link, a new email, and the row reads the email of the link that works now
+    const again = (await (await json(owner, "POST", `/api/v1/companies/current/invitations/${sent.invitation.id}/resend`)).json()) as InviteAnswer;
+    expect(again).toMatchObject({ ok: true, emailed: true });
+    expect(again.link).not.toBe(sent.link);
+    expect((await row())?.emailState).toBe("sent");
+    expect((await json(owner, "POST", `/api/v1/companies/current/invitations/${sent.invitation.id}/revoke`)).status).toBe(200);
   });
 
   it("only an owner invites an owner: an admin is refused (403 owner_only) on the invitation and on sending it again; the owner's goes out", async () => {

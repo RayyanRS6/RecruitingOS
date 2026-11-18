@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { PROVIDER_REFUSED_ALERT, queueCommunication } from "@ros/agents";
-import { entitlements, findInvitationByToken } from "@ros/core";
+import { entitlements } from "@ros/core";
 import { adminAlerts, applications, candidates, communications, notifications, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, SendResult } from "@ros/integrations";
 import { createApp } from "./app";
@@ -155,47 +155,6 @@ describe("the dead ends a first-time owner met", () => {
       expect(card.body).toContain("Nora Noaddress (");
       expect(card.body).toContain("no email address on file");
       expect((await cardOf("unreached", await member("hiring_manager", "hal@deadends.test")))?.unreached?.some((p) => p.applicationId === none.id)).toBe(true);
-    });
-  });
-
-  describe("rank 9: an invitation whose email did not arrive", () => {
-    type Pending = { id: string; email: string; emailState: string | null };
-    const pending = async () => read<Pending[]>(await json(owner, "GET", "/api/v1/companies/current/invitations"));
-
-    it("the one who invites gets the link to copy; the row says whether its email went, and Email failed when it did not", async () => {
-      const sent = await read<{ link: string; invitation: { id: string } }>(await json(owner, "POST", "/api/v1/companies/current/invites", { email: "kim@deadends.test", role: "hiring_manager" }));
-      expect(sent.link).toMatch(/\/api\/v1\/auth\/invite\?token=/);
-      await container.drain();
-      expect((await pending()).find((i) => i.id === sent.invitation.id)).toMatchObject({ email: "kim@deadends.test", emailState: "sent" });
-      // its email failed for good
-      await container.db.update(communications).set({ status: "failed", error: "postmark 422: refused" }).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "invite"), eq(communications.toAddress, "kim@deadends.test")));
-      expect((await pending()).find((i) => i.id === sent.invitation.id)?.emailState).toBe("failed");
-    });
-
-    it("Copy invitation link makes a new link with no email; the old one stops working, and the row no longer claims an email", async () => {
-      const sent = await read<{ link: string; invitation: { id: string } }>(await json(owner, "POST", "/api/v1/companies/current/invites", { email: "lee@deadends.test", role: "hiring_manager" }));
-      await container.drain();
-      const mails = async () => (await container.db.select().from(communications).where(and(eq(communications.companyId, companyId), eq(communications.templateKey, "invite"), eq(communications.toAddress, "lee@deadends.test")))).length;
-      const before = await mails();
-      const r = await json(owner, "POST", `/api/v1/companies/current/invitations/${sent.invitation.id}/resend`, { email: false });
-      expect(r.status, await r.clone().text()).toBe(200);
-      const copied = await read<{ link: string; emailed: boolean }>(r);
-      expect(copied.emailed).toBe(false);
-      expect(copied.link).toMatch(/\/api\/v1\/auth\/invite\?token=/);
-      expect(copied.link).not.toBe(sent.link);
-      await container.drain();
-      expect(await mails()).toBe(before);
-      // the old link no longer opens the invitation; the new one does
-      const tokenOf = (link: string) => new URL(link).searchParams.get("token")!;
-      expect(await findInvitationByToken(container.db, tokenOf(sent.link))).toBeNull();
-      expect((await findInvitationByToken(container.db, tokenOf(copied.link)))?.id).toBe(sent.invitation.id);
-      expect((await pending()).find((i) => i.id === sent.invitation.id)?.emailState).toBeNull();
-      // Send again still emails the fresh link, as before
-      const again = await read<{ emailed: boolean; link: string }>(await json(owner, "POST", `/api/v1/companies/current/invitations/${sent.invitation.id}/resend`));
-      expect(again.emailed).toBe(true);
-      await container.drain();
-      expect(await mails()).toBe(before + 1);
-      expect((await pending()).find((i) => i.id === sent.invitation.id)?.emailState).toBe("sent");
     });
   });
 
