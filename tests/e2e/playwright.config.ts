@@ -63,7 +63,7 @@ export default defineConfig({
       // E2E_EMAIL_PROVIDER=postmark (with no token) is email that never arrives: every send fails at once, and
       // specs/flow-email-down.spec.ts walks what the team sees then. Every other run uses the fake adapter.
       AI_PROVIDER: "fake", EMAIL_PROVIDER: process.env.E2E_EMAIL_PROVIDER || "fake", AUTH_PROVIDER: "fake", ANALYTICS_PROVIDER: "fake",
-      STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", COMP_BLS_ENABLED: "false", MAGIC_LINK_ENABLED: "true",
+      STORAGE_PROVIDER: "memory", WORKER_INLINE: "true", WORKER_POLL_MS: "250", MAGIC_LINK_ENABLED: "true",
       BOOTSTRAP_ADMIN_EMAILS: "admin-e2e@identifiedtalent.com",
       // Sign-up is open for the journeys, so a new company is live at once. access-approval.spec.ts runs on a server of
       // its own, with SIGNUP_MODE=approval in the environment (the last end-to-end step of .github/workflows/ci.yml), and

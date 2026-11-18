@@ -94,7 +94,7 @@ describe("the company details page asks the API, with the person's own cookie", 
   const open = async () => (await page.default()) as ReactElement<{ signup: { mode?: string; allowed?: boolean; contact?: string; door?: string; request?: unknown } }>;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "open", EMAIL_REPLY_TO: "recruiting@its.example" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "open", EMAIL_REPLY_TO: "recruiting@its.example" } });
     installShellForTests(container);
     app = createApp(container);
   });
@@ -208,7 +208,7 @@ describe("a person with a request lands on the same screen from any signed-in ad
   });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", EMAIL_REPLY_TO: "recruiting@its.example" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SIGNUP_MODE: "approval", EMAIL_REPLY_TO: "recruiting@its.example" } });
     installShellForTests(container);
     app = createApp(container);
   });
