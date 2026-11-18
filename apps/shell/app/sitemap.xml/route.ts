@@ -1,6 +1,6 @@
 import { honoHandler } from "../../lib/hono";
 
-/** The public sitemap of careers and job pages (docs/spec/20 item 5), built by Hono (apps/api/src/pages/public-feeds.ts). */
+/** The public sitemap of careers and job pages (docs/PRODUCT.md, D5), built by Hono (apps/api/src/pages/sitemap.ts). */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 /** Seconds a request may run on Vercel; kept in step with the other mounted routes. */

@@ -10,7 +10,6 @@ import { TRIAL_ENDED_LINE } from "../domain/trial";
 
 /**
  * The job builder, a job's page (its Job and Share tabs), the Jobs list and Home: what the API takes and answers.
- * API.md in the simplification notes lists every endpoint with these types.
  */
 
 /* ------------------------------------------------------------------------------------------------------------ */

@@ -116,7 +116,7 @@ export async function openSessionFromIdentity(
   // bootstrap never applies without Microsoft and a second factor.
   const bootstrap = await applyBootstrapAdmin(q, { userId: user.id, email, listed: (policy.bootstrapAdmins ?? []).includes(email), now });
   if (bootstrap === "granted") user = { ...user, platformRole: "platform_admin" };
-  // Team invitations (docs/spec/21, area A): honoured for customers only; a staff account never joins a company this way.
+  // Team invitations (docs/PRODUCT.md, D1): honoured for customers only; a staff account never joins a company this way.
   const invited = await acceptPendingInvitations(q, { user: { id: user.id, email, name: user.name ?? identity.name }, tokenHash: input.invitationTokenHash ?? null, staff: decision.staff, now, ip: input.ip });
   const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
   const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;

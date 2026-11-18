@@ -154,7 +154,7 @@ export function closeOutDayWords(at: string | Date, timeZone: string | null | un
 }
 
 /**
- * DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md, the locked-applicant items): everything from here to the
+ * DRAFT WORDING PENDING COUNSEL (docs/legal-drafts/counsel-register.md, the locked-applicant items): everything from here to the
  * end of this file, every word, until counsel signs off. A locked applicant is never told about a plan or money. These go
  * beside the required notices, never in place of them. The same words whether the address is new, repeat or known (Q14,
  * R20-12), so nothing here depends on what was typed.

@@ -7,7 +7,7 @@ import { seatRoom } from "./entitlements";
 import { emit } from "./events";
 
 /**
- * Team invitations (docs/spec/21, area A; migration 0022).
+ * Team invitations (docs/PRODUCT.md, D1; migration 0022).
  *
  * An invitation is a row: company, address, role, who sent it, and the hash of the token in the emailed link. The link
  * opens a page on the API that offers Google or Microsoft sign-in (and the email link where a deployment enables it)

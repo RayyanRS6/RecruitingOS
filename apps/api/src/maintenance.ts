@@ -7,7 +7,7 @@ import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-he
 
 /**
  * The daily sweep of operational rows that have served their purpose. Nothing here deletes candidate data: that follows
- * the privacy-request process and the anonymization rules (docs/09); the sweep only finishes an anonymization already
+ * the privacy-request process and the anonymization rules; the sweep only finishes an anonymization already
  * made (the AI readings and run log of a deleted candidate, and the workflow engine's run state and step records about
  * them). The periods are conservative and named in one place.
  */

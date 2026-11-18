@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(__dirname, "..", "..");
 const CLIENT_DIRS = ["apps/web/src", "apps/shell/app", "apps/shell/components", "apps/shell/lib", "apps/shell/middleware.ts", "apps/shell/next.config.ts"];
 const SERVER_DIRS = ["apps/api/src", "packages", "scripts"];
-// Repo-relative files permitted to reference the service-role key, each documented in docs/spec/09. The secret scanner
+// Repo-relative files permitted to reference the service-role key. The secret scanner
 // names the variable only as a pattern it hunts for; no application module is permitted in release 1.
 /**
  * Files that may mention the words: the scanner names the pattern; the database status report names Supabase's

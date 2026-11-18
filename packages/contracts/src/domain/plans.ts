@@ -182,7 +182,7 @@ const BUSY = "Your plan's AI help is finishing other work.";
 
 /**
  * What the owner reads when the AI help stops something they asked for: words only, never dollars
- * (docs/FOUNDER-CONTEXT.md, "AI credit math"). A candidate never reads any of these.
+ * (docs/DECISIONS.md, PL-10). A candidate never reads any of these.
  */
 export const AI_HELP_LINE = {
   /** A chat turn in the job builder: their words stay saved. */

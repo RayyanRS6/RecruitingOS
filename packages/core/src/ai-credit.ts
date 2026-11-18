@@ -21,7 +21,7 @@ import { notify } from "./notifications";
  * takes the real numbers afterwards (packages/ai/src/runner.ts). The sum and the rows are one source of truth with nothing
  * to drift; `entitlements.used` stays 0.
  *
- * Customers read words or a percentage, never dollars (docs/FOUNDER-CONTEXT.md, "AI credit math"); nothing here writes an
+ * Customers read words or a percentage, never dollars (docs/DECISIONS.md, PL-10); nothing here writes an
  * amount to an event, a notification or the company's settings. Only ITS's alerts and console line carry dollars.
  */
 

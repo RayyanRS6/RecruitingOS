@@ -259,7 +259,7 @@ async function invitePageFor(container: Container, token: string): Promise<Invit
 }
 
 /**
- * The team invitation link (docs/spec/21, area A). Opening it signs nobody in and consumes nothing: the page names the
+ * The team invitation link (docs/PRODUCT.md, D1). Opening it signs nobody in and consumes nothing: the page names the
  * company and the role and offers Google or Microsoft (and the email link where the deployment enables it). The
  * invitation rides in a sealed cookie that every sign-in path honours only for the invited address.
  */

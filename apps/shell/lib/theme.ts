@@ -2,7 +2,7 @@
  * The light or dark theme picked with the switch at the foot of the rail (docs/07). The choice is kept in a cookie rather
  * than in browser storage, so the server draws `<html data-theme>` with the page itself: no flash of the other theme on a
  * full page load, and no inline script for the content-security policy to allow. With no choice made, no data-theme is
- * set and tokens.css follows the device setting.
+ * set and the stylesheet (packages/ui/src/styles.css) follows the device setting.
  */
 export type Theme = "light" | "dark";
 

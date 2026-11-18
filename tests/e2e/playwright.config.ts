@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
  * Browser journeys and accessibility checks against the Next.js shell on an in-memory database with every provider a
  * stand-in: sign-in, email, AI. Nothing leaves the machine.
  *
- * With E2E_BASE_URL set (docs/readiness/03 section 8) the same specs run against a deployed address: no server is
+ * With E2E_BASE_URL set the same specs run against a deployed address: no server is
  * started here, nothing is assumed about the providers behind it, and every spec that needs the fake sign-in page
  * skips itself (tests/e2e/specs/helpers.ts, `skipWithoutFakeSignIn`). The public pages, the browser-protection headers
  * and the signed-out redirects are what a deployment proves.

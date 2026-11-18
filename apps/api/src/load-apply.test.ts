@@ -12,7 +12,7 @@ import { createContainer, type Container } from "./container";
 import { plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
- * The load script (docs/spec/20 item 18) run for real, as a separate process with tsx, against this API served over
+ * The load script (scripts/load-apply.ts) run for real, as a separate process with tsx, against this API served over
  * a local socket: it reads the form, posts made-up applications at the asked rate with an answer to each of the form's
  * questions, meets the apply rate limit (four an hour here), honours the Retry-After without failing, and reports the
  * counts a load run records.

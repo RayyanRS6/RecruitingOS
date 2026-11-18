@@ -32,7 +32,7 @@ const movedPages = [
  * Staging stays out of search engines (GAP3-3): a hosted deployment that is not production (a Vercel Preview deployment,
  * or DEPLOY_ENV=staging: the same test as DEPLOY_ENV in apps/api/src/env.ts) sends X-Robots-Tag on every response, the
  * application's pages, the paths mounted on Hono and the static files alike, beside robots.txt's Disallow: /
- * (apps/api/src/pages/public-feeds.ts). Read from the deployment's variables when the build writes its routes; a
+ * (apps/api/src/pages/sitemap.ts). Read from the deployment's variables when the build writes its routes; a
  * person's machine and the tests send none.
  */
 const hostedStaging = () => process.env.VERCEL_ENV === "preview" || process.env.DEPLOY_ENV === "staging";

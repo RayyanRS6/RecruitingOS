@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 /**
- * Synthetic application load (docs/spec/20 section 2 item 18 and section 4 "Load"; docs/readiness/03 section 7a).
+ * Synthetic application load.
  * Posts N made-up applications to one job's apply address at a steady rate, exactly as the form does (the
  * acknowledgment, an answer to every question on the form, a small text resume, unique addresses), honours a 429 by
  * waiting for the Retry-After the server names (capped by --max-wait), and prints what happened: accepted, refused by
