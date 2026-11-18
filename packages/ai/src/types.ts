@@ -12,7 +12,6 @@ export type TaskKey =
   | "triage.assess"
   | "screen.turn"
   | "screen.assess"
-  | "screen.writeup"
   | "brief.compose"
   | "owner.reply";
 
