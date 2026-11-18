@@ -13,7 +13,6 @@ export const PRODUCT_EVENT_NAMES = [
   "screening_invited",
   "screening_started",
   "screening_completed",
-  "human_requested",
   "candidate_withdrew",
 ] as const;
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number];

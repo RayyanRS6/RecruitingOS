@@ -91,12 +91,6 @@ export function lockedAndWaiting(): SQL {
   return and(isNotNull(applications.lockedAt), ne(applications.stage, "withdrawn"), sql`not exists (select 1 from ${candidates} where ${candidates.id} = ${applications.candidateId} and ${candidates.anonymizedAt} is not null)`) as SQL;
 }
 
-/** Whether anyone at this company is locked: a company with nobody locked reads every list as it always did. */
-export async function companyHasLocked(q: Queryable, companyId: string): Promise<boolean> {
-  const [row] = await q.select({ id: applications.id }).from(applications).where(and(eq(applications.companyId, companyId), isNotNull(applications.lockedAt))).limit(1);
-  return !!row;
-}
-
 /** What the neutral notice is filed under. It carries no name, so it needs no `about`. */
 export const MORE_APPLIED_KIND = "entitlement.more_applied";
 

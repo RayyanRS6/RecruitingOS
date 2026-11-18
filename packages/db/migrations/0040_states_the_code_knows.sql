@@ -40,7 +40,8 @@
 --    that is waiting or declined has no active member and stays as it is.
 -- 11. Company settings: the keys nothing reads are removed (verifiedBy, applyFlowDefault, applyFlowSetBy,
 --    candidateScoreShown, candidateScoreSetBy, newTimesAfterCancel, zipRecruiterPlan, boardPosting, onboarding,
---    businessHours, brief, retention).
+--    businessHours, brief, retention). So are the keys of a candidate's preferences nothing reads (smsOptOut,
+--    contactWindow, talentPoolOptOut: text messages, contact hours and the talent pool are gone); emailOptOut stays.
 -- 12. Workflow runs still going. An application_intake run of the old definition starts again at "receive", which
 --    skips whatever is already done and reads anyone not read yet. A screen run of the old definition goes on at the
 --    step of today's that fits its interview (invite, remind, close or score). Every other run still going (a removed
@@ -163,6 +164,9 @@ UPDATE companies c
 UPDATE companies
   SET settings = settings - ARRAY['verifiedBy', 'applyFlowDefault', 'applyFlowSetBy', 'candidateScoreShown', 'candidateScoreSetBy', 'newTimesAfterCancel', 'zipRecruiterPlan', 'boardPosting', 'onboarding', 'businessHours', 'brief', 'retention']
   WHERE settings ?| ARRAY['verifiedBy', 'applyFlowDefault', 'applyFlowSetBy', 'candidateScoreShown', 'candidateScoreSetBy', 'newTimesAfterCancel', 'zipRecruiterPlan', 'boardPosting', 'onboarding', 'businessHours', 'brief', 'retention'];
+--> statement-breakpoint
+UPDATE candidates SET preferences = preferences - ARRAY['smsOptOut', 'contactWindow', 'talentPoolOptOut']
+  WHERE preferences ?| ARRAY['smsOptOut', 'contactWindow', 'talentPoolOptOut'];
 --> statement-breakpoint
 WITH restarted AS (
   UPDATE workflow_runs

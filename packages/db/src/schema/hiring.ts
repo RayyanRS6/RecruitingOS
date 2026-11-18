@@ -93,8 +93,8 @@ export const intakeSessions = pgTable(
 );
 
 export type ConsentRecord = Record<string, { granted: boolean; at: string; source: string; noticeVersion?: string; ip?: string; /** application_terms only: the candidate ticked the acknowledgment box on the form. */ acknowledged?: boolean }>;
-/** Who must not be written to: set when their email was reported as unwanted, and on a deletion. */
-export type CandidatePreferences = { smsOptOut?: boolean; emailOptOut?: boolean };
+/** Who must not be emailed: set when the provider says their address did not want our email, or when they unsubscribe there. */
+export type CandidatePreferences = { emailOptOut?: boolean };
 
 export const candidates = pgTable(
   "candidates",
@@ -320,7 +320,6 @@ export const hiringOutcomes = pgTable(
     recordedAt: ts("recorded_at").notNull().defaultNow(),
     roleId: uuid("role_id"),
     hireDate: date("hire_date"),
-    offerAcceptedAt: date("offer_accepted_at"),
     details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
     correctionOf: uuid("correction_of"),
     correctedAt: ts("corrected_at"),

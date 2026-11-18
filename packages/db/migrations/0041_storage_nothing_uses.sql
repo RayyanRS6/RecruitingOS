@@ -28,10 +28,10 @@
 --   to each person stays in the history (events), which is not touched.
 --
 -- Columns: listed beside each statement. events, audit_records, platform_role_grants, hiring_outcomes, assessments,
--- ai_runs, data_requests, email_suppressions, plans and entitlements lose no row; four of them lose a column that never
--- held anything (hiring_outcomes.rating, ai_runs.model_version, tool_calls, policy_decision), ai_runs loses the
--- confidence copied from a resume's facts, which nothing read, and data_requests and workflow_runs lose the pointer to
--- a recruiter request.
+-- ai_runs, data_requests, email_suppressions, plans and entitlements lose no row; four columns of them never held
+-- anything (hiring_outcomes.rating, ai_runs.model_version, tool_calls, policy_decision), hiring_outcomes loses the day
+-- an offer was accepted (offers are gone), ai_runs loses the confidence copied from a resume's facts, which nothing
+-- read, and data_requests and workflow_runs lose the pointer to a recruiter request.
 --
 -- The release: the build before this one reads and writes these tables and columns, so its app and worker are stopped
 -- before this migration runs (docs/runbooks/production-setup.md, "The release").
@@ -151,8 +151,8 @@ ALTER TABLE workflow_runs DROP COLUMN IF EXISTS escalation_id;
 -- allow-destructive: a pointer to a recruiter request, a removed feature; no row is touched
 ALTER TABLE data_requests DROP COLUMN IF EXISTS escalation_id;
 --> statement-breakpoint
--- allow-destructive: never written; no row is touched
-ALTER TABLE hiring_outcomes DROP COLUMN IF EXISTS rating;
+-- allow-destructive: a rating never written, and the day an offer was accepted, of the removed offers; no row is touched
+ALTER TABLE hiring_outcomes DROP COLUMN IF EXISTS rating, DROP COLUMN IF EXISTS offer_accepted_at;
 --> statement-breakpoint
 DROP INDEX IF EXISTS applications_company_told_idx;
 --> statement-breakpoint

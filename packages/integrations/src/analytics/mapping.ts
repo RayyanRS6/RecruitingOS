@@ -7,7 +7,6 @@ const MAP: Record<string, ProductEventName> = {
   "screen.invited": "screening_invited",
   "screen.started": "screening_started",
   "screen.completed": "screening_completed",
-  "screen.human_requested": "human_requested",
   "application.withdrawn": "candidate_withdrew",
 };
 

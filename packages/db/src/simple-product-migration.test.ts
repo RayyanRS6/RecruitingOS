@@ -86,7 +86,7 @@ describe("migrations 0040 and 0041: the rows and the storage of the build before
 
     // People at every stage that is gone, and the ones whose AI interview or told state needs a second look.
     const person = async (n: number, stage: string, opts: { told?: string; toldAt?: string | null; jobN?: number; version?: number } = {}) => {
-      await run(sql`INSERT INTO candidates (id, company_id, first_name, last_name, first_source, in_talent_pool) VALUES (${cand(n)}, ${company(CO.live)}, ${`P${n}`}, 'Old', 'linkedin', true)`);
+      await run(sql`INSERT INTO candidates (id, company_id, first_name, last_name, first_source, in_talent_pool, preferences) VALUES (${cand(n)}, ${company(CO.live)}, ${`P${n}`}, 'Old', 'linkedin', true, '{"smsOptOut":true,"emailOptOut":true,"contactWindow":"evenings","talentPoolOptOut":true}'::jsonb)`);
       await run(sql`INSERT INTO applications (id, company_id, role_id, candidate_id, packet_version, source, status_token, stage, stage_changed_at, told_state, candidate_told_at, reject_reason, withdraw_reason, eligibility)
         VALUES (${app(n)}, ${company(CO.live)}, ${job(opts.jobN ?? J.open)}, ${cand(n)}, ${opts.version ?? 1}, 'linkedin', ${`status-${n}`}, ${stage}, '2026-10-12T12:00:00Z', ${opts.told ?? "not_told"}, ${opts.toldAt ?? null}, 'other', 'changed my mind', '{"passed":false}'::jsonb)`);
     };
@@ -180,7 +180,7 @@ describe("migrations 0040 and 0041: the rows and the storage of the build before
     // The records: an AI run of a chat kept in unconfirmed_screens, an outcome, a privacy request, an audit record.
     await run(sql`INSERT INTO ai_runs (id, company_id, agent, task, provider, model, model_version, prompt_key, prompt_version, prompt_hash, input_ref, cost_usd, confidence) VALUES (${misc(601)}, ${company(CO.live)}, 'screen', 'screen.turn', 'fake', 'fake', 'v1', 'screen.turn', 8, 'h', ${JSON.stringify({ unconfirmedScreenId: misc(517), turn: 1 })}::jsonb, 0.0021, 'high')`);
     await run(sql`INSERT INTO ai_runs (id, company_id, agent, task, provider, model, prompt_key, prompt_version, prompt_hash, input_ref, cost_usd) VALUES (${misc(602)}, ${company(CO.live)}, 'triage', 'triage.assess', 'fake', 'fake', 'triage.assess', 7, 'h', ${JSON.stringify({ applicationId: app(A.hired), reading: 1 })}::jsonb, 0.0100)`);
-    await run(sql`INSERT INTO hiring_outcomes (id, company_id, application_id, milestone, outcome, rating, notes, recorded_by, hire_date) VALUES (${misc(603)}, ${company(CO.live)}, ${app(A.hired)}, 'final', 'hired_externally', 4, 'a good hire', ${actor}, '2026-10-14')`);
+    await run(sql`INSERT INTO hiring_outcomes (id, company_id, application_id, milestone, outcome, rating, notes, recorded_by, hire_date, offer_accepted_at) VALUES (${misc(603)}, ${company(CO.live)}, ${app(A.hired)}, 'final', 'hired_externally', 4, 'a good hire', ${actor}, '2026-10-14', '2026-10-10')`);
     await run(sql`INSERT INTO data_requests (id, company_id, kind, requester_email, sla_due_at, escalation_id) VALUES (${misc(604)}, ${company(CO.live)}, 'access', 'p16@example.com', now() + interval '45 days', ${misc(509)})`);
     await run(sql`INSERT INTO audit_records (id, company_id, actor, action) VALUES (${misc(605)}, ${company(CO.live)}, ${actor}, 'staff.access_granted')`);
     before.events = (await rows<{ id: number; type: string; payload: unknown }>(sql`SELECT id, type, payload FROM events ORDER BY id`));
@@ -313,6 +313,8 @@ describe("migrations 0040 and 0041: the rows and the storage of the build before
     // the keys nothing reads are gone; the ones still read stay as they were
     expect(Object.keys(settings[company(CO.live)]!).sort()).toEqual(["aiCreditTold", "notices", "verifiedAt", "website"]);
     expect(settings[company(CO.unchecked)]).toEqual({ website: "https://unchecked.example", verifiedAt: "2026-10-05T09:30:00.000Z" });
+    // a candidate's preferences keep only whether they may be emailed
+    expect(await rows(sql`SELECT DISTINCT preferences FROM candidates`)).toEqual([{ preferences: { emailOptOut: true } }]);
   });
 
   it("starts old runs of the two workflows that remain at a step of today's, cancels the rest that were going, and clears the queue of removed kinds", async () => {
@@ -352,7 +354,7 @@ describe("migrations 0040 and 0041: the rows and the storage of the build before
     expect(await columnsOf("candidates")).toEqual(["id", "company_id", "first_name", "last_name", "email", "phone", "location_text", "dedupe_key", "consent", "preferences", "created_at", "updated_at", "anonymized_at"]);
     expect(await columnsOf("roles")).toEqual(["id", "company_id", "title", "status", "current_packet_version", "opened_at", "paused_at", "closed_at", "created_by", "created_at", "updated_at", "accepting_applications", "applications_closed_at", "applications_closed_reason", "applications_close_on", "posts"]);
     expect(await columnsOf("companies")).toEqual(["id", "name", "slug", "vertical", "size_band", "timezone", "locations", "settings", "plan_key", "created_at", "updated_at"]);
-    for (const [table, gone] of [["users", "phone"], ["magic_links", "invite_role"], ["intake_sessions", "workflow_run_id"], ["notifications", "channel"], ["webhook_receipts", "outcome"], ["ai_runs", "confidence"], ["ai_runs", "tool_calls"], ["workflow_runs", "escalation_id"], ["data_requests", "escalation_id"], ["hiring_outcomes", "rating"]] as const) expect(await columnsOf(table), `${table}.${gone}`).not.toContain(gone);
+    for (const [table, gone] of [["users", "phone"], ["magic_links", "invite_role"], ["intake_sessions", "workflow_run_id"], ["notifications", "channel"], ["webhook_receipts", "outcome"], ["ai_runs", "confidence"], ["ai_runs", "tool_calls"], ["workflow_runs", "escalation_id"], ["data_requests", "escalation_id"], ["hiring_outcomes", "rating"], ["hiring_outcomes", "offer_accepted_at"]] as const) expect(await columnsOf(table), `${table}.${gone}`).not.toContain(gone);
     // the index of who was told counts Not selected only
     expect((await one<{ indexdef: string }>(sql`SELECT indexdef FROM pg_indexes WHERE indexname = 'applications_company_told_idx'`))!.indexdef).toMatch(/WHERE \(stage = 'rejected'::text\)/);
   });
