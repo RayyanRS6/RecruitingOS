@@ -176,8 +176,8 @@ export function interviewSum(findings: readonly ScoreFinding[]): number | null {
 export const CvNoScore = z.enum(["being_read", "unreadable", "not_scored", "ai_used_up", "locked"]);
 export type CvNoScore = z.infer<typeof CvNoScore>;
 export const CV_NO_SCORE_LABEL: Record<CvNoScore, string> = {
-  being_read: "Reading the CV",
-  unreadable: "CV could not be read",
+  being_read: "Reading the resume",
+  unreadable: "Resume could not be read",
   not_scored: "Not scored yet",
   ai_used_up: "Not scored: your plan's AI help is used up",
   locked: "Locked",

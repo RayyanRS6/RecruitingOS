@@ -46,7 +46,7 @@ export type PlanStop = z.infer<typeof PlanStop>;
 
 /** The plain reason an action is not allowed. One sentence each; the same words on a disabled button and in a refusal. */
 export const ACTION_BLOCKED = {
-  beingRead: "Their CV is still being read. Try again in a moment.",
+  beingRead: "Their resume is still being read. Try again in a moment.",
   noEmail: "There is no email address that works for them, so nothing can be sent.",
   jobClosed: "This job is closed.",
   interviewsUsedUp: "This month's AI interviews are used up.",

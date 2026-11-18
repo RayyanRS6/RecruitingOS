@@ -59,7 +59,7 @@ export type EvidenceSource = z.infer<typeof EvidenceSource>;
 
 /** Where a quote is from, in the app's own words, for the sources a quote of the candidate's is checked against. */
 const QUOTE_FROM: Partial<Record<EvidenceSource, string>> = {
-  resume: "from the CV",
+  resume: "from the resume",
   application: "from the application",
   candidate_statement: "from the application",
   screen: "in the AI interview",

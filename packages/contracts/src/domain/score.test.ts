@@ -157,15 +157,15 @@ describe("the CV score as the team reads it", () => {
   });
 
   it("says why there is no number when there is none", () => {
-    expect(CV_NO_SCORE_LABEL).toEqual({ being_read: "Reading the CV", unreadable: "CV could not be read", not_scored: "Not scored yet", ai_used_up: "Not scored: your plan's AI help is used up", locked: "Locked" });
-    expect(noCvScore("unreadable")).toEqual({ score: null, band: null, bandLabel: null, noScore: "unreadable", noScoreLabel: "CV could not be read", mustHaves: { shown: 0, total: 0 }, mustHaveLine: null, held: false, missingMustHaves: [], missingLine: null, requirements: [], earlierVersion: false, earlierVersionLine: null });
+    expect(CV_NO_SCORE_LABEL).toEqual({ being_read: "Reading the resume", unreadable: "Resume could not be read", not_scored: "Not scored yet", ai_used_up: "Not scored: your plan's AI help is used up", locked: "Locked" });
+    expect(noCvScore("unreadable")).toEqual({ score: null, band: null, bandLabel: null, noScore: "unreadable", noScoreLabel: "Resume could not be read", mustHaves: { shown: 0, total: 0 }, mustHaveLine: null, held: false, missingMustHaves: [], missingLine: null, requirements: [], earlierVersion: false, earlierVersionLine: null });
     // a reading of a job with no requirement has nothing to weigh
     expect(cvScoreOf([])).toMatchObject({ score: null, noScore: "not_scored", noScoreLabel: "Not scored yet", mustHaveLine: null });
   });
 
   it("gives a row the number or the reason, and the two lines", () => {
     expect(cvScoreSummary(cvScoreOf([must("m1", "shown"), must("m2", "partly")]))).toEqual({ score: 75, band: "high", bandLabel: "High", noScore: null, noScoreLabel: null, mustHaveLine: "1 of 2 must-haves shown", missingLine: null, earlierVersion: false });
-    expect(cvScoreSummary(noCvScore("being_read"))).toEqual({ score: null, band: null, bandLabel: null, noScore: "being_read", noScoreLabel: "Reading the CV", mustHaveLine: null, missingLine: null, earlierVersion: false });
+    expect(cvScoreSummary(noCvScore("being_read"))).toEqual({ score: null, band: null, bandLabel: null, noScore: "being_read", noScoreLabel: "Reading the resume", mustHaveLine: null, missingLine: null, earlierVersion: false });
   });
 });
 
