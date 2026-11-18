@@ -1,5 +1,5 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
-import { CV_FILE_STATUS_LABEL, CandidateTab, STAGE_TAB, TEXT_SCREENS, TOLD_STATE_LABEL, applySourceLabel, byCvScore, byInterviewScore, candidateActions, cvScoreSummary, formAnswerViews, interviewScoreSummary, noCvScore, noInterviewScore, quoteFrom, stageLabel, tabOf, type AiReview, type ApplicationStage, type CandidateActionFacts, type CandidateCounts, type CandidateDocument, type CandidateList, type CandidatePanel, type CandidateRow, type CvFileStatus, type CvNoScore, type CvScore, type EvidenceAssessment, type InterviewAnswer, type InterviewScore, type PlanStop, type RolePacket, type RoleStatus, type ScreenAssessment } from "@ros/contracts";
+import { CV_FILE_STATUS_LABEL, CandidateTab, RolePacket as RolePacketSchema, STAGE_TAB, TEXT_SCREENS, TOLD_STATE_LABEL, applySourceLabel, byCvScore, byInterviewScore, candidateActions, cvScoreSummary, formAnswerViews, interviewScoreSummary, noCvScore, noInterviewScore, quoteFrom, stageLabel, tabOf, type AiReview, type ApplicationStage, type CandidateActionFacts, type CandidateCounts, type CandidateDocument, type CandidateList, type CandidatePanel, type CandidateRow, type CvFileStatus, type CvNoScore, type CvScore, type EvidenceAssessment, type InterviewAnswer, type InterviewScore, type PlanStop, type RolePacket, type RoleStatus, type ScreenAssessment } from "@ros/contracts";
 import { aiCreditStanding, aiInterviewViewOf, audit, cvScoreFromReading, entitlements, formAnswersOf, interviewScoreFromScorecard, lockedAndWaiting, notLocked, remindedRecently, sameRequirements, screenAnswersSent } from "@ros/core";
 import { DECISION_TEMPLATE, askedQuestions, chatPacket } from "@ros/agents";
 import { applications, assessments, candidates, communications, documents, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
@@ -50,7 +50,7 @@ export async function loadPeople(tx: Tx, apps: readonly App[]): Promise<Person[]
   const allScreens = await tx.select(SCREEN_COLUMNS).from(screens).where(inArray(screens.applicationId, ids)).orderBy(desc(screens.createdAt), desc(screens.id));
   const newest = new Map<string, Screen>();
   for (const s of allScreens) if (!newest.has(s.applicationId)) newest.set(s.applicationId, s);
-  const readings = await tx.select({ id: assessments.id, applicationId: assessments.applicationId, kind: assessments.kind, packetVersion: assessments.packetVersion, result: assessments.result }).from(assessments).where(inArray(assessments.applicationId, ids)).orderBy(desc(assessments.createdAt));
+  const readings = await tx.select({ id: assessments.id, applicationId: assessments.applicationId, kind: assessments.kind, packetVersion: assessments.packetVersion, result: assessments.result }).from(assessments).where(inArray(assessments.applicationId, ids)).orderBy(desc(assessments.createdAt), desc(assessments.id));
   const triaged = await tx.select({ applicationId: events.subjectId, payload: events.payload }).from(events).where(and(eq(events.type, "application.triaged"), eq(events.subjectType, "application"), inArray(events.subjectId, ids))).orderBy(desc(events.occurredAt), desc(events.id));
   const waiting = new Set((await tx.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, ids), eq(communications.templateKey, DECISION_TEMPLATE), eq(communications.status, "queued")))).map((r) => r.applicationId));
   // A sent interview with no scorecard yet: whether its run is still going (being scored) or over (it could not be scored).
@@ -76,13 +76,17 @@ export async function loadPeople(tx: Tx, apps: readonly App[]): Promise<Person[]
   });
 }
 
-/** What every row of one job shares: the job versions people were read against, the live one, and what the plan stops. */
+/** What every row of one job shares: the job versions people applied to and were read against, the live one, and what the plan stops. */
 export type JobContext = { roleStatus: RoleStatus; packets: Map<number, RolePacket>; current: RolePacket | null; planStop: PlanStop | null; now: Date; emailStopped: (address: string) => boolean };
 
 export async function jobContext(tx: Tx, container: Pick<Container, "engine" | "emailStopped">, role: { id: string; companyId: string; status: string; currentPacketVersion: number | null }): Promise<JobContext> {
   const now = container.engine.clock();
   const versions = await tx.select({ version: rolePackets.version, packet: rolePackets.packet }).from(rolePackets).where(eq(rolePackets.roleId, role.id));
-  const packets = new Map(versions.map((v) => [v.version, v.packet]));
+  // Each version as the job record reads it: an older one gets its form's one list of questions and its skills' importance from the parser.
+  const packets = new Map(versions.map((v): [number, RolePacket] => {
+    const read = RolePacketSchema.safeParse(v.packet);
+    return [v.version, read.success ? read.data : v.packet];
+  }));
   return { roleStatus: role.status as RoleStatus, packets, current: role.currentPacketVersion ? packets.get(role.currentPacketVersion) ?? null : null, planStop: await aiInterviewPlanStop(tx, role.companyId, now), now, emailStopped: container.emailStopped };
 }
 

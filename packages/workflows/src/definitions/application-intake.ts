@@ -1,7 +1,7 @@
-import { and, desc, eq, ne } from "drizzle-orm";
-import { inProcess, type CvNoScore, type EvidenceAssessment, type ResumeExtraction } from "@ros/contracts";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { RolePacket as RolePacketSchema, inProcess, type CvNoScore, type EvidenceAssessment, type ResumeExtraction, type RolePacket } from "@ros/contracts";
 import { outOfCredit, type RunOutcome } from "@ros/ai";
-import { closeOutDayWords, closeOutDueAt, emit, formAnswersOf, transition } from "@ros/core";
+import { closeOutDayWords, closeOutDueAt, emit, formAnswersOf, sameRequirements, transition } from "@ros/core";
 import { applications, assessments, candidates, companies, documents, rolePackets, roles, type Tx } from "@ros/db";
 import { assessApplication, extractResume, sendAcknowledgment } from "@ros/agents";
 import { twoPhase, type StepContext, type StepResult, type WorkflowDefinition } from "../types";
@@ -25,6 +25,9 @@ type Unscored = Extract<CvNoScore, "unreadable" | "not_scored" | "ai_used_up">;
  * - No answer on the form holds anyone: every answer is given to the reading as evidence, and a "No" is a flag a person reads.
  * - A file with no readable text, an AI answer that cannot be used, or no AI help left: the person still reaches
  *   `triaged`, unscored, with the reason. With no AI help left the run waits, and reads them when it returns.
+ * - The CV is read against the job as it is when it is read (`load`, `live`). When a job's must-haves or skills change,
+ *   `rereadApplicants` starts a run at `extract` for everyone still in the process, which reads them again against the
+ *   new version; someone already read against what the job asks for now is not read again (`toRead`).
  * - Nothing here starts an AI interview: a person on the team does, by shortlisting.
  *
  * The steps that call a provider (`validate` the malware scanner and storage, `extract` and `read` the model) do so in a
@@ -124,29 +127,33 @@ export const applicationIntake: WorkflowDefinition<State> = {
     /**
      * The CV reading: one finding per must-have and per skill, each with the quote it rests on, from the CV and from every
      * answer on the form. The model writes no number and no verdict: the CV score is worked out from the stored findings
-     * (`cvScoreOf`). The reading sees no name, email, phone, address or link, and nothing of earlier applications.
+     * (`cvScoreOf`). The reading sees no name, email, phone, address or link, and nothing of earlier applications. It is
+     * made against the job as it is now and stored with that version; the form's answers are read with the questions of
+     * the version the person applied to, which are the ones they answered.
      */
-    read: twoPhase<State, { out: RunOutcome<EvidenceAssessment> } | null>({
+    read: twoPhase<State, { version: number; out: RunOutcome<EvidenceAssessment> } | null>({
       async prepare(ctx) {
         const inputs = await ctx.read(async (q) => {
           const loaded = await load(q, ctx.state.applicationId);
           if (!loaded || !(await toRead(q, loaded))) return null;
-          const { app, candidate, packet } = loaded;
+          const { app, candidate, packet, live } = loaded;
           const doc = await readableCv(q, app);
           if (!doc) return null;
-          return { applicationId: app.id, packet, extraction: app.extraction, resumeText: doc.text, formAnswers: formAnswersOf(app.answers), identity: { firstName: candidate.firstName, lastName: candidate.lastName, email: candidate.email, phone: candidate.phone, fullName: app.extraction?.fullName ?? null } };
+          return { version: live.version, input: { applicationId: app.id, packet: { ...live.packet, formQuestions: packet.formQuestions }, extraction: app.extraction, resumeText: doc.text, formAnswers: formAnswersOf(app.answers), identity: { firstName: candidate.firstName, lastName: candidate.lastName, email: candidate.email, phone: candidate.phone, fullName: app.extraction?.fullName ?? null } } };
         });
         if (!inputs) return null;
-        return { out: await assessApplication(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, ...inputs }) };
+        return { version: inputs.version, out: await assessApplication(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, ...inputs.input }) };
       },
       async run(ctx, prepared) {
-        const loaded = await load(ctx.q, ctx.state.applicationId);
+        const loaded = await load(ctx.q, ctx.state.applicationId, { holdJob: true });
         if (!loaded) return { kind: "fail", error: "application not found", retryable: false };
         const { app } = loaded;
         const stop = await noReading(ctx, loaded);
         if (stop) return stop;
         if (!(await readableCv(ctx.q, app))) return unscored(ctx, app, "unreadable");
         if (!prepared) return { kind: "fail", error: "the application changed after the read phase; reading it again", retryable: true };
+        // The job's must-haves or skills changed while the model was reading: that reading answers a job that is gone.
+        if (!(await answersLive(ctx.q, loaded, prepared.version))) return { kind: "fail", error: "the job's requirements changed after the read phase; reading it again", retryable: true };
         const out = prepared.out;
         if (outOfCredit(out)) return waitForAiHelp(ctx, app, out.refusedHoldUsd);
         if (!out.ok) {
@@ -155,7 +162,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return unscored(ctx, app, "not_scored");
         }
         // `overall` and `confidence` are columns nothing reads any more: a reading carries neither.
-        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: app.packetVersion, aiRunId: out.runId, result: out.output, overall: "", confidence: "" }).returning({ id: assessments.id });
+        const [row] = await ctx.q.insert(assessments).values({ companyId: ctx.companyId, applicationId: app.id, kind: "triage", packetVersion: prepared.version, aiRunId: out.runId, result: out.output, overall: "", confidence: "" }).returning({ id: assessments.id });
         await ctx.q.update(applications).set({ latestAssessmentId: row.id }).where(eq(applications.id, app.id));
         await emit(ctx.q, { type: "assessment.created", companyId: ctx.companyId, actor: { kind: "agent", id: "triage", runId: out.runId }, subject: { type: "application", id: app.id }, payload: { kind: "triage", assessmentId: row.id }, correlationId: ctx.run.id });
         await toTriaged(ctx, app, { assessmentId: row.id, noScore: null });
@@ -167,12 +174,22 @@ export const applicationIntake: WorkflowDefinition<State> = {
 
 type Loaded = NonNullable<Awaited<ReturnType<typeof load>>>;
 
-/** Whether this application is still to be read: the person is in the process, their job is not closed, and this job version has no reading of theirs yet. */
+/** Whether a reading made against `version` of the job answers what the job asks for now: the same must-haves and skills, worded and weighted the same. */
+async function answersLive(q: Tx, loaded: Loaded, version: number): Promise<boolean> {
+  if (version === loaded.live.version) return true;
+  const [read] = await q.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, loaded.app.roleId), eq(rolePackets.version, version))).limit(1);
+  return !!read && sameRequirements(read.packet, loaded.live.packet);
+}
+
+/**
+ * Whether this application is still to be read: the person is in the process, their job is not closed, and they have no
+ * reading yet, or their newest one was made against other must-haves or skills than the job asks for now.
+ */
 async function toRead(q: Tx, loaded: Loaded): Promise<boolean> {
   const { app, role } = loaded;
   if (!inProcess(app.stage) || role.status === "closed") return false;
-  const [has] = await q.select({ id: assessments.id }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"), eq(assessments.packetVersion, app.packetVersion))).orderBy(desc(assessments.createdAt)).limit(1);
-  return !has;
+  const [newest] = await q.select({ packetVersion: assessments.packetVersion }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt), desc(assessments.id)).limit(1);
+  return !newest || !(await answersLive(q, loaded, newest.packetVersion));
 }
 
 /**
@@ -217,13 +234,29 @@ async function waitForAiHelp(ctx: StepContext<State>, app: { id: string; stage: 
   return wait;
 }
 
-async function load(q: Tx, applicationId: string) {
+/**
+ * Everything a step reads about one application. `packet`: the job version the person applied to, whose form they
+ * answered. `live`: the version the job runs on now, which a CV is read against, so an edit made since they applied
+ * counts. `holdJob`: the job's row is held to the end of the transaction, so the live version read here is still the
+ * live one when the step's reading is stored: an edit of the job waits for it, and then finds it.
+ */
+async function load(q: Tx, applicationId: string, opts: { holdJob?: boolean } = {}) {
   const [app] = await q.select().from(applications).where(eq(applications.id, applicationId)).limit(1);
   if (!app) return null;
   const [candidate] = await q.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-  const [role] = await q.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const job = q.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
+  const [role] = opts.holdJob ? await job.for("share") : await job;
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
-  const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-  if (!candidate || !role || !company || !pv) return null;
-  return { app, candidate, role, company, packet: pv.packet };
+  if (!candidate || !role || !company) return null;
+  const versions = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), inArray(rolePackets.version, [app.packetVersion, role.currentPacketVersion ?? app.packetVersion])));
+  const applied = versions.find((v) => v.version === app.packetVersion);
+  if (!applied) return null;
+  const live = versions.find((v) => v.version === role.currentPacketVersion) ?? applied;
+  return { app, candidate, role, company, packet: asRead(applied.packet), live: { version: live.version, packet: asRead(live.packet) } };
+}
+
+/** A stored job version as the job record reads it (an older one gets its form's one list of questions and its skills' importance from the parser); as stored if it cannot be parsed. */
+function asRead(stored: RolePacket): RolePacket {
+  const parsed = RolePacketSchema.safeParse(stored);
+  return parsed.success ? parsed.data : stored;
 }

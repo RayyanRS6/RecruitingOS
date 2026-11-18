@@ -1,7 +1,8 @@
 import { desc, eq } from "drizzle-orm";
 import { ROLE_ACTION_BLOCKED, RolePacket as RolePacketSchema, appPaths, type Actor, type PacketFlag, type RolePacket } from "@ros/contracts";
-import { emit, guardPacket, notify, openFlagsMessage, unresolvedFlags } from "@ros/core";
+import { emit, guardPacket, notify, openFlagsMessage, sameRequirements, unresolvedFlags } from "@ros/core";
 import { companies, rolePackets, roles, type Tx } from "@ros/db";
+import { rereadApplicants } from "@ros/workflows";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
@@ -13,7 +14,8 @@ import { rewritePostsAfterEdit } from "./share";
  * - an open or paused job: the new version is live at once, stamped with who saved it. A save that carries wording the
  *   fairness guard flagged, which nobody reworded or kept with a reason, is refused (422 `packet_flags`), so a live job
  *   page never shows flagged wording nobody looked at. A paused job shows the version when it resumes. When what the job
- *   page says changed, the Share tab's posts nobody edited are written again (services/share.ts);
+ *   page says changed, the Share tab's posts nobody edited are written again (services/share.ts). When its must-haves or
+ *   skills changed, everyone still in the process is read again against the new version (`rereadApplicants`);
  * - a draft job: the version is saved, and goes live when the job is published (services/publish.ts);
  * - a closed job: refused (409 `role_closed`), whichever route the edit came by.
  */
@@ -93,6 +95,9 @@ export async function createPacketVersion(
   await tellJobStarter(tx, { tenant: t, role, title: packet.identity.title, version: next, editorName: actor.name ?? "A team member", changeSummary: input.changeSummary });
   // When what the job page says changed, the posts nobody edited are written again in the background.
   await rewritePostsAfterEdit(tx, container.engine, { role, before: versions[0]?.packet, after: packet });
+  // When the must-haves or skills changed, everyone still in the process is read again, in the background, against this version.
+  const was = versions.find((v) => v.version === role.currentPacketVersion);
+  if (!was || !sameRequirements(was.packet, packet)) await rereadApplicants(tx, container.engine, { companyId: t.companyId, roleId: role.id, version: next, actor });
   // A paused job shows the version only when it resumes: `paused` lets the page say so instead of "live".
   return { version: pv, outcome: "live", guardChanges, ...(role.status === "paused" ? { paused: true as const } : {}) };
 }

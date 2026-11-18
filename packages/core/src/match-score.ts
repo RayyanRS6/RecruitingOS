@@ -1,4 +1,4 @@
-import { CHAT_WRAP_KEY, cvScoreOf, hasCheckedQuote, interviewScoreOf, questionFinding, requirementFinding, skillFinding, skillsInScore, type CvScore, type EvidenceAssessment, type InterviewScore, type RolePacket, type ScoredRequirement, type ScreenAssessment } from "@ros/contracts";
+import { CHAT_WRAP_KEY, cvScoreOf, hasCheckedQuote, importanceOf, interviewScoreOf, questionFinding, requirementFinding, skillFinding, skillsInScore, type CvScore, type EvidenceAssessment, type InterviewScore, type RolePacket, type ScoredRequirement, type ScreenAssessment } from "@ros/contracts";
 
 /**
  * The two scores of one application, each from one stored reading and worked out by the contracts' functions: the CV
@@ -10,7 +10,8 @@ type Requirements = Pick<RolePacket, "requirements" | "competencies">;
 
 /**
  * The CV score from a CV reading and the job version it was read against: every must-have of that version, then every
- * skill the score counts, each in the job's own order with the reading's finding and its checked quote.
+ * skill the score counts, each in the job's own order with the reading's finding and its checked quote. A version stored
+ * as it was written (never parsed again) may carry a skill's older 1-5 weight: it counts as the importance it stands for.
  * `earlierVersion`: the job's requirements changed since this reading.
  */
 export function cvScoreFromReading(reading: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings">, packet: Requirements, opts: { earlierVersion?: boolean } = {}): CvScore {
@@ -21,14 +22,14 @@ export function cvScoreFromReading(reading: Pick<EvidenceAssessment, "requiremen
   });
   const skills = skillsInScore(packet).map((c): ScoredRequirement => {
     const found = (reading.competencyFindings ?? []).find((f) => f.competencyKey === c.key);
-    return { key: c.key, label: c.name, mustHave: false, importance: c.importance, finding: skillFinding(found?.finding ?? "not_evidenced", hasCheckedQuote(found?.evidence)), ...quoteOf(found?.evidence) };
+    return { key: c.key, label: c.name, mustHave: false, importance: importanceOf(c), finding: skillFinding(found?.finding ?? "not_evidenced", hasCheckedQuote(found?.evidence)), ...quoteOf(found?.evidence) };
   });
   return cvScoreOf([...mustHaves, ...skills], opts);
 }
 
 /** Whether two versions of a job list the same requirements for the CV score: the same must-haves and skills, worded and weighted the same. */
 export function sameRequirements(a: Requirements, b: Requirements): boolean {
-  const key = (p: Requirements) => JSON.stringify([p.requirements.mustHaves.map((m) => [m.key, m.text.trim()]), skillsInScore(p).map((c) => [c.key, c.name.trim(), c.importance])]);
+  const key = (p: Requirements) => JSON.stringify([p.requirements.mustHaves.map((m) => [m.key, m.text.trim()]), skillsInScore(p).map((c) => [c.key, c.name.trim(), importanceOf(c)])]);
   return key(a) === key(b);
 }
 

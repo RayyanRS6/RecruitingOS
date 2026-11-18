@@ -85,6 +85,15 @@ describe("whether two versions of a job ask for the same things", () => {
     expect(sameRequirements(packet, { ...packet, requirements: { ...packet.requirements, mustHaves: [{ key: "mh_license", text: "Active RDA license in California" }, packet.requirements.mustHaves[1]] } })).toBe(false);
     expect(sameRequirements(packet, { ...packet, requirements: { ...packet.requirements, mustHaves: [packet.requirements.mustHaves[0]] } })).toBe(false);
   });
+
+  it("reads a version stored with a skill's older 1-5 weight as the importance the weight stands for", () => {
+    const older = { ...packet, competencies: [{ key: "c_chairside", name: "Chairside assisting", definition: "", weight: 5, indicators: [] }, { key: "c_dentrix", name: "Dentrix", definition: "", weight: 2, indicators: [] }] } as unknown as typeof packet;
+    expect(sameRequirements(packet, older)).toBe(true);
+    const reading = { requirementFindings: [], competencyFindings: [{ competencyKey: "c_chairside", finding: "evidenced" as const, evidence: quoted("Four years chairside") }] };
+    // 3 of 12 points either way: Essential weighs 3 and Helpful 1
+    expect(cvScoreFromReading(reading, older).score).toBe(cvScoreFromReading(reading, packet).score);
+    expect(cvScoreFromReading(reading, older).requirements.map((r) => r.importance)).toEqual([null, null, "essential", "helpful"]);
+  });
 });
 
 describe("the interview score of one scorecard", () => {

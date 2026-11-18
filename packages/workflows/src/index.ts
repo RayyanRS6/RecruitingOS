@@ -14,6 +14,7 @@ export { SCREEN_WORKFLOW_KEY, cancelAiInterview, startAiInterview } from "./defi
 export { ALERT_TEMPLATE, emailNotifications } from "./notification-email";
 export { DISCARD_OBJECT_JOB_KIND, discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, queueObjectDiscard, recordQuarantineVerdict, type QuarantineExamination, type QuarantineOutcome } from "./documents";
 export { unlockApplicants } from "./unlock-applicants";
+export { rereadApplicants } from "./reread-applicants";
 import { DISCARD_OBJECT_JOB_KIND, discardUnusedObject } from "./documents";
 
 /** Creates the engine with every workflow definition registered. */

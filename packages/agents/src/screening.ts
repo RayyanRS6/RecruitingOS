@@ -106,8 +106,9 @@ export async function latestScreen(q: Queryable, applicationId: string): Promise
 
 /**
  * Everything the chat and its scorecard read about one AI interview. `rolePacket`: the job version the person applied
- * to. `packet`: the same with the questions this chat asks (`chatPacket`). `reading`: the stored CV reading, or null
- * when the CV was never read.
+ * to. `packet`: the same with the questions this chat asks (`chatPacket`). `reading`: the CV reading that says which of
+ * that version's must-haves the CV shows: their newest one against that version, else their newest one (made against a
+ * later version of the job; a must-have it has no finding for is asked about). Null when the CV was never read.
  */
 export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [screen] = await q.select().from(screens).where(eq(screens.id, screenId)).limit(1);
@@ -119,7 +120,8 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
   if (!candidate || !role || !company || !pv) return null;
-  const [read] = await q.select({ result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt)).limit(1);
+  const readings = await q.select({ packetVersion: assessments.packetVersion, result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt), desc(assessments.id));
+  const read = readings.find((r) => r.packetVersion === app.packetVersion) ?? readings[0];
   const reading = (read?.result as Pick<EvidenceAssessment, "requirementFindings"> | undefined) ?? null;
   return { screen, app, candidate, role, company, rolePacket: pv.packet, packet: chatPacket(pv.packet, screen.progress), reading };
 }
