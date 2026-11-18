@@ -1,7 +1,7 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, appPaths, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, emit, errorForLog, isCompanyLive, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
-import { applications, candidates, communications, companies, events, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { emit, errorForLog, isCompanyLive, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
+import { applications, candidates, communications, companies, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
 /**
@@ -53,8 +53,8 @@ type QueueBase = {
   retryOf?: string | null;
   retryAttempt?: number;
   /**
-   * When the send job may run (plan G9): a message a person sent waits a few seconds so they can press Undo; while it is
-   * still queued, `undoQueuedMessage` withdraws it. Now when left out.
+   * When the send job may run: a decision email waits a short time so "Don't send" can take it back while it is still
+   * queued (`takeBackDecisionEmail` in @ros/core). Now when left out.
    */
   sendAt?: Date | null;
 };
@@ -83,28 +83,6 @@ function quietOnFailure(row: { tags?: Record<string, string> | null }): boolean 
   return row.tags?.[QUIET_ON_FAILURE_TAG] === "true";
 }
 
-/** Statuses of a message that has not left yet: queued, or being sent. */
-const NOT_LEFT: readonly string[] = ["queued", "sending"];
-
-/**
- * B7: of these screens, the ones whose link email has not left yet. The email that carries a screen's link is its own
- * invitation (`screen_invite:<screen>`), else the application's one email (`ack:<application>`, R20-5). The interview's
- * run starts the link's clock only when it leaves, and "Send a reminder" waits for it too: a reminder would only queue
- * behind it (20 Oct 2026, R20-7).
- */
-export async function linkEmailsWaiting(q: Queryable, scrs: ReadonlyArray<{ id: string; applicationId: string }>): Promise<Set<string>> {
-  if (!scrs.length) return new Set();
-  const keys = [...new Set(scrs.flatMap((s) => [`screen_invite:${s.id}`, `ack:${s.applicationId}`]))];
-  const rows = await q.select({ key: communications.idempotencyKey, status: communications.status }).from(communications).where(inArray(communications.idempotencyKey, keys));
-  const status = new Map(rows.map((r) => [r.key, r.status]));
-  return new Set(scrs.filter((s) => NOT_LEFT.includes(status.get(`screen_invite:${s.id}`) ?? status.get(`ack:${s.applicationId}`) ?? "")).map((s) => s.id));
-}
-
-/** Whether one screen's link email has not left yet (`linkEmailsWaiting`). */
-export async function linkEmailWaiting(q: Queryable, scr: { id: string; applicationId: string }): Promise<boolean> {
-  return (await linkEmailsWaiting(q, [scr])).has(scr.id);
-}
-
 /** What a caller learns about a message that already has a row. */
 export function sendResultOf(row: Pick<CommunicationRow, "status" | "providerMessageId" | "error">): SendResult {
   if (row.status === "sent" || row.status === "delivered") return { status: "sent", providerMessageId: row.providerMessageId ?? "" };
@@ -127,11 +105,13 @@ function mayBeStopped(message: { candidateId?: string | null; templateKey?: stri
  * of the conversation that goes with the application (plan Wave E) are among them, and so is the close-out note to
  * someone locked (Rule 2).
  */
-const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_later", "screen_idle_reminder", "screen_review_reminder", "screen_not_started_reminder", "screen_resume", "screen_repeat_later", "screen_repeat_resume", "screen_expired", "close_out"]);
+const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_expired", "close_out"]);
 /** Where an application has left the process: the candidate withdrew, or a decision was made. */
-const LEFT_PROCESS = new Set(["withdrawn", "rejected"]);
-/** Messages whose link opens a screening conversation: dead once that conversation has ended (expired, closed, done). */
-const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_later", "screen_not_started_reminder", "screen_idle_reminder", "screen_review_reminder", "screen_resume"]);
+const LEFT_PROCESS = new Set(["withdrawn", "rejected", "hired"]);
+/** Messages whose link opens an AI interview: dead once that interview is no longer open (sent, closed, cancelled). */
+const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder"]);
+/** The decision message's template (`DECISION_TEMPLATE` in coordinator.ts). */
+const DECISION_TEMPLATE = "disposition";
 type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId" | "idempotencyKey">;
 
 /**
@@ -165,7 +145,7 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
       : who?.anonymizedAt ? "the candidate's details were deleted at their request"
       : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId) ? "the step it invites to has ended since it was written"
-      : stage && template.startsWith("disposition:") && !DECISION_STAGES.includes(stage) ? "the decision no longer applies"
+      : stage && template === DECISION_TEMPLATE && stage !== "rejected" ? "the decision no longer applies"
       : r.applicationId && template === "close_out" && !stillLocked.has(r.applicationId) ? "the team can read this application now"
       : null;
     if (reason) out.set(r.id, reason);
@@ -218,41 +198,6 @@ export async function queueCommunication(q: Queryable, integrations: Integration
   await q.insert(jobs).values({ kind: SEND_JOB_KIND, payload: { communicationId: row.id, companyId: input.companyId }, runAt: runAt.toISOString(), maxAttempts: SEND_MAX_ATTEMPTS });
   await emit(q, { type: "message.queued", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, channel: input.channel, applicationId: input.applicationId ?? null, ...(runAt !== now ? { sendAt: runAt.toISOString() } : {}) }, correlationId: input.correlationId ?? null });
   return { status: "pending", reason: "queued for delivery", communicationId: row.id };
-}
-
-/** Why an Undo was refused, in the sender's words. */
-export class UndoError extends Error {
-  constructor(public readonly code: "not_found" | "already_sent" | "not_yours", message: string) {
-    super(message);
-  }
-}
-
-/** The messages a person's Send holds for the Undo window: a decision message. */
-export function heldForUndo(templateKey: string | null | undefined): boolean {
-  return !!templateKey?.startsWith("disposition:");
-}
-
-/**
- * Undo (plan G9): a message someone on the team sent is withdrawn
- * during its Undo window, while it still waits in the outbox. Only the messages a person's Send holds for that window
- * (`heldForUndo`), and only until the moment its Send set (`sendAt` on its `message.queued` fact): an invitation or a
- * note a workflow sent for them has no window, so a waiting workflow never waits for a message that was taken back. A
- * decision message withdrawn this way
- * leaves the candidate not told, as before the Send. Recorded as `message.cancelled` with the reason "undone".
- */
-export async function undoQueuedMessage(q: Queryable, input: { communicationId: string; applicationId: string; actor: Actor; now: Date }): Promise<{ templateKey: string | null }> {
-  const [row] = await q.select().from(communications).where(and(eq(communications.id, input.communicationId), eq(communications.applicationId, input.applicationId), eq(communications.direction, "outbound"))).limit(1);
-  if (!row) throw new UndoError("not_found", "That message was not found.");
-  if (row.sentBy.kind !== "user" || !heldForUndo(row.templateKey)) throw new UndoError("not_yours", "Only a message someone on the team sent can be undone; this one was sent by the product.");
-  if (row.status === "cancelled") throw new UndoError("already_sent", "That message was already withdrawn.");
-  const [queued] = await q.select({ payload: events.payload }).from(events).where(and(eq(events.type, "message.queued"), eq(events.subjectId, row.id))).limit(1);
-  const sendAt = typeof queued?.payload.sendAt === "string" ? Date.parse(queued.payload.sendAt) : Number.NaN;
-  if (row.status !== "queued" || !(sendAt > input.now.getTime())) throw new UndoError("already_sent", "Too late to undo: the message has already gone.");
-  const [done] = await q.update(communications).set({ status: "cancelled", error: "undone by the team before it was sent" }).where(and(eq(communications.id, row.id), eq(communications.status, "queued"))).returning({ id: communications.id });
-  if (!done) throw new UndoError("already_sent", "Too late to undo: the message has already gone.");
-  await emit(q, { type: "message.cancelled", companyId: row.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: row.templateKey, channel: row.channel, applicationId: row.applicationId, reason: "undone", by: "undo" }, correlationId: row.correlationId });
-  await settleDecisionTold(q, row, "failed", input.now);
-  return { templateKey: row.templateKey };
 }
 
 /** A message in one of these never left us, so nothing it says has reached them. */
@@ -416,10 +361,10 @@ export async function sendQueuedCommunication(db: Db, integrations: Integrations
  * a decision still standing goes back from "sent" to "not told" too.
  */
 export async function settleDecisionTold(tx: Queryable, row: Pick<CommunicationRow, "id" | "companyId" | "applicationId" | "templateKey" | "sentBy"> & Partial<Pick<CommunicationRow, "retryOf">>, outcome: "sent" | "failed" | "unknown", now: Date): Promise<void> {
-  if (!row.applicationId || !row.templateKey?.startsWith("disposition:")) return;
+  if (!row.applicationId || row.templateKey !== DECISION_TEMPLATE) return;
   const where = and(eq(applications.id, row.applicationId), eq(applications.toldState, "queued"));
   if (outcome !== "sent") {
-    const notArrived = row.retryOf ? and(eq(applications.id, row.applicationId), inArray(applications.toldState, ["queued", "sent"]), inArray(applications.stage, [...DECISION_STAGES])) : where;
+    const notArrived = row.retryOf ? and(eq(applications.id, row.applicationId), inArray(applications.toldState, ["queued", "sent"]), eq(applications.stage, "rejected")) : where;
     const [back] = await tx.update(applications).set({ toldState: "not_told", ...(row.retryOf ? { candidateToldAt: null } : {}) }).where(notArrived).returning({ id: applications.id, roleId: applications.roleId });
     if (back && outcome === "unknown") await notify(tx, { companyId: row.companyId, about: back.id, kind: "candidate.unreachable", title: "A decision message may not have reached a candidate", body: "Sending it was interrupted, so we cannot tell whether it arrived. They show as not told yet: check with them before sending it again.", action: { label: "Open the candidate", href: appPaths.candidate(back.roleId, back.id) } });
     return;

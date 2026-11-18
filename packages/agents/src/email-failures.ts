@@ -1,8 +1,9 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, appPaths, type Actor } from "@ros/contracts";
-import { DECISION_STAGES, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
+import { RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, events, jobs, memberships, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
+import { DECISION_TEMPLATE } from "./coordinator";
 import { QUIET_ON_FAILURE_TAG, queueCommunication } from "./outbox";
 
 /**
@@ -109,8 +110,8 @@ async function nobodyMayBeTold(q: Queryable, comm: { applicationId: string | nul
  * sent moves.
  */
 async function untellDecision(q: Queryable, comm: Pick<typeof communications.$inferSelect, "applicationId" | "templateKey">): Promise<void> {
-  if (!comm.applicationId || !comm.templateKey?.startsWith("disposition:")) return;
-  await q.update(applications).set({ toldState: "not_told", candidateToldAt: null }).where(and(eq(applications.id, comm.applicationId), inArray(applications.toldState, ["queued", "sent"]), inArray(applications.stage, [...DECISION_STAGES])));
+  if (!comm.applicationId || comm.templateKey !== DECISION_TEMPLATE) return;
+  await q.update(applications).set({ toldState: "not_told", candidateToldAt: null }).where(and(eq(applications.id, comm.applicationId), inArray(applications.toldState, ["queued", "sent"]), eq(applications.stage, "rejected")));
 }
 
 /**
@@ -119,17 +120,15 @@ async function untellDecision(q: Queryable, comm: Pick<typeof communications.$in
  * a message of its own). Null when it still stands.
  */
 async function decisionGoneSince(q: Queryable, orig: Pick<typeof communications.$inferSelect, "applicationId" | "templateKey" | "createdAt">): Promise<string | null> {
-  if (!orig.applicationId || !orig.templateKey?.startsWith("disposition:")) return null;
+  if (!orig.applicationId || orig.templateKey !== DECISION_TEMPLATE) return null;
   const [app] = await q.select({ stage: applications.stage }).from(applications).where(eq(applications.id, orig.applicationId)).limit(1);
-  if (!app || !DECISION_STAGES.includes(app.stage)) return DECISION_NO_LONGER_APPLIES;
-  const decisions = sql.join(DECISION_STAGES.map((s) => sql`${s}`), sql`, `);
+  if (app?.stage !== "rejected") return DECISION_NO_LONGER_APPLIES;
   const [left] = await q.select({ id: events.id }).from(events).where(and(
     eq(events.type, "application.stage_changed"),
     eq(events.subjectType, "application"),
     eq(events.subjectId, orig.applicationId),
     gt(events.occurredAt, orig.createdAt),
-    sql`${events.payload}->>'from' in (${decisions})`,
-    sql`${events.payload}->>'to' not in (${decisions})`,
+    sql`${events.payload}->>'from' = 'rejected'`,
   )).limit(1);
   return left ? DECISION_NO_LONGER_APPLIES : null;
 }

@@ -1,8 +1,15 @@
-import type { Actor, DecisionWording, RolePacket } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, closeOutNoteLine, emit, disclosureLine, onFileReceiptLine } from "@ros/core";
+import { SCREEN_LINK_OPEN_DAYS, type Actor, type RolePacket } from "@ros/contracts";
+import { ADVERSE_DECISION_LINE, closeOutNoteLine, disclosureLine, emit, onFileReceiptLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
+
+/**
+ * The emails a candidate gets about their application, each templated here and never written by a model: application
+ * received, the AI interview's invitation, its reminder and the note that its link closed, the decision message, and the
+ * close-out note to someone past the plan's candidates per job. Every one goes through the outbox (`deliver`) and
+ * carries the AI disclosure and the line about reaching a person. No email shows a score, and none says a word about a plan.
+ */
 
 type App = typeof applications.$inferSelect;
 type Cand = typeof candidates.$inferSelect;
@@ -11,7 +18,7 @@ type Company = typeof companies.$inferSelect;
 
 export type MessageInput = { application: App; candidate: Cand; role: Role; company: Company; packet: RolePacket; actor: Actor; correlationId?: string | null };
 
-/** Founder decision F6: a dedicated ITS sending address with the customer's hiring team as the display name (quoted, MAIL-V1); never the customer's domain. */
+/** The sending address: a dedicated ITS address with the customer's hiring team as the display name; never the customer's domain. */
 export function fromAddress(company: Company, integrations: Integrations): string {
   return mailbox(`${company.name} hiring team`, integrations.env.fromAddress);
 }
@@ -25,187 +32,92 @@ function signature(packet: RolePacket, company: Company): string {
   return packet.communication.signature || `The hiring team at ${company.name}`;
 }
 
-/**
- * The AI interview the one email offers (20 Oct 2026, R20-5, R20-10, R20-11):
- * - `link`: its link, with the job's own length (`minutes`, the job's screening length);
- * - `follows`: the month's AI interviews are used up (Q17): the link follows by email once more are added;
- * - `none`: the neutral thank-you, for someone held on a must-have answer or who left the process before it went;
- * - `on_file`: no interview at all, for someone past their plan's candidates per job (the plans of 5 November 2026, Rule 2):
- *   the words of the receipt, with `byDay`, the day they hear by at the latest. Its wording is DRAFT WORDING PENDING COUNSEL
- *   (packages/core/src/candidate-lock.ts). Never a word about a plan, and none of "read every application": nobody may.
- */
-export type AcknowledgedInterview = { kind: "link"; url: string; minutes: number } | { kind: "follows"; minutes: number } | { kind: "none" } | { kind: "on_file"; byDay: string };
+/** The lines under every email: how to reach a person, who it is from, and the AI disclosure. */
+function footer(packet: RolePacket, company: Company): string {
+  return `${packet.communication.humanAlternativeText}\n\n${signature(packet, company)}\n\n${packet.communication.disclosureText || disclosureLine(company.name)}`;
+}
 
-/** The address already belonged to someone on the company's records (known-bugs row 17): the email says it was sent using it. */
+/** The address already belonged to someone on the company's records: the email says it was sent using it. */
 const KNOWN_ADDRESS_LINE = "This application was sent using your email address. If you did not send it, reply to this email and a person will look into it.";
 
 /**
- * The one email every applicant gets (20 Oct 2026, R20-5): thank you, and the AI interview as their next step, sent the
- * moment the interview is ready (the résumé read, at the latest ten minutes after applying). Templated, disclosed,
- * idempotent; the template key and the `ack:` key are the acknowledgment's, which the AI-notice wait, the outbox signal
- * and the provider's tags rely on. It says "next step", never "to qualify" (R20-6): not doing it never stops the
- * application. Never in SCREEN_LINK_TEMPLATES (outbox.ts): it carries the status link and the AI notice, so it goes even
- * when the interview closed before it left.
+ * Application received: the one email every applicant gets on applying, with their status link and what happens next
+ * (the same words as the receipt page). `onFileByDay`: the applicant is past the plan's candidates per job, and reads the
+ * on-file wording with the day they hear by at the latest (DRAFT WORDING PENDING COUNSEL,
+ * packages/core/src/candidate-lock.ts); never a word about a plan. It never carries an AI interview link.
  */
-export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & {
-  appBaseUrl: string;
-  interview: AcknowledgedInterview;
-  knownAddress?: boolean;
-}): Promise<SendResult> {
+export async function sendAcknowledgment(q: Queryable, integrations: Integrations, input: MessageInput & { appBaseUrl: string; onFileByDay?: string | null; knownAddress?: boolean }): Promise<SendResult> {
   const { application, candidate, company, packet } = input;
   const statusUrl = `${input.appBaseUrl}/c/status/${application.statusToken}`;
-  const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
-  const iv = input.interview;
   const title = packet.identity.title;
   const known = input.knownAddress ? `\n\n${KNOWN_ADDRESS_LINE}` : "";
-  const footer = `${packet.communication.humanAlternativeText}
+  const body = input.onFileByDay
+    ? `Thank you for applying for the ${title} position at ${company.name}. We received your application.${known}
 
-${signature(packet, company)}
-
-${disclosure}`;
-  const body = iv.kind === "link"
-    ? `Thank you for applying for the ${title} position at ${company.name}. We have your application.
-
-Your next step is a short interview with ${company.name}'s AI assistant. Everyone who applies gets the same interview, so every application is looked at the same way. It is a written chat of about ${iv.minutes} minutes; find a quiet moment when you can give it your attention.
-
-Start your AI interview: ${iv.url}
-
-How it works:
-- The assistant asks one question at a time about your experience and this job, and you answer in your own words.
-- You can skip any question.
-- If you stop part-way, your answers are saved: use the same link to carry on.
-- At the end you check your answers and press Send. Nothing goes to the hiring team before you do.
-- The link stays open for 5 days, and we send you one reminder.
-
-Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email.
-If you need an adjustment, such as more time or another format, reply and tell us.
-Not doing the interview never stops your application: it still goes to the hiring team. People on the hiring team read every application and make every decision.
-
-Check where things stand at any time: ${statusUrl}${known}`
-    : iv.kind === "follows"
-      ? `Thank you for applying for the ${title} position at ${company.name}. We have your application.
-
-Your next step is a short interview with ${company.name}'s AI assistant, a written chat of about ${iv.minutes} minutes. Everyone who applies gets the same interview. We will email you its link as soon as it is ready.
-
-You can skip any question, and you can choose to talk to a person instead. If you need an adjustment, such as more time or another format, reply and tell us. Not doing the interview never stops your application. People on the hiring team read every application and make every decision.
-
-Check where things stand at any time: ${statusUrl}${known}`
-      : iv.kind === "on_file"
-        ? `Thank you for applying for the ${title} position at ${company.name}. We received your application.${known}
-
-${onFileReceiptLine(company.name, iv.byDay)} People make every decision.
+${onFileReceiptLine(company.name, input.onFileByDay)} People make every decision.
 
 You can check where things stand any time, withdraw, or ask about your information: ${statusUrl}`
-      : `Thank you for applying for the ${title} position at ${company.name}. We received your application. People on the hiring team review it and make every decision.${known}
+    : `Thank you for applying for the ${title} position at ${company.name}. We have your application.${known}
 
 What happens next:
 1. The hiring team at ${company.name} reviews your application.
-${packet.interviews.plan.map((r, i) => `${i + 2}. ${r.title} (${r.durationMinutes} min)`).join("\n")}
+2. If you are shortlisted, we email you a link to a short AI interview: a written chat you do at a time that suits you.
+3. The team decides. People on the hiring team make every decision.
 
-You can check where things stand any time: ${statusUrl}`;
+You can check where things stand at any time: ${statusUrl}`;
   return deliver(q, integrations, {
     ...input,
-    channel: "email",
     templateKey: "acknowledgment",
-    subject: iv.kind === "none" || iv.kind === "on_file" ? `Thank you for applying: ${title} at ${company.name}` : `Thank you for applying: your next step for ${title} at ${company.name}`,
-    text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer}`,
+    subject: `Thank you for applying: ${title} at ${company.name}`,
+    text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer(packet, company)}`,
     idempotencyKey: `ack:${application.id}`,
-    eventOnSent: "message.sent",
     to: candidate.email,
   });
 }
 
-/**
- * What a candidate email says about future roles (Wave 0 item 0.11). Someone who already asked not to be kept is never
- * offered it again: their choice is acknowledged instead.
- */
-export function futureRolesLine(candidate: { preferences: { talentPoolOptOut?: boolean } }): string {
-  return candidate.preferences.talentPoolOptOut
-    ? "As you asked, we will not keep your details for future roles."
-    : "We would like to keep your information for future openings unless you prefer we do not; reply \"no thanks\" and we will remove you from consideration for future roles.";
-}
-
-/** The screen reminder's last word to someone no longer interested; it promises nothing about future roles to a person who opted out. */
-export function reminderClosingLine(candidate: { preferences: { talentPoolOptOut?: boolean } }): string {
-  return candidate.preferences.talentPoolOptOut
-    ? "If you are no longer interested, no reply is needed; we will close the application in a few days."
-    : "If you are no longer interested, no reply is needed; we will close the application in a few days and keep you in mind for future openings.";
-}
-
+/** The key the decision message is recorded under. */
+export const DECISION_TEMPLATE = "disposition";
 
 /**
- * The sentence that tells the decision, in each approved wording (founder decision Q28, plan G6). Ours, never the AI's.
- * DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md item 23), except `v1` and `eligibility`, the wordings
- * the product has always sent. None of them gives a reason beyond the eligibility answer, which the candidate can correct.
- * The status page restates each wording in `decisionLine` (apps/api/src/pages/candidate.tsx), also under item 23;
- * change both together.
+ * The decision message for someone marked Not selected: one standard wording, ours and never the AI's, with no reason
+ * given. A decision is private until a person sends this. Below the signature: how to reach a person, Colorado's line
+ * about asking for the reasons when it applies (`adverseDecisionLine`), and the AI disclosure. Pure, so the preview shows
+ * exactly what will go.
  */
-const DECISION_SENTENCE: Record<DecisionWording, (company: string) => string> = {
-  v1: () => "After reviewing your background against what this role needs, the team has decided not to move forward at this time.",
-  v2: (company) => `We appreciate the time you took to apply and to tell us about yourself. After careful thought, the team at ${company} has decided not to move forward with your application for this role.`,
-  v3: () => "The team has decided not to move forward with your application for this role.",
-  after_interview: (company) => `Thank you for taking the time to meet the team at ${company}. After the interviews, the team has decided not to move forward with your application for this role.`,
-  position_filled: () => "The position has now been filled, so the team will not be moving forward with your application for this role.",
-  role_closed: (company) => `${company} has closed this position, so your application for this role will not go any further.`,
-  eligibility: () => "Based on your answers to the eligibility questions, this particular role requires something you indicated you do not currently have (for example a license, certification, or schedule availability). If that has changed or you answered in error, reply to this email and a person will take a look.",
-};
-
-/** The template key each wording is recorded under; the standard wording keeps the key it always had. */
-export function decisionTemplateKey(wording: DecisionWording): string {
-  return wording === "v1" ? "disposition:human" : wording === "v2" || wording === "v3" ? `disposition:human:${wording}` : `disposition:${wording}`;
-}
-
-/**
- * The decision message: respectful, after a human decision or an owner-authored eligibility rule, in one of the
- * approved wordings. A decision is private until a person sends this (founder decision B6). Below the signature comes
- * the locked footer nobody can edit (Q28): what we keep for future roles and how to say no to it, how to reach a person,
- * Colorado's line about asking for the reasons (plan G5, when `adverseDecisionLine`), and the AI disclosure. Pure, so the
- * page can preview exactly what will go. `locked`: someone nobody at the company could read when a closed role moved them
- * (Rule 2) is never kept for future roles by it, so what we keep says nothing; everything else stands.
- */
-export function dispositionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { wording: DecisionWording; statusUrl?: string | null; adverseDecisionLine?: boolean; locked?: boolean }): { subject: string; text: string; templateKey: string; wording: DecisionWording } {
+export function decisionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { adverseDecisionLine: boolean }): { subject: string; text: string } {
   const { candidate, company, packet } = input;
-  // The status page has the one-click "Don't keep me for future roles" (Wave 0 item 0.11), and the link lands on it;
-  // someone who already said so is not offered it again.
-  const futureRoles = input.statusUrl && !candidate.preferences.talentPoolOptOut ? `${futureRolesLine(candidate)} You can also choose this on your status page: ${input.statusUrl}#future-roles` : futureRolesLine(candidate);
-  const footer = [input.locked ? null : futureRoles, packet.communication.humanAlternativeText, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, packet.communication.disclosureText || disclosureLine(company.name)].filter((x): x is string => !!x);
+  const below = [packet.communication.humanAlternativeText, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, packet.communication.disclosureText || disclosureLine(company.name)].filter((x): x is string => !!x);
   const text = `Hi ${candidate.firstName},
 
 Thank you for your interest in the ${packet.identity.title} position at ${company.name}.
 
-${DECISION_SENTENCE[input.wording](company.name)}
+After reviewing your background against what this role needs, the team has decided not to move forward at this time.
 
 ${signature(packet, company)}
 
-${footer.join("\n\n")}`;
-  return { subject: `Your application to ${company.name}`, text, templateKey: decisionTemplateKey(input.wording), wording: input.wording };
+${below.join("\n\n")}`;
+  return { subject: `Your application to ${company.name}`, text };
 }
 
 /**
  * Queues the decision message. One per decision: the key carries when the decision was made, so a second Send for the
- * same decision finds the first message, while a later decision (after "review anyway") gets a message of its own.
- * `attempt` counts earlier messages for this decision that did not reach them (could not be delivered, or were taken
- * back with Undo): sending again is a new message. The closing message of a closed role has one key per application
- * (`role_closed:<id>`, Q30), so nobody gets it twice; a new key only follows one that did not reach them.
- * `sendAt` holds a person's Send for the Undo window (plan G9).
+ * same decision finds the first message, while a later decision (after an Undo) gets a message of its own. `attempt`
+ * counts earlier messages for this decision that did not reach them (could not be delivered, or were taken back):
+ * sending again is a new message. `sendAt` holds the Send for the short time "Don't send" can take it back.
  */
-export async function sendDisposition(q: Queryable, integrations: Integrations, input: MessageInput & { wording: DecisionWording; attempt?: number; statusUrl?: string | null; adverseDecisionLine?: boolean; sendAt?: Date | null }): Promise<SendResult> {
+export async function sendDecisionMessage(q: Queryable, integrations: Integrations, input: MessageInput & { attempt: number; adverseDecisionLine: boolean; sendAt: Date | null }): Promise<SendResult> {
   const { application, candidate } = input;
-  const message = dispositionMessage({ ...input, locked: !!application.lockedAt });
-  const again = input.attempt ? `:${input.attempt}` : "";
-  const idempotencyKey = input.wording === "role_closed" ? `role_closed:${application.id}${again}` : `disposition:${application.id}:${application.rejectedAt ?? application.stageChangedAt}${again}`;
+  const message = decisionMessage(input);
   return deliver(q, integrations, {
     ...input,
-    channel: "email",
-    templateKey: message.templateKey,
+    templateKey: DECISION_TEMPLATE,
     subject: message.subject,
     text: message.text,
-    idempotencyKey,
-    eventOnSent: "message.sent",
+    idempotencyKey: `${DECISION_TEMPLATE}:${application.id}:${application.rejectedAt ?? application.stageChangedAt}${input.attempt ? `:${input.attempt}` : ""}`,
     to: candidate.email,
-    // Colorado's line is recorded on the message, so a reply asking for the reasons reaches the compliance queue (plan G5).
+    // Colorado's line is recorded on the message, so a reply asking for the reasons can be traced to it.
     tags: input.adverseDecisionLine ? { adverseDecisionLine: ADVERSE_DECISION_LINE.version } : {},
-    sendAt: input.sendAt ?? null,
+    sendAt: input.sendAt,
   });
 }
 
@@ -213,16 +125,11 @@ export async function sendDisposition(q: Queryable, integrations: Integrations, 
  * Every candidate email goes through the outbox: recorded as queued inside the caller's transaction, sent by the worker
  * after commit, once per idempotency key. The result is therefore `pending` at this point; `message.sent` follows.
  */
-export async function deliver(
-  q: Queryable,
-  integrations: Integrations,
-  input: MessageInput & { channel: "email"; templateKey: string; subject: string; text: string; idempotencyKey: string; eventOnSent: "message.sent"; to: string | null; attachments?: Array<{ filename: string; contentType: string; contentBase64: string }>; tags?: Record<string, string>; sendAt?: Date | null },
-): Promise<SendResult> {
+export async function deliver(q: Queryable, integrations: Integrations, input: MessageInput & { templateKey: string; subject: string; text: string; idempotencyKey: string; to: string | null; tags?: Record<string, string>; sendAt?: Date | null }): Promise<SendResult> {
   const { application, candidate, company } = input;
-  const sentBy = input.actor;
   if (!input.to) {
-    const [row] = await q.insert(communications).values({ companyId: company.id, candidateId: candidate.id, applicationId: application.id, direction: "outbound", channel: input.channel, fromAddress: fromAddress(company, integrations), toAddress: null, subject: input.subject, bodyText: input.text, templateKey: input.templateKey, provider: integrations.email.id, status: "failed", disclosureIncluded: true, sentBy, error: "candidate has no email address" }).returning({ id: communications.id });
-    await emit(q, { type: "message.failed", companyId: company.id, actor: sentBy, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, error: "no email" }, correlationId: input.correlationId ?? null });
+    const [row] = await q.insert(communications).values({ companyId: company.id, candidateId: candidate.id, applicationId: application.id, direction: "outbound", channel: "email", fromAddress: fromAddress(company, integrations), toAddress: null, subject: input.subject, bodyText: input.text, templateKey: input.templateKey, provider: integrations.email.id, status: "failed", disclosureIncluded: true, sentBy: input.actor, error: "candidate has no email address" }).returning({ id: communications.id });
+    await emit(q, { type: "message.failed", companyId: company.id, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { template: input.templateKey, error: "no email" }, correlationId: input.correlationId ?? null });
     return { status: "failed", error: "candidate has no email address", retryable: false };
   }
   return queueCommunication(q, integrations, {
@@ -238,100 +145,80 @@ export async function deliver(
     templateKey: input.templateKey,
     idempotencyKey: input.idempotencyKey,
     tags: { ...(input.tags ?? {}), template: input.templateKey, applicationId: application.id },
-    attachments: input.attachments ?? null,
-    actor: sentBy,
+    actor: input.actor,
     correlationId: input.correlationId ?? null,
     disclosureIncluded: true,
     sendAt: input.sendAt ?? null,
   });
 }
 
-/** Everything the screening messages need beyond MessageInput. */
-/** `sendKey`: a reminder of its own (a person's "Send a reminder", R20-7, once a day), in place of the one automatic reminder's key. */
-export type ScreenMessageInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string }; sendKey?: string };
+/** What the AI interview's emails need beyond MessageInput: the interview they are about. */
+export type ScreenMessageInput = MessageInput & { appBaseUrl: string; screen: { id: string; token: string } };
 
 function screenUrl(input: ScreenMessageInput): string {
   return `${input.appBaseUrl}/c/screen/${input.screen.token}`;
 }
 
 /**
- * The AI interview's link in an email of its own: a person's "Send a new link", or the link that follows the one email
- * (someone kept in after a must-have answer, or the month's interviews topped up; 20 Oct 2026). By email with the web
- * link, and disclosed. It gives minutes, not a number of questions: the chat fixes its plan when it starts.
+ * The AI interview's invitation, sent when a person on the team shortlists someone, and again with a new link by "Send a
+ * new link". It gives minutes, not a number of questions: the chat fixes its plan when it starts. One per interview.
  */
-export async function sendScreenInvite(q: Queryable, integrations: Integrations, input: ScreenMessageInput): Promise<{ email: SendResult }> {
+export async function sendScreenInvite(q: Queryable, integrations: Integrations, input: ScreenMessageInput): Promise<SendResult> {
   const { candidate, company, packet } = input;
-  const url = screenUrl(input);
-  const disclosure = packet.communication.disclosureText || disclosureLine(company.name);
   const text = `Hi ${candidate.firstName},
 
-Thanks again for applying for the ${packet.identity.title} position at ${company.name}. Your next step is a short interview with ${company.name}'s AI assistant: a written chat of about ${packet.screening.maxMinutes} minutes, at whatever time suits you.
+The hiring team at ${company.name} has reviewed your application for the ${packet.identity.title} position and would like you to take the next step: a short interview with ${company.name}'s AI assistant. It is a written chat of about ${packet.screening.maxMinutes} minutes, at whatever time suits you.
 
-Start your AI interview: ${url}
+Start your AI interview: ${screenUrl(input)}
 
-You can skip any question, and if you stop part-way your answers are saved. Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email. If you need an adjustment, such as more time or another format, reply and tell us. Not doing the interview never stops your application.
+How it works:
+- The assistant asks one question at a time about your experience and this job, and you answer in your own words.
+- You can skip any question.
+- If you stop part-way, your answers are saved: use the same link to carry on.
+- At the end you check your answers and press "Send my answers". Nothing goes to the hiring team before you do.
+- The link stays open for ${SCREEN_LINK_OPEN_DAYS} days, and we send you one reminder.
 
-${packet.communication.humanAlternativeText}
+Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email.
+If you need an adjustment, such as more time or another format, reply and tell us.
+People on the hiring team make every decision.
 
-${signature(packet, company)}
-
-${disclosure}`;
-  const email = await deliver(q, integrations, {
-    ...input,
-    channel: "email",
-    templateKey: "screen_invite",
-    subject: `Your next step: a short AI interview for ${packet.identity.title}`,
-    text,
-    idempotencyKey: `screen_invite:${input.screen.id}`,
-    eventOnSent: "message.sent",
-    to: candidate.email,
-  });
-  return { email };
-}
-
-export async function sendScreenReminder(q: Queryable, integrations: Integrations, input: ScreenMessageInput): Promise<{ email: SendResult }> {
-  const { candidate, company, packet } = input;
-  const url = screenUrl(input);
-  const text = `Hi ${candidate.firstName},
-
-A quick reminder: your short AI interview for the ${packet.identity.title} position at ${company.name} is waiting for you whenever you have ${packet.screening.maxMinutes} minutes: ${url}
-
-${reminderClosingLine(candidate)}
-
-${packet.communication.humanAlternativeText}
-
-${signature(packet, company)}
-
-${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  const email = await deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: input.sendKey ?? `screen_reminder:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
-  return { email };
+${footer(packet, company)}`;
+  return deliver(q, integrations, { ...input, templateKey: "screen_invite", subject: `Your next step: a short AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_invite:${input.screen.id}`, to: candidate.email });
 }
 
 /**
- * The AI interview link lapsed without the candidate starting it (plan G10): no silent expiry. The application is still
- * with the team, and a reply brings a new link from a person. One per screen.
+ * The reminder about an AI interview whose link is still open: the one that goes by itself after 48 hours, and a person's
+ * "Send a reminder" (`sendKey`: a key of its own, so it is a message of its own).
  */
+export async function sendScreenReminder(q: Queryable, integrations: Integrations, input: ScreenMessageInput & { sendKey?: string }): Promise<SendResult> {
+  const { candidate, company, packet } = input;
+  const text = `Hi ${candidate.firstName},
+
+A quick reminder: your short AI interview for the ${packet.identity.title} position at ${company.name} is waiting for you whenever you have ${packet.screening.maxMinutes} minutes: ${screenUrl(input)}
+
+If you started it, your answers are saved, and nothing goes to the hiring team until you press "Send my answers". Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email.
+
+${footer(packet, company)}`;
+  return deliver(q, integrations, { ...input, templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: input.sendKey ?? `screen_reminder:${input.screen.id}`, to: candidate.email });
+}
+
+/** The AI interview's link closed after its five days, started or not: one short note, so it never closes in silence. One per interview. */
 export async function sendScreenExpiredNote(q: Queryable, integrations: Integrations, input: MessageInput & { screen: { id: string } }): Promise<SendResult> {
   const { candidate, company, packet } = input;
   const text = `Hi ${candidate.firstName},
 
-The link to your short AI interview for the ${packet.identity.title} position at ${company.name} has now closed, because it was not started. Your application is still with the hiring team, and people on the team make every decision.
+The link to your short AI interview for the ${packet.identity.title} position at ${company.name} has now closed. Anything you had not sent was not shared with the hiring team. Your application is still with the team, and people on the team make every decision.
 
-If you would still like to answer the questions, reply to this email and someone on the team can send you a new link.
+If you would still like to do the interview, reply to this email and someone on the team can send you a new link.
 
-${packet.communication.humanAlternativeText}
-
-${signature(packet, company)}
-
-${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "screen_expired", subject: `Your AI interview link for ${packet.identity.title} has closed`, text, idempotencyKey: `screen_expired:${input.screen.id}`, eventOnSent: "message.sent", to: candidate.email });
+${footer(packet, company)}`;
+  return deliver(q, integrations, { ...input, templateKey: "screen_expired", subject: `Your AI interview link for ${packet.identity.title} has closed`, text, idempotencyKey: `screen_expired:${input.screen.id}`, to: candidate.email });
 }
 
 /**
- * The close-out note (the plans of 5 November 2026, Rule 2): what someone past their plan's candidates per job hears when
- * the job is still open at the latest date they were promised. It is no decline and moves no stage, and it says nothing
- * about a plan. Its wording is DRAFT WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts). Once per application.
- * Carries the AI disclosure like every automatic email.
+ * The close-out note: what someone past the plan's candidates per job hears when the job is still open at the latest
+ * date they were promised. It is no decline and moves no stage, and it says nothing about a plan. Its wording is DRAFT
+ * WORDING PENDING COUNSEL (packages/core/src/candidate-lock.ts). Once per application.
  */
 export const CLOSE_OUT_TEMPLATE = "close_out";
 
@@ -341,37 +228,6 @@ export async function sendCloseOutNote(q: Queryable, integrations: Integrations,
 
 ${closeOutNoteLine({ roleTitle: packet.identity.title, companyName: company.name, statusUrl: input.statusUrl })}
 
-${packet.communication.humanAlternativeText}
-
-${signature(packet, company)}
-
-${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: CLOSE_OUT_TEMPLATE, subject: `Your application: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `close_out:${application.id}`, eventOnSent: "message.sent", to: candidate.email });
-}
-
-/**
- * The candidate asked for a person (plan G8): an email that says the hiring team has been told, so it is in writing
- * wherever they asked. One per request (`key`).
- */
-export async function sendPersonRequestedNote(q: Queryable, integrations: Integrations, input: MessageInput & { key: string }): Promise<SendResult> {
-  const { candidate, company, packet } = input;
-  const text = `Hi ${candidate.firstName},
-
-You asked to talk to a person about your application for the ${packet.identity.title} position at ${company.name}. The hiring team at ${company.name} has been told. Nothing else is needed from you; you can also reply to this email.
-
-${signature(packet, company)}
-
-${packet.communication.disclosureText || disclosureLine(company.name)}`;
-  return deliver(q, integrations, { ...input, channel: "email", templateKey: "person_requested", subject: `You asked to talk to a person about ${packet.identity.title}`, text, idempotencyKey: `person_requested:${input.key}`, eventOnSent: "message.sent", to: candidate.email });
-}
-
-/**
- * Records a message the candidate sent us (a web chat turn). `screenId`: it was typed in that screening conversation,
- * so the team sees it only once the conversation's answers are sent
- * (`withoutUnsentConversation` in @ros/core).
- */
-export async function recordInbound(q: Queryable, input: { companyId: string; candidateId: string; applicationId: string; channel: "web"; text: string; from?: string | null; provider?: string | null; providerMessageId?: string | null; actor: Actor; correlationId?: string | null; screenId?: string | null }): Promise<string> {
-  const [row] = await q.insert(communications).values({ companyId: input.companyId, candidateId: input.candidateId, applicationId: input.applicationId, direction: "inbound", channel: input.channel, fromAddress: input.from ?? null, toAddress: null, subject: null, bodyText: input.text, provider: input.provider ?? null, providerMessageId: input.providerMessageId ?? null, status: "received", disclosureIncluded: false, sentBy: input.actor, ...(input.screenId ? { tags: { screenId: input.screenId } } : {}) }).returning({ id: communications.id });
-  await emit(q, { type: "message.received", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: row.id }, payload: { channel: input.channel, applicationId: input.applicationId }, correlationId: input.correlationId ?? null });
-  return row.id;
+${footer(packet, company)}`;
+  return deliver(q, integrations, { ...input, templateKey: CLOSE_OUT_TEMPLATE, subject: `Your application: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `close_out:${application.id}`, to: candidate.email });
 }
