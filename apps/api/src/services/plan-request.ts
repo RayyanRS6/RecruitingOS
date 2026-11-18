@@ -4,7 +4,7 @@ import { STANDING_STATUSES, raiseAlert } from "@ros/core";
 import { adminAlerts, companies, plans, withPlatform, type Db, type Queryable } from "@ros/db";
 
 /**
- * A company's request about its plan (the Upgrade button). It is one open alert in the admin console
+ * A company's request about its plan (the Upgrade button). It is one open alert in the admin dashboard
  * (`PLAN_REQUEST_ALERT_KIND`), with the plan asked for, why, the person's note and who asked; changing the company's
  * plan resolves it (services/plan-change.ts). Alerts are platform records, so everything here runs on the platform side.
  */

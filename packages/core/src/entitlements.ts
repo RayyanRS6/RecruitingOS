@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, gte, inArray, isNotNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, JOBS_TOTAL, PLAN_LIMIT_KEYS, SEATS, TEXT_SCREENS, isAiCreditKey } from "@ros/contracts";
+import { ACTIVE_ROLES, AI_CREDIT_MONTHLY_CENTS, AI_CREDIT_TOTAL_CENTS, CANDIDATES_PER_JOB, JOBS_TOTAL, PLAN_LIMIT_KEYS, SEATS, TEXT_SCREENS, isAiCreditKey, type PlanLimitKey, type UsageLine } from "@ros/contracts";
 import { adminAlerts, aiRuns, companies, entitlements, invitations, memberships, plans, roles, usageEvents, users, type Queryable } from "@ros/db";
 import { raiseAlertOnce } from "./alerts";
 import { audit } from "./audit";
@@ -38,7 +38,7 @@ export async function seatsInUse(q: Queryable, companyId: string, opts: { now: D
 }
 
 /** The company's limit of people: its seats row, else its plan's own limit; null when there is none. */
-async function seatLimit(q: Queryable, companyId: string): Promise<number | null> {
+export async function seatLimit(q: Queryable, companyId: string): Promise<number | null> {
   const [row] = await q.select({ limit: entitlements.limit }).from(entitlements).where(and(eq(entitlements.companyId, companyId), eq(entitlements.key, SEATS))).limit(1);
   if (row) return row.limit ?? null;
   const [plan] = await q.select({ limits: plans.limits }).from(companies).innerJoin(plans, eq(plans.key, companies.planKey)).where(eq(companies.id, companyId)).limit(1);
@@ -239,15 +239,15 @@ export async function record(q: Queryable, companyId: string, key: string, quant
   return after ?? null;
 }
 
-/**
- * One allowance as the company's settings show it; `resetsAt` is when a monthly one starts again from zero (left out for
- * roles, which never reset). `unit: "percent"` is the AI credit: `used` of 100, because customers read words or a
- * percentage, never dollars.
- */
-export type UsageLine = { used: number; limit: number | null; resetsAt?: string | null; unit?: "percent" };
-
-/** The keys with a "used of limit" line: the ones every plan names, but the candidates per job, which is not a count of anything used (read it with `limitOf`). */
-const COUNTED_KEYS: readonly string[] = PLAN_LIMIT_KEYS.filter((key) => key !== CANDIDATES_PER_JOB);
+/** What each counted limit is called, and what its line counts. The candidates per job has no line: it is not a count of anything used (read it with `limitOf`). */
+const USAGE_WORDS: Partial<Record<PlanLimitKey, { label: string; of: string }>> = {
+  [ACTIVE_ROLES]: { label: "Jobs at a time", of: "jobs at a time" },
+  [JOBS_TOTAL]: { label: "Jobs in all", of: "jobs in all" },
+  [TEXT_SCREENS]: { label: "AI interviews", of: "AI interviews this month" },
+  [SEATS]: { label: "People", of: "people" },
+  [AI_CREDIT_TOTAL_CENTS]: { label: "AI help", of: "" },
+  [AI_CREDIT_MONTHLY_CENTS]: { label: "AI help", of: "" },
+};
 
 const MICROS_PER_CENT = 10_000;
 
@@ -255,30 +255,33 @@ const MICROS_PER_CENT = 10_000;
 export const creditPercent = (spent: number, limit: number): number => (limit <= 0 ? 100 : Math.min(100, Math.floor((spent * 100) / limit)));
 
 /**
- * The plan's usage as the company's settings show it: roles counted from the roles using a place now, people from the
- * members and open invitations now (known bug 128: the stored count never moved), jobs ever from the roles (only with a
- * limit: without one there is nothing to say), the AI credit as a percentage (only with a limit), the rest within their
- * period. The credit's percentage is money actually spent, worked out as Home's is (`aiCreditView`), so a draft's hold does
- * not move it up and back down, and the two pages read one figure. `check` and the gate go on counting holds. A company
- * keeps the rows of every plan it was on, so a row whose key no plan names now has no line.
+ * The plan's usage as the company's people read it, and as an administrator reads it of them: one line for each limit
+ * the plan sets, in the plan's own order. Jobs are counted from the roles using a place now and the jobs ever from the
+ * roles, people from the members and open invitations now, AI interviews within their month, and the AI credit as a
+ * percentage of money actually spent (worked out as Home's notice is, `aiCreditView`, so a draft's hold does not move it
+ * up and back down). Never an amount: a company reads its AI help as words or a percentage. `check` and the gate go on
+ * counting holds. A company keeps the rows of every plan it was on, so a row whose key no plan names now has no line.
  */
-export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<Record<string, UsageLine>> {
+export async function usageOf(q: Queryable, companyId: string, opts: { now?: Date } = {}): Promise<UsageLine[]> {
   const rows = await q.select().from(entitlements).where(eq(entitlements.companyId, companyId));
   const now = opts.now ?? new Date();
-  const out: Record<string, UsageLine> = {};
-  for (const e of rows) {
-    if (!COUNTED_KEYS.includes(e.key)) continue;
-    const credit = isAiCreditKey(e.key);
-    if ((credit || e.key === JOBS_TOTAL) && e.limit === null) continue;
-    const resets = isMonthly(e.key) ? { resetsAt: currentPeriod(e, now).periodEnd } : {};
-    if (credit) {
-      const spent = await aiCreditSpentMicros(q, companyId, { since: isMonthly(e.key) ? currentPeriod(e, now).periodStart : null, settled: true, now });
-      out[e.key] = { used: creditPercent(spent, (e.limit ?? 0) * MICROS_PER_CENT), limit: 100, unit: "percent", ...resets };
+  const lines: UsageLine[] = [];
+  for (const key of PLAN_LIMIT_KEYS) {
+    const row = rows.find((r) => r.key === key);
+    const words = USAGE_WORDS[key];
+    if (!row || row.limit === null || !words) continue;
+    const period = currentPeriod(row, now);
+    const resetsAt = isMonthly(key) && period.periodEnd ? new Date(period.periodEnd).toISOString() : null;
+    if (isAiCreditKey(key)) {
+      const spent = await aiCreditSpentMicros(q, companyId, { since: isMonthly(key) ? period.periodStart : null, settled: true, now });
+      const used = creditPercent(spent, row.limit * MICROS_PER_CENT);
+      lines.push({ key, label: words.label, used, limit: 100, unit: "percent", resetsAt, words: `AI help: ${used}% used` });
     } else {
-      out[e.key] = { used: await usedNow(q, companyId, e, now), limit: e.limit, ...resets };
+      const used = await usedNow(q, companyId, row, now);
+      lines.push({ key, label: words.label, used, limit: row.limit, unit: "count", resetsAt, words: `${used} of ${row.limit} ${words.of}` });
     }
   }
-  return out;
+  return lines;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { AI_HELP_UPGRADE_QUESTION, mayOfferUpgrade } from "@ros/contracts";
+import { AI_HELP_UPGRADE_QUESTION, mayOfferUpgrade, type PlanLimitDetails } from "@ros/contracts";
 import { aiCreditResetsAt, aiCreditRoomSoon, can, closingDayWords, companyToday, entitlements } from "@ros/core";
 import { companies, withTenant, type Queryable } from "@ros/db";
 import type { Container } from "../container";
@@ -13,13 +13,13 @@ import type { Tenant } from "../middleware/session";
  * exception is a call refused only for money held by work still running: nothing is used up, and trying again is what is true.
  */
 
-/** The way on: the request to ITS about the plan. */
-export const askForMoreAiHelp = { label: "Upgrade", method: "POST", path: "/api/v1/plans/request", body: { reason: AI_HELP_UPGRADE_QUESTION } };
-/** The same request on the last plan, where nothing is above theirs: it opens the same sheet, which asks to talk about the plan (the check of 9 November). */
-export const talkToItsAboutAiHelp = { ...askForMoreAiHelp, label: "Talk to ITS" };
+/** The way on, as a 402's `ask`: the button's words and the reason sent with POST /api/v1/plans/request. */
+export const askForMoreAiHelp: NonNullable<PlanLimitDetails["ask"]> = { label: "Upgrade", reason: AI_HELP_UPGRADE_QUESTION };
+/** The same request on the last plan, where nothing is above theirs: it opens the same sheet, which asks to talk about the plan. */
+export const talkToItsAboutAiHelp: NonNullable<PlanLimitDetails["ask"]> = { ...askForMoreAiHelp, label: "Talk to ITS" };
 
 /** Which of the two a company on this plan is offered. A plan not given reads as one with somewhere to go, as `aiHelpLine` reads it. */
-export function askForAiHelpOn(planKey: string | null | undefined): typeof askForMoreAiHelp {
+export function askForAiHelpOn(planKey: string | null | undefined): NonNullable<PlanLimitDetails["ask"]> {
   return planKey === undefined || mayOfferUpgrade(planKey) ? askForMoreAiHelp : talkToItsAboutAiHelp;
 }
 
@@ -34,7 +34,8 @@ export async function aiHelpWordsOf(q: Queryable, companyId: string, now: Date):
 
 /** 402, never 502: nothing failed. `message`: one of `AI_HELP_LINE` (`aiHelpLine`). `planKey`: the company's, so the last plan's button says Talk to ITS. */
 export function aiCreditRefusal(t: Pick<Tenant, "role">, message: string, planKey?: string): HttpError {
-  return new HttpError(402, "ai_credit_used_up", message, { actions: can(t.role, "plan.request") ? [askForAiHelpOn(planKey)] : [], upgrade: true });
+  const details: PlanLimitDetails = { upgrade: true, ask: can(t.role, "plan.request") ? askForAiHelpOn(planKey) : null };
+  return new HttpError(402, "ai_credit_used_up", message, details);
 }
 
 /** Refused only for money held by work still running (`refusedForNow`): nothing to upgrade, and it comes back within minutes. `message`: one of `AI_HELP_LINE`'s busy lines. */

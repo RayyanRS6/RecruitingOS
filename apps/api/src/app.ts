@@ -20,7 +20,6 @@ import { draftPacketRoutes, rolePacketRoutes } from "./routes/role-packets";
 import { adminRoutes } from "./routes/admin";
 import { notificationRoutes } from "./routes/notifications";
 import { privacyRequestRoutes } from "./routes/privacy-requests";
-import { observabilityRoutes } from "./routes/observability";
 import { readWorkerHealth } from "./worker-health";
 import { appHealthWatch } from "./maintenance";
 import { redactString } from "@ros/core";
@@ -141,7 +140,6 @@ export function createApp(container: Container, opts: { healthCacheMs?: number }
   app.route("/api/v1/applications", applicationRoutes);
   app.route("/api/v1/admin", adminRoutes);
   app.route("/api/v1/admin/data-requests", privacyRequestRoutes);
-  app.route("/api/v1/admin/observability", observabilityRoutes);
   app.route("/api/v1/notifications", notificationRoutes);
   app.route("/api/v1/roles", screenRoleRoutes);
   app.route("/files", fileRoutes);
