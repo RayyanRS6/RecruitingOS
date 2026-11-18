@@ -8,6 +8,7 @@ import { HttpError } from "../middleware/errors";
 import type { Tenant } from "../middleware/session";
 import { jobUrls } from "./job-urls";
 import { limitReached, planRoom } from "./plan-room";
+import { queuePosts } from "./share";
 import { assertNoNewWork } from "./trial";
 
 /**
@@ -130,8 +131,8 @@ async function settleClosingDate(tx: Tx, container: Container, input: { role: Ro
  * once. Refused, in this order: the person's role (403); a job that is not a draft (409 `role_closed`, or
  * `already_published` for one that is open or paused); the plan (402 `trial_ended`, 402 `limit_reached`); the job
  * record (409 `not_ready`, each reason in `details.blockers`). Then the newest version becomes the live one, stamped
- * with who published it, the job opens, and its closing date is settled (`settleClosingDate`). Nothing is sent to
- * anyone, and nobody else is asked.
+ * with who published it, the job opens, its closing date is settled (`settleClosingDate`), and the writing of its two
+ * posts is queued (services/share.ts). Nothing is sent to anyone, and nobody else is asked.
  */
 export async function publishRole(tx: Tx, container: Container, input: { tenant: Pick<Tenant, "companyId" | "userId" | "role">; actor: Actor; roleId: string }): Promise<PublishResult> {
   const { tenant: t, actor } = input;
@@ -158,6 +159,8 @@ export async function publishRole(tx: Tx, container: Container, input: { tenant:
   await emit(tx, { type: "role_packet.approved", companyId: t.companyId, actor, subject: { type: "role_packet", id: `${role.id}:${version.version}` }, payload: { roleId: role.id, version: version.version } });
   await emit(tx, { type: "role.opened", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { packetVersion: version.version } });
   await settleClosingDate(tx, container, { role, packet: version.packet, actor, now });
+  // The LinkedIn and Indeed posts are written in the background once this commits; publishing never waits for them.
+  await queuePosts(tx, container.engine, role);
   return { ok: true, roleId: role.id, version: version.version, urls: jobUrls(container.env, { slug: company.slug, roleId: role.id }) };
 }
 

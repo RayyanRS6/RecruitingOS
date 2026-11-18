@@ -11,6 +11,7 @@ import type {
   Location,
   ResumeExtraction,
   RolePacket,
+  RolePosts,
   ScreenAssessment,
   ScreenProgress,
   ScreenStatus,
@@ -71,6 +72,11 @@ export const roles = pgTable(
      * Only ITS changes it (packages/core/src/apply-flow.ts, `resolveApplyMode`).
      */
     applyMode: text("apply_mode"),
+    /**
+     * The LinkedIn and Indeed posts of the Share tab (migration 0038): the two texts, whether a person edited each, when
+     * each was written, and where the writing stands. Null on a job never published.
+     */
+    posts: jsonb("posts").$type<RolePosts>(),
     createdBy: jsonb("created_by").$type<Actor>().notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

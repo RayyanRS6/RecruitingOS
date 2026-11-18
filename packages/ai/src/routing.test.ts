@@ -18,7 +18,7 @@ describe("which model each task runs on", () => {
   it("gives Sonnet 5.5 the whole job draft alone, and every other task to Haiku 5.5", () => {
     const table = modelTableFromEnv({});
     expect(TASKS.filter((t) => modelForTask(t, table) === "claude-sonnet-5-5")).toEqual(["intake.compile"]);
-    for (const task of ["intake.turn", "intake.extract", "company.about", "resume.extract", "triage.assess", "screen.turn", "screen.assess"] as const) {
+    for (const task of ["intake.turn", "intake.extract", "company.about", "job.posts", "resume.extract", "triage.assess", "screen.turn", "screen.assess"] as const) {
       expect(modelForTask(task, table)).toBe("claude-haiku-5-5");
     }
   });

@@ -5,6 +5,7 @@ export * from "./runner";
 export * from "./prompts/registry";
 export * from "./prompts/intake";
 export * from "./prompts/company-about";
+export * from "./prompts/job-posts";
 export * from "./prompts/resume";
 export { FakeProvider, type FakeFailure, type FakeHandler } from "./providers/fake";
 export * from "./prompts/triage";

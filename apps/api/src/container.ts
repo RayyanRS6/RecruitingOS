@@ -17,10 +17,8 @@ import { reportError } from "./observability";
 import { jobFailureReport, stepFailureReport } from "./failure-reports";
 import { DAILY_MS, recurring } from "./recurring-jobs";
 import { LINK_REQUEST_JOB_KIND, emailStatusLinks } from "./services/applications";
-import { registerApplyConversationJobs } from "./services/apply-conversation";
-import { registerApplyDetailsJobs } from "./services/apply-details";
 import { CLOSE_OUT_JOB_KIND, sendDueCloseOutNotes } from "./services/close-out";
-import { registerProfileJobs } from "./services/profile-facts";
+import { registerPostsJob } from "./services/share";
 
 const PRIVACY_DEADLINE_JOB_KIND = "privacy.deadline_check";
 
@@ -36,6 +34,8 @@ export type Container = {
   rateLimits: RateLimitStore;
   /** Seals the grant a browser hands the apply form after a direct-to-storage upload (decision 2). */
   uploadGrants: UploadGrants;
+  /** Whether an address is on the do-not-send list, from the copy the email guard reads: nothing can be emailed to it. */
+  emailStopped(address: string): boolean;
   /** Emails one critical alert to the platform administrators now, after the commit that raised it (Wave S2 F1). */
   emailCritical(alertId: string): Promise<void>;
   /** Kicks the inline worker after a request commits; returns a promise tests can await. */
@@ -203,12 +203,8 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       if (email) await emailStatusLinks({ db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL }, email, ctx.now);
     });
 
-    // A repeat submission's conversation (plan E1): wiped after seven days unconfirmed, and tried again after an outage.
-    registerApplyConversationJobs(engine, { db: handle.db, ai, integrations, engine, jobsBaseUrl: env.JOBS_BASE_URL });
-    // Reading a résumé for the apply form (Wave S7, S7-B) and the "use your saved details" email (S7-F): registered in
-    // every process, so the web process can queue them and the worker runs them.
-    registerApplyDetailsJobs(engine, { db: handle.db, ai, integrations });
-    registerProfileJobs(engine, { db: handle.db, integrations, jobsBaseUrl: env.JOBS_BASE_URL, secret: env.SESSION_SECRET });
+    // The LinkedIn and Indeed posts of a job's Share tab are written here, after the publish or the edit that asked for them committed.
+    registerPostsJob(engine, { db: handle.db, ai, env });
 
     engine.registerJob("email.retry", async (payload, ctx) => {
       await withPlatform(handle.db, (tx) => retryCommunication(tx, integrations, { communicationId: String(payload.communicationId ?? ""), attempt: Number(payload.attempt ?? 1), now: ctx.now }));
@@ -249,6 +245,7 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       engine,
       rateLimits,
       uploadGrants: new UploadGrants(env.SESSION_SECRET),
+      emailStopped: (address) => suppressed.has(address.trim().toLowerCase()),
       emailCritical,
       kick,
       drain,

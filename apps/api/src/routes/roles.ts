@@ -27,7 +27,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = () => new HttpError(404, "not_found", "Job not found.");
 
 /** The job's id from the address; one that is not an id names no job: a plain 404, never a database error. */
-function jobId(id: string | undefined): string {
+export function jobId(id: string | undefined): string {
   if (!id || !UUID.test(id)) throw NOT_FOUND();
   return id;
 }

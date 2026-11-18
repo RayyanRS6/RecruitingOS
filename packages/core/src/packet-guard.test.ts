@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { PROXY_RULES, formQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
+import { PROXY_RULES, formQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags, wordingProblems } from "./packet-guard";
 
 /** A small valid job record; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
@@ -811,5 +811,46 @@ describe("the criminal-record rules rebuilt from the final check: production's w
   it("refuses an answer offered in a ban's words, as a question in them, and passes a driving record's own words", () => {
     const problems = formQuestionProblems([{ key: "cq_driving", question: "How would you describe your driving record?", options: ["Clean record", "One or two tickets", "Clean driving record"] }]);
     expect(problems.map((p) => [p.part, p.rule, p.text])).toEqual([["option", "asks_record", "Clean record"]]);
+  });
+});
+
+describe("a text written from a saved job (a LinkedIn post, an Indeed listing) is held to the job description's rules", () => {
+  const job = (over: (p: RolePacket) => void = () => {}) => {
+    const p = guardPacket(packet(over), ctx).packet;
+    return { compensation: p.compensation, benefits: p.compensation.benefitsSummary ?? null, provenance: p.provenance };
+  };
+
+  it("passes plain words, the job's own pay however it is written, and a figure from its benefits line", () => {
+    const plain = job((x) => { x.compensation.benefitsSummary = "Health cover and a $500 uniform allowance"; });
+    for (const line of ["We are hiring a hygienist in Irvine.", "Pay: $45–$55 an hour", "$45.00 to $55.00 an hour, full time", "- $500 uniform allowance", "Over 50 patients a week, Monday to Friday"]) expect(wordingProblems(line, plain), line).toEqual([]);
+    expect(wordingProblems("Salary $90k to $110,000 a year", { compensation: { min: 90000, max: 110000 }, provenance: {} })).toEqual([]);
+  });
+
+  it("finds wording that stands in for a protected trait, with the rule, the words and the reason", () => {
+    expect(wordingProblems("Recent graduates welcome, and no criminal record.", job()).map((p) => [p.rule, p.text])).toEqual([["recent_graduate", "Recent graduates"], ["criminal_record", "no criminal record"]]);
+    const [age] = wordingProblems("A young team, ages 22 to 30.", job());
+    expect(age).toMatchObject({ rule: "age", reason: "Age, and wording that stands in for age, cannot be a hiring requirement." });
+  });
+
+  it("finds a pay figure that is neither the job's range nor in its benefits line", () => {
+    expect(wordingProblems("Earn up to $70 an hour, with a $1,000 sign-on bonus.", job()).map((p) => [p.rule, p.text])).toEqual([["pay_mismatch", "$70"], ["pay_mismatch", "$1,000"]]);
+    expect(wordingProblems("A $1,000 sign-on bonus.", job((x) => { x.compensation.benefitsSummary = "A $1,000 sign-on bonus"; }))).toEqual([]);
+  });
+
+  it("finds what the owner was told could not be used, reworded as a must-have too", () => {
+    const declined = job((x) => { x.provenance.declinedCriteria = [{ requested: "No visa permit", reason: "Visa status cannot be a requirement." }]; });
+    expect(wordingProblems("- Visa permit", declined).map((p) => [p.rule, p.text, p.reason])).toEqual([["declined", "No visa permit", "Visa status cannot be a requirement."]]);
+    expect(wordingProblems("- Active CA RDH license", declined)).toEqual([]);
+  });
+
+  it("passes wording a person kept in the job with a reason, and only that wording", () => {
+    const flagged = guardPacket(packet((x) => { x.requirements.mustHaves[0].text = "10+ years of experience as a hygienist"; }), ctx);
+    const [flag] = flagged.flags;
+    expect(flag.rule).toBe("experience_floor");
+    const open = { compensation: flagged.packet.compensation, provenance: flagged.packet.provenance };
+    expect(wordingProblems(`- ${flag.text}`, open).map((p) => p.rule)).toEqual(["experience_floor"]);
+    const kept = guardPacket(packet((x) => { x.requirements.mustHaves[0].text = "10+ years of experience as a hygienist"; x.provenance.flags = [{ ...flag, keepReason: "The lead hygienist trains the others." }]; }), { ...ctx, actor: dana }).packet;
+    expect(wordingProblems(`- ${flag.text}`, { compensation: kept.compensation, provenance: kept.provenance })).toEqual([]);
+    expect(wordingProblems("- 15+ years of experience", { compensation: kept.compensation, provenance: kept.provenance }).map((p) => p.rule)).toEqual(["experience_floor"]);
   });
 });

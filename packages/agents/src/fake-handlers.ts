@@ -1,7 +1,7 @@
 import type { FakeProvider, StructuredRequest } from "@ros/ai";
 import { screenCriterion } from "@ros/core";
 import { fakeResumeExtract, fakeScreenAssess, fakeScreenTurn, fakeTriageAssess } from "./fake-candidate";
-import { fakeIntakeCompile, fakeIntakeExtract, fakeIntakeTurn } from "./fake-job";
+import { fakeIntakeCompile, fakeIntakeExtract, fakeIntakeTurn, fakeJobPosts } from "./fake-job";
 
 /**
  * Deterministic handlers for the fake AI provider. They exist so tests, evals, and local development run
@@ -12,6 +12,7 @@ export function registerFakeHandlers(fake: FakeProvider): void {
   fake.register("intake.turn", fakeIntakeTurn);
   fake.register("intake.compile", fakeIntakeCompile);
   fake.register("intake.extract", fakeIntakeExtract);
+  fake.register("job.posts", fakeJobPosts);
   fake.register("resume.extract", fakeResumeExtract);
   fake.register("triage.assess", fakeTriageAssess);
   fake.register("screen.turn", fakeScreenTurn);

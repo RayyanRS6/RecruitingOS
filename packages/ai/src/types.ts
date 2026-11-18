@@ -8,6 +8,7 @@ export type TaskKey =
   | "intake.compile"
   | "intake.extract"
   | "company.about"
+  | "job.posts"
   | "resume.extract"
   | "triage.assess"
   | "screen.turn"

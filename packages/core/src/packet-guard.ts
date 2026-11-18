@@ -556,11 +556,7 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     const money = description.match(/\$\s?\d[\d,.]*(?:\s*(?:k|an hour|per hour|\/hr|a year|per year))?/i);
     if (money) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: UNCONFIRMED_PAY.rule, text: money[0], reason: UNCONFIRMED_PAY.reason, alternative: UNCONFIRMED_PAY.alternative });
   } else {
-    const range = new Set([packet.compensation.min, packet.compensation.max]);
-    for (const m of description.matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k\b)?/gi)) {
-      const amount = Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1);
-      if (!range.has(amount)) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: PAY_MISMATCH.rule, text: m[0].trim(), reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
-    }
+    for (const figure of otherPayFigures(description, [packet.compensation.min, packet.compensation.max])) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: PAY_MISMATCH.rule, text: figure, reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
   }
 
   // Who kept what: a fresh request to keep is stamped with whoever is saving; an earlier keep carries over unchanged.
@@ -574,6 +570,39 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
   }
   packet.provenance.flags = flags;
   return { packet, flags, changes };
+}
+
+const DOLLAR_FIGURE = /\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k\b)?/gi;
+
+/** The dollar amounts written in `text` ("$60", "$70k", "$1,200.50"). */
+function dollarAmounts(text: string): Array<{ words: string; amount: number }> {
+  return [...text.matchAll(DOLLAR_FIGURE)].map((m) => ({ words: m[0].trim(), amount: Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1) }));
+}
+
+/** The dollar figures in `text`, as written, that are none of the `allowed` amounts. */
+function otherPayFigures(text: string, allowed: readonly number[]): string[] {
+  return dollarAmounts(text).filter((f) => !allowed.includes(f.amount)).map((f) => f.words);
+}
+
+/**
+ * The guard's wording check for a text written from a saved job (its LinkedIn post, its Indeed listing): what each rule
+ * would flag in the job's own description, what the owner was told could not be used, and a dollar figure that is
+ * neither the job's pay nor in its benefits line. Wording a person kept in the job with a reason passes here too.
+ */
+export function wordingProblems(text: string, job: { compensation?: { min: number; max: number } | null; benefits?: string | null; provenance: { flags?: PacketFlag[]; declinedCriteria?: DeclinedCriterion[] } }): CriterionCheck[] {
+  const kept = (job.provenance.flags ?? []).filter((f) => f.kept);
+  const isKept = (rule: string, words: string) => kept.some((f) => f.rule === rule && normalizeCriterion(f.text) === normalizeCriterion(words));
+  const found: CriterionCheck[] = [];
+  for (const r of PROXY_RULES) {
+    const hit = r.find(text);
+    if (hit && !isKept(r.rule, hit)) found.push({ rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative });
+  }
+  for (const d of job.provenance.declinedCriteria ?? []) {
+    if ((mentionsPhrase(text, d.requested) || mentionsPhrase(text, mustHaveOf(d.requested))) && !isKept("declined", d.requested)) found.push({ rule: "declined", text: d.requested, reason: d.reason, alternative: d.alternative ?? "" });
+  }
+  const stated = [...(job.compensation ? [job.compensation.min, job.compensation.max] : []), ...dollarAmounts(job.benefits ?? "").map((f) => f.amount)];
+  for (const figure of otherPayFigures(text, stated)) if (!isKept(PAY_MISMATCH.rule, figure)) found.push({ rule: PAY_MISMATCH.rule, text: figure, reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
+  return found;
 }
 
 /** The flags nobody has dealt with yet; publishing waits for none to be left. */

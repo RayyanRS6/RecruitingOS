@@ -26,6 +26,8 @@ export const TASK_TIER: Record<TaskKey, Tier> = {
   "intake.extract": "fast",
   // A few sentences about the company for its job pages (D10); a person edits and approves them in Setup.
   "company.about": "standard",
+  // The LinkedIn post and the Indeed listing of a published job: two short texts from the job's public facts.
+  "job.posts": "standard",
   "resume.extract": "fast",
   "triage.assess": "standard",
   "screen.turn": "standard",

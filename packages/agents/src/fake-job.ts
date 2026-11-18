@@ -1,10 +1,10 @@
-import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeMissingFact, type IntakeQuestion, type IntakeTurn } from "@ros/contracts";
+import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeMissingFact, type IntakeQuestion, type IntakeTurn, type JobPosts } from "@ros/contracts";
 import { ASKED_WORDS, type StructuredRequest } from "@ros/ai";
 import { normalizeCriterion } from "@ros/core";
 
 /**
- * The stand-in provider's answers for the job builder (intake.turn, intake.compile, intake.extract), so tests, evals and
- * local development run without a model. Rules, not intelligence: they read the request the real prompts render and
+ * The stand-in provider's answers for the job builder (intake.turn, intake.compile, intake.extract) and for a published
+ * job's two posts (job.posts), so tests, evals and local development run without a model. Rules, not intelligence: they read the request the real prompts render and
  * answer the way the model is told to.
  */
 
@@ -302,4 +302,48 @@ export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePac
     compliance: { jurisdictions: [], notices: ["ai_use", "privacy"] },
     provenance: { aiRunIds: [], assumptions },
   };
+}
+
+/**
+ * job.posts: the two posts as the model is told to write them, from the job's facts in the request and nothing else. A
+ * LinkedIn post (an opening line, short points, the pay with the schedule, its link) and an Indeed listing under its five
+ * headings, each with its own Apply link.
+ */
+export function fakeJobPosts(req: StructuredRequest<unknown>): JobPosts {
+  const said = req.messages.map((m) => m.content).join("\n");
+  let job: { companyName?: string; title?: string; places?: string[]; workArrangement?: string; employmentType?: string; schedule?: string | null; pay?: string | null; benefits?: string | null; description?: string; mustHaves?: string[] } = {};
+  try { job = JSON.parse(said.match(/<job>\n([\s\S]*?)\n<\/job>/)?.[1] ?? "{}") as typeof job; } catch { /* a job with no facts gets the plainest posts */ }
+  const link = (post: string) => said.match(new RegExp(`^Apply link for the ${post} post: (\\S+)$`, "m"))?.[1] ?? "";
+  const title = job.title ?? "Open job";
+  const company = job.companyName ?? "our company";
+  const where = /remote/i.test(job.workArrangement ?? "") || !job.places?.length ? "" : ` in ${job.places.join("; ")}`;
+  const terms = [job.employmentType, job.schedule, job.workArrangement].filter(Boolean).join(", ");
+  const needs = (job.mustHaves ?? []).map((m) => m.replace(/[\s.]+$/, ""));
+  const sentences = (job.description ?? "").match(/[^.!?]+[.!?]+/g)?.map((s) => s.trim()) ?? [];
+  const duties = sentences.filter((s) => /^You will\b/.test(s)).map((s) => s.replace(/[.]+$/, ""));
+  const linkedin = [
+    `We are hiring: ${title} at ${company}${where}.`,
+    ...[...duties.slice(0, 1), ...needs.slice(0, 4).map((n) => `You bring: ${n}`)].map((point) => `- ${point}`),
+    [job.pay, terms].filter(Boolean).join(". "),
+    `Apply here: ${link("LinkedIn")}`,
+  ];
+  const indeed = [
+    "About the job",
+    sentences.slice(0, 2).join(" ") || `${company} is hiring: ${title}${where}.`,
+    "",
+    "What you will do",
+    ...(duties.length ? duties : sentences.slice(2, 5)).map((duty) => `- ${duty}`),
+    "",
+    "What you need",
+    ...needs.map((n) => `- ${n}`),
+    "",
+    "Pay and schedule",
+    ...(job.pay ? [`Pay: ${job.pay}`] : []),
+    ...(terms ? [terms] : []),
+    ...(job.benefits ? [`Benefits: ${job.benefits}`] : []),
+    "",
+    "How to apply",
+    `Apply on our job page: ${link("Indeed")}`,
+  ];
+  return { linkedin: linkedin.filter(Boolean).join("\n"), indeed: indeed.join("\n") };
 }
