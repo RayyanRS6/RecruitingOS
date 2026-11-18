@@ -6,11 +6,9 @@ export type AuditAction =
   | "candidate.viewed"
   | "candidate.exported"
   | "export.created"
-  | "policy.changed"
   | "membership.changed"
   | "data.deleted"
   | "admin.bypass"
-  | "credentials.updated"
   | "notice.changed"
   | "session.revoked"
   | "assessment.flagged"
@@ -22,14 +20,6 @@ export type AuditAction =
   | "trial.started"
   | "trial.extended"
   | "trial.ended"
-  | "calendar.changed"
-  /** Secret lifecycle (correction 10): every read of a stored credential is recorded with service, purpose, tenant and integration. */
-  | "secret.stored"
-  | "secret.read"
-  | "secret.rotated"
-  | "secret.deleted"
-  | "secret.delete_failed"
-  | "credentials.deleted"
   | "alert.acknowledged"
   /** An alert marked dealt with: by a person in the console, or by the system once its condition ended (Wave S2 F1). */
   | "alert.resolved"
@@ -73,12 +63,7 @@ export type AuditAction =
   | "document.replaced"
   | "document.deleted"
   | "document.rejected"
-  /** Job distribution (docs/spec/20): a person recorded, verified, paused, resumed, closed, retried or confirmed the removal of a posting; changed a tracked link; flipped the accepting-applications switch. */
-  | "posting.changed"
-  | "application_link.changed"
-  | "role.applications_toggled"
-  /** Publishing (plan Wave D): the boards a role uses, and its closing date. */
-  | "role.boards_chosen"
+  /** A job's closing date set, changed or taken off. */
   | "role.closing_date_changed"
   /** Team invitations (docs/spec/21, area A): sent, sent again, withdrawn, accepted at sign-in. Never the token. */
   | "invitation.sent"
@@ -100,14 +85,9 @@ export type AuditAction =
   | "audit.exported"
   /** The holder of a session confirmed with their sign-in provider again before a sensitive change (audit finding A12). */
   | "session.reauthenticated"
-  /** A person wrote to a candidate from the sheet (F11): who, which application, whether it went at once or waited for an approval, and who approved it. Never the text. */
-  | "message.sent"
-  | "message.approval_requested"
   /** Undo (plan G9): a person took back a message while it waited in the outbox. Which message, never the text. */
   | "message.undone"
-  /** The one closing message of a closed role (Q30): sent to everyone untold, or put to one approval, by whom, how many. */
-  | "role.closing_message"
-  /** A person changed which email alerts they get (plan B3): the groups, before and after. Never anything else. */
+  /** A person turned their "Email me updates" switch on or off: before and after. Never anything else. */
   | "notification.preferences_changed"
   /** Wave E: ITS changed how a role or a company's roles meet the conversation. */
   | "role.apply_mode_changed"

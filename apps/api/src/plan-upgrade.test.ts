@@ -122,11 +122,9 @@ describe("asking for a bigger plan", () => {
       const brief = await read<{ summary: string; cards: Array<{ kind: string; title: string }> }>(await json(co.cookie, "GET", "/api/v1/brief"));
       expect(brief.cards.map((c) => c.title).join(" ")).not.toMatch(/plan/i);
       expect(brief.summary).toContain("· 0 at risk ·");
-      // anyone who may ask gets the same answer; an interviewer may not ask
+      // anyone on the team may ask, and gets the same answer
       const hm = await signInAs(container, app, { companyId: co.id, role: "hiring_manager" });
       expect(await read(await askPlan(hm))).toEqual({ requestedAt: first.requestedAt, alreadyAsked: true });
-      const interviewer = await signInAs(container, app, { companyId: co.id, role: "interviewer" });
-      expect((await askPlan(interviewer)).status).toBe(403);
       expect((await app.request("/api/v1/plans/request", { method: "POST" })).status).toBe(401);
     });
 

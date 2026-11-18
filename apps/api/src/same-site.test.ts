@@ -114,7 +114,7 @@ describe("cross-site changes to the API", () => {
   it("the API's own form pages keep their real origin on their posts (Referrer-Policy: same-origin); everything else keeps no-referrer", async () => {
     const policy = async (path: string) => (await app.request(path, { headers: { cookie } })).headers.get("referrer-policy");
     // the sign-in link, the invitation, the second factor (no step open: a redirect, same header), the development consent pages
-    for (const path of ["/api/v1/auth/consume?token=t", "/api/v1/auth/invite?token=t", "/api/v1/auth/mfa", "/api/v1/auth/mfa/backup", "/api/v1/auth/fake/authorize?provider=google", "/api/v1/integrations/calendar/fake/authorize"]) {
+    for (const path of ["/api/v1/auth/consume?token=t", "/api/v1/auth/invite?token=t", "/api/v1/auth/mfa", "/api/v1/auth/mfa/backup", "/api/v1/auth/fake/authorize?provider=google"]) {
       expect(await policy(path), path).toBe("same-origin");
     }
     // the page the invitation's own form answers with

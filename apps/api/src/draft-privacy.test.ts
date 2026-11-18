@@ -8,8 +8,8 @@ import { signInAs } from "./test-helpers";
 
 /**
  * Who can see a role while it is being drafted (founder decision Q6, option A; plan item 0.2). A draft carries the pay
- * and the reasons for the hire: an interviewer never reaches it, a hiring manager resumes only their own and cannot
- * continue, discard or compile anyone else's, and owners and admins can take one over.
+ * and the reasons for the hire: a hiring manager resumes only their own and cannot continue, discard or compile anyone
+ * else's, and owners and admins can take one over.
  */
 describe("drafts belong to the person who started them", () => {
   let container: Container;
@@ -18,8 +18,6 @@ describe("drafts belong to the person who started them", () => {
   let admin = "";
   let manager = "";
   let otherManager = "";
-  let interviewer = "";
-  let hr = "";
   let companyId = "";
   let ownersDraft = "";
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
@@ -39,29 +37,12 @@ describe("drafts belong to the person who started them", () => {
     admin = await signInAs(container, app, { companyId, role: "admin" });
     manager = await signInAs(container, app, { companyId, role: "hiring_manager", email: "hm@drafts.test" });
     otherManager = await signInAs(container, app, { companyId, role: "hiring_manager" });
-    interviewer = await signInAs(container, app, { companyId, role: "interviewer" });
-    hr = await signInAs(container, app, { companyId, role: "hr" });
     const r = await json(owner, "POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time." });
     ownersDraft = ((await r.json()) as { intakeSessionId: string }).intakeSessionId;
     expect(ownersDraft).toBeTruthy();
   });
   afterAll(async () => {
     await container.close();
-  });
-
-  it("an interviewer and HR never reach a draft: no resume, no start, and the conversation answers from the brief", async () => {
-    for (const cookie of [interviewer, hr]) {
-      expect((await current(cookie)).status).toBe(403);
-      expect((await json(cookie, "POST", "/api/v1/intake/sessions", {})).status).toBe(403);
-      expect((await json(cookie, "POST", `/api/v1/intake/sessions/${ownersDraft}/messages`, { message: "It's a replacement." })).status).toBe(403);
-      // a hiring request in the conversation box is answered from the brief: no draft is started or continued
-      const r = await json(cookie, "POST", "/api/v1/intake/conversation/messages", { message: "I need to hire a front desk coordinator." });
-      expect(r.status).toBe(200);
-      const body = (await r.json()) as { reply: string; intakeSessionId?: string };
-      expect(body.intakeSessionId).toBeUndefined();
-      expect(body.reply).not.toMatch(/\$45|\$55/);
-    }
-    expect((await container.db.select().from(intakeSessions).where(eq(intakeSessions.companyId, companyId))).length).toBe(1);
   });
 
   it("a hiring manager resumes only their own draft and cannot continue, discard or compile the owner's", async () => {

@@ -15,7 +15,7 @@ import { HttpError } from "../middleware/errors";
 export const companyRoutes = new Hono<Vars>();
 
 /**
- * Open sign-up (founder decision B7): anyone signed in who has no company yet may create one and draft and approve roles
+ * Open sign-up (founder decision B7): anyone signed in who has no company yet may create one and draft and publish jobs
  * at once. Its public side waits for the one-time ITS check, so the ITS queue is told here (COMPANY_CHECK=auto confirms
  * it instead). A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): a person who
  * already belongs to a company, or already created one, is refused with 409 `another_company_needs_its` ("To open
@@ -46,7 +46,6 @@ companyRoutes.post("/", requireUser, async (c) => {
   const autoVerify = container.env.COMPANY_CHECK === "auto";
   const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
-  await withTenant(container.db, company.id, (tx) => container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: company.id, subject: { type: "company", id: company.id }, state: { companyId: company.id }, idempotencyKey: `stuck_role_detector:${company.id}`, actor: actorOf(c) }));
   if (!autoVerify) await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: body.website ?? null }, owner: { name: body.ownerName ?? s.user.name ?? null, email: s.user.email } });
   await container.kick();
   return c.json(company, 201);
