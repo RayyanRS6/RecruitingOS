@@ -1,6 +1,5 @@
 import { FakeEmailAdapter } from "./email/fake";
 import { PostmarkEmailAdapter } from "./email/postmark";
-import { BlsOewsAdapter } from "./comp/bls";
 import { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 import { GrantSigner } from "./storage/grants";
 import { SupabaseStorageAdapter } from "./storage/supabase";
@@ -12,11 +11,10 @@ import { FakeIdentityProvider } from "./identity/fake";
 import { SupabaseIdentityProvider } from "./identity/supabase";
 import type { IdentityProvider } from "./identity/types";
 import type { AnalyticsAdapter } from "./analytics/types";
-import type { CompAdapter, EmailAdapter, StorageAdapter, AdapterStatus } from "./types";
+import type { EmailAdapter, StorageAdapter, AdapterStatus } from "./types";
 
 export type Integrations = {
   email: EmailAdapter;
-  comp: CompAdapter;
   storage: StorageAdapter;
   /** Malware scanning of quarantined uploads; a fake until a real engine is authorized (real-data blocker). */
   scanner: MalwareScanner;
@@ -36,7 +34,6 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
   const appBaseUrl = env.APP_BASE_URL ?? "http://localhost:3000";
   const fromDomain = env.EMAIL_FROM_DOMAIN ?? "mail.localhost";
   const email: EmailAdapter = env.EMAIL_PROVIDER === "postmark" ? new PostmarkEmailAdapter(env.POSTMARK_SERVER_TOKEN) : new FakeEmailAdapter();
-  const comp = new BlsOewsAdapter(env.BLS_API_KEY, fetch, env.COMP_BLS_ENABLED !== "false");
   const storage = createStorage(env, opts, appBaseUrl);
   const scanner: MalwareScanner = createScanner(env);
   const identity: IdentityProvider = env.AUTH_PROVIDER === "supabase"
@@ -45,7 +42,6 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
   const analytics: AnalyticsAdapter = env.ANALYTICS_PROVIDER === "posthog" ? new PostHogServerAdapter(env.POSTHOG_PROJECT_API_KEY, env.POSTHOG_HOST) : new FakeAnalyticsAdapter();
   return {
     email,
-    comp,
     storage,
     scanner,
     identity,
@@ -55,7 +51,6 @@ export function createIntegrations(env: Record<string, string | undefined> = pro
     clock: () => new Date(),
     statuses: () => [
       { kind: "email", provider: email.id, status: email.status },
-      { kind: "comp", provider: comp.id, status: comp.status },
       { kind: "storage", provider: storage.id, status: storage.status },
       { kind: "scanner", provider: scanner.id, status: scanner.status },
       { kind: "identity", provider: identity.id, status: identity.status },

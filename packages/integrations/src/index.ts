@@ -3,7 +3,6 @@ export * from "./registry";
 export { FakeEmailAdapter } from "./email/fake";
 export { PostmarkEmailAdapter } from "./email/postmark";
 export { mailbox } from "./email/mailbox";
-export { BlsOewsAdapter } from "./comp/bls";
 export { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 export { GrantSigner, type GrantPayload } from "./storage/grants";
 export { SupabaseStorageAdapter, StorageError } from "./storage/supabase";

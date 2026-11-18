@@ -54,7 +54,7 @@ describe("publishing a job", () => {
   const flag = (over: Partial<PacketFlag> = {}): PacketFlag => ({ id: "f1", path: "description.publicJobDescription", rule: "age", text: "young and energetic", reason: "It can stand in for age.", ...over });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake",WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@publish.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
@@ -191,7 +191,7 @@ describe("publishing a job", () => {
   });
 
   it("refuses when the plan has no room for the job, or the trial has ended, and leaves the job a draft", async () => {
-    const other = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    const other = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake",WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     try {
       const app2 = createApp(other);
       const call = (cookie: string, method: string, path: string, body?: unknown) => app2.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });

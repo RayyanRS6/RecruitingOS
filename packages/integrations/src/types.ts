@@ -36,16 +36,6 @@ export interface EmailAdapter {
   send(msg: OutboundEmail): Promise<SendResult>;
 }
 
-
-/** `approximate` (with the broader `occupation` it was read from) when the job has no occupation of its own. */
-export type CompBenchmark = { metro: string; basis: "hourly" | "salary"; p25: number; p50: number; p75: number; source: string; asOf: string; approximate?: true; occupation?: string };
-
-export interface CompAdapter {
-  readonly id: string;
-  readonly status: AdapterStatus;
-  benchmark(query: { title: string; socCode?: string; locationText?: string; basis?: "hourly" | "salary" }): Promise<CompBenchmark | null>;
-}
-
 export type StoredObjectInfo = { size: number; contentType: string | null };
 
 /** What a browser needs to send one file straight to storage: where, how, with which headers, until when. */

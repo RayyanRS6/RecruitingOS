@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { MORE_JOBS_UPGRADE_QUESTION, type DraftSaved, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnResponse, type PlanLimitDetails, type PublishBlocker, type PublishResult, type RoleDetail, type RoleSummary } from "@ros/contracts";
+import { MORE_JOBS_UPGRADE_QUESTION, type DraftSaved, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnResponse, type PlanLimitDetails, type PublishBlocker, type PublishResult, type RoleDetail, type RoleSummary, type ShareView } from "@ros/contracts";
 import { addCalendarDays, companyToday, entitlements } from "@ros/core";
 import { aiRuns, companies, intakeSessions, rolePackets, roles } from "@ros/db";
 import { createApp } from "./app";
@@ -165,9 +165,12 @@ describe("the job builder", () => {
     expect(again.status).toBe(201);
     expect(((await again.json()) as PublishResult).roleId).toBe(result.roleId);
     expect(await container.db.select({ id: roles.id }).from(roles).where(eq(roles.companyId, companyId))).toHaveLength(1);
-    // the writing is the only call on the model that writes the whole job
+    // the writing is the only call on the model that writes the whole job; publishing queued one more, for the two posts
     const runs = await container.db.select({ task: aiRuns.task }).from(aiRuns).where(eq(aiRuns.companyId, companyId));
-    expect(runs.map((x) => x.task).sort()).toEqual(["intake.compile", "intake.turn", "intake.turn", "intake.turn"]);
+    expect(runs.map((x) => x.task).sort()).toEqual(["intake.compile", "intake.turn", "intake.turn", "intake.turn", "job.posts"]);
+    const shared = (await (await json(owner, "GET", `/api/v1/roles/${result.roleId}/share`)).json()) as ShareView;
+    expect(shared).toMatchObject({ jobUrl: result.urls.job, public: true, state: "ready" });
+    expect(shared.posts.map((post) => post.text?.includes(`${result.urls.job}?src=${post.channel}`))).toEqual([true, true]);
   });
 
   it("can write the job after one sentence that names every essential, with the pay the owner typed counted as set by them", async () => {
@@ -185,6 +188,11 @@ describe("the job builder", () => {
     expect(done.flags.filter((f) => !f.kept)).toEqual([]);
     const p = await json(owner, "POST", `${sessions}/${draft.id}/publish`);
     expect(p.status, await p.clone().text()).toBe(201);
+    // the Share tab then has its two posts, each holding its own Apply link
+    const { roleId, urls } = (await p.json()) as PublishResult;
+    const shared = (await (await json(owner, "GET", `/api/v1/roles/${roleId}/share`)).json()) as ShareView;
+    expect(shared.state).toBe("ready");
+    expect(shared.posts.map((post) => [post.channel, post.applyUrl, post.text?.includes(post.applyUrl)])).toEqual([["linkedin", `${urls.job}?src=linkedin`, true], ["indeed", `${urls.job}?src=indeed`, true]]);
   });
 
   it("starts no draft for words that are not about hiring, and refuses an empty start", async () => {
