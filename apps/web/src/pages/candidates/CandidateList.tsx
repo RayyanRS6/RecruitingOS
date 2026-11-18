@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CANDIDATE_TAB_LABEL, type CandidateActionState, type CandidateList as CandidateListView, type CandidateRow, type CandidateTab } from "@ros/contracts";
 import { Alert, Avatar, Button, EmptyState, ErrorState, Icon, Menu, ScoreBadge, Skeleton, TabPanel, Tabs } from "@ros/ui";
@@ -10,6 +10,7 @@ import {
   type BulkButton, type EmptyView, type ListPlace, type RowView, type ScoreView,
 } from "../../candidates";
 import { LockedCandidates } from "../../components/LockedCandidates";
+import { focusLost, rowFocusAfterMove } from "../../focus-after";
 import { Upgrade } from "../../components/Upgrade";
 import { Link, useNavigate, useSearchParams } from "../../nav";
 import { toast } from "../../toast";
@@ -49,6 +50,21 @@ export function CandidateList({ place }: { place: ListPlace }) {
   // "Email the decision" pressed on a row: the panel opens on the email itself
   const [decisionFor, setDecisionFor] = useState<string | null>(null);
   const actions = useCandidateActions(roleId);
+  // Where an action was started from. When it takes people out of this tab, the button that had the focus goes with
+  // them, so once the list is read again the focus moves on: to the person now in that row's place, to "Select all"
+  // after an action for several, or to the tab when nobody is left. Only when the focus really was dropped.
+  const root = useRef<HTMLDivElement>(null);
+  const acted = useRef<{ id: string; index: number } | "several" | null>(null);
+  const settled = !actions.one.isPending && !actions.many.isPending && !q.isFetching;
+  useEffect(() => {
+    const from = acted.current;
+    if (!from || !settled || !rows) return;
+    acted.current = null;
+    if (!focusLost(document.activeElement, document.body)) return;
+    const next = from === "several" ? null : rowFocusAfterMove(rows.map((r) => r.id), from);
+    const target = next ? `[data-application=${JSON.stringify(next.id)}] .candidate-name` : rows.length ? "[data-select-all]" : '[role="tab"][aria-selected="true"]';
+    root.current?.querySelector<HTMLElement>(target)?.focus();
+  }, [settled, rows]);
   const go = (state: { tab: CandidateTab; open?: string | null }) => nav(listHref(place, state), { replace: true });
   const pickTab = (next: CandidateTab) => {
     setTicked(new Set());
@@ -66,15 +82,19 @@ export function CandidateList({ place }: { place: ListPlace }) {
     if (opensPanelFirst(state.action)) {
       setDecisionFor(row.id);
       go({ tab, open: row.id });
-    } else actions.one.mutate({ id: row.id, action: state.action });
+    } else {
+      acted.current = { id: row.id, index: rows?.findIndex((r) => r.id === row.id) ?? -1 };
+      actions.one.mutate({ id: row.id, action: state.action });
+    }
   };
   const runBulk = (button: BulkButton) => {
     if (button.action === "send_decision" && confirming?.action !== "send_decision") return setConfirming(button);
+    acted.current = "several";
     actions.many.mutate(button, { onSuccess: () => { setTicked(new Set()); setConfirming(null); } });
   };
   const buttons = rows ? bulkButtons(rows, ticked) : [];
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
+    <div ref={root} className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <Tabs idBase={TABS_ID} label="Candidates by stage" variant="counts" value={tab} onChange={(id) => pickTab(tabFrom(id))} items={tabItems(list?.counts)} />
       {actions.problem && !open ? (
         <Alert tone="critical">
@@ -149,8 +169,10 @@ function SelectionBar(props: { total: number; ticked: number; buttons: BulkButto
   return (
     <fieldset className="flex min-h-12 min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-line bg-surface px-3 py-1.5 data-[on=true]:border-line-tint data-[on=true]:bg-tint" data-on={some ? "true" : undefined} aria-label="Actions for the people you ticked">
       <label className="inline-flex min-h-10 cursor-pointer items-center gap-2.5 text-[14px] font-medium text-ink">
+        {/* data-select-all: where the focus goes after an action for several (no CSS of its own) */}
         <input
           type="checkbox"
+          data-select-all=""
           checked={some && ticked === total}
           ref={(el) => {
             if (el) el.indeterminate = some && ticked < total;

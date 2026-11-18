@@ -10,6 +10,17 @@ export function focusLost(active: Element | null, body: Element | null): boolean
 }
 
 /**
+ * A candidate row after an action on it: where the focus goes when the button that had it left with the row (the person
+ * moved to another tab). The person now in that place takes it, the one before when it was the last; the same row when
+ * it is still listed. Null for a list left empty, which has its own way on.
+ */
+export function rowFocusAfterMove(ids: readonly string[], from: { id: string; index: number }): { id: string; same: boolean } | null {
+  if (ids.includes(from.id)) return { id: from.id, same: true };
+  if (!ids.length) return null;
+  return { id: ids[Math.min(Math.max(from.index, 0), ids.length - 1)], same: false };
+}
+
+/**
  * The job builder's question cards: after the answers are sent, is it time to hand the focus on? Not while the answers
  * are on their way, and not before the reply's cards are drawn (the dock still shows the cards they were sent from),
  * unless the send failed and those cards stay.
