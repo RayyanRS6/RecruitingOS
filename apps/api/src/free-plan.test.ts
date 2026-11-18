@@ -65,7 +65,7 @@ describe("the Free plan's one job", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
   });
@@ -382,7 +382,7 @@ describe("accepting a company on the Free plan", () => {
   let app: ReturnType<typeof createApp>;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", SIGNUP_MODE: "approval", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", SIGNUP_MODE: "approval", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
   });
   afterAll(async () => {

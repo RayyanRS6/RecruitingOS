@@ -15,14 +15,14 @@ describe("the fake-email gate at boot", () => {
   let container: Container;
   const alerts = async () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "email.fake"));
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
   });
   afterAll(async () => {
     await container.close();
   });
 
   it("keys off the adapter in use: anything but postmark is the fake, which reports itself as fake", () => {
-    const status = (EMAIL_PROVIDER: string | undefined) => createIntegrations({ EMAIL_PROVIDER, COMP_BLS_ENABLED: "false" }, { memoryStorage: true }).email.status;
+    const status = (EMAIL_PROVIDER: string | undefined) => createIntegrations({ EMAIL_PROVIDER }, { memoryStorage: true }).email.status;
     expect(status("fake")).toBe("fake");
     expect(status(undefined)).toBe("fake");
     expect(status("postmrk")).toBe("fake");

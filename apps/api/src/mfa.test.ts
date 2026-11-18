@@ -11,7 +11,7 @@ import { createContainer, type Container } from "./container";
  * app enrolled with the identity service must answer a challenge before a session opens at assurance level 2. The
  * fake issuer keeps real time-based factors, so these tests compute codes exactly as an authenticator app would.
  */
-const BASE_ENV = { NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" };
+const BASE_ENV = { NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" };
 
 type Jar = Record<string, string>;
 const absorb = (jar: Jar, res: Response) => {

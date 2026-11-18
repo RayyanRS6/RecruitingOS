@@ -13,7 +13,7 @@ import { runHourlyChecks } from "./maintenance";
  * keeps its lease, interrupted sends are found within the hour, and a run that stops for good raises an alert for the
  * platform administrators.
  */
-const ENV = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" };
+const ENV = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" };
 const sum = (n: number, delay: (i: number) => number) => Array.from({ length: n }, (_, i) => delay(i + 1)).reduce((a, b) => a + b, 0);
 
 describe("the retry schedules outlast an hour's outage", () => {

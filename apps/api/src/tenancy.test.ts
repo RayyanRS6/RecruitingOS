@@ -31,7 +31,7 @@ describe("tenant selection and isolation at the API", () => {
   let roleA = "";
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     cookieA = await signIn("owner-a@example.test");
     cookieB = await signIn("owner-b@example.test");
@@ -98,7 +98,7 @@ describe("a second company of one's own", () => {
   let firstCompany = "";
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     first = await signInWithIdentity(app, container, { email: "fay@second.test", name: "Fay First", provider: "google", aal2: false });
     const made = await create(first, "First Dental");

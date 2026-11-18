@@ -30,7 +30,7 @@ describe("allowances, plans and alerts", () => {
   const line = (lines: UsageLine[], key: string) => lines.find((l) => l.key === key)!;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@allowance.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
@@ -273,7 +273,7 @@ describe("extending a trial, and putting a customer on Trial", () => {
   const near = (iso: string | undefined, ms: number) => Math.abs(Date.parse(iso ?? "") - ms) < 60_000;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake" } });
     app = createApp(container);
     owner = await signIn("owner@extend.test");
     // live when created (sign-up is open in tests), so its 30 days run from now

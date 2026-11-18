@@ -12,7 +12,7 @@ describe("the fake-scanner gate at boot", () => {
   let container: Container;
   const alerts = async () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "scanner.fake"));
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
   });
   afterAll(async () => {
     await container.close();

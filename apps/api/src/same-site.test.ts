@@ -16,7 +16,7 @@ describe("cross-site changes to the API", () => {
   let app: ReturnType<typeof createApp>;
   /** One signed-in person for the checks that leave the session open. */
   let cookie = "";
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: APP, JOBS_BASE_URL: JOBS };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: APP, JOBS_BASE_URL: JOBS };
   const signIn = async (email: string) => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
     const { devLink } = (await r1.json()) as { devLink: string };

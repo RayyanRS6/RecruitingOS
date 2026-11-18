@@ -19,7 +19,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
   const cookieOf = (r: Response) => r.headers.get("set-cookie")!.split(";")[0];
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
   });
   afterAll(async () => {
@@ -139,7 +139,7 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
   it("the email link is refused for staff domains, and everywhere once disabled", async () => {
     const staff = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "someone@identifiedtalent.com" }) });
     expect(staff.status).toBe(403);
-    const off = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", MAGIC_LINK_ENABLED: "false" } });
+    const off = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", MAGIC_LINK_ENABLED: "false" } });
     try {
       const offApp = createApp(off);
       const r = await offApp.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@glow.test" }) });

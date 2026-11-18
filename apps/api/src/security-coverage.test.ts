@@ -59,7 +59,7 @@ describe("release-1 security coverage", () => {
   };
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     ownerA = await signIn("owner-a@brightline.test");
     ownerB = await signIn("owner-b@other.test");

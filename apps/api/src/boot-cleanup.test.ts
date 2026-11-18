@@ -26,7 +26,7 @@ vi.mock("@ros/db", async (importOriginal) => {
  */
 describe("a start that fails after the database pool exists", () => {
   it("closes the pool and reports the failure", async () => {
-    await expect(createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } })).rejects.toThrow("boom");
+    await expect(createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } })).rejects.toThrow("boom");
     expect(boot.close).toBeDefined();
     expect(boot.close).toHaveBeenCalledTimes(1);
   });

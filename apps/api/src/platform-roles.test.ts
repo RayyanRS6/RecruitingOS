@@ -13,7 +13,7 @@ import { signInWithIdentity } from "./test-helpers";
 describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant refusal, two-person visibility", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", ITS_QUEUE_EMAIL: "queue@identifiedtalent.com", BOOTSTRAP_ADMIN_EMAILS: "first@identifiedtalent.com,second@identifiedtalent.com" };
+  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", ITS_QUEUE_EMAIL: "queue@identifiedtalent.com", BOOTSTRAP_ADMIN_EMAILS: "first@identifiedtalent.com,second@identifiedtalent.com" };
   const admin = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "platform roles test" }, body: body ? JSON.stringify(body) : undefined });
   const email = () => container.integrations.email as FakeEmailAdapter;
   let first = "";

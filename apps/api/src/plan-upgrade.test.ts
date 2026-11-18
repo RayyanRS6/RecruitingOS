@@ -49,7 +49,7 @@ describe("asking for a bigger plan", () => {
   const openJob = (companyId: string) => plantJob(container, { companyId, title: "Dental Hygienist" });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     admin = await signInAdmin(app, container, "ada.admin@identifiedtalent.com", "Ada Admin");
   });

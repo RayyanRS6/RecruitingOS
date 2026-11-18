@@ -43,7 +43,7 @@ describe("updates and the one email switch", () => {
   const changesOf = async (userId: string) => (await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "notification.preferences_changed")))).filter((a) => a.actor.id === userId);
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "dana@harbor.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;

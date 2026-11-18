@@ -68,7 +68,7 @@ describe("the Trial plan's 30 days", () => {
   let chatToken = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", SIGNUP_MODE: "approval", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", SIGNUP_MODE: "approval", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", JOBS_BASE_URL: "https://jobs.example.test", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     setClock(0);
     owner = await signIn("olive@trialdental.test");

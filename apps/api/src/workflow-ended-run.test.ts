@@ -15,7 +15,7 @@ describe("a step in flight when its run is cancelled", () => {
   const scrubbed = { applicationId: "0192a6b2-1111-7aaa-8bbb-123456789abc" };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     const [company] = await container.db.insert(companies).values({ name: "Harbor Dental", slug: "harbor-dental-ended-run", vertical: "dental", sizeBand: "20-49" }).returning({ id: companies.id });
     companyId = company.id;
   });
