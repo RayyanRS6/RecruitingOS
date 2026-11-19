@@ -3,6 +3,7 @@ import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_ST
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScorecardContext, type ScreenContext } from "@ros/ai";
 import { buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, formAnswerSentences, formAnswersOf, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, screenAnswersSent, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, transition, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
+import { resumeAsWeWriteIt } from "./assistant-words";
 import type { Integrations } from "@ros/integrations";
 import { unfairQuestion } from "./fair-question";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringView } from "./scoring-view";
@@ -781,7 +782,11 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     // of the answer, and neither keeps a bare "yes" on the push from reading as one.
     const replies = usableReplies(replyListSince(input.transcript, item.key));
     const said = replies.join(" ");
-    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : t.answerRecorded ?? (said ? { questionKey: item.key, answer: redactProtected(said), complete: m === "covered" } : null));
+    // The model's record of the answer stands only as their own words: their replies about the item, whole or with a
+    // sentence left out (`saidByCandidate`). Anything else written in their name (a rewording, two replies joined its
+    // own way, "… | …") gives way to the replies as they sent them.
+    const theirOwn = (a: ScreenTurn["answerRecorded"]): ScreenTurn["answerRecorded"] => (a && a.questionKey === item.key && said && !saidByCandidate(a.answer, replies.join("\n")) ? { ...a, answer: redactProtected(said) } : a);
+    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : theirOwn(t.answerRecorded) ?? (said ? { questionKey: item.key, answer: redactProtected(said), complete: m === "covered" } : null));
     if (chatMoveStays(expected) && modelStays) {
       move = { key: item.key, move: expected };
       ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
@@ -789,7 +794,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
       // "yes" or a plain "No" nothing is recorded, so neither ever stands as the answer, a "No" never as a "no" for a
       // skill; it settles with every reply as its answer (`answerFor`). Words with something in them are kept as they
       // stand, so "Skip this question" on a follow-up keeps them.
-      t = { ...t, answerRecorded: replies.every(bareReply) ? null : t.answerRecorded ?? { questionKey: item.key, answer: redactProtected(said), complete: false } };
+      t = { ...t, answerRecorded: replies.every(bareReply) ? null : theirOwn(t.answerRecorded) ?? { questionKey: item.key, answer: redactProtected(said), complete: false } };
     } else if (chatMoveStays(expected)) {
       // The model moved on early: fine, the item settles as it stands.
       const settled: ChatMove = reading === "not_done" ? "unknown" : "covered";
@@ -816,14 +821,15 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   const echoesAny = (text: string) => notes.some((n) => echoesNote(modelWordsOf(packet, text), n));
   if (t.done) {
     const closing = shapeClosing(t.messageToCandidate) ?? "";
-    return { turn: { ...t, messageToCandidate: echoesAny(closing) ? "" : closing }, move };
+    return { turn: { ...t, messageToCandidate: echoesAny(closing) ? "" : resumeAsWeWriteIt(closing) }, move };
   }
   const asking = t.questionKey ? q(t.questionKey) : undefined;
   let message = composed ? t.messageToCandidate : shapeChatMessage(t.messageToCandidate, { experience, calm, question: ladderQuestion ?? asking?.question ?? (item ? q(item.key)?.question ?? null : null), answering: !!t.candidateAskedAbout, known: asking?.question ?? q(current)?.question, next: asking && asking.key !== current ? asking.question : null, notes });
   // The question goes back to its own words (the job's, which are the company's to ask).
   if (echoesAny(message)) message = shapeChatMessage("", { experience: false, calm, question: asking?.question ?? q(current)?.question ?? CHAT_WRAP_QUESTION, answering: false });
   if (t.sentiment === "confused") message = `${message}\n\n${PERSON_OFFER}`;
-  return { turn: { ...t, messageToCandidate: message }, move };
+  // The models write "résumé"; every page says "resume", and so does the assistant.
+  return { turn: { ...t, messageToCandidate: resumeAsWeWriteIt(message) }, move };
 }
 
 /* ------------------------------------------------------------------------------------------------------------ */

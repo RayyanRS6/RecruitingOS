@@ -154,6 +154,8 @@ describe("the cards as the server stores them", () => {
     expect(inThePagesWords("I can compile the job now.")).toBe("I can write the job now.");
     // an owner's own must-have keeps its words
     expect(inThePagesWords("Must-have noted: can compile and ship a C++ service.")).toBe("Must-have noted: can compile and ship a C++ service.");
+    // and it says "resume", the page's word, however the model spelt it
+    expect(inThePagesWords("Applicants send a résumé. Résumés are read once; work can resume on Monday.")).toBe("Applicants send a resume. Resumes are read once; work can resume on Monday.");
   });
 });
 
