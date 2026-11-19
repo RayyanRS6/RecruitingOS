@@ -347,6 +347,29 @@ describe("public job surfaces: the application form, the sitemap and structured 
     }
   });
 
+  // Found on the live site on 19 November 2026: the application form of a job published before that day answered with an
+  // error page. Its stored version has no list of the form's questions; they are kept where they were then.
+  it("a job stored before the form had one list of questions shows its form with the questions it had, and reads an application against them", async () => {
+    const role = await roleRow();
+    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
+    const older = { ...Object.fromEntries(Object.entries(pv.packet).filter(([k]) => k !== "formQuestions")), requirements: { ...pv.packet.requirements, eligibility: [{ key: "office_years", type: "experience", question: "Do you have two years of office experience?", rationale: "The job needs it." }] } };
+    await container.db.update(rolePackets).set({ packet: older as never }).where(eq(rolePackets.id, pv.id));
+    try {
+      const shown = await app.request(applyPath());
+      expect(shown.status).toBe(200);
+      const form = decodeEntities(await shown.text());
+      expect(form).toContain("Do you have two years of office experience?");
+      expect(form).toContain("The job needs it.");
+      expect(form).not.toContain("Which shift suits you best?");
+      // a post is read against the same questions: the one left unanswered is named, and nothing fails
+      const unanswered = await refused(applicationForm({ firstName: "Olive", lastName: "Older", email: "olive.older@example.com" }));
+      expect(unanswered.status).toBe(400);
+      expect(unanswered.html).toContain('Please answer this question: "Do you have two years of office experience?".');
+    } finally {
+      await container.db.update(rolePackets).set({ packet: pv.packet }).where(eq(rolePackets.id, pv.id));
+    }
+  });
+
   it("the JobPosting data carries no invented end date while the job is open, the day it stopped while paused or switched off, names the employer's website and logo, and shows the closing day once the job is closed", async () => {
     const urls = jobUrls(container.env, { slug, roleId });
     const path = urls.job.replace("https://jobs.example.test", "");

@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import type { Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { trialPaused, type RolePacket } from "@ros/contracts";
+import { readStoredPacket, trialPaused, type RolePacket } from "@ros/contracts";
 import { isCompanyLive, jobNoticesFor, jobPastItsLimit, type Notice } from "@ros/core";
 import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
@@ -75,7 +75,7 @@ export async function loadJob(db: Vars["Variables"]["container"]["db"], slug: st
   if (!role?.currentPacketVersion) return null;
   const [pv] = await db.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, role.currentPacketVersion))).limit(1);
   if (!pv) return null;
-  return { company, role, packet: pv.packet };
+  return { company, role, packet: readStoredPacket(pv.packet) };
 }
 export type Job = NonNullable<Awaited<ReturnType<typeof loadJob>>>;
 

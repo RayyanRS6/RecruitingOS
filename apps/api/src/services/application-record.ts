@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import type { RolePacket, ScreenTranscriptEntry } from "@ros/contracts";
+import { readStoredPacket, type RolePacket, type ScreenTranscriptEntry } from "@ros/contracts";
 import { formAnswerSentences, formAnswersOf, screenAnswersSent } from "@ros/core";
 import { chatPacket, screenPacketVersion } from "@ros/agents";
 import { rolePackets, screens, type Tx, type applications } from "@ros/db";
@@ -15,7 +15,7 @@ type ScreenRow = typeof screens.$inferSelect;
 /** The job record of one version of a job, or null. */
 export async function packetOf(tx: Tx, roleId: string, version: number): Promise<RolePacket | null> {
   const [row] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, version))).limit(1);
-  return row?.packet ?? null;
+  return row ? readStoredPacket(row.packet) : null;
 }
 
 /** One answer of the AI interview as it was sent: the question in the company's words, the answer, and how it came to be. */

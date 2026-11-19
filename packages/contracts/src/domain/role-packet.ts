@@ -197,6 +197,16 @@ export const RolePacket = z.preprocess(storedPacket, RolePacketFields);
 export type RolePacket = z.infer<typeof RolePacket>;
 
 /**
+ * A version as it is stored, for a reader that takes the record without parsing it (a candidate's page, the AI
+ * interview, an email), with the one thing an older version lacks filled in: the form's list of questions, from where
+ * they were kept (`formQuestionsOfStored`). The parser does the same. A job published before the form had one list
+ * otherwise read as having none at all, and the application form of that job failed.
+ */
+export function readStoredPacket<P>(packet: P): P {
+  return storedPacket(packet) as P;
+}
+
+/**
  * The draft written beside the conversation before the job exists. Pay is optional: a draft carries a range only once a
  * person set or confirmed it; until then the builder says "not set yet" and nothing invents one.
  */
