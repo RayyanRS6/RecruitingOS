@@ -1,6 +1,6 @@
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext, type PromptDef, type RunOutcome } from "@ros/ai";
 import { INTAKE_COMPILE_MAX_TOKENS, factsFromExtraction, finalizePacket, mergeFacts } from "@ros/agents";
-import type { IntakeFacts, IntakeMessage, IntakeTurn } from "@ros/contracts";
+import type { IntakeFacts, IntakeMessage, IntakeTurn, RolePacket } from "@ros/contracts";
 import { EMPTY_FACTS, draftFailures, draftSkillsNote, type IntakeCase } from "./intake-suite";
 
 /**
@@ -84,7 +84,15 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
         continue;
       }
       failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
-      const packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
+      // A job that cannot be published as it stands (no pay in the answers, say, so none is on the job) fails its case
+      // with the reason. It never stops the run: the stand-in always writes a pay, so only the real models show this.
+      let packet: RolePacket;
+      try {
+        packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
+      } catch (e) {
+        failures.push(`${which}the job as written cannot be published: ${problemOf(e)} (pay in the answers: ${payOf(facts)}; pay as written: ${payOf({ compensationBasis: r.output.compensation?.basis, compensationMin: r.output.compensation?.min, compensationMax: r.output.compensation?.max })})`);
+        continue;
+      }
       // The case's checks and, on every written job, a skill that repeats a must-have; the note keeps the job's
       // must-haves and skills by name (synthetic data), so one renamed can be seen in the result file.
       failures.push(...draftFailures(c, packet).map((x) => `${which}${x}`));
@@ -98,6 +106,19 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
   return { failures, notes };
 }
 
+/** What stopped a job from being published, in a line: each field a schema refused with why, or the error's own words. */
+function problemOf(e: unknown): string {
+  const issues = (e as { issues?: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } | null)?.issues;
+  if (Array.isArray(issues) && issues.length) return issues.map((i) => `${i.path.map(String).join(".") || "the job"}: ${i.message}`).join("; ");
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** A pay as a few words, for a failure's reason: "hourly 45 to 55", or what of it is missing. */
+function payOf(p: { compensationBasis?: string; compensationMin?: number; compensationMax?: number }): string {
+  if (p.compensationBasis === undefined && p.compensationMin === undefined && p.compensationMax === undefined) return "none";
+  return `${p.compensationBasis ?? "no basis"} ${p.compensationMin ?? "no low end"} to ${p.compensationMax ?? "no high end"}`;
+}
+
 /** A case's entry in the result file: whether it passed, its failures, and its notes when it has any. */
 export type IntakeCaseResult = { id: string; pass: boolean; failures: string[]; notes?: string[] };
 
@@ -107,6 +128,7 @@ export type IntakeCaseResult = { id: string; pass: boolean; failures: string[]; 
  * written job's must-haves and skills by name.
  */
 export async function intakeCaseResult(call: IntakeModelCall, c: IntakeCase, compile: boolean): Promise<IntakeCaseResult> {
-  const { failures, notes } = await runIntakeCase(call, c, compile);
+  // A case that stops (a check of its own that throws, say) is a failed case with the reason: the run goes on to the next.
+  const { failures, notes } = await runIntakeCase(call, c, compile).catch((e: unknown) => ({ failures: [`the case stopped: ${problemOf(e)}`], notes: [] as string[] }));
   return { id: c.id, pass: failures.length === 0, failures, ...(notes.length ? { notes } : {}) };
 }
