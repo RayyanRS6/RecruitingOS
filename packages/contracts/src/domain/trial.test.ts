@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { TRIAL_DAYS, TRIAL_ENDED_LINE, TrialExtensionRequest, newTrialTerm, onTrialPlan, seatsFullAtSignInLine, seatsFullLine, trialPaused, trialStanding, trialTermOf, type TrialTerm } from "./trial";
 
-/** The Trial plan's 30 days (founder decision L-02 B, 16 October 2026): where a trial stands is worked out in code from its dates. */
+/** The Trial plan's 30 days: where a trial stands is worked out in code from its dates. */
 const DAY = 86_400_000;
 const start = new Date("2026-10-01T15:00:00.000Z");
 const at = (days: number) => new Date(start.getTime() + days * DAY);
@@ -17,7 +17,7 @@ describe("where a trial stands", () => {
     expect(onTrialPlan(null)).toBe(false);
   });
 
-  it("has not started, and so never ends, while a company on Trial waits for the ITS check", () => {
+  it("has not started, and so never ends, while a company on Trial has not been accepted", () => {
     const s = trialStanding(onTrial(undefined), at(400));
     expect(s).toEqual({ started: false, startedAt: null, endsAt: null, daysLeft: null, endingSoon: false, ended: false, extendedDays: 0 });
     expect(trialPaused(onTrial(undefined), at(400))).toBe(false);

@@ -1,13 +1,16 @@
 import { z } from "zod";
-import { Confidence, Evidence } from "./common";
+import { Evidence } from "./common";
 
-/** Structured extraction of a resume. The model reads; code verifies quotes. */
+/**
+ * The facts of a resume, read by AI once per application. The model reads; code verifies quotes. Every field has a
+ * reader: the name is hidden from the resume reading, the place decides a state's notice in the decision email, and the
+ * positions, licences, certifications, skills and years are given to the resume reading and the AI interview. A stored
+ * row of an earlier build also holds an email, a phone, a headline, education, languages, anomalies and a confidence;
+ * they are dropped when it is parsed.
+ */
 export const ResumeExtraction = z.object({
   fullName: z.string().optional(),
-  email: z.string().optional(),
-  phone: z.string().optional(),
   locationText: z.string().optional(),
-  headline: z.string().optional(),
   positions: z.array(z.object({
     title: z.string(),
     employer: z.string().optional(),
@@ -17,46 +20,36 @@ export const ResumeExtraction = z.object({
     summary: z.string().optional(),
     quote: z.string().optional(),
   })).default([]),
-  education: z.array(z.object({ institution: z.string().optional(), credential: z.string().optional(), field: z.string().optional(), quote: z.string().optional() })).default([]),
   licenses: z.array(z.object({ name: z.string(), jurisdiction: z.string().optional(), number: z.string().optional(), expires: z.string().optional(), quote: z.string().optional() })).default([]),
   certifications: z.array(z.object({ name: z.string(), quote: z.string().optional() })).default([]),
   skills: z.array(z.string()).default([]),
-  languages: z.array(z.string()).default([]),
   yearsOfExperienceEstimate: z.number().optional(),
-  anomalies: z.array(z.object({ kind: z.enum(["date_inconsistency", "possible_ai_generated", "contradiction", "missing_dates", "other"]), detail: z.string() })).default([]),
-  confidence: Confidence,
 });
 export type ResumeExtraction = z.infer<typeof ResumeExtraction>;
 
-export const EligibilityResult = z.object({
-  evaluatedAt: z.string(),
-  passed: z.boolean(),
-  failedRules: z.array(z.object({ key: z.string(), question: z.string(), answer: z.unknown().optional(), reason: z.string() })).default([]),
-  unverifiable: z.array(z.object({ key: z.string(), question: z.string(), reason: z.string() })).default([]),
-});
-export type EligibilityResult = z.infer<typeof EligibilityResult>;
-
-export const Overall = z.enum(["strong", "potential", "weak", "unknown"]);
-export type Overall = z.infer<typeof Overall>;
-
+/** One thing a reading says about the candidate, with where it came from. */
 export const Finding = z.object({
   claim: z.string().min(1),
   evidence: Evidence,
 });
+export type Finding = z.infer<typeof Finding>;
 
-/**
- * The evidence-based assessment (docs/02, docs/05). The numeric score is secondary and optional.
- * A schema without evidence for a claim is invalid by construction.
- */
-export const EvidenceAssessment = z.object({
-  overall: Overall,
-  confidence: Confidence,
-  /** What drives the confidence level, in plain words ("no résumé, only the written summary", "two must-haves have no evidence"). Optional: older assessments have none. */
-  confidenceReasons: z.array(z.string().min(1).max(200)).max(6).optional(),
+/** The words every reading writes: what it found, in plain language. Code never reads a decision out of them. */
+const ReadingWords = {
   summary: z.string().min(1),
   strengths: z.array(Finding).default([]),
   concerns: z.array(Finding).default([]),
+  /** Open questions: what the reading could not tell, and why it matters. */
   unknowns: z.array(z.object({ question: z.string(), whyItMatters: z.string() })).default([]),
+};
+
+/**
+ * The CV reading (AI task `triage.assess`): one finding per must-have and per skill of the job, each with the quote it
+ * rests on, and the words. The model writes no number, no verdict and no recommendation: the CV score is worked out in
+ * code from these findings (`cvScoreOf`). A stored reading from before carries more fields; they are dropped on parse.
+ */
+export const EvidenceAssessment = z.object({
+  ...ReadingWords,
   competencyFindings: z.array(z.object({
     competencyKey: z.string(),
     finding: z.enum(["evidenced", "partially_evidenced", "not_evidenced", "contradicted"]),
@@ -68,9 +61,22 @@ export const EvidenceAssessment = z.object({
     met: z.enum(["yes", "partially", "no", "unknown"]),
     evidence: Evidence.optional(),
   })).default([]),
-  anomalies: z.array(z.object({ kind: z.string(), detail: z.string() })).default([]),
-  secondaryScore: z.number().min(0).max(100).optional(),
-  recommendation: z.enum(["screen", "hold", "review_manually"]),
-  rationale: z.string().min(1),
 });
 export type EvidenceAssessment = z.infer<typeof EvidenceAssessment>;
+
+/**
+ * The AI interview's scorecard (AI task `screen.assess`): one finding per question the interview asked, and the words.
+ * The interview score is worked out in code from `questionFindings` (`interviewScoreOf`). `finding`: one plain sentence
+ * on what the answer showed. `meetsModelAnswer`: whether the answer met the job's standard for that question.
+ */
+export const ScreenAssessment = z.object({
+  ...ReadingWords,
+  questionFindings: z.array(z.object({
+    questionKey: z.string(),
+    answered: z.boolean(),
+    finding: z.string(),
+    evidence: Evidence.optional(),
+    meetsModelAnswer: z.enum(["yes", "partially", "no", "unknown"]).default("unknown"),
+  })).default([]),
+});
+export type ScreenAssessment = z.infer<typeof ScreenAssessment>;

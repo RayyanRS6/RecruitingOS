@@ -4,7 +4,7 @@ import type { SendResult } from "./types";
 const BEFORE_CONNECTING = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|getaddrinfo/i;
 
 /**
- * What a send that threw means (Wave S5 review). Neither Postmark nor Twilio de-duplicates a repeated send, so only a
+ * What a send that threw means. Postmark does not de-duplicate a repeated send, so only a
  * failure before the connection was made is tried again. A call cut off by our own timeout, or one that broke after the
  * request may have gone (a reset connection, a closed socket), may have been delivered: it is `uncertain`, never sent
  * again on a guess, and the outbox puts it in front of a person.

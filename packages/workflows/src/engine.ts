@@ -1,24 +1,23 @@
 import { and, asc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { redactDatabaseValues, type Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, createEscalation, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind, settleRetriedRunRequest, stoppedRunQuestion } from "@ros/core";
+import { SYSTEM_ACTOR, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
 /**
- * A durable, Postgres-backed workflow engine (docs/06).
+ * A durable, Postgres-backed workflow engine.
  *
  * - A run is a row; every step execution is a ledger row; the queue is the `jobs` table.
  * - Steps run inside a tenant transaction; if the process dies mid-step the transaction rolls back and the
  *   job lease expires, so the step re-executes. Steps are written to be idempotent.
  * - A step with slow external work (a model call) declares a `prepare` phase that runs before its transaction opens,
  *   so no connection or lock is held while a provider is thinking; messages leave through the outbox after commit.
- * - `wait` suspends the run on a human decision, an event, or a timer; `signal` wakes event and human waits;
- *   timers are jobs with a future `run_at`.
+ * - `wait` suspends the run on an event or a timer; `signal` wakes event waits; timers are jobs with a future
+ *   `run_at`.
  * - Failures retry with exponential backoff; after `maxAttempts` the run fails, emits `workflow.failed`, and
- *   creates a recruiter escalation for the role or candidate involved (an alert for ITS administrators when the run
- *   names neither) so nothing dies silently.
+ *   raises an alert for ITS administrators so nothing dies silently.
  * - An AI provider that is not answering is not a reason to give up (Wave S5 C2): such a failure is retried with
- *   growing waits for at least `PROVIDER_OUTAGE_PATIENCE_MS`, then the run is held (not failed, no escalation), one
+ *   growing waits for at least `PROVIDER_OUTAGE_PATIENCE_MS`, then the run is held (not failed), one
  *   alert tells ITS, and a check every `AI_HOLD_CHECK_EVERY_MS` tries one held run; when it goes through, every held
  *   run resumes by itself.
  * - A job claimed by a worker keeps its lease while it runs (renewed every third of the lease), so a slow model step
@@ -40,7 +39,7 @@ export const AI_HOLD_KEY = "ai.provider_available";
 /** The job that tries one held run and, when the provider answers, resumes all of them. Re-armed while runs are held. */
 export const AI_HOLD_CHECK_JOB_KIND = "workflow.ai_hold_check";
 export const AI_HOLD_CHECK_EVERY_MS = 15 * 60_000;
-/** The one alert a provider outage raises (not one escalation per application). */
+/** The one alert a provider outage raises (not one per application). */
 export const AI_OUTAGE_ALERT_KIND = "ai.provider_outage";
 /** How far apart held runs go again once the provider answers (each a few seconds after the one before). */
 export const HELD_RELEASE_SPACING_MS = 3000;
@@ -125,12 +124,6 @@ function heldWake(run: HeldRun): WakePayload {
   return run.token ? { kind: "timer", key: run.token } : { kind: "timer" };
 }
 
-/**
- * The request a stopped run raises, in plain words (packages/core/src/stopped-runs.ts, where the display sites also turn
- * requests stored before 13 October 2026 into the same words). Re-exported here, where it was first defined.
- */
-export { stoppedRunQuestion };
-
 export class WorkflowEngine {
   private defs = new Map<string, WorkflowDefinition>();
   private workerId: string;
@@ -203,7 +196,7 @@ export class WorkflowEngine {
     return { runId: run.id, created: true };
   }
 
-  /** Wakes runs waiting on an event or human decision key (e.g. `approval:<id>`, `application:<id>:message.received`). */
+  /** Wakes runs waiting on an event key (e.g. `screen:<id>:changed`). */
   async signal(q: Queryable, input: { companyId: string; key: string; payload?: Record<string, unknown> }): Promise<number> {
     const waiting = await q
       .select({ id: workflowRuns.id })
@@ -455,7 +448,7 @@ export class WorkflowEngine {
       const keys = (w as { keys?: unknown } | null)?.keys;
       if (wake?.kind === "event" && wake.key && Array.isArray(keys) && !keys.includes(wake.key)) return run;
       if (w?.kind === "timer" && Date.parse(w.until) > this.now().getTime()) return run; // not due yet
-      if ((w?.kind === "event" || w?.kind === "human") && !wake) return run; // needs a signal (or its timer)
+      if (w?.kind === "event" && !wake) return run; // needs a signal (or its timer)
     }
     const def = this.defs.get(run.workflowKey);
     if (!def) throw new UnknownToThisBuild({ workflowKey: run.workflowKey });
@@ -521,17 +514,6 @@ export class WorkflowEngine {
     }
 
     if (outcome.kind === "ended") return "stop";
-    // A run that had stopped and raised a request, and finished after ITS pressed Retry: the request is closed if nobody
-    // picked it up yet, or noted for the recruiter who has it. In its own transaction after the run's has committed, so
-    // the finished work never depends on it; if it fails, the request simply stays open for ITS to resolve by hand.
-    if (outcome.kind === "complete" && run.escalationId) {
-      const escalationId = run.escalationId;
-      try {
-        await withTenant(this.deps.db, companyId, (q) => settleRetriedRunRequest(q, { escalationId, companyId, now: this.now() }));
-      } catch {
-        // a courtesy; the request is still in the queue
-      }
-    }
     if (outcome.kind === "threw" || (outcome.kind === "fail" && outcome.retryable !== false)) {
       const error = outcome.kind === "threw" ? outcome.error : outcome.error;
       return this.handleRetry(def, run, stepKey, seq, error, actor);
@@ -557,7 +539,7 @@ export class WorkflowEngine {
       const token = randomToken(8);
       const wait = { ...withKeys(res.wait), token };
       await q.update(workflowRuns).set({ status: "waiting", currentStep: res.resumeStep ?? stepKey, state, wait, attempts: 0, lastError: null }).where(eq(workflowRuns.id, run.id));
-      // A timer wait is due at `until`; an event or human wait with `until` is woken then too (an approval that ran out of time).
+      // A timer wait is due at `until`; an event wait with `until` is woken then too.
       const until = wait.until;
       if (until) {
         await q.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
@@ -580,8 +562,8 @@ export class WorkflowEngine {
     const max = def.maxAttempts ?? 3;
     if (await runHasEnded(this.deps.db, run.id)) return "stop"; // cancelled while the step ran: nothing to retry
     await this.deps.db.insert(workflowSteps).values({ runId: run.id, companyId: run.companyId, stepKey, seq, status: "error", input: {}, output: {}, attempts, error, finishedAt: this.now().toISOString() });
-    // The AI provider not answering gets an hour of tries, then a hold that resumes by itself (never a failed run and an
-    // escalation per application). Any other failure keeps the definition's own number of tries.
+    // The AI provider not answering gets an hour of tries, then a hold that resumes by itself (never a failed run per
+    // application). Any other failure keeps the definition's own number of tries.
     if (outage && (wasHeld || attempts >= Math.max(max, outageAttempts()))) {
       await this.holdForProvider(def, run, stepKey, error, actor, attempts);
       return "stop";
@@ -602,7 +584,7 @@ export class WorkflowEngine {
 
   /**
    * The AI provider has not answered for an hour of tries: the run waits on `AI_HOLD_KEY` instead of failing. Nothing is
-   * lost and nobody is asked to take over each application; ITS gets one alert for the whole outage (it stands while
+   * lost; ITS gets one alert for the whole outage (it stands while
    * any run is held), and the hold check is armed to try again.
    */
   private async holdForProvider(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts: number): Promise<void> {
@@ -618,7 +600,7 @@ export class WorkflowEngine {
         kind: AI_OUTAGE_ALERT_KIND,
         severity: "critical",
         title: account ? "The AI provider refuses our account: applications are on hold" : "The AI provider is not answering: applications are on hold",
-        body: `A ${def.key} run stopped at "${stepKey}" after an hour of tries (${error.slice(0, 200)}). Runs like it are held, not failed: nothing is lost and no recruiter request is opened for each one. Every ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes one held run is tried again, and when the provider answers they all resume by themselves. ${account ? "The provider refused the account itself: check the API key or billing (credit balance)." : "Check the provider's status page and the API key."}`,
+        body: `A ${def.key} run stopped at "${stepKey}" after an hour of tries (${error.slice(0, 200)}). Runs like it are held, not failed: nothing is lost. Every ${Math.round(AI_HOLD_CHECK_EVERY_MS / 60_000)} minutes one held run is tried again, and when the provider answers they all resume by themselves. ${account ? "The provider refused the account itself: check the API key or billing (credit balance)." : "Check the provider's status page and the API key."}`,
         details: { workflowKey: def.key, step: stepKey, attempts, ...(account ? { cause: "account" } : {}) },
       }, { now });
     } catch (err) {
@@ -694,49 +676,29 @@ export class WorkflowEngine {
     } catch {
       // a reporting hook never affects the run
     }
-    if (run.companyId) {
-      const subject = run.subject;
-      const roleId = (run.state.roleId as string | undefined) ?? (subject.type === "role" ? subject.id : null);
-      const applicationId = (run.state.applicationId as string | undefined) ?? (subject.type === "application" ? subject.id : null);
-      // A failed run with no role and no candidate attached goes to ITS administrators, never to a recruiter with access
-      // to the whole company (founder decision Q31: automatic requests reach only the candidate or role involved).
-      if (!roleId && !applicationId) {
-        try {
-          await raiseAlert(this.deps.db, {
-            kind: "workflow.failed",
-            severity: "high",
-            title: `A workflow stopped and needs a look: ${def.key}`,
-            body: `Step "${stepKey}" failed after ${attempts} attempts: ${error}. No role or candidate is attached, so no recruiter was brought in; open the run in the console.`,
-            companyId: run.companyId,
-            target: { type: "workflow_run", id: run.id },
-            details: { workflowKey: def.key, step: stepKey, attempts },
-          });
-        } catch {
-          // the alert is a courtesy; the failed run is in the console regardless
-        }
-      }
+    // The run stays listed as failed in the console, with Retry; the alert puts it in front of ITS administrators.
+    try {
+      await raiseAlert(this.deps.db, {
+        kind: "workflow.failed",
+        severity: "high",
+        title: `A workflow stopped and needs a look: ${def.key}`,
+        body: `Step "${stepKey}" failed after ${attempts} attempts: ${error}. Open the run in the console; Retry runs the step again.`,
+        companyId: run.companyId,
+        target: { type: "workflow_run", id: run.id },
+        details: { workflowKey: def.key, step: stepKey, attempts },
+      });
+    } catch {
+      // the alert is a courtesy; the failed run is in the console regardless
+    }
+    if (run.companyId && def.onFailure) {
+      const onFailure = def.onFailure;
       try {
         await withTenant(this.deps.db, run.companyId, async (q) => {
-          if (roleId || applicationId) {
-            const esc = await createEscalation(q, {
-              companyId: run.companyId!,
-              roleId,
-              applicationId,
-              kind: def.escalationKind ?? "stuck_role",
-              question: stoppedRunQuestion(def.key, attempts),
-              requestedBy: actor,
-              workflowRunId: run.id,
-            });
-            await q.update(workflowRuns).set({ escalationId: esc.id }).where(eq(workflowRuns.id, run.id));
-            await emit(q, { type: "workflow.escalated", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { escalationId: esc.id }, correlationId: run.id });
-          }
-          if (def.onFailure) {
-            const ctx: StepContext = { run, companyId: run.companyId!, state: run.state, q, services: this.deps.services, wake: null, now: this.now(), actor, alreadyDone: async () => false };
-            await def.onFailure(ctx, error);
-          }
+          const ctx: StepContext = { run, companyId: run.companyId!, state: run.state, q, services: this.deps.services, wake: null, now: this.now(), actor, alreadyDone: async () => false };
+          await onFailure(ctx, error);
         });
       } catch {
-        // escalation failure must not mask the original failure; the admin console surfaces failed runs regardless
+        // a failing hook must not mask the original failure; the admin console surfaces failed runs regardless
       }
     }
   }
@@ -778,7 +740,6 @@ class UnknownToThisBuild extends Error {
 
 function withKeys(wait: WaitCondition): WaitCondition & { keys?: string[] } {
   if (wait.kind === "event") return { ...wait, keys: wait.eventTypes.map((t) => (wait.subjectId ? `${wait.subjectId}:${t}` : t)) };
-  if (wait.kind === "human") return { ...wait, keys: [wait.approvalRequestId ? `approval:${wait.approvalRequestId}` : wait.escalationId ? `escalation:${wait.escalationId}` : "human"] };
   return wait;
 }
 

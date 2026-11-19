@@ -1,31 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, inArray } from "drizzle-orm";
-import { REMOVED_RUN_OUTPUT, entitlements, recordApplicationOutcome, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
-import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, recruiterEscalations, screens, unconfirmedScreens, users, withTenant, workflowRuns, workflowSteps } from "@ros/db";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { HIRE_OUTCOME, REMOVED_RUN_OUTPUT, checkPrivacyRequestDeadlines, scrubReading, scrubWorkflowError, scrubWorkflowRecord } from "@ros/core";
+import { adminAlerts, aiRuns, applications, assessments, auditRecords, candidates, communications, dataRequests, documents, events, hiringOutcomes, screens, users, withPlatform, withTenant, workflowRuns, workflowSteps } from "@ros/db";
 import type { FakeEmailAdapter, MemoryStorageAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { runMaintenance } from "./maintenance";
-import { signInAdmin, statusTokenFor, testContainerOptions } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, signInAdmin, signInByEmailLink, statusTokenFor, testContainerOptions, usePlan } from "./test-helpers";
+
+/** The subject of a run stored before in-person interviews were removed: the column still holds such rows. */
+const storedSubject = (type: string, id: string) => ({ type, id }) as unknown as (typeof workflowRuns.$inferInsert)["subject"];
+/** What an AI interview kept of an applicant's words in a row stored by an earlier version of the app: the column still holds such rows. */
+const storedProgress = (words: Record<string, unknown>) => ({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, ...words }) as unknown as (typeof screens.$inferInsert)["progress"];
 
 /**
  * Correction 7 (docs/runbooks/privacy-requests.md), built with synthetic data: a candidate can ask for a copy, a
- * correction, deletion, no more texts, or a person's review from their own status page; every request is recorded,
+ * correction, deletion, or a person's review from their own status page; every request is recorded,
  * verified, acknowledged, tracked to a deadline, assigned, noted, escalated to counsel where needed, resolved and
  * confirmed; the customer sees only that a request exists; nothing is deleted automatically.
  */
 describe("candidate privacy requests", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  const signIn = async (email: string) => {
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const token = new URL(devLink).searchParams.get("token")!;
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
-    return r2.headers.get("set-cookie")!.split(";")[0];
-  };
-  const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "privacy test" }, body: body ? JSON.stringify(body) : undefined });
+  const json =(cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "privacy test" }, body: body ? JSON.stringify(body) : undefined });
   const form = (path: string, fields: Record<string, string>) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
   const outbox = () => (container.integrations.email as FakeEmailAdapter).sent;
 
@@ -39,27 +37,16 @@ describe("candidate privacy requests", () => {
   let candidateId = "";
 
   beforeAll(async () => {
-    // Texting on: the text-message choices on the status page need an applicant who consented on the form.
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "true" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
-    owner = await signIn("owner@harbor.test");
+    const company = await seedCompany(app, { email: "owner@harbor.test", name: "Harbor Dental" });
+    ({ owner, companyId } = company);
+    companySlug = company.slug;
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
     await container.db.update(users).set({ platformRole: "platform_admin", name: "admin" }).where(eq(users.email, "admin@its.test"));
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Harbor Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Newport Beach", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    companySlug = co.slug;
-    await entitlements.applyPlan(container.db, companyId, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Newport Beach, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = (await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "yes"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix"], "maria.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
+    await usePlan(container, companyId);
+    roleId = await plantJob(container, { companyId, title: "Registered Dental Hygienist", packet: (p) => { p.formQuestions = [{ key: "licensed", kind: "yes_no", question: "Do you hold an active California RDH license?", required: true }]; } });
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ phone: "(949) 555-0100", q_licensed: "yes" }, "Maria Reyes, RDH, Tustin\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present\nSkills: Dentrix") });
     expect(r.status).toBe(302);
     statusToken = await statusTokenFor(container, { roleId, email: "maria.reyes@example.com" });
     await container.drain();
@@ -82,8 +69,8 @@ describe("candidate privacy requests", () => {
     expect(ack).toBeTruthy();
     expect(ack.text).toContain("a copy of the information we hold about you");
     expect(ack.replyTo).toBe(container.env.PRIVACY_EMAIL);
-    // the customer sees that a request exists and its kind; not the words
-    const seen = (await (await json(owner, "GET", "/api/v1/events?type=candidate.data_request")).json()) as Array<{ payload: Record<string, unknown> }>;
+    // the company's history holds that a request exists and its kind; not the words
+    const seen = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.data_request")));
     expect(seen.length).toBeGreaterThanOrEqual(1);
     expect(JSON.stringify(seen)).not.toContain("everything you have on me");
     // the tenant role cannot read the table at all
@@ -103,21 +90,17 @@ describe("candidate privacy requests", () => {
     // a decision message taken back with Undo before it left, and one that went
     const sentBy = { kind: "user" as const, id: "owner" };
     await container.db.insert(communications).values([
-      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (taken back)", bodyText: "The team has decided not to move forward (taken back).", templateKey: "disposition:v1", status: "cancelled", error: "undone by the team before it was sent", sentBy },
-      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (sent)", bodyText: "A note that went out.", templateKey: "still_reviewing", status: "sent", sentBy },
+      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (taken back)", bodyText: "The team has decided not to move forward (taken back).", templateKey: "disposition", status: "cancelled", error: "undone by the team before it was sent", sentBy },
+      { companyId, candidateId, applicationId, direction: "outbound", channel: "email", subject: "Your application (sent)", bodyText: "A note that went out.", templateKey: "screen_reminder", status: "sent", sentBy },
     ]);
-    // what her record learned from a chat she sent (Wave S7, S7-F) is part of her information, and in the copy; so is
-    // what she kept from an earlier chat on a later application's form (Wave S8)
-    const [withFacts] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
-    const from = { applicationId, screenId: null, roleTitle: "Registered Dental Hygienist", at: new Date().toISOString() };
-    await container.db.update(applications).set({ answers: { ...withFacts.answers, learned: [{ id: "lf_privacy", kind: "skill", text: "I chart perio exams in Dentrix every day.", quote: "I chart perio exams in Dentrix every day.", from }], kept: [{ id: "lf_privacy_kept", kind: "logistics", text: "I take the bus to Irvine in twenty minutes.", from, keptAt: new Date().toISOString() }] } }).where(eq(applications.id, applicationId));
     const exp = await json(admin, "GET", `/api/v1/admin/data-requests/${req.id}/export`);
     expect(exp.status).toBe(200);
-    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ eligibility: unknown; answers?: { learned?: Array<{ text: string }>; kept?: Array<{ text: string }> } }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: Array<{ subject: string | null }>; messagesWeDidNotSend: Array<{ subject: string | null; whatHappened: string }> };
+    const bundle = (await exp.json()) as { person: { email: string }; applications: Array<{ answers?: { form?: Record<string, string> } }>; documents: Array<{ textExtracted: string | null }>; messagesWeSent: Array<{ subject: string | null }>; messagesWeDidNotSend: Array<{ subject: string | null; whatHappened: string }> };
     expect(bundle.person.email).toBe("maria.reyes@example.com");
     expect(bundle.applications).toHaveLength(1);
-    expect(bundle.applications[0].answers?.learned?.map((f) => f.text)).toEqual(["I chart perio exams in Dentrix every day."]);
-    expect(bundle.applications[0].answers?.kept?.map((f) => f.text)).toEqual(["I take the bus to Irvine in twenty minutes."]);
+    // what she answered on the form is part of her information, and in the copy; so is her resume's text
+    expect(bundle.applications[0].answers?.form).toEqual({ licensed: "yes" });
+    expect(bundle.documents.map((d) => d.textExtracted).join("\n")).toContain("Coastal Family Dentistry");
     expect(JSON.stringify(bundle)).not.toMatch(/rationale|strengths|concerns/);
     // only what left us is listed as sent; what never left is apart, with what happened to it
     expect(bundle.messagesWeSent.map((m) => m.subject)).toContain("Your application (sent)");
@@ -134,7 +117,7 @@ describe("candidate privacy requests", () => {
     expect(confirmation.attachments?.[0].filename).toMatch(/your-information/);
     const actions = (await container.db.select().from(auditRecords).where(eq(auditRecords.companyId, companyId))).map((a) => a.action);
     expect(actions).toEqual(expect.arrayContaining(["data_request.created", "data_request.updated", "data.exported", "data_request.resolved"]));
-    const fulfilled = (await (await json(owner, "GET", "/api/v1/events?type=candidate.data_request_fulfilled")).json()) as Array<{ payload: { kind: string } }>;
+    const fulfilled = await container.db.select({ payload: events.payload }).from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.data_request_fulfilled"))).orderBy(desc(events.occurredAt));
     expect(fulfilled[0].payload.kind).toBe("access");
   });
 
@@ -152,22 +135,12 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.corrected")))).length).toBe(1);
   });
 
-  it("stopping texts from the status page is applied at once and recorded", async () => {
-    expect((await form(`/c/status/${statusToken}/sms`, { pref: "off" })).status).toBe(302);
-    const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, candidateId));
-    expect(cand.preferences.smsOptOut).toBe(true);
-    const [req] = await container.db.select().from(dataRequests).where(and(eq(dataRequests.candidateId, candidateId), eq(dataRequests.kind, "sms_opt_out")));
-    expect(req.status).toBe("fulfilled");
-  });
-
-  it("asking for a person opens a recruiter escalation with the generic preview", async () => {
+  it("asking for a person's review is a privacy request like the others: ITS has it, with what they wrote", async () => {
     expect((await form(`/c/status/${statusToken}/privacy`, { kind: "human_review", details: "I think my resume was misread." })).status).toBe(302);
     const [req] = await container.db.select().from(dataRequests).where(and(eq(dataRequests.candidateId, candidateId), eq(dataRequests.kind, "human_review")));
-    expect(req.escalationId).toBeTruthy();
-    const [esc] = await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, req.escalationId!));
-    expect(esc.kind).toBe("candidate_issue");
-    expect(esc.summary).toMatch(/asked for a person/);
-    expect(esc.summary).not.toContain("misread");
+    expect(req).toMatchObject({ details: "I think my resume was misread.", channel: "status_page", verificationStatus: "verified_by_link" });
+    const listed = (await (await json(admin, "GET", "/api/v1/admin/data-requests")).json()) as Array<{ id: string; kind: string }>;
+    expect(listed.find((r) => r.id === req.id)).toMatchObject({ kind: "human_review" });
   });
 
   it("a deletion is never automatic: refused without a recorded counsel approval and an explicit confirmation; then anonymizes and keeps the stage history", async () => {
@@ -184,16 +157,23 @@ describe("candidate privacy requests", () => {
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/fulfil`, { resolution: "Deleted." })).status).toBe(409);
     const [docBefore] = await container.db.select().from(documents).where(eq(documents.candidateId, candidateId));
     expect(storage.has(docBefore.storageKey)).toBe(true);
-    // the team's own words about her: a move to the talent pool with a note (kept as the move's reason), and a later hire
-    // recorded with a note on the outcome
+    // the team marks her Hired, which records the hire. The team's own words about her are in rows an earlier version of
+    // the app stored, which the tables still hold: a move with a person's words as its reason, a note with a move, and a
+    // note on the outcome
     const moveNote = "Seemed disorganised on the phone, gaps in CV";
     const hireNote = "License expired but she is renewing it";
-    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "move_to_talent_pool", note: moveNote })).status).toBe(200);
-    await withTenant(container.db, companyId, (tx) => recordApplicationOutcome(tx, { companyId, applicationId, outcome: "hired_externally", hireDate: "2026-11-02", note: hireNote, by: "owner", actor: { kind: "user", id: "owner" } }));
+    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "hire" })).status).toBe(200);
+    await container.db.update(hiringOutcomes).set({ notes: hireNote }).where(eq(hiringOutcomes.applicationId, applicationId));
+    const mover = { kind: "user" as const, id: "owner" };
+    await container.db.insert(events).values([
+      { companyId, type: "application.stage_changed", actor: mover, subjectType: "application", subjectId: applicationId, payload: { from: "received", to: "triaged", reason: moveNote } },
+      { companyId, type: "application.stage_changed", actor: mover, subjectType: "application", subjectId: applicationId, payload: { from: "triaged", to: "hired", reason: HIRE_OUTCOME, note: hireNote } },
+    ]);
     const moves = () => container.db.select().from(events).where(and(eq(events.type, "application.stage_changed"), eq(events.subjectId, applicationId)));
     expect(JSON.stringify(await moves())).toContain(moveNote);
+    expect(JSON.stringify(await moves())).toContain(hireNote);
     // team mail is kept without a candidate on it; one that ever named her loses the name too
-    const [teamMail] = await container.db.insert(communications).values({ companyId, candidateId: null, direction: "outbound", channel: "email", toAddress: "owner@harbor.test", subject: "About Maria Reyes", bodyText: "Maria Reyes (maria.reyes@example.com) is waiting.", templateKey: "intervention", status: "sent", sentBy: { kind: "system", id: "test" } }).returning({ id: communications.id });
+    const [teamMail] = await container.db.insert(communications).values({ companyId, candidateId: null, direction: "outbound", channel: "email", toAddress: "owner@harbor.test", subject: "About Maria Reyes", bodyText: "Maria Reyes (maria.reyes@example.com) is waiting.", templateKey: "test", status: "sent", sentBy: { kind: "system", id: "test" } }).returning({ id: communications.id });
     // the AI's readings of her and the AI run log about her (the résumé reading, the scoring readings) hold her words now
     const readingsBefore = await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId));
     expect(readingsBefore.length).toBeGreaterThanOrEqual(1);
@@ -205,28 +185,27 @@ describe("candidate privacy requests", () => {
     expect(runsBefore.some((r) => r.task === "resume.extract")).toBe(true);
     expect(runsBefore.some((r) => r.task === "triage.assess")).toBe(true);
     expect(JSON.stringify(runsBefore)).toContain("Maria Reyes");
-    // the workflow engine keeps copies too (Wave S3 G1): her intake run's state and a step's record (what a model read, an
-    // error quoting it), and a scheduling run still waiting on her with a note to her in its state
+    // the workflow engine keeps copies too: her intake run's state and a step's record (what a model read, an error
+    // quoting it), and a stored run still waiting on her with a note to her in its state
     const workflowRunsAboutHer = async () => (await container.db.select().from(workflowRuns).where(eq(workflowRuns.companyId, companyId))).filter((r) => r.subject.id === applicationId || (r.state as { applicationId?: string }).applicationId === applicationId);
     const [intakeRun] = (await workflowRunsAboutHer()).filter((r) => r.workflowKey === "application_intake");
     expect(intakeRun).toBeTruthy();
-    // the apply form's reading of the upload she sent, never tied to the application (it finished after the intake read the
-    // file itself, 20 Oct): it carries only the upload, which her intake run names (`formUploadId`)
+    // a stored reading of a file she uploaded that is tied to no application: it carries only the upload, which her intake
+    // run names (`formUploadId`)
     const formUploadId = randomUUID();
     const [formRun] = await container.db.insert(aiRuns).values({ companyId, agent: "apply", task: "resume.extract", provider: "fake", model: "claude-haiku-5-5", promptKey: "resume.extract", promptVersion: 1, promptHash: "test", inputRef: { uploadId: formUploadId, roleId, purpose: "apply_form", chars: 120 }, structuredOutput: { fullName: "Maria Reyes", email: "maria.reyes@example.com", positions: [{ title: "Hygienist", employer: "Coastal Family Dentistry" }] }, status: "ok" }).returning({ id: aiRuns.id });
     await container.db.update(workflowRuns).set({ state: { ...intakeRun.state, formUploadId, candidateName: "Maria Reyes", contact: "maria.reyes@example.com, (949) 555-0100" } }).where(eq(workflowRuns.id, intakeRun.id));
     await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "extract", seq: 99, status: "error", input: { wake: null }, output: { reading: { fullName: "Maria Reyes", phone: "(949) 555-0100", positions: ["Registered Dental Hygienist at Coastal Family Dentistry"], skills: ["Dentrix"] } }, error: "invalid JSON near 'Maria Reyes, RDH, Tustin'", finishedAt: new Date().toISOString() });
     const ivId = randomUUID();
-    const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: ivId }, status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
+    const [stillGoing] = await container.db.insert(workflowRuns).values({ companyId, workflowKey: "schedule_interview", subject: storedSubject("interview", ivId), status: "waiting", currentStep: "await_pick", state: { interviewId: ivId, applicationId, roleId, roundKey: "first", attempt: 1, invitationNote: { text: "See you soon, Maria Reyes", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: ivId } }).returning();
     await container.db.insert(workflowSteps).values({ runId: stillGoing.id, companyId, stepKey: "offer", seq: 1, status: "ok", input: { wake: { kind: "event", key: `${ivId}:interview.reply`, payload: { message: "Maria here, call me on (949) 555-0100" } } }, output: { kind: "wait" }, finishedAt: new Date().toISOString() });
     const wfBefore = await workflowRunsAboutHer();
     const wfStepsOf = (ids: string[]) => container.db.select().from(workflowSteps).where(inArray(workflowSteps.runId, ids));
     const wfStepsBefore = await wfStepsOf(wfBefore.map((r) => r.id));
     expect(JSON.stringify(wfBefore)).toContain("Maria Reyes");
     expect(JSON.stringify(wfStepsBefore)).toContain("Coastal Family Dentistry");
-    // a repeat submission's chat waiting for her to confirm it, with what that visit typed for the chat (Wave S7)
-    const [appRow] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
-    const [typedRow] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: appRow.roleId, applicationId, packetVersion: appRow.packetVersion, firstName: "Maria", token: "privacy-test-typed", status: "completed", confirmation: "sent", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, typedFacts: { cv: ["Registered Dental Hygienist at Coastal Family Dentistry"], formAnswers: ["Licensed in California: yes."] }, focusQuestions: [{ key: "unknown_1", question: "Is your licence active?", answer: "Yes, Coastal Family Dentistry renewed it" }] }, expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
+    // an AI interview of hers stored by an earlier version of the app, with her words in its progress
+    const [typedRow] = await container.db.insert(screens).values({ companyId, applicationId, token: "privacy-test-typed", status: "expired", progress: storedProgress({ typedFacts: { cv: ["Registered Dental Hygienist at Coastal Family Dentistry"], formAnswers: ["Licensed in California: yes."] }, focusQuestions: [{ key: "unknown_1", question: "Is your licence active?", answer: "Yes, Coastal Family Dentistry renewed it" }] }) }).returning({ id: screens.id });
     // the "your data was deleted" email leaves only once the deletion committed: when it is sent, the record is already anonymized
     // (the adapter sits behind the do-not-send guard, whose `send` calls the adapter's own: the probe calls the class's)
     const email = container.integrations.email as FakeEmailAdapter;
@@ -243,18 +222,26 @@ describe("candidate privacy requests", () => {
     expect(ok.status).toBe(200);
     expect(anonymizedWhenSent).toBeTruthy();
     expect(((await ok.json()) as { confirmationSentAt: string | null }).confirmationSentAt).toBeTruthy();
-    // her readings keep the band, the confidence and the score, and lose every word
+    // her readings keep what was found as codes (which must-have, which skill, shown or not), so the score still adds up,
+    // and lose every word
     const words = /Maria|Reyes|maria\.reyes|Coastal|Dentrix|Tustin|555-01/;
-    for (const a of await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId))) {
+    const found = (reading: unknown) => {
+      const result = reading as { requirementFindings?: Array<{ requirementKey: string; met: string }>; competencyFindings?: Array<{ competencyKey: string; finding: string }> };
+      return { mustHaves: (result.requirementFindings ?? []).map((f) => [f.requirementKey, f.met]), skills: (result.competencyFindings ?? []).map((f) => [f.competencyKey, f.finding]) };
+    };
+    const readingsAfter = await container.db.select().from(assessments).where(eq(assessments.applicationId, applicationId));
+    expect(readingsAfter).toHaveLength(readingsBefore.length);
+    for (const a of readingsAfter) {
       const was = readingsBefore.find((b) => b.id === a.id)!;
       expect(JSON.stringify(a.result)).not.toMatch(words);
-      expect((a.result as { summary: string }).summary).toBe("[removed at the candidate's request]");
-      expect((a.result as { strengths: unknown[] }).strengths).toEqual([]);
-      expect((a.result as { concerns: unknown[] }).concerns).toEqual([]);
+      expect(a.result.summary).toBe("[removed at the candidate's request]");
+      expect(a.result.strengths).toEqual([]);
+      expect(a.result.concerns).toEqual([]);
       expect(JSON.stringify(a.result)).not.toContain("\"quote\"");
-      expect({ overall: a.overall, confidence: a.confidence, secondaryScore: a.secondaryScore, aiRunId: a.aiRunId }).toEqual({ overall: was.overall, confidence: was.confidence, secondaryScore: was.secondaryScore, aiRunId: was.aiRunId });
-      expect((a.result as { overall: string }).overall).toBe((was.result as { overall: string }).overall);
+      expect({ kind: a.kind, packetVersion: a.packetVersion, aiRunId: a.aiRunId }).toEqual({ kind: was.kind, packetVersion: was.packetVersion, aiRunId: was.aiRunId });
+      expect(found(a.result)).toEqual(found(was.result));
     }
+    expect(found(readingsAfter[0].result).mustHaves.length).toBeGreaterThanOrEqual(1);
     // the AI run log about her keeps only its bookkeeping
     const runsAfter = await runsAboutHer();
     expect(runsAfter).toHaveLength(runsBefore.length);
@@ -264,7 +251,7 @@ describe("candidate privacy requests", () => {
       expect(JSON.stringify(r)).not.toMatch(words);
       expect({ task: r.task, model: r.model, costUsd: r.costUsd, latencyMs: r.latencyMs, inputTokens: r.inputTokens, status: r.status, workflowRunId: r.workflowRunId }).toEqual({ task: was.task, model: was.model, costUsd: was.costUsd, latencyMs: was.latencyMs, inputTokens: was.inputTokens, status: was.status, workflowRunId: was.workflowRunId });
     }
-    // the form's reading found by the upload her intake run names goes too, its upload kept as bookkeeping
+    // the reading found by the upload her intake run names goes too, its upload kept as bookkeeping
     const [formRunAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, formRun.id));
     expect(formRunAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
     expect(JSON.stringify(formRunAfter)).not.toMatch(words);
@@ -299,7 +286,8 @@ describe("candidate privacy requests", () => {
     const history = JSON.stringify(await moves());
     expect(history).not.toContain(moveNote);
     expect(history).not.toContain(hireNote);
-    expect((await moves()).some((e) => (e.payload as { reason?: unknown }).reason === "hired_externally")).toBe(true);
+    expect((await moves()).some((e) => (e.payload as { reason?: unknown }).reason === HIRE_OUTCOME)).toBe(true);
+    expect((await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.applicationId, applicationId))).map((o) => o.outcome)).toEqual([HIRE_OUTCOME]);
     for (const o of await container.db.select().from(hiringOutcomes).where(eq(hiringOutcomes.applicationId, applicationId))) expect(o.notes).toBeNull();
     const [scrubbedMail] = await container.db.select().from(communications).where(eq(communications.id, teamMail.id));
     expect(`${scrubbedMail.subject} ${scrubbedMail.bodyText}`).not.toMatch(/Maria Reyes|maria\.reyes@example\.com/);
@@ -312,20 +300,16 @@ describe("candidate privacy requests", () => {
     expect(doc.textExtracted).toBeNull();
     expect(storage.has(docBefore.storageKey)).toBe(false);
     for (const s of await container.db.select().from(screens).where(eq(screens.applicationId, applicationId))) { expect(s.transcript).toEqual([]); expect(s.answers).toEqual({}); }
-    // nothing she typed is left on the repeat submission's row, and it is discarded for good
-    const [typedAfter] = await container.db.select().from(unconfirmedScreens).where(eq(unconfirmedScreens.id, typedRow.id));
-    expect(typedAfter.progress.typedFacts).toBeUndefined();
-    expect(typedAfter.progress.focusQuestions).toEqual([{ key: "unknown_1", question: "Is your licence active?" }]);
+    // nothing she typed is left on the row an earlier version stored
+    const [typedAfter] = await container.db.select().from(screens).where(eq(screens.id, typedRow.id));
+    expect(typedAfter.progress).toEqual({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 });
     expect(JSON.stringify(typedAfter)).not.toMatch(/Coastal Family Dentistry|Licensed in California|Maria/);
-    expect(typedAfter).toMatchObject({ confirmation: "discarded", discardedAt: expect.any(String) });
     for (const m of await container.db.select().from(communications).where(eq(communications.candidateId, candidateId))) expect(m.bodyText).not.toContain("Maria");
     const [a] = await container.db.select().from(applications).where(eq(applications.id, applicationId));
-    expect(a.stage).toBeTruthy(); // the stage history stays
-    // what her chats taught her record (Wave S7, S7-F), and what she kept from them (Wave S8), go with the rest of her answers
-    expect(a.answers.learned).toBeUndefined();
-    expect(a.answers.kept).toBeUndefined();
-    expect(JSON.stringify(a.answers)).not.toContain("perio");
-    expect(JSON.stringify(a.answers)).not.toContain("bus to Irvine");
+    expect(a.stage).toBe("hired"); // where she stood stays, and so does the stage history
+    // what she answered on the form and what was read from her resume go
+    expect(a.answers).toEqual({ noticeVersionsShown: [] });
+    expect(a.extraction).toBeNull();
     expect((await container.db.select().from(events).where(eq(events.type, "candidate.anonymized"))).length).toBe(1);
     expect((await container.db.select().from(auditRecords).where(and(eq(auditRecords.companyId, companyId), eq(auditRecords.action, "data.anonymized")))).length).toBe(1);
     const confirmation = outbox().find((m) => m.to === "maria.reyes@example.com" && /Your request is complete/.test(m.subject) && /identified you has been removed/.test(m.text));
@@ -336,10 +320,10 @@ describe("candidate privacy requests", () => {
     // after the deletion, or a reading written back (as a deletion made before this clean-up existed left them)
     const [late] = await container.db.insert(aiRuns).values({ companyId, agent: "triage", task: "triage.assess", provider: "fake", model: "fake", promptKey: "triage.assess", promptVersion: 1, promptHash: "h", inputRef: { applicationId, reading: 1, note: "Maria Reyes" }, structuredOutput: { summary: "Maria Reyes, 5 years at Coastal Family Dentistry" }, costUsd: "0.0021", latencyMs: 812, status: "ok" }).returning();
     await container.db.update(assessments).set({ result: readingsBefore[0].result }).where(eq(assessments.id, readingsBefore[0].id));
-    // the one-visit apply chat logs its turns against the unconfirmed screen, with no workflow run: found by that id too
-    const [app0] = await container.db.select({ roleId: applications.roleId, packetVersion: applications.packetVersion }).from(applications).where(eq(applications.id, applicationId));
-    const [unconfirmed] = await container.db.insert(unconfirmedScreens).values({ companyId, roleId: app0.roleId, applicationId, packetVersion: app0.packetVersion, firstName: "Removed", token: "privacy-test-unconfirmed", expiresAt: new Date(Date.now() + 86_400_000).toISOString() }).returning({ id: unconfirmedScreens.id });
-    const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: unconfirmed.id, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
+    // a turn of a chat an earlier version kept apart from the AI interviews, with no workflow run: its run names that chat
+    // and, since migration 0040, the application, which is what it is found by
+    const earlierChat = randomUUID();
+    const [turn] = await container.db.insert(aiRuns).values({ companyId, agent: "screen", task: "screen.turn", provider: "fake", model: "fake", promptKey: "screen.turn", promptVersion: 1, promptHash: "h", inputRef: { unconfirmedScreenId: earlierChat, applicationId, turn: 1 }, structuredOutput: { messageToCandidate: "Thanks, Maria! Next question.", answerRecorded: "Four years at Coastal Family Dentistry" }, costUsd: "0.0004", latencyMs: 300, status: "ok" }).returning();
     // and the workflow engine's copies: a step that finished after the deletion, and a run's state written back with her words
     const [lateStep] = await container.db.insert(workflowSteps).values({ runId: intakeRun.id, companyId, stepKey: "ready", seq: 100, status: "ok", input: { wake: null }, output: { kind: "complete", summary: "Maria Reyes fits", contact: "maria.reyes@example.com" }, finishedAt: new Date().toISOString() }).returning();
     await container.db.update(workflowRuns).set({ state: { ...going.state, invitationNote: { text: "Hi Maria Reyes", aiHelped: false, senderName: "Dana" } } }).where(eq(workflowRuns.id, stillGoing.id));
@@ -352,7 +336,7 @@ describe("candidate privacy requests", () => {
     expect(JSON.stringify(await workflowRunsAboutHer())).not.toMatch(words);
     const [turnAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, turn.id));
     expect(turnAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
-    expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: unconfirmed.id, turn: 1 });
+    expect(turnAfter.inputRef).toEqual({ unconfirmedScreenId: earlierChat, applicationId, turn: 1 });
     const [lateAfter] = await container.db.select().from(aiRuns).where(eq(aiRuns.id, late.id));
     expect(lateAfter.structuredOutput).toEqual(REMOVED_RUN_OUTPUT);
     expect(lateAfter.inputRef).toEqual({ applicationId, reading: 1 });
@@ -370,28 +354,23 @@ describe("candidate privacy requests", () => {
     expect(((await again.json()) as { confirmationSentAt: string | null }).confirmationSentAt).toBeTruthy();
   });
 
-  it("deadlines raise an alert ten days before and again when overdue, once each", async () => {
+  it("the daily check raises an alert ten days before a deadline and again when it is overdue, once each; nobody sets it off by hand", async () => {
     const created = await json(admin, "POST", "/api/v1/admin/data-requests", { companyId, requesterEmail: "someone@example.com", kind: "access" });
     const req = (await created.json()) as { id: string };
-    const soon = new Date(Date.now() + 40 * 86_400_000);
-    (container.engine as unknown as { now: () => Date }).now = () => soon;
-    // the check writes (alerts, and the record of them), so it is a POST: a link from another site (a GET, which carries
-    // the Lax cookie) cannot set it off, and a post from another site is refused (middleware/same-site.ts)
     const deadlineAlerts = async () => (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"))).length;
     const before = await deadlineAlerts();
-    expect((await json(admin, "GET", "/api/v1/admin/data-requests/deadlines/check")).status).toBe(404);
-    expect((await app.request("/api/v1/admin/data-requests/deadlines/check", { method: "POST", headers: { cookie: admin, "x-admin-reason": "privacy test", "sec-fetch-site": "cross-site" } })).status).toBe(403);
+    // the worker's daily job runs the check; no route does
+    for (const method of ["GET", "POST"]) expect((await json(admin, method, "/api/v1/admin/data-requests/deadlines/check")).status, method).toBe(404);
     expect(await deadlineAlerts()).toBe(before);
-    const first = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number; overdue: number };
+    const check = (at: Date) => withPlatform(container.db, (tx) => checkPrivacyRequestDeadlines(tx, at));
+    const soon = new Date(Date.now() + 40 * 86_400_000);
+    const first = await check(soon);
     expect(first.soon).toBeGreaterThanOrEqual(1);
-    const again = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { soon: number };
-    expect(again.soon).toBe(0);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date(Date.now() + 50 * 86_400_000);
-    const late = (await (await json(admin, "POST", "/api/v1/admin/data-requests/deadlines/check")).json()) as { overdue: number };
+    expect((await check(soon)).soon).toBe(0);
+    const late = await check(new Date(Date.now() + 50 * 86_400_000));
     expect(late.overdue).toBeGreaterThanOrEqual(1);
     const alerts = await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "privacy_request.deadline"));
     expect(alerts.some((a) => a.severity === "critical" && (a.details as { requestId: string }).requestId === req.id)).toBe(true);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date();
     expect((await json(admin, "POST", `/api/v1/admin/data-requests/${req.id}/decline`, { resolution: "We could not match this address to any application." })).status).toBe(200);
   });
 
@@ -402,16 +381,8 @@ describe("candidate privacy requests", () => {
     expect((await app.request(`/c/status/${statusToken}`)).status).toBe(410);
     expect((await form(`/c/status/${statusToken}/privacy`, { kind: "access" })).status).toBe(410);
     expect((await form(`/c/status/${statusToken}/withdraw`, { confirm: "yes" })).status).toBe(410);
-    expect((await form(`/c/status/${statusToken}/sms`, { pref: "off" })).status).toBe(410);
     // a second applicant
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Noor"); fd.set("lastName", "Haddad"); fd.set("email", "noor.haddad@example.com"); fd.set("phone", "(949) 555-0101"); fd.set("smsConsent", "yes"); fd.set("locationText", "Irvine, CA");
-    fd.set("resume", new File(["Noor Haddad, RDH"], "noor.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    const applied = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
+    const applied = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: "Noor", lastName: "Haddad", email: "noor.haddad@example.com", phone: "(949) 555-0101", q_licensed: "yes" }, "Noor Haddad, RDH") });
     expect(applied.status).toBe(302);
     const token = await statusTokenFor(container, { roleId, email: "noor.haddad@example.com" });
     await container.drain();
@@ -422,16 +393,14 @@ describe("candidate privacy requests", () => {
     expect((await form(`/c/status/${token.slice(0, -2)}zz/privacy`, { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/privacy", { kind: "access" })).status).toBe(404);
     expect((await form("/c/status/not-a-token/withdraw", { confirm: "yes" })).status).toBe(404);
-    expect((await form("/c/status/not-a-token/sms", { pref: "off" })).status).toBe(404);
     expect((await container.db.select().from(dr)).length).toBe(before);
     expect((await container.db.select().from(auditRecords)).length).toBe(auditsBefore);
-    // only the four kinds the page offers; a withdrawal or text choice through this form is refused without a record
-    expect((await form(`/c/status/${token}/privacy`, { kind: "sms_opt_out" })).status).toBe(302);
+    // only the four kinds the page offers; a withdrawal through this form is refused without a record
     expect((await form(`/c/status/${token}/privacy`, { kind: "withdrawal" })).status).toBe(302);
     expect((await container.db.select().from(dr)).length).toBe(before);
     // another company's ids in the form change nothing: everything comes from the token
     // another person's company: a second company of one's own goes through ITS (founder decision L-17 A)
-    const otherOwner = await signIn("owner@other-co.test");
+    const otherOwner = await signInByEmailLink(app, "owner@other-co.test");
     const other = (await (await json(otherOwner, "POST", "/api/v1/companies", { name: "Other Co", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     outbox().length = 0;
     const r = await form(`/c/status/${token}/privacy`, { kind: "access", details: "What do you hold about me?", companyId: other.id, candidateId: "00000000-0000-0000-0000-000000000000", applicationId: "00000000-0000-0000-0000-000000000000", requesterEmail: "attacker@example.com", status: "fulfilled" });
@@ -449,10 +418,10 @@ describe("candidate privacy requests", () => {
     expect((await container.db.select().from(dr)).length).toBe(countAfterFirst);
     expect(outbox().filter((m) => m.to === "noor.haddad@example.com").length).toBe(1);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.replayed"))).length).toBeGreaterThanOrEqual(1);
-    // a request for a person opens an escalation whose text never carries the candidate's words to the customer
+    // a request for a person's review never carries the candidate's words to the customer
     await form(`/c/status/${token}/privacy`, { kind: "human_review", details: "My manager at Coastal is the owner's cousin, please keep this private." });
-    const mine = (await (await json(owner, "GET", "/api/v1/escalations/mine")).json()) as Array<{ question?: string; summary?: string }>;
-    expect(JSON.stringify(mine)).not.toContain("cousin");
+    expect(await (await json(owner, "GET", "/api/v1/notifications/history")).text()).not.toContain("cousin");
+    expect(JSON.stringify(await container.db.select().from(events).where(eq(events.companyId, companyId)))).not.toContain("cousin");
     // every creation is audited with the request id, and the token appears in no audit record, event or product event
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "data_request.created"));
     expect(audits.some((a) => (a.details as { requestId?: string }).requestId === created[0].id)).toBe(true);
@@ -462,17 +431,7 @@ describe("candidate privacy requests", () => {
     expect(redactString(`POST /c/status/${token}/privacy 302`)).not.toContain(token);
     expect(redactString(`POST /c/status/${token}/privacy 302`)).toContain("/c/status/");
     expect(redactString(`GET /api/v1/auth/consume?token=${token}`)).not.toContain(token);
-    expect(redactString("GET /api/v1/admin/data-requests/lookup/candidate?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
-    // text-message choice: opting out is idempotent, opting in is not offered while texting is off (switched off from here; the consent above was given while it was on)
-    container.env.SMS_ENABLED = false;
-    await form(`/c/status/${token}/sms`, { pref: "off" });
-    await form(`/c/status/${token}/sms`, { pref: "off" });
-    expect((await container.db.select().from(dr).where(and(eq(dr.applicationId, appRow0.id), eq(dr.kind, "sms_opt_out")))).length).toBe(1);
-    expect((await container.db.select().from(events).where(and(eq(events.companyId, companyId), eq(events.type, "candidate.opted_out")))).filter((e) => e.subjectId === appRow0.candidateId).length).toBe(1);
-    expect((await form(`/c/status/${token}/sms`, { pref: "on" })).status).toBe(302);
-    const [afterOn] = await container.db.select().from(candidates).where(eq(candidates.id, appRow0.candidateId));
-    expect(afterOn.preferences.smsOptOut).toBe(true);
-    expect(await (await app.request(`/c/status/${token}`)).text()).not.toContain("Allow text messages");
+    expect(redactString("GET /c/link-request?email=noor.haddad@example.com 200")).not.toContain("noor.haddad");
     // a withdrawal needs the explicit confirmation (no inline script on the page); without it nothing changes
     const noConfirm = await form(`/c/status/${token}/withdraw`, {});
     expect(noConfirm.status).toBe(302);

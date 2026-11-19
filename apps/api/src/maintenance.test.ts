@@ -2,18 +2,21 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { SYSTEM_ACTOR } from "@ros/core";
-import { adminAlerts, applications, candidates, companies, cspReports, events, inboundEmails, jobs, magicLinks, randomToken, roles, sessions, users, webhookReceipts, workerHeartbeats, workflowRuns, workflowSteps, withTenant } from "@ros/db";
+import { adminAlerts, applications, candidates, companies, cspReports, events, jobs, magicLinks, randomToken, roles, sessions, users, webhookReceipts, workerHeartbeats, workflowRuns, workflowSteps, withTenant } from "@ros/db";
 import { createContainer, type Container } from "./container";
 import { HEALTH_ALERT_WINDOW_MS, MAINTENANCE_JOB_KIND, QUEUE_STALE_MS, RETENTION_DAYS, checkOperationalHealth, runMaintenance } from "./maintenance";
 import { DAILY_MS, recurring } from "./recurring-jobs";
 import { HEARTBEAT_STALE_MS, writeHeartbeat } from "./worker-health";
+
+/** The subject of a run stored before in-person interviews were removed: the column still holds such rows. */
+const storedSubject = (type: string, id: string) => ({ type, id }) as unknown as (typeof workflowRuns.$inferInsert)["subject"];
 
 /** The daily sweep removes only what has served its purpose, and a recurring job is armed once however many processes boot. */
 describe("maintenance", () => {
   let container: Container;
   const DAY = 86_400_000;
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
   });
   afterAll(async () => {
     await container.close();
@@ -61,25 +64,6 @@ describe("maintenance", () => {
     expect((await container.db.select().from(magicLinks).where(eq(magicLinks.email, "sweep@example.com"))).map((l) => l.tokenHash)).toEqual(["fresh-link"]);
     expect((await container.db.select().from(webhookReceipts)).map((r) => r.externalId)).toEqual(["new"]);
     expect((await container.db.select().from(cspReports)).map((r) => r.documentPath)).toEqual(["/c/y"]);
-  });
-
-  it("an emailed-in application that failed a month ago loses its stored file and its words; a recent one keeps them (Wave S5 review)", async () => {
-    const now = new Date();
-    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY).toISOString();
-    const storage = container.integrations.storage;
-    await storage.put("inbound/test/old.txt", new TextEncoder().encode("Old résumé"), "text/plain");
-    await storage.put("inbound/test/new.txt", new TextEncoder().encode("New résumé"), "text/plain");
-    const [old] = await container.db.insert(inboundEmails).values({ toAddress: "jobs@in.test", fromAddress: "ezra@example.com", subject: "Application", rawStorageKey: "inbound/test/old.txt", parsed: { text: "Ezra applied" }, status: "error", createdAt: at(RETENTION_DAYS.failedInboundEmails + 1) }).returning({ id: inboundEmails.id });
-    const [recent] = await container.db.insert(inboundEmails).values({ toAddress: "jobs@in.test", fromAddress: "zoe@example.com", subject: "Application", rawStorageKey: "inbound/test/new.txt", parsed: { text: "Zoe applied" }, status: "error", createdAt: at(2) }).returning({ id: inboundEmails.id });
-    // without a way to remove the file, nothing is cleared (no file is ever left without its record)
-    expect((await runMaintenance(container.db, now, { workerInline: true })).purgedInboundEmails).toBe(0);
-    const report = await runMaintenance(container.db, now, { workerInline: true, deleteStored: (key) => storage.delete(key) });
-    expect(report.purgedInboundEmails).toBe(1);
-    const [gone] = await container.db.select().from(inboundEmails).where(eq(inboundEmails.id, old.id));
-    expect(gone).toMatchObject({ rawStorageKey: null, parsed: {}, fromAddress: "[removed]", subject: "[removed]", status: "purged" });
-    expect(await storage.get("inbound/test/old.txt")).toBeNull();
-    expect((await container.db.select().from(inboundEmails).where(eq(inboundEmails.id, recent.id)))[0]).toMatchObject({ rawStorageKey: "inbound/test/new.txt", status: "error" });
-    expect(await storage.get("inbound/test/new.txt")).not.toBeNull();
   });
 
   it("a recurring job is armed once, re-armed by its own run, and never doubled by a second boot", async () => {
@@ -207,7 +191,7 @@ describe("maintenance", () => {
     const { gone, kept } = await withTenant(container.db, companyId, async (tx) => {
       const [role] = await tx.insert(roles).values({ companyId, title: "Hygienist", status: "open", createdBy: actor }).returning({ id: roles.id });
       const person = async (first: string, last: string, email: string | null, anonymizedAt: string | null) => {
-        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: last, email, firstSource: "direct", anonymizedAt }).returning({ id: candidates.id });
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: first, lastName: last, email, anonymizedAt }).returning({ id: candidates.id });
         const [a] = await tx.insert(applications).values({ companyId, roleId: role.id, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "withdrawn", statusToken: randomToken(16) }).returning({ id: applications.id });
         return { candidateId: cand.id, applicationId: a.id, roleId: role.id };
       };
@@ -219,7 +203,7 @@ describe("maintenance", () => {
     const interviewId = randomUUID();
     const [intake, scheduling, other] = await container.db.insert(workflowRuns).values([
       { companyId, workflowKey: "application_intake", subject: { type: "application", id: gone.applicationId }, status: "completed", currentStep: "ready", state: { applicationId: gone.applicationId, roleId: gone.roleId, remindersSent: 1, heldAt, candidateEmail: "lena.ortiz@example.com", resumeText: "Lena Ortiz, RDH. Six years at Bright Smiles Dental. (512) 555-0142" }, completedAt: now.toISOString() },
-      { companyId, workflowKey: "schedule_interview", subject: { type: "interview", id: interviewId }, status: "waiting", currentStep: "await_pick", state: { interviewId, applicationId: gone.applicationId, roleId: gone.roleId, roundKey: "first", attempt: 1, invitationNote: { text: "Looking forward to meeting you, Lena Ortiz", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: interviewId, reason: "waiting for Lena Ortiz to pick a time" } },
+      { companyId, workflowKey: "schedule_interview", subject: storedSubject("interview", interviewId), status: "waiting", currentStep: "await_pick", state: { interviewId, applicationId: gone.applicationId, roleId: gone.roleId, roundKey: "first", attempt: 1, invitationNote: { text: "Looking forward to meeting you, Lena Ortiz", aiHelped: false, senderName: "Dana" } }, wait: { kind: "event", eventTypes: ["interview.slot_selected"], subjectId: interviewId, reason: "waiting for Lena Ortiz to pick a time" } },
       { companyId, workflowKey: "application_intake", subject: { type: "application", id: kept.applicationId }, status: "completed", currentStep: "ready", state: { applicationId: kept.applicationId, roleId: kept.roleId, note: "Omar Haddad called back" }, completedAt: now.toISOString() },
     ]).returning();
     await container.db.insert(workflowSteps).values([

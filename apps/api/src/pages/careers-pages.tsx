@@ -2,24 +2,25 @@
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
-import { trialPaused, trialStanding } from "@ros/contracts";
-import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, entitlements, noticesFor } from "@ros/core";
-import { rolePackets, roles, withTenant, type companies } from "@ros/db";
-import { LOGO_FILE, jobPostingJsonLd } from "@ros/integrations";
+import { ApplySource, applyLinkFor, trialPaused, trialStanding } from "@ros/contracts";
+import { CLOSING_DATE_REASON, applyByLabel, benefitsDescriptionFor, closingDayWords, noticesFor } from "@ros/core";
+import { rolePackets, roles, type companies } from "@ros/db";
+import { LOGO_FILE } from "@ros/integrations";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
-import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse, profileOf } from "../services/company-settings-profile";
+import { approvedAbout, contactLineFor, logoPublicPath, logoPublicUrl, logoResponse } from "../services/company-settings-profile";
 import { jobUrls } from "../services/job-urls";
-import { acceptingApplications, applyFlowOf, jobNotices, loadJob, loadPublicCompany } from "./candidate-shared";
+import { acceptingApplications, jobNotices, loadJob, loadPublicCompany, pastItsLimit } from "./candidate-shared";
 import { descriptionExcerpt } from "./description";
 import { Icon } from "./icons";
 import { JobFacts, payShown, publicPay, roleValidThrough } from "./job-facts";
 import { CompanyLine, HelpLine, JobPage, type JobPageCompany, type JobPageRole } from "./job-page";
+import { jobPostingJsonLd } from "./job-structured-data";
 import { Layout } from "./layout";
 
 /**
- * The company's public pages (Wave S7, S7-0: moved as they were from pages/candidate.tsx): the careers page, the logo,
- * the job page and the privacy page. Mounted on the candidate pages by pages/candidate.tsx.
+ * The company's public pages: the careers page, the logo, the job page and the privacy page. Mounted on the candidate
+ * pages by pages/candidate.tsx.
  */
 const candidatePages = new Hono<Vars>();
 export { candidatePages as careerPages };
@@ -32,23 +33,23 @@ function closedMessage(role: { status: string; applicationsClosedReason?: string
 }
 
 /**
- * What the public pages say about the company (plan D10): the text a person approved (never a draft, never the role
- * plans' own company line), our copy of the logo, and who answers before applying.
+ * What the public pages say about the company: the text a person approved (never a draft, never the job record's own
+ * company line), our copy of the logo, and who answers before applying.
  */
 function publicCompany(company: typeof companies.$inferSelect, env: Container["env"]): JobPageCompany {
-  const logo = profileOf(company.settings).logo;
+  const logo = company.settings.logo;
   return { name: company.name, slug: company.slug, about: approvedAbout(company.settings), website: company.settings.website ?? null, logoSrc: logo ? logoPublicPath(company.slug, logo) : null, contact: contactLineFor(company.settings, env) };
 }
 
 /** The logo's full address for search engines and link previews: our stored copy, else an address typed before uploads existed. */
 function publicLogoUrl(company: typeof companies.$inferSelect, env: Container["env"]): string | null {
-  const logo = profileOf(company.settings).logo;
+  const logo = company.settings.logo;
   return logo ? logoPublicUrl(env, company.slug, logo) : company.settings.logoUrl ?? null;
 }
 
 /**
- * The job as its page shows it. `companyPaused`: the company's trial has ended (founder decision L-02 B), so the page
- * says what a job not taking applications says, in the same neutral words, and never why.
+ * The job as its page shows it. `companyPaused`: the company's trial has ended, so the page says what a job not taking
+ * applications says, in the same neutral words, and never why.
  */
 function jobRoleView(role: typeof roles.$inferSelect, companyPaused: boolean): JobPageRole {
   const accepting = acceptingApplications(role) && !companyPaused;
@@ -56,9 +57,9 @@ function jobRoleView(role: typeof roles.$inferSelect, companyPaused: boolean): J
 }
 
 /**
- * The careers page (plan D10): the company with its logo and the text it approved about itself, then every open job
- * with its places, work model, kind of job, pay, its first lines and its closing date; the jobs and the versions they
- * run on come in one query.
+ * The careers page: the company with its logo and the text it approved about itself, then every open job with its
+ * places, work model, kind of job, pay, its first lines and its closing date; the jobs and the versions they run on
+ * come in one query.
  */
 candidatePages.get("/careers/:slug", async (c) => {
   const container = c.get("container");
@@ -71,21 +72,19 @@ candidatePages.get("/careers/:slug", async (c) => {
     .where(and(eq(roles.companyId, company.id), eq(roles.status, "open")))
     .orderBy(desc(roles.openedAt));
   const view = publicCompany(company, container.env);
-  // A trial that ended (L-02 B) shows every job as not taking new applications, in the words a job's own stop uses.
+  // A trial that ended shows every job as not taking new applications, in the words a job's own stop uses.
   const paused = trialPaused(company, container.engine.clock());
-  // The company's own introduction is the page's lead; without one the page has no lead (fewer words, 23 October 2026).
-  // The link-preview text still falls back to the old default line, which is never on the page itself; never for a company
-  // whose plan can leave applicants unread (Rule 2), for whom it would not be true: its job count is enough.
+  // The company's own introduction is the page's lead; without one the page has no lead, and the link preview says
+  // only how many jobs are open.
   const intro = company.settings.careersPage?.intro ?? null;
-  const respondsToAll = (await withTenant(container.db, company.id, (tx) => entitlements.limitOf(tx, company.id, entitlements.CANDIDATES_PER_JOB))) === null;
-  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro ?? (respondsToAll ? "We respond to every applicant and keep the process short." : "")}`.trim().slice(0, 300);
+  const summary = `${open.length ? `${open.length} open ${open.length === 1 ? "job" : "jobs"} at ${company.name}.` : `Jobs at ${company.name}.`} ${view.about ?? intro ?? ""}`.trim().slice(0, 300);
   return c.html(
     <Layout title={`Careers at ${company.name}`} wide description={summary} share={{ title: `Careers at ${company.name}`, description: summary, url: jobUrls(container.env, { slug: company.slug, roleId: "-" }).careers, siteName: company.name, image: publicLogoUrl(company, container.env) }}>
       <div class="careers">
         <div class="careers-head">
           {/* The logo alone: the heading names the company, and the page's title says it is the careers page. */}
           <CompanyLine company={view} />
-          {/* The name in plum: the two-tone heading of the redesign (the words are unchanged). */}
+          {/* The name in plum: a two-tone heading. */}
           <h1>Work with <span>{company.name}</span></h1>
           {intro ? <p class="lead">{intro}</p> : null}
         </div>
@@ -125,15 +124,15 @@ candidatePages.get("/careers/:slug", async (c) => {
 });
 
 /**
- * The company's logo, from our own storage (plan D10): only the file the company has now, only once ITS has confirmed
- * the company. The name is a fresh id per upload, so the copy may be cached for good.
+ * The company's logo, from our own storage: only the file the company has now, only while the company is live. The
+ * name is a fresh id per upload, so the copy may be cached for good.
  */
 candidatePages.get("/careers/:slug/logo/:file", async (c) => {
   const container = c.get("container");
   const file = c.req.param("file");
   if (!LOGO_FILE.test(file)) return c.notFound();
   const company = await loadPublicCompany(container.db, c.req.param("slug"));
-  const logo = company ? profileOf(company.settings).logo : undefined;
+  const logo = company?.settings.logo;
   if (!logo || logo.file !== file) return c.notFound();
   const bytes = await container.integrations.storage.get(logo.key);
   if (!bytes) return c.notFound();
@@ -150,18 +149,16 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
   const logoUrl = publicLogoUrl(company, container.env);
   const trial = trialStanding(company, container.engine.clock());
   const trialEnded = trial?.ended === true;
-  // A trial that ended (L-02 B) stops the job taking applications on the day it ended, so search engines stop listing it
-  // as the feeds and the sitemap already do.
+  // A trial that ended stops the job taking applications on the day it ended, so search engines stop listing it as the
+  // sitemap already does.
   const datedRole = trialEnded && trial?.endsAt && role.acceptingApplications ? { ...role, acceptingApplications: false, applicationsClosedAt: trial.endsAt } : role;
-  // The JobPosting block stays on paused and closed pages (docs/spec/20 item 4). validThrough is a real date only: the
-  // closing day, the day the role stopped taking applications, or its closing date; an open role with none carries none.
+  // The JobPosting block stays on paused and closed pages. validThrough is a real date only: the closing day, the day
+  // the job stopped taking applications, or its closing date; an open job with none carries none.
   const jsonLd = jobPostingJsonLd({
     roleId: role.id,
     companyName: company.name,
-    companySlug: company.slug,
     packet,
     jobUrl: urls.job,
-    applyUrl: urls.apply,
     datePosted: (role.openedAt ?? role.createdAt).slice(0, 10),
     validThrough: roleValidThrough(datedRole) ?? null,
     showPay: payShown(packet, allNotices),
@@ -169,16 +166,18 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
     companyLogoUrl: logoUrl,
   });
   const excerpt = descriptionExcerpt(packet.description.publicJobDescription, 155);
+  // Where they came from (`?src=linkedin`) goes on to the application form, which records it with the application.
+  const src = ApplySource.safeParse(c.req.query("src"));
+  const applyHref = `/careers/${company.slug}/jobs/${role.id}/apply`;
   return c.html(
     <JobPage
       packet={packet}
       company={publicCompany(company, container.env)}
       role={jobRoleView(role, trialEnded)}
       notices={allNotices}
-      smsEnabled={container.env.SMS_ENABLED}
-      flow={await applyFlowOf(container, job)}
+      onFile={await pastItsLimit(container, job)}
       benefits={benefitsDescriptionFor(packet.compensation, company.settings)}
-      links={{ careers: `/careers/${company.slug}`, apply: `/careers/${company.slug}/jobs/${role.id}/apply` }}
+      links={{ careers: `/careers/${company.slug}`, apply: src.success ? applyLinkFor(applyHref, src.data) : applyHref }}
       jsonLd={jsonLd}
       description={excerpt}
       share={{ title: `${packet.identity.title} at ${company.name}`, description: excerpt, url: urls.job, siteName: company.name, image: logoUrl }}
@@ -189,24 +188,20 @@ candidatePages.get("/careers/:slug/jobs/:roleId", async (c) => {
 candidatePages.get("/privacy", async (c) => {
   const n = noticesFor(["*"]).find((x) => x.key === "privacy");
   const privacyEmail = c.get("container").env.PRIVACY_EMAIL;
-  const smsEnabled = c.get("container").env.SMS_ENABLED;
   return c.html(
     <Layout title="How we handle your information">
       <h1>How we handle your information</h1>
       <p>{n?.text}</p>
-      {/* The apply form's "Who can see it" points here (docs/readiness/20 section D, item 6): every kind of service provider that touches an application, and what each one does. */}
+      {/* The apply form's "Who can see it" points here: every kind of service provider that touches an application, and what each one does. */}
       <h2 id="who-can-see">Who can see your information</h2>
       <ul class="steps">
         <li>The hiring team at the company you applied to. People there make every hiring decision.</li>
-        <li>An Identified Talent Solutions recruiter, only if the company brings one in to help. Their access is limited to what they were brought in for, and every access is recorded.</li>
         <li>The companies that run this service for us, each only for its own job:
           <ul>
             <li>Hosting: runs this website and the work behind it.</li>
             <li>Database and file storage: keeps your application and your resume, privately.</li>
-            <li>Email delivery: sends the emails about your application and receives your replies.</li>
+            <li>Email delivery: sends the emails about your application.</li>
             <li>An AI service: reads applications and screening answers to help organize and summarize them for the hiring team. It does not decide anything.</li>
-            {smsEnabled ? <li>Text messages: sends and receives texts, only if you agreed to them.</li> : null}
-            <li>Calendars (Google or Microsoft): only the interviewers' own calendars, to book an interview time with you.</li>
           </ul>
         </li>
       </ul>
@@ -214,9 +209,7 @@ candidatePages.get("/privacy", async (c) => {
       <h2>Your choices</h2>
       <ul class="steps">
         <li>Ask what we hold about you, correct it, or delete it: <a href="/c/privacy-request">use the request form</a> with the address you applied with (we confirm it is you by email), or write to <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a> from that address. A person records the request, confirms receipt within one business day, and completes it within the legal deadline.</li>
-        <li>Stop text messages any time by replying STOP.</li>
-        <li>Talk to a person instead of the AI assistant: press "I'd rather talk to a person" on the conversation's page, or reply HUMAN to any of our emails.</li>
-        <li>Ask not to be kept for future roles: use the button on your status page, or reply "no thanks" to any of our emails.</li>
+        <li>Talk to a person instead of the AI assistant: press "I'd rather talk to a person" on the conversation's page, or email the contact on the job page.</li>
         <li>Lost the link to your status page? <a href="/c/link-request">We can email it to you again</a>, only ever to the address you applied with.</li>
       </ul>
       <h2>Automated tools</h2>

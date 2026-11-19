@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { IntakeFacts, IntakeTurn, askedKind, lacksCredential, mustHaveOf, restatementsOf, rulesOut } from "./intake";
-import { withoutOwnersCallMark } from "./playbook";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, IntakeQuestion, IntakeServerState, IntakeTurn, askedKind, lacksCredential, mustHaveOf, restatementsOf, rulesOut } from "./intake";
 
 /**
- * A deal-breaker as the must-have it rules people out on (live test, 12 November 2026: "No active California RDA
- * license" became a must-have in those very words). Only clear shapes are turned round; anything else stays as written,
- * so the fairness check still reads the owner's own words, and it is never turned into its opposite (review of the live
- * test, 12 Nov 2026).
+ * A deal-breaker as the must-have it rules people out on: "No active California RDA license" is the must-have "Active
+ * California RDA license". Only clear shapes are turned round; anything else stays as written, so the fairness check
+ * still reads the owner's own words, and it is never turned into its opposite.
  */
 describe("a deal-breaker as the must-have it counts as", () => {
   it("turns round a missing licence, certificate or permit, and what someone cannot or will not do", () => {
@@ -178,29 +176,36 @@ describe("words that rule someone out", () => {
   });
 });
 
-// Review of the live-test fixes, 12 Nov 2026: a note the assistant read was taken for the owner's choice of the form's
-// questions, and the draft prompt's mark could reach a card the owner reads.
-describe("what only the server sets, and words only the AI reads", () => {
-  it("never takes the marker that the owner went through the questions for the form from what the assistant extracts", () => {
-    const turn = IntakeTurn.parse({ assistantMessage: "Noted.", factsExtracted: { eligibilityNotes: ["Able to work Saturdays"], formQuestionsChosen: true }, missingFacts: [], readyToCompile: false, confidence: "low" });
-    expect(turn.factsExtracted.eligibilityNotes).toEqual(["Able to work Saturdays"]);
-    expect("formQuestionsChosen" in turn.factsExtracted).toBe(false);
-    // the facts themselves keep it, as the server set it
-    expect(IntakeFacts.parse({ formQuestionsChosen: true }).formQuestionsChosen).toBe(true);
+describe("what the job builder needs and keeps", () => {
+  it("needs the title, the place, the work arrangement, the pay, full or part time, the schedule and one must-have, each with its label", () => {
+    expect(INTAKE_ESSENTIALS).toEqual(["title", "location", "remote_policy", "compensation_range", "employment_type", "schedule", "must_haves"]);
+    expect(Object.keys(INTAKE_ESSENTIAL_LABEL).sort()).toEqual([...INTAKE_ESSENTIALS].sort());
+    for (const gone of ["reason_for_hire", "interviewers", "decision_maker"]) expect(INTAKE_ESSENTIALS as readonly string[]).not.toContain(gone);
   });
 
-  it("takes the owner's-call mark, or any '(ask only when …)', out of words a model wrote, and leaves other words alone", () => {
-    const rda = "Do you hold an active Registered Dental Assistant (RDA) license in the state where this office is located?";
-    expect(withoutOwnersCallMark(`${rda} (ask only when the owner requires it)`)).toBe(rda);
-    expect(withoutOwnersCallMark("Are you available on Saturdays? (Ask only when the office opens then)")).toBe("Are you available on Saturdays?");
-    expect(withoutOwnersCallMark("Which certifications do you hold (ask only when the owner requires it)?")).toBe("Which certifications do you hold?");
-    for (const t of [rda, "  Words as typed  ", "Do you hold a CDL (class A)?"]) expect(withoutOwnersCallMark(t), t).toBe(t);
+  it("reads the facts of a draft, dropping what the builder no longer asks", () => {
+    const facts = IntakeFacts.parse({ title: "Dental assistant", remotePolicy: "onsite", mustHaves: ["RDA license"], formQuestions: ["Able to work Saturdays"], decisionMaker: "Dr Chen", interviewers: ["Sam"], reason: "growth", compensationCeiling: 40 });
+    expect(facts).toEqual({ title: "Dental assistant", remotePolicy: "onsite", mustHaves: ["RDA license"], niceToHaves: [], formQuestions: ["Able to work Saturdays"], dealBreakers: [], declinedCriteria: [] });
+  });
+
+  it("takes a turn of the assistant with up to three cards, and no card about who interviews or who decides", () => {
+    const card = { id: "q1", field: "remote_policy", prompt: "Is this job on site, hybrid or remote?", mode: "single", options: [{ label: "On site", value: "onsite", origin: "assistant" }] };
+    const turn = IntakeTurn.parse({ assistantMessage: "Two things are missing.", factsExtracted: { title: "Software engineer" }, missingFacts: ["location", "remote_policy", "compensation_range"], questions: [card], readyToCompile: false });
+    expect(turn.questions[0]).toMatchObject({ field: "remote_policy", allowOwn: true });
+    expect(turn.notARole).toBe(false);
+    expect(IntakeTurn.safeParse({ ...turn, questions: [card, card, card, card] }).success).toBe(false);
+    for (const field of ["interviewers", "decision_maker", "reason_for_hire", "timeline"]) expect(IntakeQuestion.safeParse({ ...card, field }).success, field).toBe(false);
+    expect(IntakeQuestion.safeParse({ ...card, mode: "team" }).success).toBe(false);
+  });
+
+  it("starts the server's own record of a draft empty, with no market figure anywhere in it", () => {
+    const state = IntakeServerState.parse({});
+    expect(state).toEqual({ openQuestions: [], answeredRounds: 0, settledFields: [], answeredFacts: [], askedPrompts: [], dealBreakersOffered: [] });
+    expect(IntakeServerState.parse({ benchmark: { p50: 30 }, benchmarkGap: "no_market_figure", fromRole: { roleId: "r1", version: 1, title: "x" } })).toEqual(state);
   });
 });
 
-// Review of the form-questions fix, 12 Nov 2026: no short form names the schedule or the right to work, so a model's own
-// wording of one left unticked stayed on the form, and the quick start offered the assistant's second copy of each.
-describe("the kind of rule a question for the form asks, by its words", () => {
+describe("what a question for the form asks about, by its words", () => {
   it("reads the schedule and the right to work in any words, and nothing else as either", () => {
     for (const q of ["Are you available for the days this office is open?", "Which of these days can you work: Mon, Tue, Wed, Thu, Fri?", "Are you able to work Saturdays?", "Can you work our regular hours?", "Are you available for the posted schedule and work model?"]) expect(askedKind(q), q).toBe("schedule_availability");
     for (const q of ["Are you legally authorized to work in the United States for any employer?", "Are you authorized to work in the U.S.?", "Will you now or in the future require visa sponsorship?"]) expect(askedKind(q), q).toBe("work_authorization");

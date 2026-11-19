@@ -16,14 +16,13 @@ import { Layout } from "./layout";
 import { CARD_PAGE_CSS } from "./signin-link";
 
 /**
- * The public privacy-request form (audit finding D13): anyone can ask for a copy, a correction or deletion of their
- * information without a status link. Sending the form records nothing: the request itself travels, sealed, inside a
- * single-use link emailed to the address (24 hours), one per employer that holds a record under it. Opening the link
- * shows a page with one button; pressing the button creates the request, already verified, and sends the
- * acknowledgment. So a mail scanner that opens the link confirms nothing, a request nobody confirms leaves no row, no
- * deadline and no alert behind, and the page never says whether an address is known: the mailbox learns that, nobody
- * else. The link goes out directly, not through the candidate's message thread, because it exists only to prove
- * control of the mailbox and is not for the hiring team to read.
+ * The public privacy-request form: anyone can ask for a copy, a correction or deletion of their information without a
+ * status link. Sending the form records nothing: the request itself travels, sealed, inside a single-use link emailed
+ * to the address (24 hours), one per employer that holds a record under it. Opening the link shows a page with one
+ * button; pressing the button creates the request, already verified, and sends the acknowledgment. So a mail scanner
+ * that opens the link confirms nothing, a request nobody confirms leaves no row, no deadline and no alert behind, and
+ * the page never says whether an address is known: the mailbox learns that, nobody else. The link goes out directly,
+ * not as one of the candidate's recorded emails, because it exists only to prove control of the mailbox.
  */
 export const privacyRequestPages = new Hono<Vars>();
 
@@ -63,11 +62,11 @@ function RequestForm(props: { privacyEmail: string; company: string | null; erro
         <label for="details">Details (optional)</label>
         <textarea id="details" name="details" rows={3} maxlength={2000} placeholder="For example: my phone number is wrong, it should be ...">{v.details ?? ""}</textarea>
         <p class="meta">We email that address a link to confirm it is you; nothing happens until you open it and press the button.</p>
-        {/* The notice, word for word, one click away (founder brief, 14 October 2026). */}
+        {/* The notice, word for word, one click away. */}
         <details class="more">
           <summary>Read the full notice</summary>
           <p class="notice">
-            <strong>What we collect and why:</strong> the information you gave when you applied (your name, contact details, résumé, your answers and any screening conversation), to consider you for employment. <strong>Who can see it:</strong> the hiring team at the employer, an Identified Talent Solutions recruiter only if the employer brings one in to help, and the service providers that store files and deliver email on our behalf. <strong>How this works:</strong> a person handles every request; nothing is decided by software. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details.
+            <strong>What we collect and why:</strong> the information you gave when you applied (your name, contact details, resume, your answers and any screening conversation), to consider you for employment. <strong>Who can see it:</strong> the hiring team at the employer, and the service providers that store files and deliver email on our behalf. <strong>How this works:</strong> a person handles every request; nothing is decided by software. We confirm receipt and completion by email. Deleting keeps only what the law requires, without your name or contact details.
           </p>
           <p class="notice">{privacy?.text}</p>
         </details>
@@ -113,7 +112,7 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
   // The employers that hold a record under this address, plus the one the form named (a link from a careers page).
   // A read only: nothing is written until the person confirms from the mailbox.
   const targets = await withPlatform(container.db, async (tx) => {
-    // The same address-matching rule as "Lost your link?" (known-bugs row 68): the folded key, or the exact address.
+    // The same address-matching rule as "Lost your link?": the folded key, or the exact address.
     const match = addressMatch(email);
     const matches = match ? await tx.select({ id: candidates.id, companyId: candidates.companyId, email: candidates.email }).from(candidates).where(and(match, isNull(candidates.anonymizedAt))).orderBy(desc(candidates.createdAt)).limit(20) : [];
     const byCompany = new Map<string, { id: string; email: string | null } | null>();
@@ -133,7 +132,7 @@ privacyRequestPages.post("/c/privacy-request", rateLimit(POLICIES.privacyForm), 
     return out;
   });
   const link = (token: string) => `${container.env.APP_BASE_URL}/c/privacy-request/verify/${encodeURIComponent(token)}`;
-  // Sent directly, outside any transaction (the way sign-in links are sent): never queued into the candidate's thread.
+  // Sent directly, outside any transaction (the way sign-in links are sent): never recorded among the candidate's emails.
   for (const t of targets) {
     const id = uuidv7(now.getTime());
     const token = sealPayload<VerifyToken>(VERIFY_PURPOSE, { v: 2, id, email: t.to, kind: parsed.data.kind, ...(parsed.data.details ? { details: parsed.data.details } : {}), companyId: t.companyId, candidateId: t.candidateId, applicationId: t.applicationId, exp: now.getTime() + VERIFY_TTL_MS }, container.env.SESSION_SECRET);

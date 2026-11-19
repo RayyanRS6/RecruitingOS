@@ -6,10 +6,9 @@ import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 
 /**
- * The deadline of an /api request that runs more than one slow step (review, 13 Oct 2026). Each model call used to get
- * its own 270 s, so a pasted ad's read followed by the turn, or the market check before the draft, could run past the
- * route's 300 s limit, which answers 504 and records nothing. Now the agent sets the request's deadline once, at its
- * start, and every call in the request is sent with that same deadline.
+ * The deadline of an /api request that runs more than one slow step: a pasted ad's read followed by the turn, or the
+ * saves before the job is written. The agent sets the request's deadline once, at its start, and every model call in
+ * the request is sent with that same deadline, so none runs past the route's 300 s limit.
  */
 describe("the deadline of an intake request", () => {
   let container: Container;
@@ -32,13 +31,13 @@ describe("the deadline of an intake request", () => {
   ].join("\n");
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@deadline.test" }) });
     const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
     owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
     const company = (await (await json("POST", "/api/v1/companies", { name: "Harbor Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
-    await entitlements.applyPlan(container.db, company.id, "growth");
+    await entitlements.applyPlan(container.db, company.id, "ultra");
     // Every request the agents send to the model passes here first, so the test sees each call's deadline.
     const provider = container.ai.provider;
     const structured = provider.structured.bind(provider);
@@ -65,11 +64,17 @@ describe("the deadline of an intake request", () => {
     expect(read!.deadlineAt).toBeLessThanOrEqual(after + 300_000);
   });
 
-  it("writing the draft counts the market check and the saves before the call against the request's deadline", async () => {
-    expect((await json("POST", `/api/v1/intake/sessions/${sessionId}/answers`, { draftIt: true, reply: false })).status).toBe(200);
+  it("writing the job counts the saves before the call against the request's deadline", async () => {
+    // the cards are answered until the job may be written: the ad's pay confirmed, on site, the schedule, one must-have
+    let draft = ((await (await json("GET", `/api/v1/intake/sessions/${sessionId}`)).json()) as { session: IntakeSessionView }).session;
+    for (let round = 0; round < 4 && !draft.readiness.mayDraft; round++) {
+      const answers = draft.questions.map((q) => (q.mode === "pay" ? { questionId: q.id, pay: { basis: "hourly", min: 24, max: 28 } } : q.field === "remote_policy" ? { questionId: q.id, selected: ["onsite"] } : q.field === "must_haves" ? { questionId: q.id, own: ["Radiography certificate"] } : q.options[0] ? { questionId: q.id, selected: [q.options[0].value] } : { questionId: q.id, skipped: true }));
+      draft = ((await (await json("POST", `/api/v1/intake/sessions/${sessionId}/answers`, { answers })).json()) as { session: IntakeSessionView }).session;
+    }
+    expect(draft.readiness.mayDraft, draft.readiness.draftBlocker ?? "").toBe(true);
     seen.length = 0;
     const before = Date.now();
-    await json("POST", `/api/v1/intake/sessions/${sessionId}/draft`);
+    expect((await json("POST", `/api/v1/intake/sessions/${sessionId}/draft`)).status).toBe(200);
     const after = Date.now();
     const compile = seen.find((s) => s.task === "intake.compile");
     expect(compile?.deadlineAt).toBeGreaterThanOrEqual(before + 300_000);

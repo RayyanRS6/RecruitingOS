@@ -1,16 +1,16 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cspHeaderName, cspMode } from "../lib/csp";
 import { middleware } from "../middleware";
 
 /**
- * The public welcome page (/welcome, October 2026 redesign, screenshot 2) as the server draws it, and the one change in
- * middleware.ts that sends someone without a session from the address of Home to it. The page is static: one main
- * heading, sections the header links to, every way in leading to the sign-in page (where an invitation is opened too),
- * and nothing to fill in, because there is no sign-up or pilot request behind it. Since 23 October 2026 (founder: fewer
- * words) it carries no eyebrows over its headings, no strip of ticks and no taglines.
+ * The public welcome page (/welcome) as the server draws it, and the rule in middleware.ts that sends someone without
+ * a session from the address of Home to it. The page is static: one main heading, sections the header links to, every
+ * way in leading to the sign-in page, and nothing to fill in: a company gives its details after signing in. It carries
+ * no eyebrows over its headings, no strip of ticks and no taglines.
  */
 (globalThis as { React?: typeof React }).React = React;
 const page = await import("../app/(public)/welcome/page");
@@ -35,9 +35,10 @@ describe("the public welcome page", () => {
   it("every way in leads to the sign-in page", () => {
     // the header's and the footer's
     expect(named("Sign in").map((l) => l.href)).toEqual(["/login", "/login"]);
-    expect(named("Have an invitation?").map((l) => l.href)).toEqual(["/login"]);
-    // the hero's button and the closing card's
-    expect(named("Open your invitation").map((l) => l.href)).toEqual(["/login", "/login"]);
+    // the header's button, the hero's and the closing card's
+    expect(named("Get started").map((l) => l.href)).toEqual(["/login", "/login", "/login"]);
+    // the owner band asks an owner in
+    expect(named("Get help with your next hire").map((l) => l.href)).toEqual(["/login"]);
     // nowhere else: the sign-in page, Home's address (the logo) or a section of this page
     for (const l of links) expect(["/login", "/", "#how-it-works", "#for-owners"], `${l.name} -> ${l.href}`).toContain(l.href);
   });
@@ -131,52 +132,31 @@ describe("the public welcome page", () => {
 });
 
 /**
- * By invitation (SIGNUP_MODE=invite, GATE-V2) the page invites no stranger to start: the owner band's "Get help with
- * your next hire" goes, and the ways in for someone with an invitation, and for signing in, stay. The route reads the
- * mode from the environment as the API does (apps/api/src/env.ts), without starting the API.
+ * One gate: anyone may sign in and ask for a company, and an administrator accepts or declines it. So the page is the
+ * same whatever the sign-up mode, invites an owner in, and never speaks of an invitation; it reads nothing from the
+ * environment and imports nothing of the API.
  */
-describe("the public welcome page by invitation", () => {
+describe("the public welcome page and the one gate", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
   const draw = () => renderToStaticMarkup(React.createElement(page.default));
-  const hrefsOf = (markup: string, name: string) => linksIn(markup).filter((l) => l.name === name).map((l) => l.href);
 
-  it("while sign-up is open (unset or open) the owner band asks an owner in", () => {
-    for (const mode of ["", "open"]) {
+  it("reads the same whatever the sign-up mode is, and a mode it does not know breaks nothing", () => {
+    for (const mode of ["", "open", "approval", "invite", "closed"]) {
       vi.stubEnv("SIGNUP_MODE", mode);
-      expect(hrefsOf(draw(), "Get help with your next hire"), mode).toEqual(["/login"]);
+      expect(draw(), mode).toBe(html);
     }
   });
 
-  it("by invitation the owner band's way in goes; Sign in, Have an invitation? and Open your invitation stay", () => {
-    vi.stubEnv("SIGNUP_MODE", "open");
-    const open = draw();
-    vi.stubEnv("SIGNUP_MODE", "invite");
-    const invited = draw();
-    expect(hrefsOf(invited, "Get help with your next hire")).toEqual([]);
-    expect(hrefsOf(invited, "Sign in")).toEqual(["/login", "/login"]);
-    expect(hrefsOf(invited, "Have an invitation?")).toEqual(["/login"]);
-    expect(hrefsOf(invited, "Open your invitation")).toEqual(["/login", "/login"]);
-    for (const l of linksIn(invited)) expect(["/login", "/", "#how-it-works", "#for-owners"], `${l.name} -> ${l.href}`).toContain(l.href);
-    // nothing else changes: the same page without that one link
-    expect(linksIn(invited)).toHaveLength(linksIn(open).length - 1);
-    expect(text(invited)).toBe(text(open).replace(" Get help with your next hire", ""));
+  it("never speaks of an invitation, a waiting list or a pilot", () => {
+    expect(text(html)).not.toMatch(/invitation|invite|waiting list|pilot/i);
   });
 
-  it("a SIGNUP_MODE that is neither open nor invite is refused here too, as the API refuses it", () => {
-    vi.stubEnv("SIGNUP_MODE", "closed");
-    expect(draw).toThrow(/^SIGNUP_MODE must be "open" or "invite"/);
-  });
-
-  it("by approval the page reads exactly as by invitation: nothing invites a stranger to start", () => {
-    vi.stubEnv("SIGNUP_MODE", "invite");
-    const invited = draw();
-    vi.stubEnv("SIGNUP_MODE", "approval");
-    const byApproval = draw();
-    expect(hrefsOf(byApproval, "Get help with your next hire")).toEqual([]);
-    expect(linksIn(byApproval)).toEqual(linksIn(invited));
-    expect(text(byApproval)).toBe(text(invited));
+  it("is drawn without the API: the page's files import none of it", () => {
+    for (const file of ["../app/(public)/welcome/page.tsx", "./welcome/WelcomePage.tsx"]) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8"), file).not.toMatch(/@ros\/api|process\.env/);
+    }
   });
 });
 

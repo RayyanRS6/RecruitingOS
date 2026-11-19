@@ -1,321 +1,183 @@
 import { Hono } from "hono";
-import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { ApproveRole, CreatePacketVersion, RoleStatusChange, ApplicationAction, OwnerGroupQuery, FlagAssessment, RecordApplicationOutcome, RecordRoleOutcome, OwnerGroup, OwnerStage, PoolQuestionQuery, RoleBatchRequest, SendDecisionMessages, SetClosingDate, ApplyModeChange, DecisionMessagePreviewRequest, SendClosingMessage, RecordOfferMade, AiInterviewGroup, importanceOf, scoreRank, type ActiveMark, type AssessmentFlagKind, type CancelledReason, type CandidateNotice, type ClosingMessagePreview, type DecisionMessagePreview, type PoolAnswer } from "@ros/contracts";
-import { ESCALATION_ACCESS_DAYS, PoolQuestionError, activeStaffGrant, addEscalationReply, answerPoolQuestion, applicationAnswerSentences, createEscalation, hiddenTextNoteOf, inCancelled, maskCandidateLinks, poolQuestions, resolveApplyMode, teamScreenView, unsentScreenReadings, withoutUnsentConversation, withoutUnsentScreenEvents, writtenQuestionsOf } from "@ros/core";
-import { withPlatform, type Tx } from "@ros/db";
-import { requireRecruiterOrAdmin } from "../middleware/session";
-import { aiInterviewsFor } from "../services/screens";
-import { CLOSER_LOOK_LABEL, CLOSING_DATE_REASON, DECISION_STAGES, OUTCOME_STATEMENT, OutcomeError, STAGE_LABEL, activeFollowUpsFor, activeMarksFor, assertCan, audit, whoPostsBoards, can, cancelledView, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, followUpStripOf, groupFor, IN_MOTION_SQL, interviewsInMotionFor, hiddenFrom, holdEnded, jobNoticesFor, listOutcomes, notify, ownerStage, ownerStageLabel, ownerTags, payShown, payTransparencyApplies, recordApplicationOutcome, recordRoleOutcome, scopeAllows, showsOldVersion, visibleTo } from "@ros/core";
-import { lockedCardsOf, withoutLockedApprovals } from "../services/locked-visibility";
-import { boardView, concernsAsRead, loadPool, openPath, packetsOf, poolPersonOf, scoreFields, scorePerson, shownReadings } from "../services/pool";
-import { readingWontCome } from "../services/application-record";
-import { applyBatch, previewBatch } from "../services/review-apply";
-import { emailHolderAboutDecision, emailHolderAboutNote, emailItsQueue, queueNoticeOf, type HeldNote, type QueueNotice } from "../services/escalation-queue";
-import { COMPARE_MAX, compareCandidates } from "./compare";
-import { armClosingDate, interviewsBeingPrepared, interviewsLapsedOnAllowance } from "@ros/workflows";
-import { interviewHasNoHours, readingRunIds } from "@ros/agents";
-import { autoActionsOnOpen, boardChoices, closingDateFor } from "../services/publishing";
-import { withEmptyPay, withoutPay } from "../services/pay-redaction";
-import { assertMayApprovePacket, packetApprovalView } from "../services/packet-approval";
-import { assertNoNewWork } from "../services/trial";
-import { saveBoardTicks } from "./postings";
-import { CLOSED_ROLE_MESSAGE, cancelPendingPacketApprovals, createPacketVersion, currentVersionOf, settleVersionsSavedWhilePaused } from "../services/packet-versions";
-import { aiRuns, applicationMarks, applications, approvalRequests, assessments, candidates, communications, companies, documents, events, interviewFollowups, interviews, postings, recruiterEscalations, rolePackets, roles, screens, withTenant } from "@ros/db";
-import { actorOf, applicationScopeGuard, clientIp, requireTenant, roleScopeGuard, rolesInterviewedBy, type Vars } from "../middleware/session";
+import { and, desc, eq } from "drizzle-orm";
+import { CloseRole, PacketFieldEdit, ROLE_ACTION_BLOCKED, RolePacket as RolePacketSchema, RoleStatus, RoleStatusChange, SetClosingDate, appPaths, type ClosingDateAnswer, type PacketSaved, type RoleDetail } from "@ros/contracts";
+import { CLOSING_DATE_REASON, assertCan, audit, closingDateProblem, closingDateRequired, closingDayWords, closingMoment, emit, notify } from "@ros/core";
+import { companies, rolePackets, roles, withTenant, type Tx } from "@ros/db";
+import { armClosingDate, closeAiInterviewsOfJob } from "@ros/workflows";
+import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
-import { DOWNLOAD_URL_TTL_SECONDS, safeFilename } from "../uploads";
-import { SCREEN_OPEN_STATUSES, applicationActionState, applicationFactsFrom, declineMessagePolicy, decisionMessagePreview, pendingDecisionMessages, performApplicationAction, sendDecisionMessages, stageMoves, undoFacts, untoldFallbackDayOf } from "../services/application-actions";
-import { exitCleanup, type ExitCandidateEmail } from "../services/exit-cleanup";
-import { closingMessagePreview, sendClosingMessage } from "../services/closing-messages";
-import { keepInTalentPool } from "../services/talent-pool";
-import { screenScorecards, screensForScore } from "../services/screen-scorecards";
-import { replayHeldEmails, settleHeldEmailsOnClose } from "../webhooks/postmark";
-import { candidatesHeard } from "../services/interview-cancel";
-import { candidateEmailStates } from "../services/interview-create";
-import { interviewerApplicationView } from "../services/interviewer-view";
-import { hireFollowUp, lockedStillInProcess } from "../services/hire-sheet";
-import { openOfferDays, recordOfferMade, settleOutsideOffer, tellRecruiterAboutOutcome } from "../services/offers";
-import { staffMayAsk, staffScopeOf } from "../services/staff-scope";
+import { actorOf, requireTenant, roleScopeGuard, type Tenant, type Vars } from "../middleware/session";
+import { closingDateFor } from "../services/closing-date";
+import { roleDetail, roleSummaries } from "../services/jobs";
+import { applyFieldEdit } from "../services/packet-fields";
+import { createPacketVersion, currentVersionOf } from "../services/packet-versions";
+import { publishRole } from "../services/publish";
+import { assertNoNewWork } from "../services/trial";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+/**
+ * Jobs: the list, one job's page, its one editor, and what can be done with it (publish, pause, resume, close, the
+ * closing date). The Share tab's routes are in routes/share.ts, the candidates of a job in routes/candidates.ts.
+ */
 export const roleRoutes = new Hono<Vars>();
 roleRoutes.use("/:id", roleScopeGuard);
 roleRoutes.use("/:id/*", roleScopeGuard);
 
-/**
- * When anything last happened on a role, for the Jobs page's "Recent activity" order (Wave S2, additive): the latest of
- * its own changes (created, edited, opened, paused, closed) and, for those who may see applicants, its newest application.
- * An ISO time; the dates the database hands back are read with Date.parse, as `daysOpen` reads `openedAt`.
- */
-export function lastActivityOf(role: { createdAt: string; updatedAt?: string | null; openedAt?: string | null; pausedAt?: string | null; closedAt?: string | null }, newestApplication?: string | null): string {
-  const times = [role.createdAt, role.updatedAt, role.openedAt, role.pausedAt, role.closedAt, newestApplication].map((x) => (x ? Date.parse(x) : Number.NaN)).filter((n) => Number.isFinite(n));
-  return times.length ? new Date(Math.max(...times)).toISOString() : role.createdAt;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const NOT_FOUND = () => new HttpError(404, "not_found", "Job not found.");
+
+/** The job's id from the address; one that is not an id names no job: a plain 404, never a database error. */
+export function jobId(id: string | undefined): string {
+  if (!id || !UUID.test(id)) throw NOT_FOUND();
+  return id;
+}
+
+/** The job's page as it stands after a change. */
+async function detailOf(tx: Tx, container: Container, t: Tenant, roleId: string): Promise<RoleDetail> {
+  const detail = await roleDetail(tx, container, t, roleId);
+  if (!detail) throw NOT_FOUND();
+  return detail;
 }
 
 roleRoutes.get("/", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  const status = c.req.query("status");
-  const rows = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const list = await tx.select().from(roles).where(status ? and(eq(roles.companyId, t.companyId), eq(roles.status, status)) : eq(roles.companyId, t.companyId)).orderBy(desc(roles.createdAt));
-    const visible = t.staff?.scope.roleId ? list.filter((x) => x.id === t.staff!.scope.roleId) : list;
-    if (!visible.length) return [];
-    // An interviewer holds role.read but not application.read: the list names only the roles they interview for, the
-    // same rule as their interviews list and the role page (roleScopeGuard), and carries no applicant counts or waiting
-    // decisions (countsHidden).
-    if (t.role === "interviewer") {
-      const ids = await rolesInterviewedBy(tx, t.userId);
-      return visible.filter((r) => ids.has(r.id)).map((r) => ({ ...r, counts: { total: 0 }, countsHidden: true, needsYou: 0, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r) }));
-    }
-    // Three queries for the whole list, whatever its length: the roles, their applicants by stage, private mark and open
-    // follow-up (a running hold does not wait on you, nor does someone under Cancelled with new times promised, being
-    // prepared or out; `stageCounts` is the stage strip), their open decisions. `interviewOpen` is the condition the
-    // talent list and the report read through `activeFollowUpsFor`, so the three agree (J18).
-    const roleIds = visible.map((r) => r.id);
-    const interviewOpen = sql<boolean>`EXISTS (SELECT 1 FROM interviews i WHERE i.application_id = ${applications.id} AND i.status IN ('proposed','scheduling'))`;
-    // An interview booked or with times out waits on nobody at the company (6 November 2026; `interviewsInMotionFor`).
-    const interviewInMotion = IN_MOTION_SQL;
-    // Past the plan's candidates per job (Rule 3) nobody counts toward a stage, a group or a decision waiting: only the total
-    // and `lockedCount` say more people applied, which names nobody and shows what an upgrade opens.
-    const stageCounts = await tx
-      .select({ roleId: applications.roleId, stage: applications.stage, mark: applicationMarks.mark, remindAt: applicationMarks.remindAt, kind: interviewFollowups.kind, choice: interviewFollowups.choice, autoState: interviewFollowups.autoState, interviewOpen, interviewInMotion, n: count() })
-      .from(applications)
-      .leftJoin(applicationMarks, and(eq(applicationMarks.applicationId, applications.id), isNull(applicationMarks.clearedAt)))
-      .leftJoin(interviewFollowups, and(eq(interviewFollowups.applicationId, applications.id), isNull(interviewFollowups.resolvedAt)))
-      .where(and(inArray(applications.roleId, roleIds), visibleTo(t)))
-      .groupBy(applications.roleId, applications.stage, applicationMarks.mark, applicationMarks.remindAt, interviewFollowups.kind, interviewFollowups.choice, interviewFollowups.autoState, interviewOpen, interviewInMotion);
-    const hidden = hiddenFrom(t);
-    const lockedCounts = hidden ? await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), hidden)).groupBy(applications.roleId) : [];
-    // Break glass reads everyone, so it has no filter, and `or` with nothing beside it would leave only the requests about no one.
-    const readable = visibleTo(t);
-    const pendingCounts = await tx.select({ roleId: approvalRequests.roleId, n: count() }).from(approvalRequests).leftJoin(applications, eq(applications.id, approvalRequests.applicationId)).where(and(inArray(approvalRequests.roleId, roleIds), eq(approvalRequests.status, "pending"), readable ? or(isNull(approvalRequests.applicationId), readable) : undefined)).groupBy(approvalRequests.roleId);
-    // The newest application per role, for `lastActivityAt` (the Jobs page's "Recent activity" order).
-    const newest = await tx.select({ roleId: applications.roleId, at: sql<string | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
-    const now = c.get("container").engine.clock();
-    return visible.map((r) => {
-      const counts: Record<string, number> = {};
-      const stageStrip: Record<string, number> = Object.fromEntries(OwnerStage.options.map((s) => [s, 0]));
-      let total = 0;
-      for (const row of stageCounts) {
-        if (row.roleId !== r.id) continue;
-        const n = Number(row.n);
-        const mark = row.mark ? { mark: row.mark, remindAt: row.remindAt } : null;
-        const followUp = followUpStripOf(row);
-        total += n;
-        const g = groupFor({ stage: row.stage }, mark, now, followUp, !!row.interviewInMotion);
-        counts[g] = (counts[g] ?? 0) + n;
-        stageStrip[ownerStage({ stage: row.stage }, mark, followUp)] += n;
-      }
-      const needsYou = Number(pendingCounts.find((p) => p.roleId === r.id)?.n ?? 0);
-      // a raw max() may come back from the driver as a Date or as text
-      const at = newest.find((x) => x.roleId === r.id)?.at as string | Date | null | undefined;
-      const newestApplication = at instanceof Date ? at.toISOString() : at ? String(at) : null;
-      const lockedCount = Number(lockedCounts.find((l) => l.roleId === r.id)?.n ?? 0);
-      return { ...r, counts: { total: total + lockedCount, ...counts }, lockedCount, stageCounts: stageStrip, needsYou, daysOpen: r.openedAt ? Math.floor((Date.now() - Date.parse(r.openedAt)) / 86_400_000) : null, lastActivityAt: lastActivityOf(r, newestApplication) };
-    });
-  });
-  return c.json(rows);
+  const status = RoleStatus.optional().parse(c.req.query("status") || undefined);
+  const container = c.get("container");
+  return c.json(await withTenant(container.db, t.companyId, (tx) => roleSummaries(tx, container, t, status)));
 });
 
 roleRoutes.get("/:id", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.read");
-  // An id that is not one names no role: a plain 404, never a database error (an interviewer's is answered by roleScopeGuard).
-  const id = c.req.param("id");
-  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
-  const canSeeComp = can(t.role, "compensation.read");
-  const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1);
-    if (!role) return null;
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const current = currentVersionOf(role, packets);
-    const posts = await tx.select().from(postings).where(eq(postings.roleId, role.id));
-    // Applicants by stage, for those who read applications (an interviewer gets none, as on the roles list); a grant about
-    // one candidate counts that candidate alone, as the role's applications list shows them alone.
-    const onlyApplicationId = t.staff?.scope.applicationId ?? null;
-    const apps = !can(t.role, "application.read") ? [] : await tx.select({ stage: applications.stage }).from(applications).where(and(eq(applications.roleId, role.id), onlyApplicationId ? eq(applications.id, onlyApplicationId) : visibleTo(t)));
-    const pending = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.status, "pending")));
-    const counts: Record<string, number> = {};
-    for (const a of apps) counts[a.stage] = (counts[a.stage] ?? 0) + 1;
-    // Past the plan's candidates per job (Rule 3): a number for the Candidates tab, beside stages that cover those the team can read.
-    const hidden = hiddenFrom(t);
-    const [lockedRow] = hidden && !onlyApplicationId && can(t.role, "application.read") ? await tx.select({ n: count() }).from(applications).where(and(eq(applications.roleId, role.id), hidden)) : [];
-    const lockedCount = Number(lockedRow?.n ?? 0);
-    // Without compensation.read the pay section keeps its shape but carries no figure anywhere (services/pay-redaction.ts).
-    const redact = (p: typeof current) => (p && !canSeeComp ? withEmptyPay(p) : p);
-    // Whether candidates see the range, by the public pages' rule: the owner's choice, or a pay transparency law where the job is (plan 0.8).
-    const [company] = await tx.select({ name: companies.name, locations: companies.locations, settings: companies.settings, timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    const withPayView = (p: typeof current) => {
-      const shown = redact(p);
-      if (!p || !shown) return shown;
-      const notices = jobNoticesFor({ jobLocations: p.packet.identity.locations, companyLocations: company?.locations ?? [], overrides: company?.settings.notices });
-      return { ...shown, payShown: payShown(p.packet.compensation, notices), payRequiredByLaw: payTransparencyApplies(notices) };
-    };
-    // Waiting requests can carry a candidate's name and a message written to them (F11): only for those who read
-    // applications, and for ITS staff only the requests their grant may decide (the same rule as POST /approvals/:id/decide):
-    // a request about the whole role, such as the closing message naming every untold applicant, is not shown to a grant
-    // about one candidate. The approval card below reads them all.
-    const scope = staffScopeOf(t);
-    const visiblePending = !can(t.role, "application.read") ? [] : await withoutLockedApprovals(tx, t, pending.filter((p) => staffMayAsk(scope, { roleId: p.roleId, applicationId: p.applicationId })));
-    // A version proposed while the role runs (an edit waiting for approval): shown beside the current one, never in its place.
-    const proposed = current && ["open", "paused"].includes(role.status) ? packets.find((p) => p.status === "proposed" && p.version > current.version) ?? null : null;
-    const now = c.get("container").engine.clock();
-    const approval = await packetApprovalView(tx, { tenant: t, role, packets, pending, now });
-    // Wave D: what starts on its own once the job is live (D9), the board ticks and who posts them (D3, D6), the closing date (D7).
-    const publishing = {
-      autoActionsOnOpen: autoActionsOnOpen(),
-      boards: boardChoices(role, current?.packet ?? null, company?.settings),
-      whoPosts: await whoPostsBoards(tx, role.companyId, company?.settings),
-      closingDate: closingDateFor(role, company ?? null, current?.packet ?? null, now),
-      boardsShowingOldVersion: posts.filter((p) => showsOldVersion(p, role.currentPacketVersion)).map((p) => p.channel),
-    };
-    return { ...role, currentPacket: withPayView(current), proposedPacket: withPayView(proposed), packetVersions: packets.map((p) => ({ id: p.id, version: p.version, status: p.status, source: p.source, changeSummary: p.changeSummary, createdAt: p.createdAt, createdBy: p.createdBy })), postings: posts, boardsStillUp: posts.filter((p) => p.closureRequired && !p.closureConfirmedAt).map((p) => p.channel), counts, lockedCount, pendingApprovals: visiblePending, packetApproval: approval.packetApproval, decisionMaker: approval.decisionMaker, ...publishing };
-  });
-  if (!row) throw new HttpError(404, "not_found", "Role not found.");
-  return c.json(row);
-});
-
-roleRoutes.get("/:id/packets", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => tx.select().from(rolePackets).where(eq(rolePackets.roleId, c.req.param("id"))).orderBy(desc(rolePackets.version)));
-  if (can(t.role, "compensation.read")) return c.json(rows);
-  // Interviewers never see pay (docs/spec/21, area A): only the basis, the currency and whether the range is shown to
-  // candidates; the figures, the bonus, the benefits and the sources that quote the figures are left out, never zeroed.
-  return c.json(rows.map((p) => withoutPay(p)));
+  const id = jobId(c.req.param("id"));
+  const container = c.get("container");
+  return c.json(await withTenant(container.db, t.companyId, (tx) => detailOf(tx, container, t, id)));
 });
 
 /**
- * A human edit creates a new version; nothing is overwritten. What happens next depends on the role and the editor
- * (services/packet-versions.ts): an approver's edit to an open role is current at once; anyone else's waits for
- * approval while the role keeps running on the approved version; an edit to a pending role replaces its approval request.
- * A paused role takes an edit like an open one; a closed role refuses it (409 `role_closed`), in plain words.
+ * The one editor of a job. The edit starts from `baseVersion`, which must still be the newest version (someone else may
+ * have saved since: 409 `stale_version`), and saves a new version: live at once on an open or paused job, saved on a
+ * draft. Wording the fairness guard flags refuses the save on an open or paused job until it is changed or kept with a
+ * reason (422 `packet_flags`); a form question about a protected characteristic is always refused (422
+ * `question_not_allowed`). Answers the job as it now stands and what the guard fixed by rule.
  */
-roleRoutes.post("/:id/packets", requireTenant, async (c) => {
+roleRoutes.patch("/:id/packet", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "packet.edit");
-  const body = CreatePacketVersion.parse(await c.req.json());
+  const id = jobId(c.req.param("id"));
+  const body = PacketFieldEdit.parse(await c.req.json());
   const container = c.get("container");
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
-    const made = await createPacketVersion(tx, container, { tenant: t, actor: actorOf(c), role, packet: body.packet, changeSummary: body.changeSummary });
-    // `guardChanges` says what the packet guard changed on its own (a must-have it took out, the ceiling it raised), so the page can tell the person.
-    // `needsApproval` says why an approver's change to a live job waits (Q10) and whether they may confirm it themselves;
-    // `boardsShowingOldVersion` names the boards still showing the earlier version once a change is live (D4).
-    return { ...made.version, outcome: made.outcome, approvalRunId: made.approvalRunId, guardChanges: made.guardChanges, needsApproval: made.needsApproval, boardsShowingOldVersion: made.boardsShowingOldVersion, ...(made.paused ? { paused: true } : {}) };
+  const actor = actorOf(c);
+  const saved = await withTenant(container.db, t.companyId, async (tx): Promise<PacketSaved> => {
+    // The job's row is locked first, so two saves at once take turns: the second finds the first one's version and is refused as out of date.
+    const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1).for("update");
+    if (!role) throw NOT_FOUND();
+    if (role.status === "closed") throw new HttpError(409, "role_closed", ROLE_ACTION_BLOCKED.closed);
+    const [newest] = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version)).limit(1);
+    if (!newest) throw new HttpError(409, "no_draft", "This job has not been written yet.");
+    if (body.baseVersion !== newest.version) throw new HttpError(409, "stale_version", `Someone saved a newer version of this job (version ${newest.version}) since you opened it. Reload to see it, then make your change again.`);
+    const edit = applyFieldEdit(RolePacketSchema.parse(newest.packet), body);
+    if (!edit.fields.length && !body.keepFlags?.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
+    const made = await createPacketVersion(tx, container, { tenant: t, actor, role, packet: edit.packet, changeSummary: body.changeSummary ?? (edit.summary || "Kept flagged wording, with a reason") });
+    return { role: await detailOf(tx, container, t, role.id), guardChanges: made.guardChanges };
   });
   await container.kick();
-  return c.json(result, 201);
+  return c.json(saved);
 });
 
 /**
- * Approving resolves the pending approval request; the role_approval workflow opens and publishes the role (or, for a
- * version proposed while the role was open, makes it current). Refused for the person who started the role or wrote
- * the version unless they are the company's only owner, and reserved for the named decision maker when there is one.
- * Refused with 409 `legal_check` while the law of the job's places asks for something the version lacks (plan D5:
- * `details.missing` lists each item with what to do).
- *
- * `channels` are the boards ticked on the approval card: checked as POST /:id/channels checks them (role.manage too, which
- * a hiring manager approving does not hold) and saved in this transaction, so the approval and the boards land together
- * and a refused approval changes nothing. A change to a live job takes none (409 `live_job_boards`): there, unticking a
- * board closes its posting, which the Share tab warns about first. Left out, the saved boards stand.
+ * "Publish job" on a job that is a draft: anyone on the team opens it with one press (services/publish.ts runs the
+ * checks: the person's role, the plan, the wording flags, the legal check). Answers `PublishResult`.
  */
-roleRoutes.post("/:id/approve", requireTenant, async (c) => {
+roleRoutes.post("/:id/publish", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertCan(t.role, "role.approve");
-  const body = ApproveRole.parse(await c.req.json());
-  if (body.channels) assertCan(t.role, "role.manage");
+  const id = jobId(c.req.param("id"));
   const container = c.get("container");
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    // A closed role is never opened by an approval (closing one withdraws its request); only ITS reopens one, by correcting its outcome.
-    if (role.status === "closed") throw new HttpError(409, "role_closed", CLOSED_ROLE_MESSAGE);
-    const [req] = await tx.select().from(approvalRequests).where(and(eq(approvalRequests.roleId, role.id), eq(approvalRequests.actionType, "role_packet.approve"), eq(approvalRequests.status, "pending"))).limit(1);
-    if (!req) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
-    const proposedVersion = Number((req.proposal as { version?: number }).version);
-    if (proposedVersion !== body.version) throw new HttpError(409, "version_mismatch", `The pending approval is for version ${proposedVersion}.`);
-    const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version))).limit(1);
-    await assertMayApprovePacket(tx, { tenant: t, req, role, version: pv ?? null, now: container.engine.clock() });
-    if (body.channels) {
-      if (["open", "paused"].includes(role.status)) throw new HttpError(409, "live_job_boards", "This is a change to a live job, so its boards are not part of this approval. Change them on the Share tab.");
-      await saveBoardTicks(tx, { role, channels: body.channels, actor: actorOf(c) });
-    }
-    // On the engine's clock, like POST /approvals/:id/decide: the waiting workflow judges expiry on that clock.
-    const decidedAt = container.engine.clock().toISOString();
-    // Still pending is checked again in the write itself: of two approvals at once, the second changes nothing, its boards included.
-    const [decided] = await tx.update(approvalRequests).set({ status: "approved", decidedBy: t.userId, decidedAt, decisionNote: body.note ?? null }).where(and(eq(approvalRequests.id, req.id), eq(approvalRequests.status, "pending"))).returning({ id: approvalRequests.id });
-    if (!decided) throw new HttpError(409, "nothing_pending", "There is no pending approval for this role.");
-    await tx.update(rolePackets).set({ approvedBy: t.userId, approvedAt: decidedAt }).where(and(eq(rolePackets.roleId, role.id), eq(rolePackets.version, body.version)));
-    await emit(tx, { type: "approval.granted", companyId: t.companyId, actor: actorOf(c), subject: { type: "approval_request", id: req.id }, payload: { actionType: req.actionType, roleId: role.id, version: body.version, note: body.note ?? null }, correlationId: req.workflowRunId });
-    await emit(tx, { type: "role.approved", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { version: body.version } });
-    await container.engine.signal(tx, { companyId: t.companyId, key: `approval:${req.id}`, payload: { decision: "approved" } });
-    return { ok: true, approvalRequestId: req.id };
-  });
+  const result = await withTenant(container.db, t.companyId, (tx) => publishRole(tx, container, { tenant: t, actor: actorOf(c), roleId: id }));
   await container.kick();
   return c.json(result);
 });
 
-// Closing a role records its outcome through POST /:id/outcome (21 Sep, item 4); the old unconfirmed close is gone.
-// Pause only from open and resume only from paused (Wave 0 item 0.8): a resume must never reopen a closed role or
-// restart publishing for a draft, and a second click changes nothing.
+// Pause only from open and resume only from paused: a resume never reopens a closed job or opens a draft, and a second
+// press changes nothing.
 for (const action of ["pause", "resume"] as const) {
   roleRoutes.post(`/:id/${action}`, requireTenant, async (c) => {
     const t = c.get("tenant")!;
     assertCan(t.role, "role.manage");
+    const id = jobId(c.req.param("id"));
     const body = RoleStatusChange.parse(await c.req.json().catch(() => ({})));
     const container = c.get("container");
-    const row = await withTenant(container.db, t.companyId, async (tx) => {
-      const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-      if (!role) throw new HttpError(404, "not_found", "Role not found.");
-      if (action === "pause" && role.status !== "open") throw new HttpError(409, "not_open", role.status === "paused" ? "This role is already paused." : `Only an open role can be paused. This role is ${role.status === "closed" ? "closed" : "not open yet"}.`);
-      if (action === "resume" && role.status !== "paused") throw new HttpError(409, "not_paused", role.status === "closed" ? "This role is closed, so it cannot be resumed. Open a new role to hire again." : role.status === "open" ? "This role is already open." : "Only a paused role can be resumed.");
-      // A trial that has ended takes no new applications (founder decision L-02 B): a paused job waits for a plan. Pausing never does.
+    const detail = await withTenant(container.db, t.companyId, async (tx) => {
+      const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1);
+      if (!role) throw NOT_FOUND();
+      if (role.status === "closed") throw new HttpError(409, "role_closed", ROLE_ACTION_BLOCKED.closed);
+      if (action === "pause" && role.status !== "open") throw new HttpError(409, "not_open", role.status === "paused" ? "This job is already paused." : "Only an open job can be paused. This job is not published yet.");
+      if (action === "resume" && role.status !== "paused") throw new HttpError(409, "not_paused", role.status === "open" ? "This job is already open." : "Only a paused job can be resumed.");
+      // A trial that has ended takes no new applications: a paused job waits for a plan. Pausing never does.
       if (action === "resume") await assertNoNewWork(tx, t.companyId, container.engine.clock());
-      const now = new Date().toISOString();
-      const patch = action === "pause" ? { status: "paused", pausedAt: now } : { status: "open", pausedAt: null };
-      // the state is checked again in the write itself, so two clicks at once pause (or resume) once
-      const [updated] = await tx.update(roles).set(patch).where(and(eq(roles.id, role.id), eq(roles.status, action === "pause" ? "open" : "paused"))).returning();
-      if (!updated) throw new HttpError(409, action === "pause" ? "not_open" : "not_paused", "Someone changed this role a moment ago. Refresh to see where it is now.");
+      const patch = action === "pause" ? { status: "paused", pausedAt: container.engine.clock().toISOString() } : { status: "open", pausedAt: null };
+      // the state is checked again in the write itself, so two presses at once pause (or resume) once
+      const [updated] = await tx.update(roles).set(patch).where(and(eq(roles.id, role.id), eq(roles.status, action === "pause" ? "open" : "paused"))).returning({ id: roles.id });
+      if (!updated) throw new HttpError(409, action === "pause" ? "not_open" : "not_paused", "Someone changed this job a moment ago. Refresh to see where it is now.");
       await emit(tx, { type: action === "pause" ? "role.paused" : "role.resumed", companyId: t.companyId, actor: actorOf(c), subject: { type: "role", id: role.id }, payload: { reason: body.reason ?? null } });
-      if (action === "resume") {
-        // A version saved during the pause is never dropped (row 12): one still waiting with no approval asked gets its
-        // request now; the job publishes the version that is current (an approver's edit during the pause already is).
-        await settleVersionsSavedWhilePaused(tx, container, { companyId: t.companyId, role: updated, actor: actorOf(c) });
-        await container.engine.start(tx, { workflowKey: "publish_role", companyId: t.companyId, subject: { type: "role", id: role.id }, state: { roleId: role.id, packetVersion: updated.currentPacketVersion }, actor: actorOf(c) });
-      }
-      return updated;
+      return detailOf(tx, container, t, role.id);
     });
     await container.kick();
-    // Applications that arrived by email while the role was paused were held (C19); resuming adds them to the role.
-    if (action === "resume") await replayHeldEmails(container, { companyId: t.companyId, roleId: row.id });
-    return c.json(row);
+    return c.json(detail);
   });
 }
 
 /**
- * The closing date (founder decision Q12, plan D7): the last day new applications are taken, in the company's time
- * zone, or null to take it off. For an open or paused role the timer is set again (packages/workflows closing-date.ts);
- * a draft or pending role gets its timer when it opens. A later date on a role whose date already stopped applications
- * takes applications again ("Extend the date"), and the emails held meanwhile are added. Colorado (and remote) roles
- * keep a date: 409 `closing_date_required`. Answers `{ ok, closingDate, reopened }`.
+ * Closes a job, for good: its page is no longer public, it takes no applications, and its place on the plan comes back.
+ * Nobody is told anything by a close, and nobody's place in the process changes: a person tells a candidate a decision.
+ * An AI interview of the job that was still open closes with it, so no link works for a job that takes no more
+ * applications; an interview already sent keeps its answers and its score (`closeAiInterviewsOfJob`).
+ * A second press answers the closed job as it stands.
+ */
+roleRoutes.post("/:id/close", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  assertCan(t.role, "role.manage");
+  const id = jobId(c.req.param("id"));
+  CloseRole.parse(await c.req.json().catch(() => ({})));
+  const container = c.get("container");
+  const actor = actorOf(c);
+  const detail = await withTenant(container.db, t.companyId, async (tx) => {
+    const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1).for("update");
+    if (!role) throw NOT_FOUND();
+    if (role.status !== "closed") {
+      await tx.update(roles).set({ status: "closed", closedAt: container.engine.clock().toISOString() }).where(eq(roles.id, role.id));
+      await emit(tx, { type: "role.closed", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { from: role.status } });
+      // the timer that would stop applications on the closing date has nothing left to do
+      await armClosingDate(tx, container.engine, { companyId: t.companyId, roleId: role.id, closesOn: null, actor });
+      await closeAiInterviewsOfJob(tx, container.engine, { roleId: role.id, actor, now: container.engine.clock() });
+    }
+    return detailOf(tx, container, t, role.id);
+  });
+  await container.kick();
+  return c.json(detail);
+});
+
+/**
+ * The closing date: the last day new applications are taken, in the company's time zone, or null to take it off. For
+ * an open or paused job the timer is set again (packages/workflows closing-date.ts); a draft gets its timer when it is
+ * published. A later date on a job whose date already stopped applications takes applications again. Colorado (and
+ * remote) jobs keep a date: 409 `closing_date_required`.
  */
 roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.manage");
+  const id = jobId(c.req.param("id"));
   const body = SetClosingDate.parse(await c.req.json());
   const container = c.get("container");
   const actor = actorOf(c);
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [role] = await tx.select().from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    if (!role) throw new HttpError(404, "not_found", "Role not found.");
-    if (role.status === "closed") throw new HttpError(409, "role_closed", "The role is closed, so it has no closing date to change.");
+  const answer = await withTenant(container.db, t.companyId, async (tx): Promise<ClosingDateAnswer> => {
+    const [role] = await tx.select().from(roles).where(eq(roles.id, id)).limit(1);
+    if (!role) throw NOT_FOUND();
+    if (role.status === "closed") throw new HttpError(409, "role_closed", ROLE_ACTION_BLOCKED.closed);
     const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-    const packets = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
-    const packet = currentVersionOf(role, packets)?.packet ?? null;
+    const versions = await tx.select().from(rolePackets).where(eq(rolePackets.roleId, role.id)).orderBy(desc(rolePackets.version));
+    const packet = currentVersionOf(role, versions)?.packet ?? null;
     const now = container.engine.clock();
     if (body.closesOn) {
       const problem = closingDateProblem(body.closesOn, now, company?.timezone);
@@ -327,772 +189,20 @@ roleRoutes.post("/:id/closing-date", requireTenant, async (c) => {
     const [updated] = await tx.update(roles).set({ applicationsCloseOn: body.closesOn }).where(eq(roles.id, role.id)).returning();
     await emit(tx, { type: "role.closing_date_set", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { closesOn: body.closesOn, previous } });
     await audit(tx, { companyId: t.companyId, actor, action: "role.closing_date_changed", target: { type: "role", id: role.id }, reason: body.closesOn ? `closes on ${body.closesOn}` : "closing date removed", details: { closesOn: body.closesOn, previous } });
-    if (["open", "paused"].includes(role.status)) await armClosingDate(tx, container.engine, { companyId: t.companyId, roleId: role.id, closesOn: body.closesOn, actor });
-    // "Extend the date": applications the old date stopped open again when the new date is still ahead. Once a trial has
-    // ended that reopening is new work and waits for a plan (founder decision L-02 B, 402 `trial_ended`); a plain date
-    // change is still taken.
+    if (role.status === "open" || role.status === "paused") await armClosingDate(tx, container.engine, { companyId: t.companyId, roleId: role.id, closesOn: body.closesOn, actor });
+    // A later date opens again the applications the old date stopped. Once a trial has ended that is new work and waits
+    // for a plan (402 `trial_ended`); a plain date change is still taken.
     let reopened = false;
     let row = updated;
     if (body.closesOn && !role.acceptingApplications && role.applicationsClosedReason === CLOSING_DATE_REASON && closingMoment(body.closesOn, company?.timezone).getTime() > now.getTime()) {
       await assertNoNewWork(tx, t.companyId, now);
       [row] = await tx.update(roles).set({ acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null }).where(eq(roles.id, role.id)).returning();
       await emit(tx, { type: "role.applications_reopened", companyId: t.companyId, actor, subject: { type: "role", id: role.id }, payload: { reason: "closing date extended", closesOn: body.closesOn } });
-      await notify(tx, { companyId: t.companyId, kind: "applications.reopened", title: `${role.title} is taking applications again`, body: `${actor.name ?? "A team member"} moved the closing date to ${closingDayWords(body.closesOn)}. The job page shows the apply button again.`, action: { label: "Open the Share tab", href: `/roles/${role.id}?tab=posting` } });
+      await notify(tx, { companyId: t.companyId, kind: "applications.reopened", title: `${role.title} is taking applications again`, body: `${actor.name ?? "A team member"} moved the closing date to ${closingDayWords(body.closesOn)}. The job page shows the apply button again.`, action: { label: "Open the job", href: appPaths.job(role.id) } });
       reopened = true;
     }
-    return { ok: true, reopened, roleId: role.id, closingDate: closingDateFor(row, company ?? null, packet, now) };
+    return { ok: true, reopened, closingDate: closingDateFor(row, company ?? null, packet, now) };
   });
   await container.kick();
-  // Applications that arrived by email while applications were stopped were held (C19); reopening adds them to the role.
-  if (result.reopened) await replayHeldEmails(container, { companyId: t.companyId, roleId: result.roleId });
-  return c.json({ ok: result.ok, reopened: result.reopened, closingDate: result.closingDate });
-});
-
-/**
- * ITS's old "apply and talk in one visit" switch for a role (plan E1, founder decision B1): "one_visit", "form_then_screen",
- * or null to follow the company's default. Since 20 October 2026 (R20-12) it is ignored and hidden: every applicant waits
- * on the page for their AI interview and gets its link by email, so `effective` is always "one_visit". The saved setting
- * stays readable (and writable, changing nothing) for ITS only, with a second factor: a platform administrator, or an ITS
- * recruiter whose active grant for the company covers this role (founder decision Q31). A reason is required and
- * recorded. GET answers `{ roleId, applyMode, companyDefault, effective }`; PUT answers the same after the change.
- */
-async function applyModeView(tx: Tx, roleId: string) {
-  const [role] = await tx.select({ id: roles.id, companyId: roles.companyId, applyMode: roles.applyMode }).from(roles).where(eq(roles.id, roleId)).limit(1);
-  if (!role) throw new HttpError(404, "not_found", "Role not found.");
-  const [company] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, role.companyId)).limit(1);
-  return { role, view: { roleId: role.id, applyMode: role.applyMode ?? null, companyDefault: resolveApplyMode({ applyMode: null }, company?.settings), effective: "one_visit" as const } };
-}
-
-/** A platform administrator always; an ITS recruiter only under an active grant for the company that covers the role. */
-async function assertMayChangeApplyMode(tx: Tx, session: NonNullable<Vars["Variables"]["session"]>, role: { id: string; companyId: string }): Promise<void> {
-  if (session.user.platformRole === "platform_admin") return;
-  const grant = await activeStaffGrant(tx, session.user.id, role.companyId);
-  if (!grant || !scopeAllows(grant, { roleId: role.id })) throw new HttpError(403, "staff_scope", "Only an ITS administrator, or a recruiter working on this company's request about this role, can see or change how people apply for it.");
-}
-
-roleRoutes.get("/:id/apply-mode", requireRecruiterOrAdmin, async (c) => {
-  const id = c.req.param("id") ?? "";
-  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
-  const s = c.get("session")!;
-  return c.json((await withPlatform(c.get("container").db, async (tx) => {
-    const found = await applyModeView(tx, id);
-    await assertMayChangeApplyMode(tx, s, found.role);
-    return found;
-  })).view);
-});
-
-roleRoutes.put("/:id/apply-mode", requireRecruiterOrAdmin, async (c) => {
-  const id = c.req.param("id") ?? "";
-  if (!UUID.test(id)) throw new HttpError(404, "not_found", "Role not found.");
-  const body = ApplyModeChange.parse(await c.req.json().catch(() => ({})));
-  const s = c.get("session")!;
-  const actor = { kind: "user" as const, id: s.user.id, name: s.user.name ?? s.user.email };
-  const view = await withPlatform(c.get("container").db, async (tx) => {
-    const { role, view: before } = await applyModeView(tx, id);
-    await assertMayChangeApplyMode(tx, s, role);
-    if (before.applyMode === body.applyMode) return before;
-    await tx.update(roles).set({ applyMode: body.applyMode }).where(eq(roles.id, role.id));
-    await emit(tx, { type: "role.apply_mode_changed", companyId: role.companyId, actor, subject: { type: "role", id: role.id }, payload: { from: before.applyMode, to: body.applyMode } });
-    await audit(tx, { companyId: role.companyId, actor, action: "role.apply_mode_changed", target: { type: "role", id: role.id }, reason: body.reason, details: { from: before.applyMode, to: body.applyMode } });
-    return (await applyModeView(tx, id)).view;
-  });
-  return c.json(view);
-});
-
-// The posting routes (GET /:id/postings, the per-channel actions, links, volume, the accepting switch) live in routes/postings.ts.
-
-/** A time in ISO form whatever the driver hands back, so the page can sort and compare it as text. */
-const iso = (value: string) => new Date(value).toISOString();
-
-/**
- * The stage strip's counts over every applicant the caller may see (founder decision B3). `cancelled`: the people under
- * Cancelled by why they are there, for the column's chips (founder decisions 1A to 4A). `aiInterview`: the people under
- * "No AI interview yet" by where they stand with it (R20-7), for that column's chips; never how far anyone got.
- * `stillApplying`: the same people as `byOwnerStage.no_ai_interview`, kept one release for older pages.
- */
-export type StageStripCounts = { total: number; byOwnerStage: Record<OwnerStage, number>; byGroup: Record<OwnerGroup, number>; notTold: number; holdsEnded: number; stillApplying: number; cancelled: { askedNewTimes: number; notInterested: number; noShow: number }; aiInterview: Record<AiInterviewGroup, number> };
-
-/** Which count of `StageStripCounts.cancelled` each reason adds to. */
-const CANCELLED_COUNT_KEY: Record<CancelledReason, keyof StageStripCounts["cancelled"]> = { asked_new_times: "askedNewTimes", not_interested: "notInterested", no_show: "noShow" };
-
-/** The company's time zone, in which a promised day of new times is named. */
-async function companyTimeZone(tx: Tx, companyId: string): Promise<string> {
-  const [co] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  return co?.timezone ?? "UTC";
-}
-
-/**
- * The role's applicants. Each row carries, beside the evidence view: where the person sits on the stage strip
- * (`ownerStage`, `ownerStageLabel`: under Cancelled, why they are there), with `cancelled` (why, and where their new
- * times stand; null for everyone not under Cancelled), their active private mark (`mark`: kind, label, `remindAt`, note, who set it),
- * small `tags` ("Check eligibility", "Hold ended"), `stageChangedAt` and `appliedAt` with `daysInStage`, the day the offer
- * someone at Offer waits on was made (`offerMadeOn`, the newest offers row's `made_on`; null for everyone else), the told state
- * of a decision (`toldState`: null for someone whose details were deleted, who cannot be told; `candidateToldAt`,
- * `decisionMessageWaiting`), and the stage button (`stageMoves`). The match
- * score (founder decision B2), worked out on read from the stored findings: `score`, `band`, `bandLabel`, `coverage`,
- * `missingMustHave`, whether the AI interview is in it and the label (`interview`, `basis`; R20-9), the must-have line
- * (`mustHaves`), where the pool board puts them (`placement`) and its `nextStep`, and `readingVersion` when the reading
- * was made against an earlier version of the role. One query per kind of fact for the whole list, never one per row.
- * Ordered newest first, by the longest wait, by name, or by score (`order=score`, or `sort=score`): people whose score
- * counts the AI interview first, then résumé-only scores, each highest first, no score last. `?counts=1` answers
- * `{ applications, counts, locked }`, the counts covering every visible applicant whatever the filters.
- *
- * Past the plan's candidates per job (Rule 3) nobody is a row. They are left out in the query, before anything reads a name, a
- * score or a stage, so where a row sorts or which filter finds it says nothing about them. `locked` is all there is:
- * `{ count, cards: [{ position, appliedAt }] }`, and `counts.total` includes them; every other count is the people shown.
- */
-roleRoutes.get("/:id/applications", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const q = OwnerGroupQuery.parse({ group: c.req.query("group"), stage: c.req.query("stage"), ownerStage: c.req.query("ownerStage"), told: c.req.query("told"), aiInterview: c.req.query("aiInterview"), order: c.req.query("order") ?? c.req.query("sort"), counts: c.req.query("counts") });
-  const now = c.get("container").engine.clock();
-  const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const apps = (await tx.select().from(applications).where(and(eq(applications.roleId, c.req.param("id")), visibleTo(t))).orderBy(desc(applications.createdAt))).filter((a) => !t.staff?.scope.applicationId || a.id === t.staff.scope.applicationId);
-    const locked = q.counts ? await lockedCardsOf(tx, c.req.param("id"), t) : { count: 0, cards: [] };
-    // For the close card's "and N more you cannot see yet" under who is still in process: fewer than the cards when someone locked was decided or moved on.
-    const lockedInProcess = locked.count ? await lockedStillInProcess(tx, c.req.param("id")) : 0;
-    const ids = apps.map((a) => a.candidateId);
-    const appIds = apps.map((a) => a.id);
-    const cands = ids.length ? await tx.select().from(candidates).where(inArray(candidates.id, ids)) : [];
-    // Every reading of every applicant (the score takes the scorecard's finding where it has one, the résumé's otherwise) and the role's packets by version.
-    const asmts = appIds.length ? await tx.select().from(assessments).where(inArray(assessments.applicationId, appIds)).orderBy(desc(assessments.createdAt)) : [];
-    const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, c.req.param("id"))).limit(1);
-    const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
-    // Whether each résumé file had text to read (a clean scan without a text layer has none): one query, no text pulled.
-    const docIds = apps.filter((a) => a.resumeDocumentId).map((a) => a.resumeDocumentId!);
-    const docs = docIds.length ? await tx.select({ id: documents.id, status: documents.status, hasText: sql<boolean>`${documents.textExtracted} is not null` }).from(documents).where(inArray(documents.id, docIds)) : [];
-    // What the stage button needs, for every row at once: marks, open follow-ups (the Cancelled column), screens,
-    // interviews, decision messages waiting for approval.
-    const marks = await activeMarksFor(tx, appIds);
-    const followUps = await activeFollowUpsFor(tx, appIds);
-    const timeZone = followUps.size ? await companyTimeZone(tx, t.companyId) : "UTC";
-    // With whether each sent one's scorecard waits for the AI credit or could not be written (`screensForScore`), for the score's label.
-    const scr = await screensForScore(tx, appIds);
-    // Never a reading of a conversation the candidate did not send ("hide them until they send", 9 October 2026).
-    const hiddenReadings = unsentScreenReadings(scr, asmts);
-    const ivs = appIds.length ? await tx.select({ applicationId: interviews.applicationId, status: interviews.status, decision: interviews.decision }).from(interviews).where(inArray(interviews.applicationId, appIds)) : [];
-    // An interview booked or with times out waits on nobody at the company (6 November 2026): not "Waiting on you".
-    const inMotion = await interviewsInMotionFor(tx, appIds);
-    const waitingToTell = await pendingDecisionMessages(tx, appIds);
-    // "No AI interview yet" (R20-7): where each person in that column stands with it (the latest screen's times).
-    const aiInterviews = await aiInterviewsFor(tx, apps, now);
-    // Whose AI interview is still being prepared: a person's own link waits for it (`interviewPreparing`).
-    const preparing = await interviewsBeingPrepared(tx, appIds);
-    // Whose AI interview never came because the month's allowance stayed used up (Q17): their score's label says so.
-    const lapsed = await interviewsLapsedOnAllowance(tx, appIds.filter((id) => !scr.some((s) => s.applicationId === id)));
-    // The day the offer each person at Offer waits on was made, so the row says the day the panel says (`offerMadeOn`).
-    const offerDays = await openOfferDays(tx, apps.filter((a) => a.stage === "offer_sent").map((a) => a.id));
-    const rows = apps.map((loaded) => {
-      const cand = cands.find((x) => x.id === loaded.candidateId);
-      const { app: a, assessments: own } = shownReadings(loaded, asmts.filter((x) => x.applicationId === loaded.id), hiddenReadings);
-      const asmt = own.find((x) => x.id === a.latestAssessmentId);
-      const doc = docs.find((d) => d.id === a.resumeDocumentId);
-      const mark: ActiveMark | null = marks.get(a.id) ?? null;
-      // Insufficient evidence as a state the owner can see, and the match score: derived here and on the candidate page from the same assessments, never stored.
-      // The screens come unordered: where the AI interview stands for the score's label reads them in any order (R20-9).
-      const ownScreens = scr.filter((s) => s.applicationId === a.id);
-      const scored = scorePerson({ app: a, assessments: own, screens: ownScreens, allowanceLapsed: lapsed.has(a.id), packets: packets.byVersion, currentVersion: packets.currentVersion, mark, resumeUnreadable: !!doc && doc.status === "clean" && !doc.hasText && !a.extraction, openScreen: ownScreens.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
-      const evidence = scored.evidence;
-      const followUp = followUps.get(a.id) ?? null;
-      const strip = ownerStage(a, mark, followUp);
-      const aiInterview = strip === "no_ai_interview" ? aiInterviews.get(a.id) ?? null : null;
-      const facts = applicationFactsFrom(a, ownScreens.map((s) => s.status), ivs.filter((i) => i.applicationId === a.id), t.role, asmt?.kind === "triage" ? asmt : null, { mark, decisionMessagePending: waitingToTell.has(a.id), followUp, interviewPreparing: preparing.has(a.id), aiInterview: aiInterviews.get(a.id) ?? null });
-      return {
-        id: a.id,
-        stage: a.stage,
-        stageLabel: evidence.needsCloserLook ? CLOSER_LOOK_LABEL : STAGE_LABEL[a.stage],
-        group: groupFor(a, mark, now, followUp, inMotion.has(a.id)),
-        ownerStage: strip,
-        ownerStageLabel: ownerStageLabel(strip, mark, followUp, aiInterview, a.stage),
-        cancelled: strip === "cancelled" && followUp ? cancelledView(followUp, { timeZone }) : null,
-        aiInterview,
-        mark,
-        tags: ownerTags(a, mark, now),
-        source: a.source,
-        createdAt: a.createdAt,
-        appliedAt: iso(a.createdAt),
-        stageChangedAt: iso(a.stageChangedAt),
-        daysInStage: Math.max(0, Math.floor((now.getTime() - Date.parse(a.stageChangedAt)) / 86_400_000)),
-        offerMadeOn: a.stage === "offer_sent" ? offerDays.get(a.id) ?? null : null,
-        // Someone whose details were deleted at their request cannot be told anything: no told state, so the Talent list's
-        // "Not told yet" count and list leave them out, as Today and the daily check do (polish list).
-        toldState: DECISION_STAGES.includes(a.stage) && !cand?.anonymizedAt ? a.toldState : null,
-        candidateToldAt: a.candidateToldAt ? iso(a.candidateToldAt) : null,
-        decisionMessageWaiting: waitingToTell.has(a.id),
-        // Kept one release for older pages: the same people as the column.
-        stillApplying: strip === "no_ai_interview",
-        candidate: cand ? { id: cand.id, name: `${cand.firstName} ${cand.lastName}`, email: cand.email, phone: cand.phone, locationText: cand.locationText } : null,
-        eligibility: a.eligibility,
-        extractionSummary: a.extraction ? { positions: a.extraction.positions.slice(0, 3).map((p) => `${p.title}${p.employer ? ` at ${p.employer}` : ""}`), licenses: a.extraction.licenses.map((l) => l.name), years: a.extraction.yearsOfExperienceEstimate ?? null, anomalies: a.extraction.anomalies } : null,
-        assessment: asmt ? { overall: asmt.overall, confidence: asmt.confidence, summary: asmt.result.summary, strengths: asmt.result.strengths.slice(0, 2), concerns: asmt.result.concerns.slice(0, 1) } : null,
-        evidence,
-        ...scoreFields(scored.match),
-        mustHaves: scored.mustHaves,
-        placement: scored.placement,
-        nextStep: scored.placement.nextStep,
-        readingVersion: scored.readingVersion,
-        stageMoves: stageMoves(facts),
-      };
-    });
-    const counts: StageStripCounts = { total: rows.length + locked.count, byOwnerStage: Object.fromEntries(OwnerStage.options.map((s) => [s, 0])) as Record<OwnerStage, number>, byGroup: Object.fromEntries(OwnerGroup.options.map((g) => [g, 0])) as Record<OwnerGroup, number>, notTold: 0, holdsEnded: 0, stillApplying: 0, cancelled: { askedNewTimes: 0, notInterested: 0, noShow: 0 }, aiInterview: Object.fromEntries(AiInterviewGroup.options.map((g) => [g, 0])) as Record<AiInterviewGroup, number> };
-    for (const r of rows) {
-      counts.byOwnerStage[r.ownerStage] += 1;
-      counts.byGroup[r.group] += 1;
-      if (r.toldState === "not_told") counts.notTold += 1;
-      if (holdEnded(r.mark, now)) counts.holdsEnded += 1;
-      if (r.stillApplying) counts.stillApplying += 1;
-      if (r.cancelled) counts.cancelled[CANCELLED_COUNT_KEY[r.cancelled.reason]] += 1;
-      if (r.aiInterview) counts.aiInterview[r.aiInterview.group] += 1;
-    }
-    const nameOf = (r: (typeof rows)[number]) => r.candidate?.name.toLowerCase() ?? "";
-    // By score (`scoreRank`, 6 November 2026): final numbers first, then people whose AI interview is still coming, then no
-    // score; highest first, and among equals the longest wait. The same rule as the page's own sort (apps/web/src/talent-list.ts).
-    const byScore = (x: (typeof rows)[number], y: (typeof rows)[number]) => scoreRank(x) - scoreRank(y) || (y.score ?? -1) - (x.score ?? -1) || Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt);
-    const ordered = q.order === "waiting" ? [...rows].sort((x, y) => Date.parse(x.stageChangedAt) - Date.parse(y.stageChangedAt)) : q.order === "name" ? [...rows].sort((x, y) => nameOf(x).localeCompare(nameOf(y))) : q.order === "score" ? [...rows].sort(byScore) : rows;
-    const shown = ordered.filter((r) => (!q.group || r.group === q.group) && (!q.stage || r.stage === q.stage) && (!q.ownerStage || r.ownerStage === q.ownerStage) && (!q.told || r.toldState === q.told) && (!q.aiInterview || r.aiInterview?.group === q.aiInterview));
-    return { shown, counts, locked, lockedInProcess };
-  });
-  return c.json(q.counts ? { applications: result.shown, counts: result.counts, locked: result.locked, lockedInProcess: result.lockedInProcess } : result.shown);
-});
-
-/**
- * "Send the decision message" to several people of this role at once (the Talent page's and Today's "not told yet"):
- * the same Send as on each person's page, one result per person, so one refusal never blocks the rest. `held` counts
- * the messages saved to go out once ITS confirms the company (founder decision B7). `wording` picks one approved wording
- * for all (Q28); each result carries `communicationId` and `undoUntil` while the message waits out its Undo window.
- */
-roleRoutes.post("/:id/decision-messages", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.reject");
-  const body = SendDecisionMessages.parse(await c.req.json());
-  const container = c.get("container");
-  const results = await withTenant(container.db, t.companyId, (tx) => sendDecisionMessages(tx, container, { roleId: c.req.param("id") ?? "", applicationIds: body.applicationIds, tenant: t, actor: actorOf(c), wording: body.wording ?? null }));
-  await container.kick();
-  const tally = (n: CandidateNotice) => results.filter((r) => r.candidateNotice === n).length;
-  return c.json({ results, queued: tally("queued"), held: tally("held"), waitingApproval: tally("waiting_approval"), notSent: results.length - tally("queued") - tally("held") - tally("waiting_approval") });
-});
-
-/**
- * The closing message of a closed role (founder decision Q30; plan G4). GET answers `ClosingMessagePreview`: who it is
- * for (everyone the role left in the talent pool untold), the words with "[first name]", those left out and what a Send
- * does. POST `{ confirm: true, applicationIds? }` sends it to them, approved once for everyone: `ClosingMessageResult`,
- * `sent` with a result per person (each waits out the Undo window), `waiting_approval` with the one request, or
- * `not_sent_settings`. 409 `role_not_closed`, `waiting_approval`, `nothing_to_send`.
- */
-roleRoutes.get("/:id/closing-message", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.reject");
-  // It names everyone the role left in the talent pool: an ITS recruiter given one candidate sees nobody else, and may
-  // not send it either (sendClosingMessage).
-  if (t.staff?.scope.applicationId) throw new HttpError(403, "staff_scope", "Your access covers one candidate, so you can't see the closing message for everyone this role left in the talent pool.");
-  const container = c.get("container");
-  const preview = await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, c.req.param("id") ?? ""));
-  if (!preview) throw new HttpError(404, "not_found", "Role not found.");
-  return c.json(preview);
-});
-
-roleRoutes.post("/:id/closing-message", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.reject");
-  const body = SendClosingMessage.parse(await c.req.json());
-  const container = c.get("container");
-  const result = await withTenant(container.db, t.companyId, (tx) => sendClosingMessage(tx, container, { roleId: c.req.param("id") ?? "", tenant: t, actor: actorOf(c), applicationIds: body.applicationIds }));
-  await container.kick();
-  return c.json(result, result.status === "waiting_approval" ? 202 : 200);
-});
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* The pool board, Review and apply, and the one-click questions (plan Wave F; docs/spec/22).                     */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/**
- * The pool board (plan F6, F7): Shortlist, Longlist and Not moving forward, each card with its match score, the
- * must-have line, why it is placed there and the suggested next step; the people still applying apart; the rule-built
- * summary on top. Answers `BoardView` (packages/contracts api/board.ts). Nothing moves until a person applies it.
- */
-roleRoutes.get("/:id/board", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const container = c.get("container");
-  const now = container.engine.clock();
-  return c.json(await withTenant(container.db, t.companyId, async (tx) => boardView(await loadPool(tx, { roleId: c.req.param("id") ?? "", tenant: t, now }), now)));
-});
-
-/**
- * Review and apply (plan F8; founder decision B4): `{ items: [{ applicationId, action, reason?, note? }], dryRun }`, up to
- * 50 people. With `dryRun` nothing changes and the answer is the preview (`BatchPreview`): per person what will happen,
- * whether it may, the warnings, and the pre-filled reason for a not-moving-forward. Without it each person is applied
- * in a transaction of their own (`BatchResult`, one result each). Marks and declines are private; nobody is emailed.
- */
-roleRoutes.post("/:id/batch", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  const body = RoleBatchRequest.parse(await c.req.json());
-  const container = c.get("container");
-  const roleId = c.req.param("id") ?? "";
-  if (body.dryRun) return c.json(await previewBatch(container, { roleId, tenant: t, body }));
-  return c.json(await applyBatch(container, { roleId, tenant: t, actor: actorOf(c), body }));
-});
-
-/** The one-click questions the board offers for this role (plan F10), in plain words. */
-roleRoutes.get("/:id/questions", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const container = c.get("container");
-  const pool = await withTenant(container.db, t.companyId, (tx) => loadPool(tx, { roleId: c.req.param("id") ?? "", tenant: t, onlyIds: [] }));
-  return c.json({ questions: poolQuestions(pool.packet) });
-});
-
-/**
- * One question answered from the stored, checked findings (plan F10; founder decision B5): no AI is asked anything
- * new. `missing_must_have`, `strongest_evidence?mustHave=<key>`, `overlooked`, or `compare?ids=a,b` (up to five, the
- * comparison view). Answers `PoolAnswer`: the people with why and the quotes, the ids to filter the board, and what it
- * looked at.
- */
-roleRoutes.get("/:id/questions/:kind", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const q = PoolQuestionQuery.parse({ kind: c.req.param("kind"), mustHave: c.req.query("mustHave") || undefined, ids: c.req.query("ids") || undefined });
-  const container = c.get("container");
-  const roleId = c.req.param("id") ?? "";
-  const now = container.engine.clock();
-  const answer = await withTenant(container.db, t.companyId, async (tx): Promise<PoolAnswer> => {
-    if (q.kind === "compare") {
-      const ids = [...new Set((q.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean))];
-      if (!ids.length) throw new HttpError(400, "invalid_request", "Choose the people to compare first.");
-      if (ids.length > COMPARE_MAX) throw new HttpError(400, "too_many", `Compare up to ${COMPARE_MAX} candidates at a time.`);
-      const out = await compareCandidates(tx, { roleId, ids, tenant: t, actor: actorOf(c), now });
-      if (!out) throw new HttpError(404, "not_found", "Role not found.");
-      const people = out.candidates.map((p) => ({ applicationId: p.applicationId, name: p.name, score: p.score?.score ?? null, band: p.score?.band ?? null, placement: null, why: p.score && p.score.score !== null ? `Match score ${p.score.score}; ${p.score.coverage.words.toLowerCase()}.` : "No score yet.", quotes: out.mustHaves.filter((m) => p.mustHaves[m.key]?.quote).map((m) => ({ criterion: m.text, quote: p.mustHaves[m.key].quote!, source: "evidence" })), open: p.open }));
-      const read = out.candidates.filter((p) => p.score);
-      return { kind: "compare", question: "Compare these", answer: `${out.candidates.length} people side by side, in the order you chose.`, people, applicationIds: people.map((p) => p.applicationId), lookedAt: { people: read.length, resumeReadings: read.filter((p) => p.score!.basedOn !== "screen").length, screenReadings: read.filter((p) => p.score!.basedOn !== "resume").length, requirements: out.mustHaves.map((m) => m.text), words: "Looked at the checked findings already on file for each person; no AI was asked anything new." }, compare: out };
-    }
-    const pool = await loadPool(tx, { roleId, tenant: t });
-    try {
-      return answerPoolQuestion(q.kind, pool.rows.map(poolPersonOf), pool.packet, { mustHaveKey: q.mustHave ?? null, now, open: (id) => openPath(roleId, id) });
-    } catch (e) {
-      if (e instanceof PoolQuestionError) throw new HttpError(400, e.code, e.message);
-      throw e;
-    }
-  });
   return c.json(answer);
-});
-
-/** Application detail and actions live here too, keyed by application id. */
-export const applicationRoutes = new Hono<Vars>();
-applicationRoutes.use("/:id", applicationScopeGuard);
-applicationRoutes.use("/:id/*", applicationScopeGuard);
-
-applicationRoutes.get("/:id", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  // An interviewer holds no application.read but may open the candidates they are interviewing (F8): they get the
-  // brief with pay and internal rationale left out (services/interviewer-view.ts), and a 403 for anyone else.
-  const interviewerOnly = t.role === "interviewer";
-  if (!interviewerOnly) assertCan(t.role, "application.read");
-  const row = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
-    if (!app) return null;
-    if (interviewerOnly) return interviewerApplicationView(tx, { app, tenant: t, actor: actorOf(c) });
-    const [cand] = await tx.select().from(candidates).where(eq(candidates.id, app.candidateId)).limit(1);
-    const docs = await tx.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, hasText: documents.textExtracted, status: documents.status, uploadedVia: documents.uploadedVia, rejectedReason: documents.rejectedReason, validatedAt: documents.validatedAt }).from(documents).where(eq(documents.applicationId, app.id));
-    const scr = await tx.select().from(screens).where(eq(screens.applicationId, app.id)).orderBy(desc(screens.createdAt));
-    // "Hide them until they send" (founder decision of 9 October 2026): while they are still in the conversation, and for
-    // good when it closed without being sent, the team gets none of what they said in it: no answer or transcript line
-    // (a recruiter's call notes excepted), no message they typed in it, no reading of it, and no history entry about a
-    // single answer, nor one about a reading of it ("scorecard written", its recommendation, a flag on it). A reading of
-    // a conversation nobody sent stays hidden however it is reached (`unsentScreenReadings` with the readings: one a
-    // recruiter's call notes unlinked from its screen too). `screens[].answersShared` says which.
-    const readings = await tx.select().from(assessments).where(eq(assessments.applicationId, app.id)).orderBy(desc(assessments.createdAt));
-    const hiddenReadings = unsentScreenReadings(scr, readings);
-    const shown = shownReadings(app, readings, hiddenReadings);
-    const asmts = shown.assessments;
-    const comms = withoutUnsentConversation(await tx.select().from(communications).where(eq(communications.applicationId, app.id)).orderBy(desc(communications.createdAt)), scr);
-    const own = await tx.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id))).orderBy(desc(events.occurredAt)).limit(100);
-    // History (plan A10) also tells what happened to the assistant's suggestions about them (asked, approved by whom,
-    // "Not now", closed) and to their screens, which are recorded on the request and the screen, not the application.
-    const requestIds = (await tx.select({ id: approvalRequests.id }).from(approvalRequests).where(eq(approvalRequests.applicationId, app.id))).map((r) => r.id);
-    const related = requestIds.length || scr.length ? await tx.select().from(events).where(or(and(eq(events.subjectType, "approval_request"), inArray(events.subjectId, requestIds.length ? requestIds : [""])), and(eq(events.subjectType, "screen"), inArray(events.subjectId, scr.length ? scr.map((s) => s.id) : [""])))).orderBy(desc(events.occurredAt)).limit(100) : [];
-    const timeline = withoutUnsentScreenEvents([...own, ...related], scr, hiddenReadings).sort((x, y) => Date.parse(y.occurredAt) - Date.parse(x.occurredAt));
-    const ivs = await tx.select({ id: interviews.id, roundKey: interviews.roundKey, title: interviews.title, format: interviews.format, durationMinutes: interviews.durationMinutes, status: interviews.status, startsAt: interviews.startsAt, endsAt: interviews.endsAt, timezone: interviews.timezone, meetingUrl: interviews.meetingUrl, linkSource: interviews.linkSource, attempt: interviews.attempt, outcome: interviews.outcome, decision: interviews.decision, offeredSlots: interviews.offeredSlots, selectedSlot: interviews.selectedSlot, createdAt: interviews.createdAt }).from(interviews).where(eq(interviews.applicationId, app.id)).orderBy(desc(interviews.createdAt));
-    const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, app.packetVersion))).limit(1);
-    // `written` (Wave S7, additive): the written questions the chat asks and Review & send writes up, in order, keyed like
-    // the write-up's answers (`writtenQuestionsOf`: never what the company looks for in them); the candidate panel labels them.
-    const packetLabels = pv ? { mustHaves: pv.packet.requirements.mustHaves.map((m) => ({ key: m.key, text: m.text })), competencies: pv.packet.competencies.map((c) => ({ key: c.key, name: c.name, importance: importanceOf(c) })), questions: pv.packet.screening.questions.map((q) => ({ key: q.key, question: q.question })), written: writtenQuestionsOf(pv.packet) } : { mustHaves: [], competencies: [], questions: [], written: [] };
-    // `formAnswers` (Wave S7, additive): every answer to the form's questions (eligibility and the company's own quick
-    // questions) as the sentence the candidate's record and the AI read (`applicationAnswerSentences`), each marked when
-    // it was suggested from the résumé and left as it was (`answers.fromCv`); `workSummary`: the summary they checked.
-    const fromCv = new Set(app.answers.fromCv ?? []);
-    const formAnswers = pv ? applicationAnswerSentences(pv.packet, app.answers).map((s) => ({ key: s.key, source: s.source, sentence: s.sentence, fromCv: fromCv.has(s.source === "eligibility" ? `elig_${s.key}` : `q_${s.key}`) || fromCv.has(s.key) })) : [];
-    const workSummary = typeof app.answers.workSummary === "string" && app.answers.workSummary.trim() ? { text: app.answers.workSummary, fromCv: fromCv.has("workSummary") } : null;
-    // `keptFacts` (Wave S8, additive): the facts from their earlier chats here that they kept on this application's form
-    // (opened from the emailed reuse link, which tells them the company sees what they keep), in the words their record
-    // holds now. The words only: not the chat, job or application they came from.
-    const keptFacts = (Array.isArray(app.answers.kept) ? app.answers.kept : []).map((k) => ({ id: k.id, kind: k.kind, text: k.text, keptAt: k.keptAt, editedAt: k.editedAt ?? null }));
-    // `proposal` carries a waiting message's text (F11), so the sheet can show it to the approver; `requiredRoles` says who may decide.
-    const pendingApprovals = await tx.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, rationale: approvalRequests.rationale, createdAt: approvalRequests.createdAt, proposal: approvalRequests.proposal, requiredRoles: approvalRequests.requiredRoles }).from(approvalRequests).where(and(eq(approvalRequests.applicationId, app.id), eq(approvalRequests.status, "pending")));
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "candidate.viewed", target: { type: "application", id: app.id } });
-    // The latest résumé assessment (rows are newest first) is what offers "ask about this in a screen", the same rule the action route applies.
-    // Every choice the page shows but cannot take comes with the reason (plan 0.5), and the decline step says before the click what the candidate will get.
-    // The private mark and the stage button (founder decision B3), and whether a decision was told (B6).
-    const mark = (await activeMarksFor(tx, [app.id])).get(app.id) ?? null;
-    // Under Cancelled (founder decisions 1A to 4A): why, and where their new times stand.
-    const followUp = (await activeFollowUpsFor(tx, [app.id])).get(app.id) ?? null;
-    // Their own decision message waiting for an approver, or a closed role's one closing message that names them (Q30).
-    const decisionMessageWaiting = (await pendingDecisionMessages(tx, [app.id])).has(app.id);
-    // A decision nobody told can be taken back (plan G1): where it was made from, and whether the role has closed.
-    const now = c.get("container").engine.clock();
-    // Under "No AI interview yet" (R20-7): where they stand with it, and whether "Send a reminder" is offered now.
-    const aiInterview = (await aiInterviewsFor(tx, [app], now)).get(app.id) ?? null;
-    // Under Cancelled with someone on the interview who has no hours to offer: "Send new times" would be refused (10 November 2026).
-    const noHours = !!followUp && inCancelled(app.stage, followUp) && (await interviewHasNoHours(tx, { companyId: t.companyId, interviewId: followUp.currentInterviewId ?? followUp.interviewId }));
-    const facts = applicationFactsFrom(app, scr.map((s) => s.status), ivs, t.role, asmts.find((x) => x.kind === "triage") ?? null, { mark, decisionMessagePending: decisionMessageWaiting, followUp, interviewPreparing: (await interviewsBeingPrepared(tx, [app.id])).has(app.id), aiInterview, noHours, ...(await undoFacts(tx, app)) });
-    // What became of the email about a booked time: the panel says when they have not been told. And whether they heard of each
-    // interview at all, as a cancellation decides whom to tell, so the decline steps never promise a note that will not go.
-    const emailStates = await candidateEmailStates(tx, { interviews: ivs, hasEmail: !!cand?.email });
-    const heard = ivs.length ? await candidatesHeard(tx, app.id) : new Map<string, boolean>();
-    const { allowed: allowedActions, blockedReasons } = applicationActionState(facts);
-    // What a Send of the decision message does under the company's settings: it goes, waits for approval, or is not sent.
-    const declineMessage = await declineMessagePolicy(tx, { companyId: t.companyId, roleId: app.roleId, lockedAt: app.lockedAt });
-    // A scorecard only for a complete conversation: one closed without being sent has none to show.
-    const shownScorecard = (s: { status: string; assessmentId: string | null }) => s.status === "completed" && !(s.assessmentId && hiddenReadings.has(s.assessmentId));
-    const scorecards = await screenScorecards(tx, scr.map((s) => (shownScorecard(s) ? s : { ...s, assessmentId: null })));
-    // The day the untold safety net acts on a decision nobody has told (Q27), in the company's calendar: its time zone,
-    // its working days and the ITS holidays, as the daily check counts them: from the unlock, for someone a change of plan
-    // opened. The answer to the decision named the same day (`untoldFallbackDayOf`).
-    const untoldFallbackOn = DECISION_STAGES.includes(app.stage) && app.toldState === "not_told" && !decisionMessageWaiting && !cand?.anonymizedAt ? await untoldFallbackDayOf(tx, app, now) : null;
-    const strip = ownerStage(app, mark, followUp);
-    const cancelled = strip === "cancelled" && followUp ? { ...cancelledView(followUp, { timeZone: await companyTimeZone(tx, app.companyId) }), noHours } : null;
-    // The match score with its breakdown (founder decision B2), the must-have line, where the pool board puts them and
-    // the version label, from the same assessments and rules as the list and the board.
-    const [roleRow] = await tx.select({ id: roles.id, currentPacketVersion: roles.currentPacketVersion }).from(roles).where(eq(roles.id, app.roleId)).limit(1);
-    const packets = roleRow ? await packetsOf(tx, roleRow) : { byVersion: new Map(), currentVersion: null };
-    const resumeDoc = docs.find((d) => d.id === app.resumeDocumentId);
-    const scored = scorePerson({ app: shown.app, assessments: asmts, screens: scr.map((s) => ({ ...s, scoreFailed: scorecards.get(s.id)?.scorecard === "unavailable" })), allowanceLapsed: !scr.length && (await interviewsLapsedOnAllowance(tx, [app.id])).has(app.id), packets: packets.byVersion, currentVersion: packets.currentVersion, mark, resumeUnreadable: !!resumeDoc && resumeDoc.status === "clean" && !resumeDoc.hasText && !app.extraction, openScreen: scr.some((s) => SCREEN_OPEN_STATUSES.includes(s.status)) });
-    // L-08 B (founder, 16 Oct 2026): one neutral line when the résumé or the written answers the reading used held text aimed at the AI. Worked out from the stored words on every read; never stored, never given to the reading or the score, never sent to the candidate.
-    const hiddenTextNote = hiddenTextNoteOf({ resumeText: resumeDoc?.status === "clean" ? resumeDoc.hasText : null, answers: shown.app.answers, extraction: shown.app.extraction, readings: asmts });
-    // `noReading` (10 November 2026, additive): why no AI review of the résumé will come by itself, so the panel never promises one.
-    const noReading = await readingWontCome(tx, app.id);
-    // The status token opens the candidate's status page and the reply token is all that authenticates a reply, so neither leaves the server.
-    const { statusToken: _statusToken, replyToken: _replyToken, ...appOut } = shown.app;
-    // Nor does any other candidate link in the messages we sent them (status, conversation, scheduling, confirming the
-    // answers given after applying again): each body is shown with the tokens hidden, without the reply address (it
-    // carries the reply token) and with attachments named only. Links outlive any team member's or recruiter's access.
-    const thread = comms.map(({ replyTo: _replyTo, attachments, ...m }) => ({ ...m, bodyText: maskCandidateLinks(m.bodyText), bodyHtml: maskCandidateLinks(m.bodyHtml), attachments: attachments ? attachments.map((a) => ({ filename: a.filename, contentType: a.contentType })) : null }));
-    // An interview booked, or with times out whose email did not fail, waits on nobody at the company (6 November 2026;
-    // the same rule as `interviewsInMotionFor`, from the rows already read).
-    const inMotion = ivs.some((i) => i.status === "scheduled" || (i.status === "scheduling" && i.offeredSlots.length > 0 && emailStates.get(i.id) !== "failed" && emailStates.get(i.id) !== "no_email"));
-    // The newest scorecard with the newest résumé reading, as the score pairs them, and the conversation it read: a concern
-    // that is only the AI interview's silence about what the résumé shows is left out here (the Overview's Concerns, the
-    // AI review under Full breakdown), never in the stored row (`concernsAsRead`).
-    const asRead = concernsAsRead(asmts, { packets: packets.byVersion, fallback: pv?.packet ?? null, chats: new Map(scr.flatMap((s) => (s.assessmentId ? [[s.assessmentId, teamScreenView(s).transcript] as const] : []))) });
-    return { ...appOut, stageLabel: STAGE_LABEL[app.stage], group: groupFor(app, mark, now, followUp, inMotion), ownerStage: strip, ownerStageLabel: ownerStageLabel(strip, mark, followUp, strip === "no_ai_interview" ? aiInterview : null, app.stage), cancelled, aiInterview: strip === "no_ai_interview" ? aiInterview : null, mark, tags: ownerTags(app, mark, now), stageMoves: stageMoves(facts), toldState: DECISION_STAGES.includes(app.stage) ? app.toldState : null, decisionMessageWaiting, untoldFallbackOn, allowedActions, blockedReasons, declineMessage, candidate: cand, interviews: ivs.map((i) => ({ ...i, candidateEmail: emailStates.get(i.id) ?? null, candidateHeard: heard.get(i.id) ?? false })), interviewPlan: pv?.packet.interviews.plan.map((r) => ({ key: r.key, title: r.title, durationMinutes: r.durationMinutes, format: r.format, interviewerUserIds: r.interviewerUserIds, purpose: r.purpose })) ?? [], documents: docs.map((d) => ({ ...d, hasText: !!d.hasText })), assessments: asRead, communications: thread, timeline, screens: scr.map(teamScreenView).map((s) => ({ id: s.id, channel: s.channel, status: s.status, invitedVia: s.invitedVia ?? null, invitedAt: s.invitedAt, startedAt: s.startedAt, completedAt: s.completedAt, remindedAt: s.remindedAt, idleRemindedAt: s.idleRemindedAt, expiresAt: s.expiresAt, transcript: s.transcript, answers: s.answers, progress: s.progress, answersShared: s.answersShared, assessmentId: shownScorecard(s) ? s.assessmentId : null, ...scorecards.get(s.id) })), pendingApprovals, packetLabels, formAnswers, workSummary, keptFacts, matchScore: scored.match, mustHaves: scored.mustHaves, placement: scored.placement, readingVersion: scored.readingVersion, hiddenTextNote, noReading };
-  });
-  if (!row) throw new HttpError(404, "not_found", "Application not found.");
-  return c.json(row);
-});
-
-/**
- * The preview before "Send the decision message" (founder decision B6; `DecisionMessagePreview`): the exact words the
- * candidate will get in the suggested wording (the fitting one, marked `suggested`: the Send screen starts on it), the
- * address, the approved wordings on offer (Q28; POST .../preview shows another), whether Colorado's
- * line is in it, what the Send does under the company's settings (`policy`: sends, needs_approval, not_sent) and how
- * long the Undo lasts. 404 when there is no decision to tell (they are still in the process).
- */
-applicationRoutes.get("/:id/decision-message", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.reject");
-  const container = c.get("container");
-  const preview = await withTenant(container.db, t.companyId, async (tx) => {
-    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
-    return app ? decisionMessagePreview(tx, container, app, { senderName: actorOf(c).name ?? undefined }) : null;
-  });
-  if (!preview) throw new HttpError(404, "not_found", "There is no decision to tell this candidate about.");
-  return c.json(preview);
-});
-
-/**
- * The same preview with a chosen wording and a personal line (`DecisionMessagePreviewRequest`), checked exactly as the
- * Send checks them: 400 `personal_line_refused` says what to take out (`details.problems`), 400 `wording_not_allowed`
- * names a wording this decision cannot use. The personal line travels in the body, never in the address.
- */
-applicationRoutes.post("/:id/decision-message/preview", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.reject");
-  const body = DecisionMessagePreviewRequest.parse(await c.req.json().catch(() => ({})));
-  const container = c.get("container");
-  const preview: DecisionMessagePreview | null = await withTenant(container.db, t.companyId, async (tx) => {
-    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1);
-    return app ? decisionMessagePreview(tx, container, app, { wording: body.wording ?? null, personalLine: body.personalLine ?? null, senderName: actorOf(c).name ?? undefined }) : null;
-  });
-  if (!preview) throw new HttpError(404, "not_found", "There is no decision to tell this candidate about.");
-  return c.json(preview);
-});
-
-/**
- * The file itself (decision 2): only a checked and scanned document, only to a member who may read the application,
- * only through a short-lived single-object link, and every read is audited with who, which file and why not more.
- */
-applicationRoutes.get("/:id/documents/:documentId/file", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const container = c.get("container");
-  const found = await withTenant(container.db, t.companyId, async (tx) => {
-    const [doc] = await tx.select().from(documents).where(and(eq(documents.id, c.req.param("documentId")), eq(documents.applicationId, c.req.param("id")))).limit(1);
-    if (!doc) return null;
-    if (doc.status !== "clean") return { doc, url: null };
-    const link = await container.integrations.storage.createDownloadUrl(doc.storageKey, { expiresSeconds: DOWNLOAD_URL_TTL_SECONDS, filename: safeFilename(doc.filename), contentType: doc.mime });
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "document.read", target: { type: "document", id: doc.id }, ip: clientIp(c), details: { applicationId: doc.applicationId, filename: safeFilename(doc.filename), expiresAt: link.expiresAt } });
-    return { doc, url: link.url };
-  });
-  if (!found) throw new HttpError(404, "not_found", "Document not found.");
-  if (!found.url) throw new HttpError(409, "not_available", found.doc.status === "quarantined" ? "This file is still being checked." : "This file was refused or removed and cannot be opened.");
-  return c.redirect(found.url, 302);
-});
-
-/**
- * The résumé inside the candidate panel (plan H5): the same checks and the same `document.read` audit as the file
- * itself, served from this origin with an inline disposition so the panel can show it in a frame of its own page. A PDF
- * comes back as itself; a Word or text file, which browsers do not show as it is, comes back as its extracted text
- * (`?as=text` asks for the text of a PDF too). Never cached; only this application's own pages may frame it.
- */
-applicationRoutes.get("/:id/documents/:documentId/inline", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const container = c.get("container");
-  const wantsText = c.req.query("as") === "text";
-  const found = await withTenant(container.db, t.companyId, async (tx) => {
-    const [doc] = await tx.select().from(documents).where(and(eq(documents.id, c.req.param("documentId")), eq(documents.applicationId, c.req.param("id")))).limit(1);
-    if (!doc) return null;
-    if (doc.status !== "clean") throw new HttpError(409, "not_available", doc.status === "quarantined" ? "This file is still being checked." : "This file was refused or removed and cannot be opened.");
-    const asText = wantsText || doc.mime !== "application/pdf";
-    if (asText && !doc.textExtracted) throw new HttpError(409, "no_text", "We could not read the text of this file. Open it in a new tab instead.");
-    const bytes = asText ? null : await container.integrations.storage.get(doc.storageKey);
-    if (!asText && !bytes) throw new HttpError(409, "not_available", "This file could not be found. Open it in a new tab, or ask the candidate to send it again.");
-    await audit(tx, { companyId: t.companyId, actor: actorOf(c), action: "document.read", target: { type: "document", id: doc.id }, ip: clientIp(c), details: { applicationId: doc.applicationId, filename: safeFilename(doc.filename), view: asText ? "text" : "inline" } });
-    return { doc, text: asText ? doc.textExtracted : null, bytes };
-  });
-  if (!found) throw new HttpError(404, "not_found", "Document not found.");
-  const name = safeFilename(found.doc.filename);
-  c.header("Cache-Control", "private, no-store");
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("X-Frame-Options", "SAMEORIGIN");
-  if (found.text !== null) {
-    // Plain text runs nothing; the policy says so anyway, and the frame may only be this origin's.
-    c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'");
-    c.header("Content-Disposition", `inline; filename="${name.replace(/\.[a-z0-9]+$/i, "")}.txt"`);
-    return c.body(found.text, 200, { "Content-Type": "text/plain; charset=utf-8" });
-  }
-  // A browser's PDF viewer does not run in a sandboxed frame, so the policy limits who may frame it and nothing more.
-  c.header("Content-Security-Policy", "frame-ancestors 'self'");
-  c.header("Content-Disposition", `inline; filename="${name}"`);
-  return c.body(found.bytes!.slice().buffer as ArrayBuffer, 200, { "Content-Type": "application/pdf" });
-});
-
-applicationRoutes.post("/:id/actions", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  const body = ApplicationAction.parse(await c.req.json());
-  const container = c.get("container");
-  const { holdersToTell, ...result } = await withTenant(container.db, t.companyId, async (tx) => {
-    // The row is locked for the decision, so two people acting on the same candidate at once take turns: the second
-    // sees what the first did (a mark already replaced, a decision already told) instead of colliding with it.
-    const [app] = await tx.select().from(applications).where(eq(applications.id, c.req.param("id"))).limit(1).for("update");
-    if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    return performApplicationAction(tx, container, { app, body, tenant: t, actor: actorOf(c) });
-  });
-  // A held application's request a recruiter took: they are told it was decided, now that the decision has committed.
-  for (const n of holdersToTell ?? []) await emailHolderAboutDecision(container, n);
-  await container.kick();
-  return c.json(result);
-});
-
-/** The flag kinds as the ITS recruiter reads them. */
-const FLAG_WORDS: Record<AssessmentFlagKind, string> = {
-  wrong_evidence: "it quotes the wrong evidence",
-  hallucination: "it says something that is not in the application",
-  policy_error: "it broke one of the rules it should follow",
-  bias_concern: "it may be unfair to the candidate",
-  poor_communication: "it is hard to understand",
-  wrong_workflow_action: "it led to the wrong next step",
-  false_negative: "it rates the candidate too low",
-  false_positive: "it rates the candidate too high",
-  missing_context: "it misses something important",
-};
-const OPEN_REQUEST = ["open", "claimed", "in_progress"];
-
-/**
- * One-click flag on an AI assessment (docs/FOUNDER-CONTEXT.md §23). Stored against the AI run, emitted as a human
- * override, audited. Never retrains anything by itself. A team member's flag reaches the ITS recruiter queue (plan F11)
- * as a request to review that candidate's reading: one request per candidate while it is open (a later flag adds a note
- * to it), not counted against the plan's recruiter requests. `review` says which request carries it.
- */
-applicationRoutes.post("/:id/assessments/:assessmentId/flag", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.act");
-  const body = FlagAssessment.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const { out, notice, note } = await withTenant(container.db, t.companyId, async (tx): Promise<{ out: Record<string, unknown>; notice: QueueNotice | null; note: HeldNote | null }> => {
-    const [asmt] = await tx.select().from(assessments).where(and(eq(assessments.id, c.req.param("assessmentId")), eq(assessments.applicationId, c.req.param("id")))).limit(1);
-    if (!asmt) throw new HttpError(404, "not_found", "Assessment not found.");
-    // A reading of a conversation the candidate never sent is never shown, so it is never flagged either (9 October 2026).
-    if (asmt.kind === "screen" && unsentScreenReadings(await tx.select({ status: screens.status, assessmentId: screens.assessmentId }).from(screens).where(eq(screens.applicationId, asmt.applicationId)), [asmt]).has(asmt.id)) throw new HttpError(404, "not_found", "Assessment not found.");
-    const at = new Date().toISOString();
-    const flag = { kind: body.kind, note: body.note ?? null, by: actor, at };
-    // every run behind the reading (the three readings are linked to the kept one: `linkReadingRuns` in @ros/agents)
-    if (asmt.aiRunId) await tx.update(aiRuns).set({ humanOverride: flag }).where(inArray(aiRuns.id, await readingRunIds(tx, asmt.aiRunId)));
-    await emit(tx, { type: "human.override", companyId: t.companyId, actor, subject: { type: "application", id: asmt.applicationId }, payload: { action: "flag_assessment", assessmentId: asmt.id, kind: body.kind, note: body.note ?? null, aiRunId: asmt.aiRunId } });
-    await audit(tx, { companyId: t.companyId, actor, action: "assessment.flagged", target: { type: "ai_run", id: asmt.aiRunId ?? asmt.id }, reason: `${body.kind}${body.note ? `: ${body.note}` : ""}` });
-    // An ITS recruiter flagging a reading is ITS already: recorded, with no request to itself.
-    if (t.staff) return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: null, message: "Flagged and recorded." }, notice: null, note: null };
-    const [app] = await tx.select({ roleId: applications.roleId }).from(applications).where(eq(applications.id, asmt.applicationId)).limit(1);
-    const words = `The team flagged the assistant's ${asmt.kind === "screen" ? "screening scorecard" : "AI review of the résumé"} for this candidate: ${FLAG_WORDS[body.kind]}.${body.note?.trim() ? ` Their note: ${body.note.trim()}` : ""} Please check the AI review and tell them what you find.`;
-    // The recruiter reads the flag under their grant; the team member's name stays with the company (the audit record and
-    // the human.override event keep who it was), as everywhere else the recruiter reads the team's words.
-    const entry = { assessmentId: asmt.id, aiRunId: asmt.aiRunId, kind: body.kind, note: body.note ?? null, by: actor.kind, at };
-    const [open] = await tx.select({ id: recruiterEscalations.id, companyId: recruiterEscalations.companyId, kind: recruiterEscalations.kind, assignedToUserId: recruiterEscalations.assignedToUserId, contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(and(eq(recruiterEscalations.applicationId, asmt.applicationId), eq(recruiterEscalations.kind, "review"), inArray(recruiterEscalations.status, OPEN_REQUEST), sql`(${recruiterEscalations.contextSnapshot} -> 'flags') is not null`)).limit(1);
-    if (open) {
-      const message = await addEscalationReply(tx, { escalation: open, side: "customer", author: actor, body: words });
-      const flags = Array.isArray(open.contextSnapshot.flags) ? open.contextSnapshot.flags : [];
-      await tx.update(recruiterEscalations).set({ contextSnapshot: { ...open.contextSnapshot, flags: [...flags, entry] } }).where(eq(recruiterEscalations.id, open.id));
-      return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: open.id, created: false }, message: "Thanks. It is added to the ITS recruiter's open check of this candidate's AI review." }, notice: null, note: open.assignedToUserId ? { escalationId: open.id, kind: open.kind, holderId: open.assignedToUserId, messageId: message.id } : null };
-    }
-    const created = await createEscalation(tx, { companyId: t.companyId, roleId: app?.roleId ?? null, applicationId: asmt.applicationId, kind: "review", question: words, requestedBy: actor });
-    const [row] = await tx.select({ contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.id, created.id)).limit(1);
-    await tx.update(recruiterEscalations).set({ contextSnapshot: { ...(row?.contextSnapshot ?? {}), flags: [entry] } }).where(eq(recruiterEscalations.id, created.id));
-    return { out: { ok: true, assessmentId: asmt.id, kind: body.kind, review: { escalationId: created.id, created: true }, message: `Thanks. An ITS recruiter will check this AI review; follow it under Your recruiter requests on Home. Once they pick it up they see this candidate and the role they applied for, until a day after they answer or ${ESCALATION_ACCESS_DAYS} days at most.` }, notice: await queueNoticeOf(tx, created.id), note: null };
-  });
-  if (notice) await emailItsQueue(container, notice);
-  // A flag added to a request someone already holds tells them there is a note, never its words, as a note from the team does.
-  if (note) await emailHolderAboutNote(container, note);
-  return c.json(out);
-});
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* Human-recorded hiring outcomes (21 Sep, item 4). Recording only: no offer is generated, approved or sent here. */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-function outcomeHttpError(e: unknown): never {
-  if (e instanceof OutcomeError) throw new HttpError(e.code === "not_found" ? 404 : ["already_closed", "already_corrected", "already_recorded", "not_active"].includes(e.code) ? 409 : 400, e.code, e.message);
-  throw e;
-}
-
-applicationRoutes.get("/:id/outcomes", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "application.read");
-  const rows = await withTenant(c.get("container").db, t.companyId, (tx) => listOutcomes(tx, { companyId: t.companyId, applicationId: c.req.param("id") }));
-  return c.json({ statement: OUTCOME_STATEMENT, outcomes: rows });
-});
-
-applicationRoutes.post("/:id/outcome", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "outcome.record");
-  const body = RecordApplicationOutcome.parse(await c.req.json());
-  if (body.outcome === "employer_declined") assertCan(t.role, "application.reject"); // a decline is a decline, whoever records it
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    try {
-      const r = await recordApplicationOutcome(tx, { companyId: t.companyId, applicationId: c.req.param("id") ?? "", outcome: body.outcome, by: t.role, actor, hireDate: body.hireDate, offerAcceptedAt: body.offerAcceptedAt, reason: body.reason, note: body.note, now: container.engine.clock() });
-      // The candidate's own news (a withdrawal, a hire, an offer they declined) may be confirmed with the cancellation; the
-      // team's decisions (declined, no hire) are private like the Decline button's (founder decision B6): the decision is
-      // not sent, but a candidate who held a booked time or was offered times is told at once, with no reason, that the
-      // interview is off, and the decision message sent later leaves it out.
-      const privateDecision = body.outcome === "employer_declined" || body.outcome === "no_hire";
-      // A hire ends their interviews still to come too (6 November 2026), quietly: nothing to the candidate, and the
-      // interviewers are told, so nothing waits under "Coming up" for ever.
-      const candidateEmail: ExitCandidateEmail = r.to === "hired" ? "hired" : privateDecision ? "private_decision" : "send_cancellation";
-      const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId: r.app.id, reason: `outcome: ${body.outcome}`, actor, candidateEmail });
-      const candidateNotice: CandidateNotice | null = privateDecision ? "not_told" : null;
-      // "No hire" keeps them in the talent pool unless they asked not to be kept (Q30), never silently: the answer says so,
-      // with the message a Send would now write (a count of one and its preview, plan G4), and the day the safety net acts.
-      const pool = r.to === "talent_pool" ? await keepInTalentPool(tx, [r.app.candidateId]) : null;
-      let decisionMessage: DecisionMessagePreview | null = null;
-      let untoldFallbackOn: string | null = null;
-      if (privateDecision) {
-        const [fresh] = await tx.select().from(applications).where(eq(applications.id, r.app.id)).limit(1);
-        decisionMessage = fresh ? await decisionMessagePreview(tx, container, fresh, { senderName: actor.name ?? undefined }) : null;
-        untoldFallbackOn = fresh ? await untoldFallbackDayOf(tx, fresh, container.engine.clock()) : null;
-      }
-      // An offer recorded as made outside the app (plan H2) takes the answer: accepted with the hire, declined, or withdrawn,
-      // and the answer names the day it was made.
-      const offer = await settleOutsideOffer(tx, { applicationId: r.app.id, companyId: t.companyId, outcome: body.outcome, actor, now: container.engine.clock() });
-      // The hire sheet (plan H1): the backups to keep warm until the start date, and closing the role in the same sheet.
-      const hire = r.to === "hired" ? await hireFollowUp(tx, { roleId: r.roleId, hiredApplicationId: r.app.id, startDate: r.row.hireDate, role: t.role, scope: staffScopeOf(t) }) : null;
-      return { ...r, dispositionSent: false, candidateNotice, interviewsCancelled: cleaned.interviewsCancelled, interviewOffNotes: cleaned.candidateNotes, talentPoolOptOut: !!pool?.optedOut.length, decisionMessage, untoldFallbackOn, offer, hire };
-    } catch (e) { outcomeHttpError(e); }
-  });
-  const label: Record<string, string> = { hired_externally: "recorded a hire (offer accepted outside the platform)", candidate_withdrew: "recorded that the candidate withdrew", employer_declined: "declined the candidate", offer_declined_externally: "recorded that the candidate declined an offer made outside the platform", no_hire: "closed the process for this candidate without a hire" };
-  await tellRecruiterAboutOutcome(container, t.companyId, result.roleId, c.req.param("id") ?? null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `outcome:${result.row.id}`);
-  await container.kick();
-  return c.json({ ok: true, outcomeId: result.row.id, stage: result.to, roleId: result.roleId, roleStillOpen: result.roleStillOpen, dispositionSent: result.dispositionSent, ...(result.candidateNotice ? { candidateNotice: result.candidateNotice, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes } : {}), ...(result.to === "hired" && result.interviewsCancelled ? { interviewsEnded: result.interviewsCancelled } : {}), ...(result.decisionMessage ? { decisionMessage: result.decisionMessage } : {}), ...(result.untoldFallbackOn ? { untoldFallbackOn: result.untoldFallbackOn } : {}), ...(result.talentPoolOptOut ? { talentPoolOptOut: true } : {}), ...(result.offer ? { offer: result.offer.status, ...(result.offer.madeOn ? { offerMadeOn: result.offer.madeOn } : {}) } : {}), ...(result.hire ? { hire: result.hire } : {}), movedToTalentPool: 0, statement: OUTCOME_STATEMENT, next: result.roleStillOpen ? "The role is still open. Close it with its outcome when you are ready; that is a separate confirmation." : null }, 201);
-});
-
-/**
- * "Offer made" (founder decision Q29; plan H2): a person records that an offer was made to a finalist outside the app.
- * Record-only: nothing is written, approved or sent by the app, and the candidate is sent nothing. They then wait on the
- * candidate's answer, recorded through POST /:id/outcome (Accepted: hired_externally with the start date; Declined:
- * offer_declined_externally). 409 `offer_not_allowed` says why at any other step.
- */
-applicationRoutes.post("/:id/offer", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "outcome.record");
-  const body = RecordOfferMade.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    const [app] = await tx.select().from(applications).where(and(eq(applications.id, c.req.param("id") ?? ""), eq(applications.companyId, t.companyId))).limit(1).for("update");
-    if (!app) throw new HttpError(404, "not_found", "Application not found.");
-    return { app, made: await recordOfferMade(tx, { app, by: t.role, actor, body, now: container.engine.clock() }) };
-  });
-  await tellRecruiterAboutOutcome(container, t.companyId, result.app.roleId, result.app.id, `${actor.name ?? "The customer"} recorded that an offer was made outside the platform.`, `offer:${result.made.offerId}`);
-  await container.kick();
-  return c.json(result.made, 201);
-});
-
-roleRoutes.post("/:id/outcome", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "outcome.record");
-  const body = RecordRoleOutcome.parse(await c.req.json());
-  const container = c.get("container");
-  const actor = actorOf(c);
-  const roleId = c.req.param("id") ?? "";
-  const result = await withTenant(container.db, t.companyId, async (tx) => {
-    try {
-      // A closed role's place comes back, so its approval goes too: nobody can open it later, past the plan's limit, by
-      // approving a request still waiting, and its 14 days cannot run out and turn it back into a draft. On every plan.
-      // Before the role itself: a step opening the role holds the run and then the role, so this takes its turn behind it.
-      await cancelPendingPacketApprovals(tx, container, { companyId: t.companyId, roleId, actor, reason: "the job was closed" });
-      // The people the team cannot see yet who were still in process: the close moves them too, and the toast counts them (a
-      // number, never who), as the close card and the hire sheet did (the release review, 11 November 2026). None for a
-      // recruiter given one candidate, who reads about nobody else.
-      const lockedInProcess = staffScopeOf(t)?.applicationId ? 0 : await lockedStillInProcess(tx, roleId);
-      const closed = await recordRoleOutcome(tx, { companyId: t.companyId, roleId, outcome: body.outcome, by: t.role, actor, reason: body.reason, now: container.engine.clock() });
-      // Everyone still in the process left it with the role: their interviews and screens end. The decision stays private
-      // (founder decision B6) until someone sends the decision message, but a candidate who held a booked time or was
-      // offered times is told at once, with no reason, that the interview is off; the decision message leaves it out.
-      let interviewsCancelled = 0;
-      let interviewOffNotes = 0;
-      for (const applicationId of closed.movedApplicationIds) {
-        const cleaned = await exitCleanup(tx, container, { companyId: t.companyId, applicationId, reason: `role closed: ${body.outcome}`, actor, candidateEmail: "private_decision" });
-        interviewsCancelled += cleaned.interviewsCancelled;
-        interviewOffNotes += cleaned.candidateNotes;
-      }
-      // They stay in the talent pool unless they asked not to be kept (founder decision Q30).
-      const pool = await keepInTalentPool(tx, closed.movedCandidateIds);
-      // The day the safety net acts on the people it moved, from a moved person's own row as their card counts it, so the
-      // toast names the card's day (live test, 12 November 2026); none when nobody the team can see moved.
-      const [moved] = closed.movedApplicationIds.length ? await tx.select().from(applications).where(and(inArray(applications.id, closed.movedApplicationIds), isNull(applications.lockedAt))).limit(1) : [];
-      const untoldFallbackOn = moved ? await untoldFallbackDayOf(tx, moved, container.engine.clock()) : null;
-      return { ...closed, interviewsCancelled, interviewOffNotes, keptInTalentPool: pool.kept.length, talentPoolOptOuts: pool.optedOut.length, lockedInProcess, untoldFallbackOn };
-    } catch (e) { outcomeHttpError(e); }
-  });
-  const label: Record<string, string> = { filled: "closed the role as filled", filled_outside_platform: "closed the role: filled outside the platform", role_cancelled: "cancelled the role", no_hire: "closed the role without a hire" };
-  await tellRecruiterAboutOutcome(container, t.companyId, result.role.id, null, `${actor.name ?? "The customer"} ${label[body.outcome]}.`, `role_outcome:${result.row.id}`);
-  // Applications emailed while the role was paused or closed to applications were held with a promise to add them (C19); a close keeps it by putting them in the talent pool.
-  const held = await settleHeldEmailsOnClose(container, { companyId: t.companyId, roleId: result.role.id });
-  await container.kick();
-  // The close card's count and preview of the one closing message for everyone still untold (Q30), held emails included;
-  // nothing is sent until someone presses Send on it. Only for someone who may send it (application.reject): HR may close
-  // a role but not tell candidates, so they get no Send that the closing-message route would refuse.
-  const closingMessage: ClosingMessagePreview | null = can(t.role, "application.reject") ? await withTenant(container.db, t.companyId, (tx) => closingMessagePreview(tx, container, result.role.id)).catch(() => null) : null;
-  return c.json({ ok: true, outcomeId: result.row.id, role: result.role, movedToTalentPool: result.movedToTalentPool + held.addedToTalentPool, heldEmailsAddedToTalentPool: held.addedToTalentPool, keptInTalentPool: result.keptInTalentPool, talentPoolOptOuts: result.talentPoolOptOuts, interviewsCancelled: result.interviewsCancelled, interviewOffNotes: result.interviewOffNotes, lockedInProcess: result.lockedInProcess, ...(result.untoldFallbackOn ? { untoldFallbackOn: result.untoldFallbackOn } : {}), closingMessage, statement: OUTCOME_STATEMENT });
 });

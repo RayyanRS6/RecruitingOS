@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import type { AuthConfig } from "@ros/contracts";
 import { useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
@@ -36,14 +37,15 @@ const ERRORS: Record<string, string> = {
 };
 
 /**
- * Sign-in is delegated to the managed identity service (D19): Google or Microsoft through a PKCE flow that starts and
- * ends on the API, so no token ever touches this page. The email link stays only where the deployment enables it; the
- * link itself opens a one-button page on the API, so this page has nothing to consume.
+ * Sign-in is delegated to the managed identity service: Google or Microsoft through a PKCE flow that starts and ends
+ * on the API, so no token ever touches this page. Someone new signs in the same way and is asked for their company's
+ * details next. The email link stays only where the deployment enables it (never in production); the link itself opens
+ * a one-button page on the API, so this page has nothing to consume.
  */
 export function Login() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const config = useQuery({ queryKey: ["auth", "config"], queryFn: () => api.get<{ mode: string; providers: Array<{ key: string; label: string }>; magicLink: boolean }>("/api/v1/auth/config") });
+  const config = useQuery({ queryKey: ["auth", "config"], queryFn: () => api.get<AuthConfig>("/api/v1/auth/config") });
   const [email, setEmail] = useState("");
   const errParam = params.get("error");
   const send = useMutation({

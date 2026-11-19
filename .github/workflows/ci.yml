@@ -21,15 +21,11 @@ env:
   # Fake providers only. Nothing here is a secret; nothing here reaches a real service.
   AI_PROVIDER: fake
   EMAIL_PROVIDER: fake
-  SMS_PROVIDER: fake
   AUTH_PROVIDER: fake
-  CALENDAR_PROVIDER: fake
   ANALYTICS_PROVIDER: fake
-  SECRET_STORE: memory
   STORAGE_PROVIDER: memory
   PGLITE_DIR: "memory://"
   WORKER_INLINE: "true"
-  COMP_BLS_ENABLED: "false"
   MAGIC_LINK_ENABLED: "true"
   RATE_LIMIT_STORE: fake
   CSP_MODE: report-only
@@ -109,7 +105,7 @@ jobs:
             pnpm --filter @ros/e2e exec playwright install chromium
           }
 
-      # In four runs, each with a dev server of its own: one server for all 32 journeys grew until the runner was shut
+      # In four runs, each with a dev server of its own: one server for all the journeys grew until the runner was shut
       # down mid-run twice (10 October 2026), the route inventory, which compiles every page in one test, needs a fresh
       # server of its own to stay under the heap limit, and the sign-up mode is the server's, so the journey that asks for
       # approval has one too (the other runs skip it). Each run writes its own report; all are uploaded below. The later
@@ -151,9 +147,9 @@ jobs:
 
   # The whole flows (tests/e2e/specs/flow-*.spec.ts, the Playwright projects "flows" and "flows-phone"): each walks a whole
   # hire or a whole application through the real screens and reads every email by its words, so each takes minutes. They
-  # run in parts, each with a dev server of its own, beside `checks`. The sign-up mode and the email provider are the
-  # server's, so the specs that need SIGNUP_MODE=approval, or an email provider that never delivers, have a part each (and
-  # skip themselves in the others).
+  # run in parts, each with a dev server of its own, beside `checks`. The email provider is the server's, so the spec that
+  # needs one that never delivers has a part of its own (and skips itself in the others). Sign-up by approval is walked
+  # by specs/access-approval.spec.ts, the last end-to-end step of `checks`.
   flows:
     name: flows (${{ matrix.part }})
     runs-on: ubuntu-24.04
@@ -162,9 +158,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - part: sign-up by approval
-            args: specs/flow-whole-hire.spec.ts specs/flow-owner-signup-approval.spec.ts
-            signup: approval
           - part: 1 of 3
             args: --shard=1/3
           - part: 2 of 3
@@ -202,8 +195,7 @@ jobs:
         run: pnpm --filter @ros/e2e exec playwright test --project=flows --project=flows-phone ${{ matrix.args }}
         env:
           E2E_REPORT_DIR: report/flows-${{ strategy.job-index }}
-          # empty in the parts that do not set them: open sign-up and the fake email adapter
-          SIGNUP_MODE: ${{ matrix.signup }}
+          # empty in the parts that do not set it: the fake email adapter
           E2E_EMAIL_PROVIDER: ${{ matrix.email }}
 
       - name: Playwright report (synthetic data only)

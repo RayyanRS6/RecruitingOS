@@ -5,14 +5,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import { formAnswersOf } from "@ros/core";
 import { applications, candidates } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
- * The load script (docs/spec/20 item 18) run for real, as a separate process with tsx, against this API served over
- * a local socket: it reads the form, posts made-up applications at the asked rate, meets the apply rate limit (four an
- * hour here), honours the Retry-After without failing, and reports the counts the staging run records.
+ * The load script (scripts/load-apply.ts) run for real, as a separate process with tsx, against this API served over
+ * a local socket: it reads the form, posts made-up applications at the asked rate with an answer to each of the form's
+ * questions, meets the apply rate limit (four an hour here), honours the Retry-After without failing, and reports the
+ * counts a load run records.
  */
 describe("scripts/load-apply.ts", () => {
   let container: Container;
@@ -36,7 +39,7 @@ describe("scripts/load-apply.ts", () => {
   });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ apply: 4 }) } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ apply: 4 }) } });
     const app = createApp(container);
     // The Hono app on a plain node socket, the way the shell serves it, so the script talks real HTTP.
     server = createServer(async (req, res) => {
@@ -58,17 +61,21 @@ describe("scripts/load-apply.ts", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@load.test" }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
-    const owner = r2.headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Load Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { slug: string };
-    slug = co.slug;
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-    await container.drain();
+    const company = await seedCompany(app, { email: "owner@load.test", name: "Load Dental" });
+    slug = company.slug;
+    await usePlan(container, company.companyId);
+    // A form with one question of each kind, all required: the script has to read them off the page and answer each.
+    roleId = await plantJob(container, {
+      companyId: company.companyId,
+      title: "Dental Hygienist",
+      packet: (p) => {
+        p.formQuestions = [
+          { key: "licensed", kind: "yes_no", question: "Do you hold an active RDH license?", required: true },
+          { key: "shift", kind: "choice", question: "Which shift suits you?", options: ["Mornings & early afternoons", "Evenings"], required: true },
+          { key: "years", kind: "number", question: "How many years have you worked as a hygienist?", min: 2, max: 60, required: true },
+        ];
+      },
+    });
   });
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -96,6 +103,9 @@ describe("scripts/load-apply.ts", () => {
     for (const a of rows) {
       expect(a.source).toBe("careers_page");
       expect((a.answers as { acknowledgment?: { noticeVersions: string[] } }).acknowledgment?.noticeVersions.length).toBeGreaterThan(0);
+      // every question on the form was answered as the page offers it: the first choice, and the smallest number allowed
+      expect(formAnswersOf(a.answers)).toEqual({ licensed: "yes", shift: "Mornings & early afternoons", years: "2" });
+      expect(a.resumeDocumentId).toBeTruthy();
       const [cand] = await container.db.select().from(candidates).where(eq(candidates.id, a.candidateId));
       expect(cand.email).toMatch(new RegExp(`^load-${summary.runId}-000[1-4]@blackhole\\.postmarkapp\\.com$`));
     }

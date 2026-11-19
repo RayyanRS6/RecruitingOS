@@ -1,17 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { FakeSharedCounter, MemoryRateLimitStore, SharedRateLimitStore, UpstashSharedCounter, createRateLimitStore, entitlements, rateLimitKey } from "@ros/core";
+import { FakeSharedCounter, MemoryRateLimitStore, SharedRateLimitStore, UpstashSharedCounter, createRateLimitStore, rateLimitKey } from "@ros/core";
 import { adminAlerts, applications, auditRecords } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { loadEnv } from "./env";
 import { POLICIES } from "./middleware/rate-limit";
-import { statusTokenFor } from "./test-helpers";
+import { applicationForm, plantJob, statusTokenFor } from "./test-helpers";
 
 /**
- * Founder instruction of 21 September 2026, item 5: shared, provider-neutral rate limiting on every public surface,
- * keyed by hashes (never by a person's data), answering 429 with a Retry-After, recording security events, and never
- * refusing a provider's valid webhook retry.
+ * Shared, provider-neutral rate limiting on every public surface, keyed by hashes (never by a person's data), answering
+ * 429 with a Retry-After, recording security events, and never refusing a provider's valid webhook retry.
  */
 describe("rate limiting", () => {
   it("the memory store counts fixed windows and resets", async () => {
@@ -123,7 +122,7 @@ describe("rate limiting", () => {
     let companySlug = "";
     let roleId = "";
     let statusToken = "";
-    const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ "api.user": 6, "webhook.auth_failed": 3, "auth.magic_link": 4 }), POSTMARK_WEBHOOK_SECRET: "whsec-test" };
+    const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", RATE_LIMIT_STORE: "fake", RATE_LIMIT_OVERRIDES: JSON.stringify({ "api.user": 6, "webhook.auth_failed": 3, "auth.magic_link": 4 }), POSTMARK_WEBHOOK_SECRET: "whsec-test" };
     const post = (a: ReturnType<typeof createApp>, path: string, body: unknown, headers: Record<string, string> = {}) => a.request(path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     const form = (path: string, fields: Record<string, string>, headers: Record<string, string> = {}) => app.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html", ...headers }, body: new URLSearchParams(fields).toString() });
     const signIn = async (email: string) => {
@@ -143,20 +142,10 @@ describe("rate limiting", () => {
       const other = await createContainer({ memory: true, env });
       second = createApp(other);
       owner = await signIn("owner@limits.test");
-      const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Limits Inc", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-      companySlug = co.slug;
-      await entitlements.applyPlan(container.db, co.id, "growth");
-      const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
-      roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-      await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-      const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-      const fd = new FormData();
-      fd.set("firstName", "Rosa"); fd.set("lastName", "Diaz"); fd.set("email", "rosa.diaz@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "no"); fd.set("locationText", "Tustin, CA");
-      fd.set("resume", new File(["Rosa Diaz, RDH"], "rosa.txt", { type: "text/plain" }));
-      for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-      fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-      fd.set("acknowledged", "yes");
-      const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: { "x-forwarded-for": "198.51.100.10" } });
+      const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Limits Inc", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
+      companySlug = ((await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { slug: string }).slug;
+      roleId = await plantJob(container, { companyId: co.id, title: "Dental Hygienist" });
+      const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: "Rosa", lastName: "Diaz", email: "rosa.diaz@example.com", phone: "(949) 555-0100" }), headers: { "x-forwarded-for": "198.51.100.10" } });
       expect(r.status).toBe(302);
       statusToken = await statusTokenFor(container, { roleId, email: "rosa.diaz@example.com" });
       await container.drain();
@@ -241,10 +230,10 @@ describe("rate limiting", () => {
 
     it("the tenant tier, the provider tier, the application form and the candidate pages each answer 429 (never 500) when they trip", async () => {
       // each scenario gets its own process with its own overrides
-      const mk = async (overrides: Record<string, number>, url: string) => { const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_SHARED_URL: url, RATE_LIMIT_OVERRIDES: JSON.stringify(overrides) } }); return { c, a: createApp(c) }; };
+      const mk = async (overrides: Record<string, number>) => { const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_OVERRIDES: JSON.stringify(overrides) } }); return { c, a: createApp(c) }; };
       // tenant tier: the whole company shares a budget
       {
-        const { c, a } = await mk({ "api.user": 100, "api.tenant": 3 }, "fake://tenant-tier");
+        const { c, a } = await mk({ "api.user": 100, "api.tenant": 3 });
         const r1 = await post(a, "/api/v1/auth/magic-link", { email: "t-owner@limits.test" }, { "x-forwarded-for": "198.51.100.30" });
         const { devLink } = (await r1.json()) as { devLink: string };
         const r2 = await post(a, "/api/v1/auth/magic-link/consume", { token: new URL(devLink).searchParams.get("token")! });
@@ -258,7 +247,7 @@ describe("rate limiting", () => {
       }
       // provider tier: only accepted deliveries spend the provider's budget; junk never does
       {
-        const { c, a } = await mk({ "webhook.provider": 2, "webhook.auth_failed": 50 }, "fake://provider-tier");
+        const { c, a } = await mk({ "webhook.provider": 2, "webhook.auth_failed": 50 });
         const bounce = (id: number) => JSON.stringify({ RecordType: "Bounce", ID: id, Type: "HardBounce", Email: "nobody@example.com", MessageID: `pm-${id}`, BouncedAt: new Date().toISOString(), Description: "mailbox does not exist" });
         const bad = { "content-type": "application/json", authorization: `Basic ${Buffer.from("postmark:wrong").toString("base64")}`, "x-forwarded-for": "192.0.2.5" };
         for (let i = 0; i < 5; i++) expect((await a.request("/webhooks/postmark/bounces", { method: "POST", headers: bad, body: bounce(100 + i) })).status).toBe(401);
@@ -273,7 +262,7 @@ describe("rate limiting", () => {
       }
       // the application form and the public candidate pages
       {
-        const { c, a } = await mk({ apply: 1, "candidate.pages": 3 }, "fake://public-tier");
+        const { c, a } = await mk({ apply: 1, "candidate.pages": 3 });
         const ip = { "x-forwarded-for": "203.0.113.200" };
         const statuses: number[] = [];
         for (let i = 0; i < 4; i++) statuses.push((await a.request("/privacy", { headers: { ...ip, accept: "text/html" } })).status);
@@ -285,14 +274,13 @@ describe("rate limiting", () => {
       }
     });
 
-    it("the screening conversation is limited mainly per link (plan E14): answers, 'Do this later' and the emailed confirm button each have their own budget, and trip at 429", async () => {
-      // the production budgets: generous per link for answers, a handful of emails per link, raised per-address limits
+    it("the AI interview is limited mainly per link: its answers and the choice of a person each have their own budget, and trip at 429", async () => {
+      // the production budgets: generous per link for answers, fewer for the choice of a person, and a per-address limit that suits a shared address
       const tokenLimit = (p: { rules: Array<{ by: string; limit: number }> }) => p.rules.find((r) => r.by === "token")?.limit;
       expect(tokenLimit(POLICIES.screen)).toBe(200);
-      expect(tokenLimit(POLICIES.screenLater)).toBe(5);
-      expect(tokenLimit(POLICIES.confirmAnswers)).toBe(10);
+      expect(tokenLimit(POLICIES.screenHuman)).toBe(30);
       expect(POLICIES.apply.rules.find((r) => r.by === "ip")?.limit).toBe(60);
-      const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_SHARED_URL: "fake://conversation-tier", RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen": 3, "candidate.screen_later": 2, "candidate.confirm_answers": 2 }) } });
+      const c = await createContainer({ memory: true, env: { ...env, RATE_LIMIT_OVERRIDES: JSON.stringify({ "candidate.screen": 3, "candidate.screen_human": 2 }) } });
       try {
         const a = createApp(c);
         const post = (path: string, ip: string) => a.request(path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html", "x-forwarded-for": ip }, body: new URLSearchParams({ message: "Hello" }).toString() });
@@ -301,12 +289,11 @@ describe("rate limiting", () => {
         const answers: number[] = [];
         for (let i = 0; i < 4; i++) answers.push((await post(`/c/screen/${link}`, `198.51.100.${60 + i}`)).status);
         expect(answers).toEqual([404, 404, 404, 429]);
-        const later: number[] = [];
-        for (let i = 0; i < 3; i++) later.push((await post(`/c/screen/${link}/later`, `198.51.100.${70 + i}`)).status);
-        expect(later).toEqual([404, 404, 429]);
-        const confirm: number[] = [];
-        for (let i = 0; i < 3; i++) confirm.push((await post(`/c/confirm-answers/${link}`, `198.51.100.${80 + i}`)).status);
-        expect(confirm).toEqual([404, 404, 429]);
+        const person: number[] = [];
+        for (let i = 0; i < 3; i++) person.push((await post(`/c/screen/${link}/person`, `198.51.100.${70 + i}`)).status);
+        expect(person).toEqual([404, 404, 429]);
+        // the addresses of what the AI interview no longer has answer nothing at all, limited or not
+        for (const gone of [`/c/screen/${"z".repeat(32)}/later`, `/c/confirm-answers/${"z".repeat(32)}`]) expect((await post(gone, "198.51.100.80")).status).toBe(404);
         // another link is untouched
         expect((await post(`/c/screen/${"y".repeat(32)}`, "198.51.100.90")).status).toBe(404);
       } finally {

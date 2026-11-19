@@ -6,7 +6,7 @@ import { createContainer, type Container } from "./container";
 import { checkEmailForProduction } from "./email-gate";
 
 /**
- * Staging ran with EMAIL_PROVIDER=fake and nothing said so: the company check to ITS and every candidate email went
+ * Staging ran with EMAIL_PROVIDER=fake and nothing said so: the email to ITS about a company and every candidate email went
  * nowhere while the pages said they were sent. Production on the fake email adapter now warns at every boot and raises
  * one standing `email.fake` alert, from whichever process boots first; nothing is raised outside production or with
  * Postmark, and a failure to raise never stops the boot.
@@ -15,14 +15,14 @@ describe("the fake-email gate at boot", () => {
   let container: Container;
   const alerts = async () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "email.fake"));
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
   });
   afterAll(async () => {
     await container.close();
   });
 
   it("keys off the adapter in use: anything but postmark is the fake, which reports itself as fake", () => {
-    const status = (EMAIL_PROVIDER: string | undefined) => createIntegrations({ EMAIL_PROVIDER, COMP_BLS_ENABLED: "false" }, { memoryStorage: true }).email.status;
+    const status = (EMAIL_PROVIDER: string | undefined) => createIntegrations({ EMAIL_PROVIDER }, { memoryStorage: true }).email.status;
     expect(status("fake")).toBe("fake");
     expect(status(undefined)).toBe("fake");
     expect(status("postmrk")).toBe("fake");
@@ -54,7 +54,7 @@ describe("the fake-email gate at boot", () => {
       expect(raised).toHaveLength(1);
       expect(raised[0]).toMatchObject({ severity: "high", status: "open", title: "Emails are not being sent" });
       expect(raised[0].body).toContain("no email leaves the system");
-      expect(raised[0].body).toContain("company check sent to ITS");
+      expect(raised[0].body).toContain("each request for access sent to ITS");
       expect(raised[0].body).toContain("Set up Postmark (to-do item 14");
       expect(raised[0].body).toContain("EMAIL_PROVIDER=postmark");
       expect(raised[0].details).toMatchObject({ provider: "fake-email", process: "app" });

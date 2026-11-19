@@ -13,8 +13,8 @@ import type { Vars } from "./session";
  * job pages have their own host). A request with neither header passes: older browsers send no fetch metadata, and a
  * caller that is not a browser still needs the session cookie, which the browser withholds from another site.
  *
- * Nothing under /api is exempt; nothing there is posted to from elsewhere by design. The sign-in and calendar callbacks
- * are GET, webhooks live under /webhooks, and every form the API serves (the sign-in link, the invitation, the second
+ * Nothing under /api is exempt; nothing there is posted to from elsewhere by design. The sign-in callback
+ * is GET, webhooks live under /webhooks, and every form the API serves (the sign-in link, the invitation, the second
  * factor, the development consent pages) and the policy reports post from this deployment's own pages.
  */
 export type SiteEnv = Pick<Env, "APP_BASE_URL" | "JOBS_BASE_URL">;
@@ -54,7 +54,7 @@ export function fromThisSite(c: Context, env: SiteEnv): boolean {
 }
 
 /** The pages under /api whose forms post back to /api: the second factor, the sign-in link, the invitation, and the development consent pages. */
-export const API_FORM_PAGES = ["/api/v1/auth/mfa", "/api/v1/auth/mfa/*", "/api/v1/auth/consume", "/api/v1/auth/invite", "/api/v1/auth/invite/*", "/api/v1/auth/fake/authorize", "/api/v1/integrations/calendar/fake/authorize"];
+export const API_FORM_PAGES = ["/api/v1/auth/mfa", "/api/v1/auth/mfa/*", "/api/v1/auth/consume", "/api/v1/auth/invite", "/api/v1/auth/invite/*", "/api/v1/auth/fake/authorize"];
 
 /**
  * Hono's `Referrer-Policy: no-referrer` makes a browser post a page's own forms with `Origin: null`, which a browser

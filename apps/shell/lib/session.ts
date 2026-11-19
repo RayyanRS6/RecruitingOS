@@ -7,7 +7,6 @@ export type Me = {
   auth: { provider: string; aal: string; mfaVerifiedAt: string | null };
   memberships: Array<{ companyId: string; companyName: string; companySlug: string; role: string }>;
   activeCompanyId: string | null;
-  staffAccess?: { grantId: string; kind: string; purpose: string; expiresAt: string; companyName: string | null; scope: { escalationId: string | null; roleId: string | null; applicationId: string | null } } | null;
   ai: { provider: string };
 };
 
@@ -25,5 +24,4 @@ export const getMe = cache(async (): Promise<Me | null> => {
   return (await res.json()) as Me;
 });
 
-export const isStaff = (me: Me | null) => !!me && ["platform_admin", "its_recruiter"].includes(me.user.platformRole);
 export const isAdmin = (me: Me | null) => !!me && me.user.platformRole === "platform_admin";

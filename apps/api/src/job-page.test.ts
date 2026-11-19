@@ -1,16 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
-import { applyByLabel, closingDayWords, CLOSING_DATE_REASON } from "@ros/core";
-import { applications, companies, rolePackets, roles } from "@ros/db";
+import { eq } from "drizzle-orm";
+import { CLOSING_DATE_REASON, ON_FILE_LAST_STEP, applyByLabel, closingDayWords } from "@ros/core";
+import { applications, companies, roles } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { descriptionBlocks, descriptionExcerpt } from "./pages/description";
-import { NO_RESUME_QUESTIONS, noResumeAnswersFrom } from "./pages/apply-form";
-import { expectAtAGlance, initials } from "./pages/job-page";
-import { resetPublicFeedCache } from "./pages/public-feeds";
-import { oneVisitMinutes } from "./services/job-preview";
+import { initials } from "./pages/job-page";
+import { resetSitemapCache } from "./pages/sitemap";
+import { APPLY_TIME_LINE, applySteps } from "./services/job-preview";
 import { jobUrls } from "./services/job-urls";
-import { useOneVisitApplyFlow } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /** The first bytes of a PNG: enough for the server's header check, which never decodes pixels. */
 function png(width = 200, height = 80): Uint8Array {
@@ -21,7 +20,7 @@ function png(width = 200, height = 80): Uint8Array {
   return b;
 }
 
-describe("the description renderer (plan D10)", () => {
+describe("what the job page is drawn from", () => {
   it("reads headings and bullets in the shapes people type, and keeps everything else as plain text", () => {
     const text = "## What you will do\n- Clean teeth <b>gently</b>\n* Teach patients\n  and their families\n\nWe are a **friendly** practice.\nLine two of the same paragraph.\n\nSchedule:\n1. Tuesday\n2) Friday\n\n**Benefits**\n• Dental care";
     expect(descriptionBlocks(text)).toEqual([
@@ -33,7 +32,7 @@ describe("the description renderer (plan D10)", () => {
       { kind: "heading", text: "Benefits" },
       { kind: "list", ordered: false, items: ["Dental care"] },
     ]);
-    // a plain description is one paragraph, as the assistant writes them today; a sentence ending in a colon after other words stays text
+    // a plain description is one paragraph; a sentence ending in a colon after other words stays text
     expect(descriptionBlocks("Harbor Dental is hiring. You will care for patients.")).toEqual([{ kind: "paragraph", text: "Harbor Dental is hiring. You will care for patients." }]);
     expect(descriptionBlocks("Schedule: Monday to Friday")).toEqual([{ kind: "paragraph", text: "Schedule: Monday to Friday" }]);
     expect(descriptionBlocks("This is a long sentence that happens to end with a colon because a list follows it here:")[0].kind).toBe("paragraph");
@@ -47,56 +46,30 @@ describe("the description renderer (plan D10)", () => {
     expect(long).not.toMatch(/ …$/);
   });
 
-  it("the four short questions keep each answer and write the one summary every reader uses; an older one-box form still works", () => {
-    expect(NO_RESUME_QUESTIONS.map((q) => q.key)).toEqual(["recentWork", "dayToDay", "skills", "lookingFor"]);
-    expect(noResumeAnswersFrom({ recentWork: " Hygienist at Coastal Dental, 2019 to now ", skills: "CA RDH license; Dentrix" })).toEqual({
-      recentWork: "Hygienist at Coastal Dental, 2019 to now",
-      skills: "CA RDH license; Dentrix",
-      summary: "Most recent work: Hygienist at Coastal Dental, 2019 to now\nSkills, licenses or tools: CA RDH license; Dentrix",
-    });
-    expect(noResumeAnswersFrom({ noResume: "Hygienist for six years." })).toEqual({ summary: "Hygienist for six years." });
-    expect(noResumeAnswersFrom({ recentWork: "", noResume: "  " })).toBeUndefined();
-    expect(noResumeAnswersFrom({ recentWork: "x".repeat(5000) })!.recentWork).toHaveLength(1000);
+  it("shows a company without a logo by its initials", () => {
     expect(initials("Harbor Dental")).toBe("HD");
     expect(initials("Smile & Co.")).toBe("SC");
     expect(initials("acme")).toBe("AC");
   });
 
-  it("'What to expect' at a glance: four lines at most, the first sentence of applying and of the conversation (never cut inside the company's name), the interviews on one line, the decision", () => {
-    const steps = [
-      "Apply in about 12 minutes, including a short written conversation with Dr. Lee Dental's AI assistant. We confirm by email.",
-      "The conversation: 5 questions, about 10 minutes. It is not a test. You can skip a question, stop and come back later, or ask for a person instead.",
-      "Phone call (20 minutes)",
-      "Meet the team (45 minutes)",
-      "A decision, and a real answer either way.",
-    ];
-    expect(expectAtAGlance(steps, "Dr. Lee Dental")).toEqual([
-      "Apply in about 12 minutes, including a short written conversation with Dr. Lee Dental's AI assistant.",
-      "The conversation: 5 questions, about 10 minutes.",
-      "Interviews: Phone call (20 minutes), Meet the team (45 minutes)",
-      "A decision, and a real answer either way.",
+  it("'What to expect': a short form, the team's review, an AI interview by email only for someone shortlisted, and people deciding; a job past its limit promises an email by a date and no review", () => {
+    expect(applySteps({ companyName: "Dr. Lee Dental", onFile: false })).toEqual([
+      "Send a short form, about 3 minutes. We confirm by email.",
+      "The hiring team at Dr. Lee Dental reviews your application.",
+      "If you are shortlisted, we email you a link to a short AI interview: a written chat you do at a time that suits you.",
+      "The team decides. People on the hiring team make every decision.",
     ]);
-    // one interview keeps its own words; none leaves three lines; the later path keeps its first sentence
-    expect(expectAtAGlance([steps[0], steps[1], steps[2], steps[4]], "Dr. Lee Dental")[2]).toBe("Phone call (20 minutes)");
-    expect(expectAtAGlance(["Send a short form, about 3 minutes. We confirm by email.", "Possibly a short written conversation with Acme's AI assistant (online, about 10 minutes). If so, we email you the link.", steps[4]], "Acme")).toEqual([
-      "Send a short form, about 3 minutes.",
-      "Possibly a short written conversation with Acme's AI assistant (online, about 10 minutes).",
-      "A decision, and a real answer either way.",
-    ]);
+    expect(applySteps({ companyName: "Dr. Lee Dental", onFile: true })).toEqual(["Send a short form, about 3 minutes. We confirm by email.", ON_FILE_LAST_STEP]);
+    expect(APPLY_TIME_LINE).toBe("A short form, about 3 minutes.");
   });
 });
 
-describe("the job page and the careers page (plan D10)", () => {
+describe("the job page and the careers page", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  let owner = "";
   let companyId = "";
   let slug = "";
   let roleId = "";
-  let eligibility: Array<{ key: string }> = [];
-  let maxMinutes = 0;
-  let questionCount = 0;
-  const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   const decode = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const page = async (path: string) => {
     const r = await app.request(path);
@@ -110,44 +83,28 @@ describe("the job page and the careers page (plan D10)", () => {
     change(next);
     await container.db.update(companies).set({ settings: next as typeof co.settings }).where(eq(companies.id, companyId));
   };
-  const applyForm = (fields: Record<string, string | null>) => {
-    const fd = new FormData();
-    const base: Record<string, string> = { firstName: "Rosa", lastName: "Diaz", email: "rosa.diaz@example.com", locationText: "Irvine, CA", acknowledged: "yes" };
-    for (const r of eligibility) base[`elig_${r.key}`] = "yes";
-    for (const [k, v] of Object.entries({ ...base, ...fields })) if (v !== null) fd.set(k, v);
-    return fd;
-  };
+  const apply = (fd: FormData) => app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test", SMS_ENABLED: "false" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3000", JOBS_BASE_URL: "https://jobs.example.test" } });
     app = createApp(container);
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@jobpage.test" }) });
-    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
-    owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Ledger Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    slug = co.slug;
-    // A pilot company: the conversation follows the form in the same visit, and the pages say how long both take (plan E8).
-    await useOneVisitApplyFlow(container, companyId);
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Irvine, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    expect((await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" })).status).toBe(200);
-    await container.drain();
-    // The version the role runs on, with the shapes this page has to handle: two places, a nice-to-have, a description
-    // with headings, bullets and markup typed into it, and the role plan's own company line (which no person approved).
-    const [role] = await container.db.select().from(roles).where(eq(roles.id, roleId));
-    const [pv] = await container.db.select().from(rolePackets).where(and(eq(rolePackets.roleId, roleId), eq(rolePackets.version, role.currentPacketVersion!)));
-    const p = structuredClone(pv.packet);
-    p.identity.locations = [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }];
-    p.requirements.mustHaves = [{ key: "mh_license", text: "An active California RDH license", rationale: "PRIVATE-RATIONALE-1", evidencedBy: ["resume"] }];
-    p.requirements.niceToHaves = [{ key: "nh_dentrix", text: "Experience with Dentrix", rationale: "PRIVATE-RATIONALE-2", evidencedBy: ["resume"] }];
-    p.description.publicJobDescription = "## What you will do\n- Cleanings and periodontal care <script>alert(1)</script>\n- Teach patients how to care for their teeth\n\nLedger Dental is a **friendly** practice in Irvine, and the team works four days a week.";
-    p.communication.companyBlurb = "UNAPPROVED-BLURB: the role plan's own company line.";
-    p.compensation.benefitsSummary = "Health and dental cover, paid holidays.";
-    await container.db.update(rolePackets).set({ packet: p }).where(eq(rolePackets.id, pv.id));
-    eligibility = p.requirements.eligibility;
-    maxMinutes = p.screening.maxMinutes;
-    questionCount = p.screening.questions.length;
+    ({ companyId, slug } = await seedCompany(app, { email: "owner@jobpage.test", name: "Ledger Dental" }));
+    await usePlan(container, companyId);
+    // A job with the shapes this page has to handle: two places, a nice-to-have, a description with headings, bullets and
+    // markup typed into it, a reason beside each requirement (the team's), and the job record's own company line (which
+    // no person approved).
+    roleId = await plantJob(container, {
+      companyId,
+      title: "Registered Dental Hygienist",
+      packet: (p) => {
+        p.identity.locations = [{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }];
+        p.compensation = { ...p.compensation, min: 45, max: 55, benefitsSummary: "Health and dental cover, paid holidays." };
+        p.requirements.mustHaves = [{ key: "mh_license", text: "An active California RDH license", rationale: "PRIVATE-RATIONALE-1" }];
+        p.requirements.niceToHaves = [{ key: "nh_dentrix", text: "Experience with Dentrix", rationale: "PRIVATE-RATIONALE-2" }];
+        p.description.publicJobDescription = "## What you will do\n- Cleanings and periodontal care <script>alert(1)</script>\n- Teach patients how to care for their teeth\n\nLedger Dental is a **friendly** practice in Irvine, and the team works four days a week.";
+        p.communication.companyBlurb = "UNAPPROVED-BLURB: the job record's own company line.";
+      },
+    });
   });
   afterAll(async () => {
     await container.close();
@@ -172,15 +129,14 @@ describe("the job page and the careers page (plan D10)", () => {
     expect(html).toContain('<div class="desc"><h3>What you will do</h3><ul><li>Cleanings and periodontal care <script>alert(1)</script></li><li>Teach patients how to care for their teeth</li></ul><p>Ledger Dental is a friendly practice in Irvine');
     expect(raw).toContain("Cleanings and periodontal care &lt;script&gt;alert(1)&lt;/script&gt;");
     expect(raw).not.toContain("<script>alert(1)");
-    // the role plan's own company line is never shown, approved or not
+    // the job record's own company line is never shown, approved or not
     expect(html).not.toContain("UNAPPROVED-BLURB");
   });
 
   it("the four points and the pre-apply line name the company's own hiring contact when it set one, the ITS inbox otherwise", async () => {
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     const its = container.env.EMAIL_REPLY_TO;
-    expect(html).toContain("<li><svg class=\"icon\"");
-    for (const point of [`About ${oneVisitMinutes({ screening: { maxMinutes } })} minutes, including a short AI interview with Ledger Dental's AI assistant.`, "A resume, or a few lines about your work. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(point);
+    for (const point of [APPLY_TIME_LINE, "Your resume. No cover letter.", "People at Ledger Dental make every hiring decision."]) expect(html).toContain(`<span>${point}</span>`);
     expect(html).toContain(`Questions? Email <a href="mailto:${its}">${its}</a> to reach a person.`);
     expect(html).toContain(`Need help applying, or a change to how you apply because of a disability? Email <a href="mailto:${its}">${its}</a> and a person will help.`);
     await setSettings((s) => { s.hiringContact = { email: "jobs@ledger.test", name: "Maya", setAt: new Date().toISOString(), setBy: { kind: "user", id: "u1" } }; });
@@ -192,36 +148,45 @@ describe("the job page and the careers page (plan D10)", () => {
     await setSettings((s) => { delete s.hiringContact; });
   });
 
-  it("says how long applying really takes (plan E8): the form and the AI interview every applicant has, with the job's own length; the same whatever ITS's old switch says (20 Oct 2026)", async () => {
-    const total = oneVisitMinutes({ screening: { maxMinutes } });
-    const check = async () => {
-      const html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
-      // the time on the panel and the steps count the AI interview, and say who it is with; minutes, never a count of questions
-      expect(html).toContain(`<span>About ${total} minutes, including a short AI interview with Ledger Dental's AI assistant.</span>`);
-      expect(html).toContain("<li>Send a short form, about 3 minutes. We confirm by email.</li>");
-      expect(html).toContain(`<li>A short AI interview with Ledger Dental's AI assistant, about ${maxMinutes} minutes. It opens right after the form, usually within a minute, and its link comes by email too, so you can do it later. It is not a test: you can skip a question, stop and come back later, or ask for a person instead.</li>`);
-      expect(html).not.toContain(`${questionCount} questions`);
-      // at a glance, the first sentence of each; every step in full one click away (founder brief, 14 October 2026)
-      const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
-      expect(glance).toContain(`<li>A short AI interview with Ledger Dental's AI assistant, about ${maxMinutes} minutes.</li>`);
-      expect(glance).toContain("<li>A decision, and a real answer either way.</li>");
-      expect(glance.match(/<li>/g)!.length).toBeLessThanOrEqual(4);
-      expect(html).not.toMatch(/three minutes|looks like a fit|Possibly a short written conversation/);
-      const form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
-      expect(form).toContain(`<p class="lead">About ${total} minutes, including a short AI interview with Ledger Dental's AI assistant. First, this form; no cover letter needed.</p>`);
-      expect(form).toContain("Next comes a short AI interview with Ledger Dental's AI assistant. It opens here once your résumé is read, usually within a minute, and its link comes by email too");
-      expect(form).not.toContain("three minutes");
-    };
-    await check();
-    // ITS's old "form now, conversation later" for the role, or a rule saved before: nothing changes (R20-12, R20-4)
-    await container.db.update(roles).set({ applyMode: "form_then_screen" }).where(eq(roles.id, roleId));
-    await check();
-    await container.db.update(roles).set({ applyMode: null }).where(eq(roles.id, roleId));
-    expect((await json(owner, "PUT", "/api/v1/policies", { actionType: "application.invite_screen", level: "approval", approverRoles: ["owner"] })).status).toBe(400);
-    await check();
+  it("says what to expect in four steps, and nothing on the job page or the form presents an AI interview as part of applying", async () => {
+    const html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
+    const steps = applySteps({ companyName: "Ledger Dental", onFile: false });
+    expect(html).toContain(`<h2>What to expect</h2><ol class="steps">${steps.map((s) => `<li>${s}</li>`).join("")}</ol>`);
+    // the AI interview is named once, as something that may come later by email
+    expect(html.match(/AI interview/g)).toHaveLength(1);
+    expect(html).not.toMatch(/right after the form|including a short AI interview|AI assistant|More about each step|either way/);
+    // the time on the apply card is the form's alone
+    expect(html.match(new RegExp(`<span>${APPLY_TIME_LINE}</span>`, "g"))).toHaveLength(2);
+    const form = decode(await page(`/careers/${slug}/jobs/${roleId}/apply`));
+    expect(form).toContain('<p class="lead">A short form for Ledger Dental, about 3 minutes. No cover letter needed.</p>');
+    expect(form).not.toMatch(/AI interview|AI assistant|Read my resume|No resume\?|saved details/);
   });
 
-  it("shows the text about the company only once a person approved it, with the website; a draft waiting in Setup never shows", async () => {
+  it("carries where a candidate came from (?src=) from the job page on to the form and back again, and drops anything that is not a plain word", async () => {
+    const job = `/careers/${slug}/jobs/${roleId}`;
+    const fromPost = await page(`${job}?src=linkedin`);
+    expect(fromPost.match(new RegExp(`href="${job}/apply\\?src=linkedin"`, "g"))).toHaveLength(2);
+    const form = await page(`${job}/apply?src=linkedin`);
+    expect(form).toContain('<input type="hidden" name="src" value="linkedin"');
+    // "Back to the job" keeps it, so pressing Apply there again is still counted to LinkedIn
+    expect(form).toContain(`<p class="back"><a href="${job}?src=linkedin">`);
+    // and so does a form that comes back with something to fix
+    const sentBack = await apply(applicationForm({ firstName: "", src: "indeed" }));
+    expect(sentBack.status).toBe(400);
+    const again = await sentBack.text();
+    expect(again).toContain(`<p class="back"><a href="${job}?src=indeed">`);
+    expect(again).toContain('<input type="hidden" name="src" value="indeed"');
+    const odd = await page(`${job}?src=${encodeURIComponent("<x y>")}`);
+    expect(odd).not.toContain("src=");
+    const oddForm = await page(`${job}/apply?src=${encodeURIComponent("<x y>")}`);
+    expect(oddForm).not.toContain('name="src"');
+    expect(oddForm).toContain(`<p class="back"><a href="${job}">`);
+    // with no source the links are the plain ones, both ways
+    expect((await page(job)).match(new RegExp(`href="${job}/apply"`, "g"))).toHaveLength(2);
+    expect(await page(`${job}/apply`)).toContain(`<p class="back"><a href="${job}">`);
+  });
+
+  it("shows the text about the company only once a person approved it, with the website; a draft waiting in Settings never shows", async () => {
     await setSettings((s) => { s.aboutDraft = { text: "DRAFT-ONLY text about Ledger Dental that nobody approved yet.", draftedAt: new Date().toISOString(), draftedBy: { kind: "user", id: "u1" }, aiRunId: null, basedOn: [] }; s.website = "ledgerdental.example"; });
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     expect(html).not.toContain("DRAFT-ONLY");
@@ -267,13 +232,14 @@ describe("the job page and the careers page (plan D10)", () => {
     for (const bad of [`/careers/${slug}/logo/0192f0c4-1c2d-7a3b-8c4d-5e6f708192a4.png`, `/careers/${slug}/logo/..%2F..%2Fsecret.png`, `/careers/other-company/logo/${file}`]) expect((await app.request(bad)).status, bad).toBe(404);
     // the careers page shows it too
     expect(await page(`/careers/${slug}`)).toContain(`<img src="/careers/${slug}/logo/${file}" alt=""`);
-    // a company ITS has not confirmed has no public logo either (founder decision B7)
+    // a company that is not live has no public logo, and no public page, either
     await setSettings((s) => { s.verifiedAtSaved = s.verifiedAt; delete s.verifiedAt; });
     expect((await app.request(`/careers/${slug}/logo/${file}`)).status).toBe(404);
+    expect((await app.request(`/careers/${slug}/jobs/${roleId}`)).status).toBe(404);
     await setSettings((s) => { s.verifiedAt = s.verifiedAtSaved; delete s.verifiedAtSaved; });
   });
 
-  it("the careers page lists each open job with its places, work model, kind, pay, first lines and closing date, from one query", async () => {
+  it("the careers page lists each open job with its places, work model, kind, pay, first lines and closing date, from one query, and its link preview promises nothing", async () => {
     const closesOn = new Date(Date.now() + 20 * 86_400_000).toISOString().slice(0, 10);
     await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
     const html = decode(await page(`/careers/${slug}`));
@@ -285,20 +251,18 @@ describe("the job page and the careers page (plan D10)", () => {
     expect(card).toContain(`<p class="meta">${applyByLabel(closesOn)}</p>`);
     expect(card).toMatch(/View and apply<span class="sr-only">: [^<]+<\/span>/);
     expect(html).toContain('<meta property="og:title" content="Careers at Ledger Dental"/>');
+    expect(html).not.toContain("We respond to every applicant");
     // the job page says the same, by the title and in the panel
     const job = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     expect(job.match(new RegExp(applyByLabel(closesOn), "g"))).toHaveLength(2);
     await container.db.update(roles).set({ applicationsCloseOn: null }).where(eq(roles.id, roleId));
   });
 
-  it("a closing date: the structured data and the feeds end on it; once it passes a newcomer finds the form closed, while someone part-way through may still send theirs for a while", async () => {
+  it("a closing date: the structured data ends on it; once it passes a newcomer finds the form closed, while someone part-way through may still send theirs for a while", async () => {
     const closesOn = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     await container.db.update(roles).set({ applicationsCloseOn: closesOn }).where(eq(roles.id, roleId));
-    resetPublicFeedCache(container);
+    resetSitemapCache(container);
     expect(jsonLdOf(await page(`/careers/${slug}/jobs/${roleId}`)).validThrough).toBe(closesOn);
-    const feed = (await (await app.request("/feeds/jobs.json")).json()) as { jobs: Array<{ referenceNumber: string; validThrough?: string }> };
-    expect(feed.jobs.find((j) => j.referenceNumber === roleId)?.validThrough).toBe(closesOn);
-    expect(await (await app.request("/feeds/jobs.xml")).text()).toContain(`<expirationdate><![CDATA[${closesOn}]]></expirationdate>`);
     // someone opens the form; then the date passes and applications stop (the closing-date timer's own change)
     const form = await page(`/careers/${slug}/jobs/${roleId}/apply`);
     const opened = form.match(/name="formOpened" value="([^"]+)"/)![1];
@@ -313,40 +277,20 @@ describe("the job page and the careers page (plan D10)", () => {
       expect(careers).toContain(`Applications closed at the end of ${closingDayWords(closesOn)}.`);
       expect(careers).toContain("View details");
       // a newcomer's submission (no sealed opening time, or a forged one) is refused; the person part-way through gets in
-      expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "late.newcomer@example.com", nr_recentWork: "Hygienist." }) })).status).toBe(404);
-      expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "late.forged@example.com", nr_recentWork: "Hygienist.", formOpened: `${opened}x` }) })).status).toBe(404);
+      expect((await apply(applicationForm({ email: "late.newcomer@example.com" }))).status).toBe(404);
+      expect((await apply(applicationForm({ email: "late.forged@example.com", formOpened: `${opened}x` }))).status).toBe(404);
       const intent = (formOpened?: string) => app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ filename: "r.txt", size: 10, type: "text/plain", ...(formOpened ? { formOpened } : {}) }) });
       expect((await intent()).status).toBe(404);
       expect((await intent(opened)).status).toBe(200);
-      const late = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "late.finisher@example.com", nr_recentWork: "Hygienist at Coastal Dental since 2019.", formOpened: opened }) });
+      const late = await apply(applicationForm({ email: "late.finisher@example.com", formOpened: opened }));
       expect(late.status).toBe(302);
-      // they finish applying like anyone else: the waiting room, which opens the AI interview once it is ready (R20-12)
+      // they get the receipt anyone gets, and their application is in
       expect(late.headers.get("location")).toBe(`/careers/${slug}/jobs/${roleId}/applied`);
       await container.drain();
-      expect((await container.db.select().from(applications).where(eq(applications.roleId, roleId))).length).toBeGreaterThan(0);
+      expect(await container.db.select().from(applications).where(eq(applications.roleId, roleId))).toHaveLength(1);
     } finally {
       await container.db.update(roles).set({ acceptingApplications: true, applicationsClosedAt: null, applicationsClosedReason: null, applicationsCloseOn: null }).where(eq(roles.id, roleId));
-      resetPublicFeedCache(container);
+      resetSitemapCache(container);
     }
-  });
-
-  it("applying without a resume: four short questions, each answer kept and summed up for the team; one answer is enough, none is asked for again with the questions open", async () => {
-    const none = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "no.answers@example.com" }) });
-    expect(none.status).toBe(400);
-    const again = decode(await none.text());
-    expect(again).toContain("Upload a resume, or answer at least one of the four short questions about your work.");
-    expect(again).toMatch(/<details class="no-resume" open[^>]*>/);
-    expect(again).toMatch(/<textarea id="nr_recentWork"[^>]*aria-invalid="true"/);
-    const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applyForm({ email: "guided.answers@example.com", nr_recentWork: "Dental assistant at Smile Bright, three years", nr_skills: "X-ray certificate; Dentrix", nr_lookingFor: "Full time, near Irvine" }) });
-    expect(r.status).toBe(302);
-    await container.drain();
-    const rows = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
-    const mine = rows.find((a) => a.answers.noResume?.recentWork === "Dental assistant at Smile Bright, three years")!;
-    expect(mine.answers.noResume).toEqual({
-      recentWork: "Dental assistant at Smile Bright, three years",
-      skills: "X-ray certificate; Dentrix",
-      lookingFor: "Full time, near Irvine",
-      summary: "Most recent work: Dental assistant at Smile Bright, three years\nSkills, licenses or tools: X-ray certificate; Dentrix\nLooking for: Full time, near Irvine",
-    });
   });
 });

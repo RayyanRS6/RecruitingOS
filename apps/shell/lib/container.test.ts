@@ -17,7 +17,7 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ getAll: () => [{ name: 
 describe("each request waits for the database pool to give its connections back", () => {
   let container: Container;
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     installShellForTests(container);
   });
   afterAll(async () => {

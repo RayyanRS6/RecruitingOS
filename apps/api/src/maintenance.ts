@@ -1,13 +1,13 @@
-import { and, eq, inArray, lt, ne, or } from "drizzle-orm";
+import { and, eq, inArray, lt } from "drizzle-orm";
 import { expireEmptyDrafts, sweepStaleSending } from "@ros/agents";
-import { REMOVED_INBOUND_EMAIL, alertOverdueEscalations, anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, settleDecidedHoldRequests, type CancelWorkflowRun } from "@ros/core";
-import { aiRuns, cspReports, inboundEmails, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
+import { anonymizedCandidates, errorForLog, raiseAlertOnce, resolveAlertsOfKind, scrubCandidateAiData, scrubCandidateWorkflowData, type CancelWorkflowRun } from "@ros/core";
+import { aiRuns, cspReports, jobs, magicLinks, sessions, webhookReceipts, withPlatform, workerHeartbeats, type Db } from "@ros/db";
 import { settleTrials } from "./services/trial";
 import { HEARTBEAT_STALE_MS, queueSnapshot, readWorkerHealth } from "./worker-health";
 
 /**
  * The daily sweep of operational rows that have served their purpose. Nothing here deletes candidate data: that follows
- * the privacy-request process and the anonymization rules (docs/09); the sweep only finishes an anonymization already
+ * the privacy-request process and the anonymization rules; the sweep only finishes an anonymization already
  * made (the AI readings and run log of a deleted candidate, and the workflow engine's run state and step records about
  * them). The periods are conservative and named in one place.
  */
@@ -27,13 +27,6 @@ export const RETENTION_DAYS = {
   cspReports: 90,
   /** Every worker process start writes a new heartbeat row; rows of workers not seen for a week are noise. */
   workerHeartbeats: 7,
-  /**
-   * An emailed-in application that failed and nobody retried (Wave S5 review, known-bugs row 120): its stored résumé and
-   * its words are personal data with no record behind them, so they go after a month; the row stays as a bare record.
-   */
-  failedInboundEmails: 30,
-  /** One held while its role was paused or not taking applications, which neither reopened nor closed in three months. */
-  heldInboundEmails: 90,
 } as const;
 
 /** A due job that has waited this long for a worker means the queue is not being drained. */
@@ -41,7 +34,7 @@ export const QUEUE_STALE_MS = 30 * 60_000;
 /** A stale worker or queue raises one alert an hour at most, and none while a person already has one open. */
 export const HEALTH_ALERT_WINDOW_MS = 60 * 60_000;
 
-export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; interruptedAiRuns: number; emptyDrafts: number; purgedInboundEmails: number; anonymizedAssessments: number; anonymizedAiRuns: number; anonymizedWorkflowRuns: number; anonymizedWorkflowSteps: number; anonymizedWorkflowEvents: number; cancelledWorkflowRuns: number; healthAlerts: number };
+export type MaintenanceReport = { doneJobs: number; failedJobs: number; sessions: number; magicLinks: number; webhookReceipts: number; cspReports: number; staleHeartbeats: number; interruptedSends: number; interruptedAiRuns: number; emptyDrafts: number; anonymizedAssessments: number; anonymizedAiRuns: number; anonymizedWorkflowRuns: number; anonymizedWorkflowSteps: number; anonymizedWorkflowEvents: number; cancelledWorkflowRuns: number; healthAlerts: number };
 
 export type MaintenanceOptions = {
   /** True when the queue runs inside the app process (development): there is no separate worker to watch. */
@@ -54,8 +47,6 @@ export type MaintenanceOptions = {
    * this matters for the stale worker, whose job would wait for the very worker that is down.
    */
   emailCritical?: (alertId: string) => Promise<void>;
-  /** Removes a stored file (the container passes the storage adapter's `delete`); without it, rows with a file are left. */
-  deleteStored?: (storageKey: string) => Promise<void>;
   /**
    * The engine's cancel (`engine.cancel` bound to the system actor), for a workflow run about a deleted candidate that is
    * somehow still going (one from a deletion made before the workflow clean-up existed). Without it the same writes are
@@ -91,33 +82,6 @@ async function scrubDeletedCandidatesAi(db: Db, now: Date, opts: MaintenanceOpti
   return total;
 }
 
-/**
- * Failed (`error`) emailed-in applications older than `RETENTION_DAYS.failedInboundEmails`, and held ones older than
- * `heldInboundEmails`, lose their stored file and their words (`REMOVED_INBOUND_EMAIL`); the bare row stays. A row with
- * a file is cleared only when the file could be removed (`deleteStored`), so no file is ever left without its record.
- */
-async function purgeOldInboundEmails(db: Db, now: Date, opts: MaintenanceOptions): Promise<number> {
-  const before = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
-  const rows = await withPlatform(db, (tx) =>
-    tx
-      .select({ id: inboundEmails.id, rawStorageKey: inboundEmails.rawStorageKey })
-      .from(inboundEmails)
-      .where(and(ne(inboundEmails.fromAddress, REMOVED_INBOUND_EMAIL.fromAddress), or(and(eq(inboundEmails.status, "error"), lt(inboundEmails.createdAt, before(RETENTION_DAYS.failedInboundEmails))), and(eq(inboundEmails.status, "held"), lt(inboundEmails.createdAt, before(RETENTION_DAYS.heldInboundEmails))))))
-      .limit(500),
-  );
-  let cleared = 0;
-  for (const r of rows) {
-    if (r.rawStorageKey) {
-      if (!opts.deleteStored) continue;
-      await opts.deleteStored(r.rawStorageKey);
-    }
-    // "purged": off the console's list of failed email applications, and never replayed (nothing is left to replay)
-    await withPlatform(db, (tx) => tx.update(inboundEmails).set({ ...REMOVED_INBOUND_EMAIL, status: "purged" }).where(eq(inboundEmails.id, r.id)));
-    cleared += 1;
-  }
-  return cleared;
-}
-
 /** No call runs this long (the /api route stops at 5 minutes, and a worker's call at 4.5): its process went away during it. */
 const AI_RUN_GONE_AFTER_MS = 60 * 60_000;
 
@@ -150,7 +114,6 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   const interruptedAiRuns = await closeInterruptedAiRuns(db, now);
   // Drafts nobody wrote anything into are set aside quietly (plan C3); each one is recorded as an event.
   const emptyDrafts = await expireEmptyDrafts(db, now);
-  const purgedInboundEmails = await purgeOldInboundEmails(db, now, opts);
   // The AI readings, the AI run log and the workflow run state and step records of candidates deleted at their request
   // keep no words (privacy-requests.ts): repeated
   // daily for the deletions of the last AI_SCRUB_WINDOW_DAYS (a model run that finished after a deletion lands within
@@ -158,7 +121,7 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
   // candidate, so the sweep never holds a long platform transaction, and its cost stays bounded day to day.
   const ai = await scrubDeletedCandidatesAi(db, now, opts);
   const health = await checkOperationalHealth(db, now, opts);
-  const report = { ...swept, interruptedSends, interruptedAiRuns, emptyDrafts, purgedInboundEmails, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, anonymizedWorkflowRuns: ai.workflowRuns, anonymizedWorkflowSteps: ai.workflowSteps, anonymizedWorkflowEvents: ai.workflowEvents, cancelledWorkflowRuns: ai.cancelledRuns, healthAlerts: health.raised };
+  const report = { ...swept, interruptedSends, interruptedAiRuns, emptyDrafts, anonymizedAssessments: ai.assessments, anonymizedAiRuns: ai.aiRuns, anonymizedWorkflowRuns: ai.workflowRuns, anonymizedWorkflowSteps: ai.workflowSteps, anonymizedWorkflowEvents: ai.workflowEvents, cancelledWorkflowRuns: ai.cancelledRuns, healthAlerts: health.raised };
   if (Object.values(report).some((n) => n > 0)) console.log(`[maintenance] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   return report;
 }
@@ -167,15 +130,14 @@ export async function runMaintenance(db: Db, now: Date, opts: MaintenanceOptions
 export const HEALTH_CHECK_JOB_KIND = "ops.health_check";
 export const HOURLY_MS = 3600_000;
 
-export type HourlyReport = { interruptedSends: number; interruptedAiRuns: number; holdRequestsClosed: number; overdueRequests: number; workerStale: boolean; queueStale: boolean; healthAlerts: number; trialsStarted: number; trialsEnded: number; trialsWarned: number };
+export type HourlyReport = { interruptedSends: number; interruptedAiRuns: number; workerStale: boolean; queueStale: boolean; healthAlerts: number; trialsStarted: number; trialsEnded: number; trialsWarned: number };
 
 /**
  * What the worker checks every hour (`HEALTH_CHECK_JOB_KIND`, armed with `engine.ensureQueued` like every recurring
  * job): sends interrupted mid-call are found within the hour, not the next day (audit row 37: the decision goes back to
  * "not told" and the team is asked to check); so are AI calls whose process went away (`closeInterruptedAiRuns`, one
- * update of the calls still `running` an hour after any call can end, so it never closes a live one); an eligibility
- * hold's request nobody picked up is closed once a person has decided about the application (`settleDecidedHoldRequests`);
- * recruiter requests past their reply-by time with nobody on them raise one alert each (row 38); the Trial plan's 30 days (founder decision L-02 B, services/trial.ts): started for a confirmed
+ * update of the calls still `running` an hour after any call can end, so it never closes a live one); the Trial plan's
+ * 30 days (founder decision L-02 B, services/trial.ts): started for a confirmed
  * company on Trial that has none yet, one notice to the owners a week and a day before a trial ends, and one alert and
  * one notice for each trial that ended; then the stale worker and
  * stale queue checks. Each part runs even when another fails; the first failure is thrown at the end so the queue
@@ -193,13 +155,10 @@ export async function runHourlyChecks(db: Db, now: Date, opts: MaintenanceOption
   };
   const interruptedSends = await attempt(0, () => sweepStaleSending(db, now));
   const interruptedAiRuns = await attempt(0, () => closeInterruptedAiRuns(db, now));
-  // Before the overdue check, which then resolves any alert still standing for a request this closed.
-  const holdRequestsClosed = await attempt(0, () => withPlatform(db, (tx) => settleDecidedHoldRequests(tx, now)));
-  const overdue = await attempt({ raised: 0, resolved: 0 }, () => withPlatform(db, (tx) => alertOverdueEscalations(tx, now)));
   const trials = await attempt({ started: 0, ended: 0, warned: 0 }, () => withPlatform(db, (tx) => settleTrials(tx, now)));
   const health = await attempt({ workerStale: false, queueStale: false, raised: 0 }, () => checkOperationalHealth(db, now, opts));
-  const report = { interruptedSends, interruptedAiRuns, holdRequestsClosed, overdueRequests: overdue.raised, workerStale: health.workerStale, queueStale: health.queueStale, healthAlerts: health.raised, trialsStarted: trials.started, trialsEnded: trials.ended, trialsWarned: trials.warned };
-  if (interruptedSends > 0 || interruptedAiRuns > 0 || holdRequestsClosed > 0 || overdue.raised > 0 || trials.started > 0 || trials.ended > 0 || trials.warned > 0) console.log(`[hourly] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  const report = { interruptedSends, interruptedAiRuns, workerStale: health.workerStale, queueStale: health.queueStale, healthAlerts: health.raised, trialsStarted: trials.started, trialsEnded: trials.ended, trialsWarned: trials.warned };
+  if (interruptedSends > 0 || interruptedAiRuns > 0 || trials.started > 0 || trials.ended > 0 || trials.warned > 0) console.log(`[hourly] ${Object.entries(report).map(([k, v]) => `${k}=${v}`).join(" ")}`);
   if (firstError) throw firstError;
   return report;
 }
@@ -249,7 +208,7 @@ export async function checkOperationalHealth(db: Db, now: Date, opts: Maintenanc
         kind: "worker.stale",
         severity: "critical",
         title: "The background worker has stopped polling",
-        body: `${worker ? `The last heartbeat was ${minutes} minute${minutes === 1 ? "" : "s"} ago (worker ${worker.workerId}).` : "No worker has ever written a heartbeat."} While the worker is down nothing queued runs: no email or text leaves, no application is processed, no reminder goes out. Check the Railway worker service (docs/runbooks/railway-worker.md, screen 4): its health check, its logs and whether it keeps restarting.`,
+        body: `${worker ? `The last heartbeat was ${minutes} minute${minutes === 1 ? "" : "s"} ago (worker ${worker.workerId}).` : "No worker has ever written a heartbeat."} While the worker is down nothing queued runs: no email leaves, no application is processed, no reminder goes out. Check the Railway worker service (docs/runbooks/railway-worker.md, screen 4): its health check, its logs and whether it keeps restarting.`,
         details: { workerId: worker?.workerId ?? null, lastSeenAt: worker?.lastSeenAt ?? null, queueDepth: worker?.queueDepth ?? null, version: worker?.version ?? null },
       }, { withinMs: HEALTH_ALERT_WINDOW_MS, now }));
       if (result.created) {

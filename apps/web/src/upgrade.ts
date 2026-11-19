@@ -1,9 +1,10 @@
 import type { PublicPlan } from "@ros/contracts";
+import { longDay } from "./dates";
 
 /**
- * The upgrade sheet's words and rules (the plans of 5 November 2026, Rule 5), kept free of React so they can be tested
- * (tests/web/upgrade.test.ts). A customer reads prices in dollars, and the AI help in words, never in dollars. Nothing here
- * compares a plan's name: what a plan offers comes with it from GET /api/v1/plans.
+ * The upgrade sheet's words and rules, kept free of React so they can be tested. A customer reads prices in dollars and
+ * the AI help in words, never in dollars. Nothing here compares a plan's name: what a plan offers comes with it from
+ * GET /api/v1/plans.
  */
 
 /** The sheet's price line: "$49" and "a month", or "$0" alone for a plan that costs nothing. */
@@ -23,41 +24,20 @@ export function planFacts(plan: PublicPlan): Array<{ label: string; value: strin
 }
 
 /**
- * The plan already chosen when the sheet opens: the next one above the company's. None on the last plan, and none on a plan
- * that is not in the list (the private pilot, Trial, a retired one), where the first of the list would be Free: a plan below is
- * never chosen for anyone. They can still pick one, or ask with none picked.
+ * The plan already chosen when the sheet opens: the next one above the company's. None on the last plan, and none on a
+ * plan that is not in the list (the private pilot, Trial), where the first of the list would be a plan below theirs.
  */
 export function firstChoice(plans: readonly PublicPlan[]): PublicPlan | null {
   const at = plans.findIndex((p) => p.current);
   return at < 0 ? null : plans[at + 1] ?? null;
 }
 
-/** An action the API offers (a card's, a refusal's) that is a request about the plan: it opens the upgrade sheet, never sends in one click. */
-export function isPlanAsk(action: { path?: string; body?: Record<string, unknown> | null }): boolean {
-  return !!action.path?.includes("/escalations") && action.body?.topic === "plan";
+/** What stands in place of the Upgrade button while a request is with ITS: "Request sent on November 18, 2026". */
+export function requestSentWords(requestedAt: string): string {
+  return `Request sent on ${longDay(requestedAt)}`;
 }
 
-/** Why the request is being made, from such an action's body: goes after the plan's name in the question. */
-export function reasonOf(body: Record<string, unknown> | null | undefined): string | undefined {
-  return typeof body?.question === "string" ? body.question : undefined;
-}
-
-/** A group of locked people folded into one line on the list and the board. */
+/** A group of locked people folded into one line under a job's candidates. */
 export function moreLockedWords(n: number): string {
   return `${n} more ${n === 1 ? "candidate is" : "candidates are"} locked`;
-}
-
-/** Beside the board's counts. */
-export function boardLockedWords(n: number): string {
-  return `${n} more ${n === 1 ? "is" : "are"} locked`;
-}
-
-/** Beside the report's applicant total. */
-export function reportLockedLabel(n: number): string {
-  return n === 1 ? "person is locked" : "people are locked";
-}
-
-/** Under a list of names that leaves out the people the team cannot read. */
-export function cannotSeeYetWords(n: number): string {
-  return `and ${n} more you cannot see yet`;
 }

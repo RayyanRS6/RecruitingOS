@@ -1,8 +1,6 @@
 /**
- * The ITS console's plain words, in one place (redesign spec 3.3): what each status, severity, plan and workflow is
- * called on screen, and how money and dates read. The sections only import from here; a section that needs a word this
- * file lacks keeps it in its own file. Codes the maps do not know read as their words (underscores as spaces), never as
- * a raw code.
+ * The admin dashboard's plain words, in one place: what each severity, status and workflow is called on screen, and how
+ * money and dates read. A code the maps do not know reads as its words (underscores as spaces), never as a raw code.
  */
 import type { TrialStanding } from "@ros/contracts";
 import { trialDate } from "../../trial";
@@ -17,17 +15,18 @@ export function firstUpper(words: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 }
 
+/** "intake.turn" or "read_resume" -> "Intake turn", "Read resume": a code with dots or underscores, readable. */
+export function codeWords(code: string | null | undefined): string {
+  return code ? firstUpper(code.replace(/[._]/g, " ").replace(/\s+/g, " ").trim()) : "";
+}
+
 /** The word a map gives a code, or the code itself in readable words (first letter capital). */
 export function wordFor(map: Readonly<Record<string, string>>, code: string | null | undefined): string {
   if (!code) return "";
   return Object.hasOwn(map, code) ? map[code] : firstUpper(plainCode(code));
 }
 
-/** A workflow run's status (GET /admin/runs). */
-export const RUN_STATUS_WORDS: Readonly<Record<string, string>> = { running: "Running", waiting: "Waiting", failed: "Failed", completed: "Done" };
-export const runStatusWords = (code: string) => wordFor(RUN_STATUS_WORDS, code);
-
-/** An alert's severity (GET /admin/alerts, /admin/failures). */
+/** An alert's severity (GET /admin/failures). */
 export const ALERT_SEVERITY_WORDS: Readonly<Record<string, string>> = { critical: "Urgent", warning: "Check soon", info: "For your information" };
 export const severityWords = (code: string) => wordFor(ALERT_SEVERITY_WORDS, code);
 
@@ -42,57 +41,36 @@ export const privacyStatusWords = (code: string) => wordFor(PRIVACY_STATUS_WORDS
 export const VERIFICATION_WORDS: Readonly<Record<string, string>> = { pending: "Not checked yet", verified_by_link: "Verified", verified_manual: "Verified", failed: "Could not verify" };
 export const verificationWords = (code: string) => wordFor(VERIFICATION_WORDS, code);
 
-/** A customer's plan, by its key (the plans table). */
-export const PLAN_WORDS: Readonly<Record<string, string>> = { free: "Free", basic: "Basic", pro: "Pro", ultra: "Ultra", trial: "Trial", core: "Core", growth: "Growth", company: "Company", design_partner: "Design Partner" };
-export const planWords = (key: string) => wordFor(PLAN_WORDS, key);
-
-/**
- * Where a Trial customer's 30 days stand (founder decision L-02 B; GET /admin/customers `trial`), for the plan cell:
- * "ends Oct 30", "ended Oct 30, paused", or "starts at the ITS check"; empty on another plan. The date is on the
- * company's calendar when its time zone is known.
- */
-export function trialWords(trial: TrialStanding | null | undefined, timeZone?: string | null): string {
-  if (!trial) return "";
-  if (!trial.started || !trial.endsAt) return "starts at the ITS check";
-  const day = trialDate(trial.endsAt, timeZone, { short: true });
-  return trial.ended ? `ended ${day}, paused` : `ends ${day}`;
-}
-
-/** Where a customer stands with its plan (`companies.status`). Design Partner is a pilot, never called a free trial. */
-export const PLAN_STATUS_WORDS: Readonly<Record<string, string>> = { trial: "Trial", active: "Active", design_partner: "Design Partner pilot" };
-export const planStatusWords = (code: string) => wordFor(PLAN_STATUS_WORDS, code);
-
 /** What each workflow does, by its key (packages/workflows/src/definitions). */
 export const WORKFLOW_WORDS: Readonly<Record<string, string>> = {
   application_intake: "Reading a new application",
   screen: "AI interview",
-  role_approval: "Job approval",
-  publish_role: "Publishing a job",
-  schedule_interview: "Scheduling an interview",
-  interview_new_times: "New interview times",
   role_closing_date: "Closing date",
-  notification_digest: "Email summary",
-  stuck_role_detector: "Check for stuck jobs",
 };
 export const workflowWords = (key: string) => wordFor(WORKFLOW_WORDS, key);
 
-/** An AI run's status (packages/ai/src/runner.ts), the same on System › AI runs and Problems › Failed work. */
+/** How an AI run that was not OK ended (packages/ai/src/runner.ts). */
 export const AI_STATUS_WORDS: Readonly<Record<string, string>> = { ok: "OK", running: "Running", refused: "Refused", error: "Provider error", invalid_output: "Answer not usable" };
 export const aiStatusWords = (code: string) => wordFor(AI_STATUS_WORDS, code);
-/** An AI run's chip: a call still running has not failed; its cost is the hold on the customer's AI credit until it ends. */
-export const aiStatusTone = (code: string): "good" | "neutral" | "critical" => (code === "ok" ? "good" : code === "running" ? "neutral" : "critical");
 
-/** A workflow step's status (packages/workflows/src/engine.ts), as it reads inside a sentence. */
-export const STEP_STATUS_WORDS: Readonly<Record<string, string>> = { ok: "done", error: "failed" };
+/**
+ * Where a company's trial stands, beside its plan: "ends Oct 30", or "ended Oct 30, paused" once the days are over and
+ * no other plan was chosen. Empty on another plan. The date is on the company's own calendar.
+ */
+export function trialWords(trial: TrialStanding | null | undefined, timeZone?: string | null): string {
+  if (!trial?.started || !trial.endsAt) return "";
+  const day = trialDate(trial.endsAt, timeZone, { short: true });
+  return trial.ended ? `ended ${day}, paused` : `ends ${day}`;
+}
 
-/** "$4.10"; an amount under a cent that is not nothing reads "less than $0.01". The exact figure is for drawers. */
+/** "$4.10"; an amount under a cent that is not nothing reads "less than $0.01". The exact figure is the tooltip's. */
 export function money(usd: number): string {
   if (!Number.isFinite(usd)) return "";
   if (usd > 0 && usd < 0.005) return "less than $0.01";
   return `$${usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** The exact amount, as the console showed it before (4 decimals for a customer's total, 5 for one run). */
+/** The exact amount (4 decimals for a company's total, 5 for one line of spend). */
 export function exactMoney(usd: number, decimals: 4 | 5 = 4): string {
   return `$${usd.toFixed(decimals)}`;
 }
@@ -113,24 +91,17 @@ export function whenWords(iso: string | null | undefined, now: Date = new Date()
   return at.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
-/** The exact time, for a tooltip (`title`) and in drawers: "Oct 14, 2026, 3:10 PM". */
+/** The exact time, for a tooltip (`title`) and in a drawer: "Oct 14, 2026, 3:10 PM". */
 export function exactWhen(iso: string | null | undefined): string {
   if (!iso) return "";
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return "";
-  // newer ICU puts a narrow no-break space before AM/PM; a plain space reads the same and matches everywhere
+  // newer ICU puts a narrow no-break space (U+202F) before AM/PM; a plain space reads the same and matches everywhere
   return at.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).replace(/ /g, " ");
 }
 
-/** The console's churn rule (unchanged): quiet after 7 days without activity, no activity after 14. */
-export const QUIET_AFTER_DAYS = 7;
-export const NO_ACTIVITY_AFTER_DAYS = 14;
-
-/** How a customer's last activity reads, with the tone of its chip; never active counts as no activity. */
-export function activityWords(lastActivityAt: string | null, now: number = Date.now()): { state: "active" | "quiet" | "none"; label: string; tone: "good" | "caution" | "critical" } {
-  if (!lastActivityAt) return { state: "none", label: "never active", tone: "critical" };
-  const idle = (now - Date.parse(lastActivityAt)) / DAY;
-  if (idle > NO_ACTIVITY_AFTER_DAYS) return { state: "none", label: `no activity ${Math.round(idle)}d`, tone: "critical" };
-  if (idle > QUIET_AFTER_DAYS) return { state: "quiet", label: `quiet ${Math.round(idle)}d`, tone: "caution" };
-  return { state: "active", label: "active", tone: "good" };
+/** A reason typed with a change is required, five characters at least (the API's rule). */
+export const REASON_MIN = 5;
+export function reasonReady(reason: string): boolean {
+  return reason.trim().length >= REASON_MIN;
 }

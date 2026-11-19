@@ -6,11 +6,10 @@ import { describe, expect, it } from "vitest";
 
 /**
  * The evaluation runner run for real, as the fairness button runs it (.github/workflows/fairness.yml: tsx, one process,
- * `--suite`), on the stand-in provider. A name given to `--suite` that chooses no suite fails the run (second review of
- * the live-test fixes, #22), which is what turns the button's run red; that exit lives only in the runner's main(), which
- * no other test runs (the second look at that fix, S2). The rules themselves are `suiteNameFailures` in summary.ts,
- * pinned in summary.test.ts; this holds the runner to them. `board` chooses board.determinism, which makes no model
- * call, so each run costs only the in-memory database's migrations.
+ * `--suite`), on the stand-in provider. A name given to `--suite` that chooses no suite fails the run, which is what
+ * turns the button's run red; that exit lives only in the runner's main(), which no other test runs. The rules
+ * themselves are `suiteNameFailures` in summary.ts, pinned in summary.test.ts; this holds the runner to them. `score`
+ * chooses score.rules, which makes no model call, so each run costs only the in-memory database's migrations.
  */
 const EVALS = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TSX = fileURLToPath(import.meta.resolve("tsx/cli"));
@@ -30,17 +29,17 @@ const failed = (stdout: string) => stdout.split(/\r?\n/).filter((line) => line.s
 
 describe("the evaluation runner's exit code", () => {
   it("fails a run in which a name given to --suite chose no suite, after running the ones that did", () => {
-    const r = runWith("board,board.renamed");
-    expect(r.stdout).toContain("PASS board.determinism: ");
-    expect(failed(r.stdout)).toEqual(["FAIL --suite board.renamed: no suite by that name or family ran"]);
+    const r = runWith("score,score.renamed");
+    expect(r.stdout).toContain("PASS score.rules: ");
+    expect(failed(r.stdout)).toEqual(["FAIL --suite score.renamed: no suite by that name or family ran"]);
     // the run reached its end and wrote its file: a crash exits 1 too, and must not pass for the refusal
     expect(r.wrote).toBe(true);
     expect(r.status).toBe(1);
   }, 120_000);
 
   it("passes a run in which every name chose a suite, held to its choice and not to every suite thresholds.json lists", () => {
-    const r = runWith("board");
-    expect(r.stdout).toContain("PASS board.determinism: ");
+    const r = runWith("score");
+    expect(r.stdout).toContain("PASS score.rules: ");
     expect(failed(r.stdout)).toEqual([]);
     expect(r.wrote).toBe(true);
     expect(r.status).toBe(0);

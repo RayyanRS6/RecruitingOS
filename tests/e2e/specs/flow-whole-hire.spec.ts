@@ -1,266 +1,186 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
-  HYGIENIST_JOB, PERSONAS, applyThroughTheForm, approvalCard, approveOnTheJobPage, buildJobThroughTheBuilder, companyDay, decideInPanel, emailsTo, exactlyOneEmail, expectAccessible,
-  expectNoEmail, fillTheCompanyForm, gotoSettled, linkIn, openThePanel, recordTookPlace, sendTheAiInterview, setADateAndTime, signIn, signInAsNadine, skipWithoutFakeSignIn,
-  waitForEmail, waitForTheAiInterview, type Applicant,
+  PERSONAS, applyThroughTheForm, candidateRow, candidateTabs, createCompanyThroughTheForm, doTheAiInterview, emailsTo, exactlyOneEmail, expectAccessible, gotoSettled, namesInOrder, openThePanel,
+  publishedJobThroughTheApi, scoreOn, signIn, signInAsAdmin, skipWithoutFakeSignIn, statusPathFromEmail, waitForEmail, waitForLink, type Applicant,
 } from "./helpers";
 
 /**
- * The whole hire, both flows in order on one job, in a real browser through the real screens: the owner's words of
- * 6 November 2026, "please test it thoroughly so the complete process of making a job hiring and then the complete process
- * of applying test both these flows", and "nadine sets date and time from the shortlisted candidates and he/she will get
- * the mail". Nothing here is built through the API: the owner asks for access and Nadine accepts it, the job is written in
- * the job builder and approved on its page, two people apply through the link the owner shares and take the AI interview,
- * the owner reads them best first, shortlists one, sets a date and time, records the interview, the offer and the hire,
- * closes the job and tells the other one. Every email is read by its words, right after the press that sends it, and the
- * ones that must not go are checked too: nothing about the offer or the hire to the person hired, nothing to the other
- * before Send.
+ * The whole hire on one job, in a real browser through the real screens. Three people apply. The owner reads them
+ * ranked by resume score, best first; shortlists the first, which emails her the AI interview; and marks the last Not
+ * selected, privately. The shortlisted candidate opens the emailed link, does the AI interview and presses Send my
+ * answers; only then does anything of it reach the team. The owner reads the interview score and hires her, and emails
+ * the decision to the one not selected, after reading the email as it will go. The platform administrator then opens
+ * the company and sees its job as counts, with nobody named. Each email is found right after the press that sends it.
  *
- * The owner asks for access, as on production, so this needs a server in SIGNUP_MODE=approval (the "approval" run of the
- * flows job in .github/workflows/ci.yml); in any other run it is skipped, with the reason on the report.
+ * The job is made through the API (flow-owner-build-publish-share.spec.ts walks the builder).
  */
 const run = Date.now().toString(36);
-const ITS_QUEUE = "recruiters@its.localhost";
-/** Longer than one 30-second look of the waiting screen. */
-const A_LOOK = 45_000;
-/** A decision or closing message waits out its 30-second Undo window before it leaves. */
+/** A decision email waits out its Undo window before it leaves. */
 const AFTER_UNDO = 90_000;
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const toast = (page: Page, words: string | RegExp) => page.getByRole("status").filter({ hasText: words });
 
 test.describe("the whole hire", () => {
   skipWithoutFakeSignIn();
-  test.skip(process.env.SIGNUP_MODE !== "approval", "the owner asks for access, as on production: needs a server of its own in SIGNUP_MODE=approval");
 
-  test("ask for access, build and approve a job, two people apply through its link, one is interviewed, offered and hired, and the other is told", async ({ page, browser, baseURL }) => {
+  test("ranked by score, one shortlisted, interviewed by the AI and hired, one not selected and told; the administrator sees the job as counts", async ({ page, browser, baseURL }) => {
     test.setTimeout(1_200_000);
     const base = baseURL!;
     const company = `Harbor Smiles ${run}`;
-    const owner = { email: `dana.whitfield+${run}@harborsmiles.test`, name: "Dana Whitfield", provider: "google" } as const;
+    await signIn(page, { email: `owner+${run}@harborsmiles.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, company);
+    const job = await publishedJobThroughTheApi(page.request, base);
     const ana: Applicant = { first: "Ana", last: "Holt", email: `ana.holt+${run}@example.com`, resume: PERSONAS.strong.resume };
     const ben: Applicant = { first: "Ben", last: "Ortiz", email: `ben.ortiz+${run}@example.com`, resume: PERSONAS.possible.resume };
+    const cal: Applicant = { first: "Cal", last: "Avery", email: `cal.avery+${run}@example.com`, resume: PERSONAS.weak.resume };
+    const [anaName, benName, calName] = [ana, ben, cal].map((who) => `${who.first} ${who.last}`);
 
-    // ---- 1. The owner asks for access, and Nadine accepts it ------------------------------------------------------------
-    await signIn(page, owner);
-    await page.waitForURL("**/setup/company");
-    await expect(page.getByRole("heading", { name: "Tell us about your company" })).toBeVisible();
-    await fillTheCompanyForm(page, company, owner.name);
-    await page.getByRole("button", { name: "Send my request" }).click();
-    await expect(page.getByRole("heading", { name: "Your request has been sent" })).toBeVisible({ timeout: 30_000 });
-    await waitForEmail(page.request, base, { to: owner.email, subject: "Your request has been sent", says: [`Your request for ${company} has been sent.`, "Please wait for approval. ITS reviews each company, usually within one business day, and we will email you when it is decided."] });
-    await exactlyOneEmail(page.request, base, { to: owner.email, subject: "Your request has been sent" });
-    await waitForEmail(page.request, base, { to: ITS_QUEUE, subject: `[access request] ${company} is asking for access`, says: ["Someone is asking for access.", `Company: ${company}`, `Person: ${owner.email} (${owner.name})`, "Only the email address is proved; the rest is what they typed.", "Accept or decline it in the admin console, on the Overview:"] });
-
-    const nadine = await signInAsNadine(browser);
-    await gotoSettled(nadine.page, "/admin");
-    const request = nadine.page.locator(".card", { has: nadine.page.getByRole("heading", { name: "Needs attention" }) }).getByRole("listitem").filter({ hasText: `${company} is asking for access` });
-    await expect(request).toBeVisible({ timeout: 30_000 });
-    await request.getByRole("button", { name: `Accept ${company}` }).click();
-    await request.getByRole("button", { name: `Yes, accept ${company}` }).click();
-    await expect(toast(nadine.page, `${company} was accepted.`)).toBeVisible({ timeout: 30_000 });
-    await nadine.context.close();
-
-    // the waiting screen goes Home by itself, and the owner hears it by email
-    await page.waitForURL((u) => u.pathname === "/", { timeout: A_LOOK });
-    await expect(page.getByRole("heading", { name: /Good (morning|afternoon|evening)/ })).toBeVisible({ timeout: 30_000 });
-    await waitForEmail(page.request, base, { to: owner.email, subject: "Your request was approved", says: ["Your request was approved.", `Company: ${company}`, "Candidate names and details are never put in emails"] });
-    await exactlyOneEmail(page.request, base, { to: owner.email, subject: "Your request was approved" });
-
-    // ---- 2. The job: Home's box, the job builder, Ask for approval; Home's card; Approve on the job's page ---------------
-    const roleId = await buildJobThroughTheBuilder(page, HYGIENIST_JOB);
-    const title = await page.getByRole("heading", { level: 1 }).first().textContent().then((t) => (t ?? "").trim());
-    expect(title).toMatch(/Hygienist/i);
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: `Approve the job: ${title}` })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("link", { name: "Review and approve" }).click();
-    await expect(page).toHaveURL(new RegExp(`/roles/${roleId}$`));
-    await expect(approvalCard(page)).toBeVisible({ timeout: 30_000 });
-    await expectAccessible(page, "the job's approval card");
-    await approveOnTheJobPage(page);
-    await expect(page.locator(".pill", { hasText: /^Live$/ }).first()).toBeVisible({ timeout: 30_000 });
-
-    // Home says it is live and leads to sharing it; the job's address is what the owner shares
-    await page.goto("/");
-    await expect(page.getByRole("heading", { name: `${title} is live. Share it now` })).toBeVisible({ timeout: 30_000 });
-    await page.getByRole("link", { name: "Share the job" }).click();
-    await expect(page).toHaveURL(new RegExp(`/roles/${roleId}\\?tab=posting#share$`));
-    const address = page.locator("#share .share-link code");
-    await expect(address).toBeVisible({ timeout: 30_000 });
-    const jobUrl = ((await address.getAttribute("title")) ?? "").trim();
-    expect(jobUrl).toMatch(new RegExp(`/careers/[a-z0-9-]+/jobs/${roleId}$`));
-
-    // ---- 3. Two people apply through the shared link and take the AI interview, each in a browser of their own ------------
-    const a = await applyThroughTheForm(browser, base, jobUrl, ana);
-    const b = await applyThroughTheForm(browser, base, jobUrl, ben);
-    await Promise.all([waitForTheAiInterview(a.page), waitForTheAiInterview(b.page)]);
-    for (const who of [ana, ben]) {
-      const ack = await waitForEmail(page.request, base, {
-        to: who.email,
-        subject: `Thank you for applying: your next step for ${title} at ${company}`,
-        says: [`Hi ${who.first},`, "Start your AI interview:", "How it works:", "The link stays open for 5 days", "People on the hiring team read every application and make every decision.", "Check where things stand at any time:"],
-      });
-      expect(linkIn(ack, "/c/status/")).toMatch(/^\/c\/status\/[A-Za-z0-9_-]+$/);
-      await exactlyOneEmail(page.request, base, { to: who.email, subject: /^Thank you for applying/ });
-    }
-    const anaStatus = linkIn(await waitForEmail(page.request, base, { to: ana.email, subject: /^Thank you for applying/ }), "/c/status/");
-    const benStatus = linkIn(await waitForEmail(page.request, base, { to: ben.email, subject: /^Thank you for applying/ }), "/c/status/");
-    await sendTheAiInterview(a.page, PERSONAS.strong.says);
-    await sendTheAiInterview(b.page, PERSONAS.possible.says);
-    // sending the answers sends no email
-    await expectNoEmail(page.request, base, { to: ana.email, subject: /^(?!Thank you for applying)/, ms: 2_000 });
-
-    // ---- 4. The owner reads them: everyone, best first, each in New with their score -----------------------------------------
-    await page.goto(`/roles/${roleId}/talent`);
-    const rows = page.locator(".talent-row");
-    await expect(async () => {
-      await page.reload();
-      await expect(rows).toHaveCount(2, { timeout: 5_000 });
-      await expect(page.locator(".talent-row .score-slot .score")).toHaveCount(2, { timeout: 5_000 });
-    }).toPass({ timeout: 180_000, intervals: [3_000] });
-    await expect(page.getByRole("button", { name: "Sort: Score" })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Waiting on you/, pressed: true })).toHaveCount(0);
-    await expect(rows.nth(0).locator(".talent-name")).toHaveText("Ana Holt");
-    await expect(rows.nth(1).locator(".talent-name")).toHaveText("Ben Ortiz");
-    const strip = page.getByRole("tablist", { name: "Stages" });
-    await expect(strip.getByRole("tab", { name: /^New 2$/ })).toBeVisible();
-    const anaScore = Number(await rows.nth(0).locator(".score-slot .score").textContent().then((t) => (t ?? "").match(/\d+/)?.[0] ?? "-1"));
-    const benScore = Number(await rows.nth(1).locator(".score-slot .score").textContent().then((t) => (t ?? "").match(/\d+/)?.[0] ?? "-1"));
-    expect(anaScore, "the stronger résumé and interview score higher").toBeGreaterThan(benScore);
-    await expectAccessible(page, "the list, best first");
-
-    // the owner heard once about each of them, with a way to their page
-    await page.goto("/updates");
-    for (const who of [ana, ben]) {
-      const notice = page.getByRole("listitem").filter({ hasText: `${who.first} ${who.last} finished the AI interview` });
-      await expect(notice).toHaveCount(1, { timeout: 30_000 });
-      await expect(notice.getByRole("link", { name: "Review" })).toHaveAttribute("href", new RegExp(`/roles/${roleId}/talent\\?open=`));
-    }
-
-    // ---- 5. Shortlist Ana from her row: private, nobody is emailed -------------------------------------------------------------
-    await page.goto(`/roles/${roleId}/talent`);
-    const anaRow = page.locator(".talent-row").filter({ hasText: "Ana Holt" });
-    await anaRow.getByRole("button", { name: /^Stage: .+\. Move to another stage$/ }).click();
-    await page.getByRole("menuitemradio", { name: /^Shortlist/ }).click();
-    await expect(toast(page, /Moved to Shortlist\..*Private: the candidate was not told\./)).toBeVisible({ timeout: 30_000 });
-    await expect(strip.getByRole("tab", { name: /^Shortlist 1$/ })).toBeVisible({ timeout: 30_000 });
-    await expectNoEmail(page.request, base, { to: ana.email, subject: /^(?!Thank you for applying)/, ms: 2_000 });
-
-    // ---- 6. On her panel the main button is Set a date and time; one press books it and she gets one email -------------------
-    const panel = await openThePanel(page, roleId, "Ana Holt");
-    const ready = panel.locator(".card", { has: page.getByRole("heading", { name: "Ready to interview" }) });
-    await expect(ready).toBeVisible({ timeout: 30_000 });
-    await expect(ready.getByText("Ana is on your shortlist.")).toBeVisible();
-    await ready.getByRole("button", { name: "Set a date and time" }).click();
-    const form = panel.locator(".card", { has: page.getByRole("heading", { name: "Set a date and time" }) });
-    await expect(form).toBeVisible();
-    await expect(form.getByText("With Dana Whitfield", { exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(form.getByLabel("Time (Pacific time)")).toBeVisible();
-    // nobody has hours or a calendar here, and none is needed: the old way is not offered
-    await expect(form.getByText("Or let them pick from your free times")).toHaveCount(0);
-    await expectAccessible(page, "set a date and time");
-    await setADateAndTime(form, { first: "Ana", daysAhead: 4, time: "10:30", place: "Address", address: "120 Main Street, Tustin" });
-    await expect(toast(page, /Booked\..*The email to Ana is on its way\./)).toBeVisible({ timeout: 30_000 });
-    await expect(panel.getByRole("button", { name: /^Stage: Interviewing/ })).toBeVisible({ timeout: 30_000 });
-    // "Where things stand": the round, then the same word as on Interviews, then when
-    await expect(panel.locator("p").filter({ hasText: / · Scheduled · [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, 10:30 AM$/ })).toBeVisible({ timeout: 30_000 });
-
-    const booked = await waitForEmail(page.request, base, {
-      to: ana.email,
-      subject: new RegExp(`^Your interview: .+ at ${escapeRegExp(company)}, `),
-      says: ["Hi Ana,", `Good news: ${company} would like to interview you for the ${title} position.`, /When: .+ (AM|PM)/, "Where: 120 Main Street, Tustin", "Who: Dana", "What to prepare:", "A calendar invitation is attached. Need a different time?", "Need an adjustment, such as captions or a phone call instead of video? Tell us on the same page, or reply to this email."],
-    });
-    expect(booked.attachments?.map((x) => [x.filename, x.contentType])).toEqual([["interview.ics", "text/calendar; method=REQUEST"]]);
-    expect(Buffer.from(booked.attachments![0].contentBase64, "base64").toString()).toContain("LOCATION:120 Main Street\\, Tustin");
-    await exactlyOneEmail(page.request, base, { to: ana.email, subject: /^Your interview: / });
-    // the interviewer (the owner, who pressed) hears too, by name
-    await waitForEmail(page.request, base, { to: owner.email, subject: `Interview booked: Ana Holt for ${title}`, says: ["120 Main Street, Tustin", "/interviews/"] });
-
-    // her own page has it booked, from the link in her email
-    await a.page.goto(linkIn(booked, "/c/schedule/"));
-    await expect(a.page.getByRole("heading", { level: 1, name: "Your interview is booked" })).toBeVisible({ timeout: 30_000 });
-    await a.page.goto(anaStatus);
-    await expect(a.page.getByText("Your interview is booked. The details are below and in your email.")).toBeVisible({ timeout: 30_000 });
-    await expect(a.page.locator('ol.track [aria-current="step"]')).toHaveText("Interview");
-
-    // on Interviews it is booked, not waiting on anyone
-    await page.goto("/interviews");
-    const ivRow = page.getByRole("row").filter({ hasText: "Ana Holt" });
-    await expect(ivRow).toBeVisible({ timeout: 30_000 });
-    await expect(ivRow.getByText("Scheduled", { exact: true })).toBeVisible();
-
-    // ---- 7. The interview took place; Finalist; the offer; the hire -------------------------------------------------------------
-    const sheet = await recordTookPlace(page, "Ana Holt");
-    const decide = sheet.getByRole("link", { name: "Record the decision" });
-    await expect(async () => {
-      if (!/\/talent\?open=/.test(page.url())) await decide.click({ timeout: 5_000 });
-      await expect(page).toHaveURL(/\/talent\?open=/, { timeout: 3_000 });
-    }).toPass({ timeout: 30_000 });
-    const anaPanel = page.getByRole("dialog", { name: "Ana Holt" });
-    await decideInPanel(anaPanel, "Finalist");
-    await expect(toast(page, /Marked as a finalist/)).toBeVisible({ timeout: 30_000 });
-    await expect(anaPanel.getByRole("heading", { name: "Ana is a finalist: what next?" })).toBeVisible({ timeout: 30_000 });
-    await anaPanel.getByRole("button", { name: /^Stage: / }).click();
-    await anaPanel.getByRole("menuitemradio", { name: /^Offer/ }).click();
-    await expect(anaPanel.getByRole("heading", { name: "Offer made" })).toBeVisible();
-    await anaPanel.getByRole("button", { name: "Record the offer" }).click();
-    await expect(toast(page, /Offer recorded\..*Nothing was sent to Ana/)).toBeVisible({ timeout: 30_000 });
-    await a.page.goto(anaStatus);
-    await expect(a.page.getByText(/^The team has made you an offer\./)).toBeVisible({ timeout: 30_000 });
-    await expect(anaPanel.getByRole("heading", { name: "Waiting on Ana's answer" })).toBeVisible({ timeout: 30_000 });
-    await anaPanel.getByRole("button", { name: "They accepted" }).click();
-    await expect(anaPanel.getByRole("heading", { name: "Hire Ana Holt" })).toBeVisible();
-    await anaPanel.getByLabel("Start date (agreed with them)").fill(companyDay(21));
-    await anaPanel.getByRole("button", { name: "Continue" }).click();
-    await anaPanel.getByRole("button", { name: "Yes, record the hire" }).click();
-    await expect(toast(page, /Ana Holt is hired\./)).toBeVisible({ timeout: 30_000 });
-
-    // what about the job: close it now and tell the one still in process (Ben applied, never interviewed, so he is not a
-    // backup to keep warm), or leave it open; the closing message names him before anything goes
-    // (in job words, like every other button: the lead's D1, 11 November 2026)
-    const after = anaPanel.locator(".card", { has: page.getByRole("heading", { name: "Ana Holt is hired: what about the job?" }) });
-    await expect(after).toBeVisible({ timeout: 30_000 });
-    await expect(after.getByText(/^Ana starts on [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}\.$/)).toBeVisible();
-    await expect(after.getByText("Close the job now and tell them")).toBeVisible();
-    await expect(after.getByText(/^Close the job as filled\. The 1 person still in process moves to your talent pool, privately: nobody is told at once, and you see the closing message before it goes\./)).toBeVisible();
-    await expect(after.getByRole("button", { name: "Leave it open" })).toBeVisible();
-    await expectAccessible(page, "the hire's next step");
-    await after.getByRole("button", { name: "Close it now" }).click();
-    await expect(toast(page, /Job closed as filled\./)).toBeVisible({ timeout: 30_000 });
-    const closing = anaPanel.locator(".card", { has: page.getByRole("heading", { name: `Tell the people ${title} left in process` }) });
-    await expect(closing).toBeVisible({ timeout: 30_000 });
-    await expect(closing.getByRole("list", { name: "Who gets the closing message" }).getByText("Ben Ortiz")).toBeVisible();
-    // nothing has gone to Ben yet, and his own page says nothing of it
-    await expectNoEmail(page.request, base, { to: ben.email, subject: `Your application to ${company}`, ms: 1_000 });
-    await b.page.goto(benStatus);
-    await expect(b.page.getByText(/has closed this position/)).toHaveCount(0);
-    await closing.getByRole("button", { name: "Send to 1 person" }).click();
-    await expect(toast(page, /1 closing message on its way\./)).toBeVisible({ timeout: 30_000 });
-
-    // ---- 8. What each of them got, and what they see -----------------------------------------------------------------------------
-    // the one closing message (founder decision Q30), in its own words whatever the close's outcome
-    await waitForEmail(page.request, base, {
-      to: ben.email,
-      subject: `Your application to ${company}`,
-      says: ["Hi Ben,", `Thank you for your interest in the ${title} position at ${company}.`, `${company} has closed this position, so your application for this role will not go any further.`, "We would like to keep your information for future openings", `This message was sent by the hiring team at ${company} with help from an AI recruiting assistant.`],
-      timeout: AFTER_UNDO,
-    });
-    await exactlyOneEmail(page.request, base, { to: ben.email, subject: `Your application to ${company}` });
-    await b.page.goto(benStatus);
-    await expect(b.page.getByText(new RegExp(`${escapeRegExp(company)} has closed this position`)).first()).toBeVisible({ timeout: 30_000 });
-    // Ana got the thank-you and the booking, and nothing about the offer or the hire
-    expect((await emailsTo(page.request, base, ana.email)).map((m) => m.subject).sort()).toEqual([`Thank you for applying: your next step for ${title} at ${company}`, booked.subject].sort());
-    await a.page.goto(anaStatus);
-    await expect(a.page.getByText("You are on the team.")).toBeVisible({ timeout: 30_000 });
-
-    // the job is closed, and its list says who was hired and who was told
-    await page.keyboard.press("Escape");
-    await page.goto(`/roles/${roleId}`);
-    await expect(page.locator(".pill", { hasText: /^Closed$/ }).first()).toBeVisible({ timeout: 30_000 });
-    await page.goto(`/roles/${roleId}/talent`);
-    await strip.getByRole("tab", { name: /^All/ }).click();
-    await expect(page.locator(".talent-row").filter({ hasText: "Ana Holt" })).toContainText("Hired", { timeout: 30_000 });
-    await a.context.close();
+    // ---- 1. Three people apply, the weakest resume first, so the order on the list is the score's and not the day's ----------
+    const c = await applyThroughTheForm(browser, base, job.jobUrl, cal);
+    await c.context.close();
+    const b = await applyThroughTheForm(browser, base, job.jobUrl, ben);
     await b.context.close();
+    const a = await applyThroughTheForm(browser, base, job.jobUrl, ana);
+    const calStatus = await statusPathFromEmail(page.request, base, cal.email);
+    for (const who of [ana, ben]) await statusPathFromEmail(page.request, base, who.email);
+    for (const who of [ana, ben, cal]) expect((await emailsTo(page.request, base, who.email)).length, `${who.first} got one email, the receipt`).toBe(1);
+
+    // ---- 2. The owner reads them, ranked by resume score, best first -------------------------------------------------------------
+    await page.goto(`/roles/${job.roleId}/talent`);
+    const resume: Record<string, number> = {};
+    for (const name of [anaName, benName, calName]) resume[name] = await scoreOn(candidateRow(page, name), "Resume match");
+    await expect(candidateTabs(page).getByRole("tab", { name: /^New 3$/ })).toBeVisible();
+    const order = await namesInOrder(page);
+    expect(order, "everyone is listed once").toHaveLength(3);
+    expect(order.map((name) => resume[name]), "the list is in the score's order, highest first").toEqual([...order.map((name) => resume[name])].sort((x, y) => y - x));
+    expect(order[0], "everything the job asks for is shown on her resume").toBe(anaName);
+    expect(order[2], "his resume says he does not hold the license").toBe(calName);
+    expect(resume[anaName]).toBeGreaterThan(resume[calName]);
+    await expect(candidateRow(page, anaName).locator(".score-band")).toHaveText(/^(Very high|High|Medium|Low)$/);
+    await expectAccessible(page, "the candidates, ranked");
+
+    // the panel says why: every requirement with its finding
+    const first = await openThePanel(page, anaName);
+    await expect(first.getByRole("heading", { name: "Resume match" })).toBeVisible();
+    await expect(first.getByRole("list", { name: "Requirements" }).getByRole("listitem").first()).toBeVisible({ timeout: 30_000 });
+    await expect(first.getByText("Not sent.")).toBeVisible();
+    await expectAccessible(page, "the candidate panel with the resume match");
+    await page.keyboard.press("Escape");
+
+    // ---- 3. Shortlist Ana: the AI interview goes to her by email, and to nobody else ---------------------------------------------
+    await candidateRow(page, anaName).getByRole("button", { name: `Shortlist: ${anaName}` }).click();
+    await expect(candidateTabs(page).getByRole("tab", { name: /^Shortlisted 1$/ })).toBeVisible({ timeout: 30_000 });
+    await expect(candidateTabs(page).getByRole("tab", { name: /^New 2$/ })).toBeVisible();
+    const invitation = await waitForLink(page.request, base, { to: ana.email, path: "/c/screen/" });
+    expect(invitation.path).toMatch(/^\/c\/screen\/[A-Za-z0-9_-]+$/);
+    await candidateTabs(page).getByRole("tab", { name: /^Shortlisted 1$/ }).click();
+    await expect(candidateRow(page, anaName)).toContainText("AI interview sent", { timeout: 30_000 });
+    await expect(candidateRow(page, anaName)).toContainText(/Link open until /);
+
+    // ---- 4. Mark Cal Not selected: private, nobody is emailed -----------------------------------------------------------------------
+    await candidateTabs(page).getByRole("tab", { name: /^New 2$/ }).click();
+    await candidateRow(page, calName).getByRole("button", { name: `More for ${calName}` }).click();
+    await page.getByRole("menuitem", { name: "Not selected" }).click();
+    await expect(candidateTabs(page).getByRole("tab", { name: /^Not selected 1$/ })).toBeVisible({ timeout: 30_000 });
+    await expect(candidateTabs(page).getByRole("tab", { name: /^New 1$/ })).toBeVisible();
+    await page.waitForTimeout(3_000);
+    for (const who of [ben, cal]) expect((await emailsTo(page.request, base, who.email)).length, `nothing more went to ${who.first}`).toBe(1);
+    // his own page says nothing of a decision nobody has told him
+    await a.page.goto(calStatus);
+    const calSteps = a.page.getByRole("list", { name: "Where your application is" });
+    await expect(calSteps).toContainText("Under review", { timeout: 30_000 });
+    await expect(calSteps).not.toContainText("Decision");
+
+    // ---- 5. Ana opens the emailed link, does the AI interview and sends it ------------------------------------------------------------
+    await a.page.goto(invitation.path);
+    await expect(a.page.getByText(/AI assistant/).first()).toBeVisible({ timeout: 30_000 });
+    await expect(a.page.getByText(/when you press Send my answers/).first()).toBeVisible();
+    await expectAccessible(a.page, "the AI interview's first page");
+    // before she sends, nothing of it is with the team
+    const before = await openThePanelOn(page, job.roleId, "shortlisted", anaName);
+    await expect(before.getByText(/^AI interview \d+ out of 100$/)).toHaveCount(0);
+    await expect(before.getByText(/^Their answers/)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await doTheAiInterview(a.page, PERSONAS.strong.says);
+    await expectAccessible(a.page, "the AI interview, answers sent");
+    await a.context.close();
+
+    // ---- 6. The owner sees the interview score, and hires her; nothing is emailed for a hire ------------------------------------------
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: "1 finished the AI interview" })).toHaveAttribute("href", new RegExp(`/roles/${job.roleId}/talent\\?tab=interviewed$`), { timeout: 60_000 });
+    const panel = await openThePanelOn(page, job.roleId, "interviewed", anaName);
+    await expect(candidateTabs(page).getByRole("tab", { name: /^Interviewed 1$/ })).toBeVisible();
+    const interview = await scoreOn(candidateRow(page, anaName), "AI interview");
+    expect(interview).toBeGreaterThanOrEqual(0);
+    expect(interview).toBeLessThanOrEqual(100);
+    await expect(panel.getByText("AI interview done")).toBeVisible({ timeout: 30_000 });
+    expect(await scoreOn(panel, "AI interview")).toBe(interview);
+    await expect(panel.getByRole("list", { name: "Interview questions" }).getByRole("listitem").first()).toBeVisible();
+    await expect(panel.getByText(/^Their answers \(\d+\)$/)).toBeVisible();
+    await expectAccessible(page, "the candidate panel with the AI interview's result");
+    const sentToAna = (await emailsTo(page.request, base, ana.email)).length;
+    await panel.getByRole("button", { name: `Hire: ${anaName}` }).click();
+    await expect(candidateTabs(page).getByRole("tab", { name: /^Hired 1$/ })).toBeVisible({ timeout: 30_000 });
+    await expect(candidateTabs(page).getByRole("tab", { name: /^Interviewed 0$/ })).toBeVisible();
+    await page.waitForTimeout(3_000);
+    expect((await emailsTo(page.request, base, ana.email)).length, "a hire emails nobody").toBe(sentToAna);
+    await page.keyboard.press("Escape");
+
+    // ---- 7. Email the decision to Cal: the email is read first, then sent, and it leaves after its Undo window ----------------------
+    await page.goto(`/roles/${job.roleId}/talent?tab=not_selected`);
+    await expect(candidateRow(page, calName)).toContainText("Not told yet", { timeout: 30_000 });
+    await candidateRow(page, calName).getByRole("button", { name: `Email the decision: ${calName}` }).click();
+    const told = page.getByRole("dialog", { name: calName });
+    await expect(told.getByText(`Private: ${cal.first} has not been told.`)).toBeVisible({ timeout: 30_000 });
+    const email = told.locator(".card", { has: page.getByRole("heading", { name: "Email the decision" }) });
+    await expect(email.locator("dt", { hasText: "To" }).locator("xpath=following-sibling::dd[1]")).toHaveText(cal.email, { timeout: 30_000 });
+    const subject = ((await email.locator("dt", { hasText: "Subject" }).locator("xpath=following-sibling::dd[1]").textContent()) ?? "").trim();
+    expect(subject.length).toBeGreaterThan(0);
+    await expectAccessible(page, "the decision email, before it is sent");
+    await email.getByRole("button", { name: "Send the email" }).click();
+    await expect(told.getByText(/Decision email on its way|Told by email/).first()).toBeVisible({ timeout: 30_000 });
+    await waitForEmail(page.request, base, { to: cal.email, subject, timeout: AFTER_UNDO });
+    await exactlyOneEmail(page.request, base, { to: cal.email, subject });
+    await page.goto(`/roles/${job.roleId}/talent?tab=not_selected`);
+    await expect(candidateRow(page, calName)).toContainText("Told by email", { timeout: 30_000 });
+    // now his own page says there is a decision; Ben, still new, heard nothing more
+    const calPage = await browser.newPage({ baseURL: base });
+    await calPage.goto(calStatus);
+    await expect(calPage.getByRole("list", { name: "Where your application is" })).toContainText("Decision", { timeout: 30_000 });
+    await calPage.close();
+    expect((await emailsTo(page.request, base, ben.email)).length).toBe(1);
+
+    // ---- 8. The administrator opens the company: its job, as counts, with nobody named ---------------------------------------------
+    const admin = await signInAsAdmin(browser);
+    await gotoSettled(admin.page, "/admin");
+    const listed = admin.page.getByRole("row").filter({ has: admin.page.getByRole("button", { name: company, exact: true }) });
+    await expect(listed).toContainText("1 of 1 open", { timeout: 30_000 });
+    await listed.getByRole("button", { name: company, exact: true }).click();
+    await expect(admin.page).toHaveURL(/\/admin\?open=[0-9a-f-]+$/);
+    const drawer = admin.page.getByRole("dialog", { name: company });
+    const jobRow = drawer.getByRole("region", { name: `Jobs of ${company}` }).getByRole("row").filter({ hasText: job.title });
+    await expect(jobRow).toBeVisible({ timeout: 30_000 });
+    await expect(jobRow.getByText("Open", { exact: true })).toBeVisible();
+    // Applicants, Shortlisted, Interviewed, Hired: the people in each place now
+    await expect(jobRow.getByRole("cell").nth(1)).toHaveText("3");
+    await expect(jobRow.getByRole("cell").nth(2)).toHaveText("0");
+    await expect(jobRow.getByRole("cell").nth(3)).toHaveText("0");
+    await expect(jobRow.getByRole("cell").nth(4)).toHaveText("1");
+    await expect(jobRow.getByRole("link", { name: /^View job page/ })).toHaveAttribute("href", new RegExp(`/careers/${job.slug}/jobs/${job.roleId}$`));
+    for (const who of [ana, ben, cal]) await expect(drawer).not.toContainText(who.last);
+    await expectAccessible(admin.page, "a company's page with its job");
+    // the administrator reads counts only: nothing of a candidate, on the page or in what the page reads
+    const companyId = new URL(admin.page.url()).searchParams.get("open")!;
+    const read = await (await admin.page.request.get(`${base}/api/v1/admin/customers/${companyId}/jobs`, { headers: { "x-admin-reason": "e2e: counts only" } })).text();
+    for (const who of [ana, ben, cal]) expect(read).not.toContain(who.last);
+    expect((await admin.page.request.get(`${base}/api/v1/roles/${job.roleId}/applications`)).status()).toBeGreaterThanOrEqual(400);
+    await admin.context.close();
   });
 });
+
+/** A tab of the job's Candidates list with one person's panel open, once that person is under the tab (the list is asked for again until they are). */
+async function openThePanelOn(page: Page, roleId: string, tab: "shortlisted" | "interviewed", name: string) {
+  await expect(async () => {
+    await page.goto(`/roles/${roleId}/talent?tab=${tab}`);
+    await expect(candidateRow(page, name)).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 90_000 });
+  return openThePanel(page, name);
+}

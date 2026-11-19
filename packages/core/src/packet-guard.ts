@@ -1,22 +1,22 @@
-import { IMPORTANCE_WEIGHT, mustHaveOf, restatementsOf, type Actor, type CompanyQuestions, type DeclinedCriterion, type DraftRolePacket, type Location, type PacketFlag } from "@ros/contracts";
-import { DEFAULT_NOTICES, disclosureLine, resolveJurisdictions } from "./compliance";
+import { mustHaveOf, restatementsOf, type Actor, type DeclinedCriterion, type DraftRolePacket, type FormQuestionRefusal, type Location, type PacketFlag } from "@ros/contracts";
+import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, resolveJurisdictions } from "./compliance";
 
 /**
- * The packet guard (plan item C1). The deterministic guarantees every saved Role Packet gets, whoever or whatever wrote
- * it: the intake draft, a person's edit, a revision by chat, an approval. It never trusts the model and never edits the
- * owner's words on its own; what it cannot fix by rule it flags, and a role cannot be approved while a flag is open
- * (a person edits the words out, or keeps them and says why).
+ * The fairness guard on a job's wording. The deterministic guarantees every saved job record gets, whoever or whatever
+ * wrote it: the builder's AI or a person's edit. It never trusts the model and never edits the owner's words on its own;
+ * what it cannot fix by rule it flags, and a job cannot be published, nor an edit of an open job saved, while a flag is
+ * open (a person edits the words out, or keeps them and says why).
  *
- * Fixed by rule: jurisdictions and the notices that follow from them; pay shown on every job ad (founder decision Q9);
- * the private ceiling never below the top of the range, and a reversed range put the right way round; the AI disclosure
- * and "a person is available" lines; at most six must-haves; anything the owner was told could not be used taken out of
- * the lists it appears in. Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
- * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
- * pay figure in the job description that nobody set or that is not the advertised range.
+ * Fixed by rule: jurisdictions and the notices that follow from them; pay shown on every job ad; a reversed range put the
+ * right way round; the AI disclosure and "a person is available" lines; at most six must-haves; anything the owner was
+ * told could not be used taken out of the lists it appears in. Flagged: wording that stands in for a protected trait,
+ * anywhere a candidate or a reader of applications would meet it (the phrase list below), what the owner was told could
+ * not be used, reworded or not, and a pay figure in the job description that nobody set or that is not the advertised
+ * range.
  *
- * Wave S7: the questions every applicant answers (`companyQuestions`) are read like every other words, and for the
- * protected-question list too (`PROTECTED_QUESTION_RULES`); a question that asks about a protected characteristic is
- * refused where it is set (`companyQuestionProblems`, `questionCheck`), never kept with a reason.
+ * The application form's questions (`formQuestions`) are read like every other words, and for the protected-question
+ * list too (`PROTECTED_QUESTION_RULES`); a question that asks about a protected characteristic is refused where it is
+ * set (`formQuestionProblems`, `questionCheck`), never kept with a reason.
  */
 
 export type ProxyRule = { rule: string; reason: string; alternative: string; find: (text: string) => string | null };
@@ -148,7 +148,7 @@ const findBan = (text: string): string | null => firstOutsideExceptions(PRODUCTI
 /** A question about the record, the same way; one in a ban's own words asks about it too ("Do you have a clean record?"). */
 const findRecordQuestion = (text: string): string | null => firstOutsideExceptions(PRODUCTION_QUESTION, text) ?? firstOutsideExceptions(ADDED_QUESTION, text) ?? findBan(text);
 
-/** The deterministic phrase list (C1). Each rule says why in plain words and offers the lawful way to get at the real need. */
+/** The deterministic phrase list. Each rule says why in plain words and offers the lawful way to get at the real need. */
 export const PROXY_RULES: readonly ProxyRule[] = [
   { rule: "age", reason: "Age, and wording that stands in for age, cannot be a hiring requirement.", alternative: "Describe the skill or the availability the job needs; every candidate is asked about that.", find: findAge },
   {
@@ -259,8 +259,8 @@ const RECORD_NAMED = new RegExp(String.raw`^(?:${NAMED_AFTER})?${A_RECORD}(?:\s+
 const DEAL_BREAKER_RULES: readonly ProxyRule[] = PROXY_RULES.map((r) => (r.rule === "criminal_record" ? { ...r, find: (text: string) => r.find(text) ?? (RECORD_NAMED.test(text.trim()) ? text.trim() : null) } : r));
 
 /**
- * The fairness check for one deal-breaker (the quick start's "What rules someone out?", the panel, a card, one the job
- * builder read from the chat): `screenCriterion`, and a record named on its own is refused too.
+ * The fairness check for one deal-breaker (answered on a card, or read by the job builder from the chat):
+ * `screenCriterion`, and a record named on its own is refused too.
  */
 export function screenDealBreaker(text: string): CriterionCheck | null {
   for (const r of DEAL_BREAKER_RULES) {
@@ -271,8 +271,8 @@ export function screenDealBreaker(text: string): CriterionCheck | null {
 }
 
 /**
- * Questions put to candidates that ask about a protected characteristic itself (Wave S7, "Questions every applicant
- * answers"): a company's quick or written question, or a question typed in the quick start. The phrase list above reads
+ * Questions put to candidates that ask about a protected characteristic itself: a question on the application form or
+ * in the AI interview. The phrase list above reads
  * requirements ("male only", "no kids"); these read questions ("What is your gender?", "Do you have children?"). A
  * question that breaks one is refused when it is set, never kept with a reason: there is no lawful reason to ask it on an
  * application. Each says why in plain words and offers the lawful way to the real need. The patterns ask about the
@@ -370,63 +370,40 @@ export function questionCheck(text: string): CriterionCheck | null {
   return screenCriterion(text);
 }
 
-/**
- * One reason a company's question cannot be saved: which list ("quick" on the form, "written" in the chat), its place in
- * that list, which part of it (the question, its help line, an option, or the private "what a good answer shows"), and
- * the rule with its plain reason and the lawful alternative.
- */
-export type CompanyQuestionProblem = { list: "quick" | "written"; index: number; key: string | null; part: "question" | "help" | "option" | "lookFor"; rule: string; text: string; reason: string; alternative: string };
-
-type QuestionWords = { key?: string | null; question: string; help?: string | null; options?: readonly string[]; lookFor?: string | null };
+type QuestionWords = { key?: string | null; question: string; help?: string | null; options?: readonly string[] };
 
 /**
- * The questions every applicant answers (Wave S7), checked before they are saved: any part that asks about a protected
- * characteristic is refused (never kept with a reason, unlike a flagged phrase). Wording the phrase list flags elsewhere
- * ("10+ years of experience") is not refused here; the packet guard flags it as everywhere else, and approval waits for
- * a person to decide. Reads the shape the editor sends as well as the saved one.
+ * The application form's questions, checked before they are saved: any part (the question, its help line, an answer to
+ * choose from) that asks about a protected characteristic is refused, never kept with a reason, unlike a flagged phrase.
+ * Wording the phrase list flags elsewhere ("10+ years of experience") is not refused here; the guard flags it as
+ * everywhere else. Each refusal carries its place in the list and the sentence a person reads (`words`). Reads the shape
+ * the editor sends as well as the saved one.
  */
-export function companyQuestionProblems(cq: { quick?: readonly QuestionWords[]; written?: readonly QuestionWords[] } | null | undefined): CompanyQuestionProblem[] {
-  const out: CompanyQuestionProblem[] = [];
-  const check = (list: "quick" | "written", index: number, key: string | null, part: CompanyQuestionProblem["part"], text: string | null | undefined, question = "") => {
+export function formQuestionProblems(questions: readonly QuestionWords[] | null | undefined): FormQuestionRefusal[] {
+  const out: FormQuestionRefusal[] = [];
+  const refuse = (index: number, key: string | null, part: FormQuestionRefusal["part"], hit: { rule: string; text: string; reason: string; alternative: string }) => {
+    const where = `Screening question ${index + 1}${part === "option" ? `, the answer "${hit.text}"` : part === "help" ? ", its help line" : ""}`;
+    out.push({ index, key, part, ...hit, words: `${where}: ${hit.reason} ${hit.alternative}` });
+  };
+  const check = (index: number, key: string | null, part: FormQuestionRefusal["part"], text: string | null | undefined, question = "") => {
     if (!text?.trim()) return;
     for (const r of PROTECTED_QUESTION_RULES) {
       const hit = r.find(text);
-      if (hit) {
-        out.push({ list, index, key, part, rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative });
-        return;
-      }
+      if (hit) return refuse(index, key, part, { rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative });
     }
     // the phrase list's protected-characteristic rules ("under 30", "male only", "native English") and a ban on a criminal
     // record are refused here too
     const phrase = screenCriterion(text);
-    if (phrase && REFUSED_PHRASE_RULES.has(phrase.rule)) {
-      out.push({ list, index, key, part, rule: phrase.rule, text: phrase.text, reason: phrase.reason, alternative: phrase.alternative });
-      return;
-    }
-    if (part === "option" && (TRAIT_OPTION.test(text) || (AGE_BRACKET.test(text) && !COUNTS_SOMETHING.test(question)))) out.push({ list, index, key, part, rule: TRAIT_OPTION_RULE.rule, text: text.trim(), reason: TRAIT_OPTION_RULE.reason, alternative: TRAIT_OPTION_RULE.alternative });
+    if (phrase && REFUSED_PHRASE_RULES.has(phrase.rule)) return refuse(index, key, part, phrase);
+    if (part === "option" && (TRAIT_OPTION.test(text) || (AGE_BRACKET.test(text) && !COUNTS_SOMETHING.test(question)))) refuse(index, key, part, { rule: TRAIT_OPTION_RULE.rule, text: text.trim(), reason: TRAIT_OPTION_RULE.reason, alternative: TRAIT_OPTION_RULE.alternative });
   };
-  for (const [list, items] of [["quick", cq?.quick ?? []], ["written", cq?.written ?? []]] as const) {
-    for (const [i, q] of items.entries()) {
-      const key = q.key ?? null;
-      check(list, i, key, "question", q.question);
-      check(list, i, key, "help", q.help);
-      for (const o of q.options ?? []) check(list, i, key, "option", o, q.question);
-      check(list, i, key, "lookFor", q.lookFor);
-    }
+  for (const [i, q] of (questions ?? []).entries()) {
+    const key = q.key ?? null;
+    check(i, key, "question", q.question);
+    check(i, key, "help", q.help);
+    for (const o of q.options ?? []) check(i, key, "option", o, q.question);
   }
   return out;
-}
-
-/** What a person reads when a company question is refused: the question's place, the reason and the lawful alternative. */
-export function companyQuestionProblemWords(p: CompanyQuestionProblem): string {
-  const where = `${p.list === "quick" ? "Quick question" : "Written question"} ${p.index + 1}`;
-  const part = p.part === "option" ? `, the answer "${p.text}"` : p.part === "help" ? ", its help line" : p.part === "lookFor" ? ", what a good answer shows" : "";
-  return `${where}${part}: ${p.reason} ${p.alternative}`;
-}
-
-/** The packet's own questions every applicant answers, whatever kind of packet it is (a draft has none). */
-function companyQuestionsIn(p: DraftRolePacket): CompanyQuestions | null {
-  return (p as DraftRolePacket & { companyQuestions?: CompanyQuestions | null }).companyQuestions ?? null;
 }
 
 /** Lower case, punctuation as spaces, single spaces: "Recent grads!" and "recent  grads" read the same. */
@@ -452,40 +429,27 @@ export function mentionsPhrase(text: string, requested: string): boolean {
  * place by something that does not move when items before it are taken out or reordered (the item's key, or its own
  * words), so a flag a person kept stays kept.
  */
-function readableText(p: DraftRolePacket): Array<{ path: string; at: string; text: string; asked?: true; dealBreaker?: true; requirement?: true }> {
-  const out: Array<{ path: string; at: string; text: string; asked?: true; dealBreaker?: true; requirement?: true }> = [];
-  const add = (path: string, at: string, text: string | undefined, kind?: { dealBreaker: true } | { requirement: true }) => {
+function readableText(p: DraftRolePacket): Array<{ path: string; at: string; text: string; asked?: true; requirement?: true }> {
+  const out: Array<{ path: string; at: string; text: string; asked?: true; requirement?: true }> = [];
+  const add = (path: string, at: string, text: string | undefined, kind?: { requirement: true }) => {
     if (text?.trim()) out.push({ path, at, text, ...kind });
   };
-  // The questions every applicant answers (Wave S7) are read for the protected-question list too (`asked`).
+  // The application form's questions are read for the protected-question list too (`asked`).
   const ask = (path: string, at: string, text: string | undefined) => {
     if (text?.trim()) out.push({ path, at, text, asked: true });
   };
   const one = (path: string, text: string | undefined) => add(path, path, text);
   one("identity.title", p.identity.title);
   one("description.publicJobDescription", p.description.publicJobDescription);
-  one("description.internalNotes", p.description.internalNotes);
   for (const [i, m] of p.requirements.mustHaves.entries()) add(`requirements.mustHaves[${i}].text`, `requirements.mustHaves[${m.key}].text`, m.text, { requirement: true });
   for (const [i, m] of p.requirements.niceToHaves.entries()) add(`requirements.niceToHaves[${i}].text`, `requirements.niceToHaves[${m.key}].text`, m.text, { requirement: true });
-  for (const [i, e] of p.requirements.eligibility.entries()) add(`requirements.eligibility[${i}].question`, `requirements.eligibility[${e.key}].question`, e.question);
   for (const [i, q] of p.screening.questions.entries()) add(`screening.questions[${i}].question`, `screening.questions[${q.key}].question`, q.question);
   for (const [i, c] of p.competencies.entries()) add(`competencies[${i}].definition`, `competencies[${c.key}].definition`, c.definition);
-  for (const [i, c] of p.evaluation.criteria.entries()) add(`evaluation.criteria[${i}]`, `evaluation.criteria[${slug(c)}]`, c);
-  for (const [i, c] of p.evaluation.redFlags.entries()) add(`evaluation.redFlags[${i}]`, `evaluation.redFlags[${slug(c)}]`, c);
-  for (const [i, r] of p.interviews.plan.entries()) {
-    for (const [j, q] of r.suggestedQuestions.entries()) add(`interviews.plan[${i}].suggestedQuestions[${j}]`, `interviews.plan[${r.key}].suggestedQuestions[${slug(q)}]`, q);
-  }
-  for (const [i, d] of p.preferences.dealBreakersInTheirWords.entries()) add(`preferences.dealBreakersInTheirWords[${i}]`, `preferences.dealBreakersInTheirWords[${slug(d)}]`, d, { dealBreaker: true });
   one("communication.companyBlurb", p.communication.companyBlurb);
-  const cq = companyQuestionsIn(p);
-  for (const [i, q] of (cq?.quick ?? []).entries()) {
-    ask(`companyQuestions.quick[${i}].question`, `companyQuestions.quick[${q.key}].question`, q.question);
-    ask(`companyQuestions.quick[${i}].help`, `companyQuestions.quick[${q.key}].help`, q.help);
-    if (q.kind === "choice") for (const [j, o] of q.options.entries()) ask(`companyQuestions.quick[${i}].options[${j}]`, `companyQuestions.quick[${q.key}].options[${slug(o)}]`, o);
-  }
-  for (const [i, q] of (cq?.written ?? []).entries()) {
-    ask(`companyQuestions.written[${i}].question`, `companyQuestions.written[${q.key}].question`, q.question);
-    ask(`companyQuestions.written[${i}].lookFor`, `companyQuestions.written[${q.key}].lookFor`, q.lookFor);
+  for (const [i, q] of p.formQuestions.entries()) {
+    ask(`formQuestions[${i}].question`, `formQuestions[${q.key}].question`, q.question);
+    ask(`formQuestions[${i}].help`, `formQuestions[${q.key}].help`, q.help);
+    if (q.kind === "choice") for (const [j, o] of q.options.entries()) ask(`formQuestions[${i}].options[${j}]`, `formQuestions[${q.key}].options[${slug(o)}]`, o);
   }
   return out;
 }
@@ -521,7 +485,7 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
 
   const comp = packet.compensation;
   if (comp) {
-    // Founder decision Q9: the pay range is on every job ad, whatever the state's law says.
+    // The pay range is on every job ad, whatever the state's law says.
     if (!comp.discloseRange) {
       comp.discloseRange = true;
       changes.push("The pay range is shown on the job ad.");
@@ -530,19 +494,13 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
       [comp.min, comp.max] = [comp.max, comp.min];
       changes.push("The pay range was the wrong way round and was swapped.");
     }
-    if (comp.ceiling < comp.max) {
-      comp.ceiling = comp.max;
-      changes.push("The private ceiling was raised to the top of the range.");
-    }
   }
   if (!packet.communication.disclosureText || !/\bAI\b|artificial intelligence/i.test(packet.communication.disclosureText)) packet.communication.disclosureText = disclosureLine(ctx.companyName);
-  if (!packet.communication.humanAlternativeText?.trim()) packet.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
+  if (!packet.communication.humanAlternativeText?.trim()) packet.communication.humanAlternativeText = REACH_A_PERSON_LINE;
   if (packet.requirements.mustHaves.length > 6) {
     packet.requirements.mustHaves = packet.requirements.mustHaves.slice(0, 6);
     changes.push("Must-haves were cut to six.");
   }
-  // A skill's importance as a person picked it (plan F3) is what counts; the 1-5 weight is kept in step with it.
-  for (const c of packet.competencies) if (c.importance && c.weight !== IMPORTANCE_WEIGHT[c.importance]) c.weight = IMPORTANCE_WEIGHT[c.importance];
 
   // What the owner was told could not be used: recorded on the packet so no later version can bring it back.
   const declined: DeclinedCriterion[] = [];
@@ -556,14 +514,12 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
   // "Visa permit"), so a model that restates it is caught too (review of the live test, 12 Nov 2026).
   const mentions = (text: string, d: DeclinedCriterion) => mentionsPhrase(text, d.requested) || mentionsPhrase(text, mustHaveOf(d.requested));
   const mentionsDeclined = (text: string) => declined.some((d) => mentions(text, d));
-  const count = () => packet.requirements.mustHaves.length + packet.requirements.niceToHaves.length + packet.preferences.dealBreakersInTheirWords.length + packet.evaluation.redFlags.length;
+  const count = () => packet.requirements.mustHaves.length + packet.requirements.niceToHaves.length;
   const before = count();
   const keptMust = packet.requirements.mustHaves.filter((m) => !mentionsDeclined(m.text));
   // A list never loses its last must-have here (the schema needs one); that one is flagged below instead.
   if (keptMust.length) packet.requirements.mustHaves = keptMust;
   packet.requirements.niceToHaves = packet.requirements.niceToHaves.filter((m) => !mentionsDeclined(m.text));
-  packet.preferences.dealBreakersInTheirWords = packet.preferences.dealBreakersInTheirWords.filter((d) => !mentionsDeclined(d));
-  packet.evaluation.redFlags = packet.evaluation.redFlags.filter((r) => !mentionsDeclined(r));
   const removed = before - count();
   if (removed > 0) changes.push(`${removed} ${removed === 1 ? "item the owner was told could not be used was" : "items the owner was told could not be used were"} taken out.`);
 
@@ -575,14 +531,13 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     if (flags.some((x) => x.id === id || (x.path === f.path && normalizeCriterion(x.text) === normalizeCriterion(f.text)))) return;
     flags.push({ id, ...f });
   };
-  // A deal-breaker is read as one (`DEAL_BREAKER_RULES`: a record named on its own is the ban), and a must-have or a
-  // nice-to-have in the words of a deal-breaker refused for a record ("Felony convictions" under the deal-breaker "Felony
-  // convictions", "Felonies" under "No felonies") is flagged with it, as the quick start refuses both (review of the
-  // criminal-record fix, 17 Nov 2026).
+  // A deal-breaker the owner was refused for a record ("Felony convictions", "No felonies") is read as one
+  // (`DEAL_BREAKER_RULES`: a record named on its own is the ban), and a must-have or a nice-to-have in its words
+  // ("Felony convictions", "Felonies") is flagged with it.
   const record = DEAL_BREAKER_RULES.find((r) => r.rule === "criminal_record");
-  const restatesRecordBan = new Set(packet.preferences.dealBreakersInTheirWords.filter((d) => record?.find(d)).flatMap((d) => restatementsOf(d).map(normalizeCriterion)));
+  const restatesRecordBan = new Set(declined.filter((d) => record?.find(d.requested)).flatMap((d) => restatementsOf(d.requested).map(normalizeCriterion)));
   for (const target of readableText(packet)) {
-    for (const r of target.asked ? [...PROTECTED_QUESTION_RULES, ...PROXY_RULES] : target.dealBreaker ? DEAL_BREAKER_RULES : PROXY_RULES) {
+    for (const r of target.asked ? [...PROTECTED_QUESTION_RULES, ...PROXY_RULES] : PROXY_RULES) {
       const hit = r.find(target.text);
       if (hit) push(target.at, { path: target.path, rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative, ...(declinedRules.has(r.rule) ? { declined: true } : {}) });
     }
@@ -593,19 +548,15 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
       if (mentions(target.text, d)) push(target.at, { path: target.path, rule: "declined", text: d.requested, reason: `You were told this could not be used. ${d.reason}`, ...(d.alternative ? { alternative: d.alternative } : {}), declined: true });
     }
   }
-  // A draft with no confirmed pay must not quote a figure anywhere (C7): nobody set it. With pay set, the description may
-  // quote only the advertised range: a figure from before the pay changed, or the private ceiling, is flagged, since the
-  // pay set by a person is brought up to date on its own but the description's words are not.
+  // A draft with no confirmed pay must not quote a figure anywhere: nobody set it. With pay set, the description may
+  // quote only the advertised range: a figure from before the pay changed is flagged, since the pay set by a person is
+  // brought up to date on its own but the description's words are not.
   const description = packet.description.publicJobDescription;
   if (!packet.compensation) {
     const money = description.match(/\$\s?\d[\d,.]*(?:\s*(?:k|an hour|per hour|\/hr|a year|per year))?/i);
     if (money) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: UNCONFIRMED_PAY.rule, text: money[0], reason: UNCONFIRMED_PAY.reason, alternative: UNCONFIRMED_PAY.alternative });
   } else {
-    const range = new Set([packet.compensation.min, packet.compensation.max]);
-    for (const m of description.matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k\b)?/gi)) {
-      const amount = Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1);
-      if (!range.has(amount)) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: PAY_MISMATCH.rule, text: m[0].trim(), reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
-    }
+    for (const figure of otherPayFigures(description, [packet.compensation.min, packet.compensation.max])) push("description.publicJobDescription", { path: "description.publicJobDescription", rule: PAY_MISMATCH.rule, text: figure, reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
   }
 
   // Who kept what: a fresh request to keep is stamped with whoever is saving; an earlier keep carries over unchanged.
@@ -621,12 +572,45 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
   return { packet, flags, changes };
 }
 
-/** The flags nobody has dealt with yet; approval waits for none to be left. */
+const DOLLAR_FIGURE = /\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k\b)?/gi;
+
+/** The dollar amounts written in `text` ("$60", "$70k", "$1,200.50"). */
+function dollarAmounts(text: string): Array<{ words: string; amount: number }> {
+  return [...text.matchAll(DOLLAR_FIGURE)].map((m) => ({ words: m[0].trim(), amount: Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1) }));
+}
+
+/** The dollar figures in `text`, as written, that are none of the `allowed` amounts. */
+function otherPayFigures(text: string, allowed: readonly number[]): string[] {
+  return dollarAmounts(text).filter((f) => !allowed.includes(f.amount)).map((f) => f.words);
+}
+
+/**
+ * The guard's wording check for a text written from a saved job (its LinkedIn post, its Indeed listing): what each rule
+ * would flag in the job's own description, what the owner was told could not be used, and a dollar figure that is
+ * neither the job's pay nor in its benefits line. Wording a person kept in the job with a reason passes here too.
+ */
+export function wordingProblems(text: string, job: { compensation?: { min: number; max: number } | null; benefits?: string | null; provenance: { flags?: PacketFlag[]; declinedCriteria?: DeclinedCriterion[] } }): CriterionCheck[] {
+  const kept = (job.provenance.flags ?? []).filter((f) => f.kept);
+  const isKept = (rule: string, words: string) => kept.some((f) => f.rule === rule && normalizeCriterion(f.text) === normalizeCriterion(words));
+  const found: CriterionCheck[] = [];
+  for (const r of PROXY_RULES) {
+    const hit = r.find(text);
+    if (hit && !isKept(r.rule, hit)) found.push({ rule: r.rule, text: hit, reason: r.reason, alternative: r.alternative });
+  }
+  for (const d of job.provenance.declinedCriteria ?? []) {
+    if ((mentionsPhrase(text, d.requested) || mentionsPhrase(text, mustHaveOf(d.requested))) && !isKept("declined", d.requested)) found.push({ rule: "declined", text: d.requested, reason: d.reason, alternative: d.alternative ?? "" });
+  }
+  const stated = [...(job.compensation ? [job.compensation.min, job.compensation.max] : []), ...dollarAmounts(job.benefits ?? "").map((f) => f.amount)];
+  for (const figure of otherPayFigures(text, stated)) if (!isKept(PAY_MISMATCH.rule, figure)) found.push({ rule: PAY_MISMATCH.rule, text: figure, reason: PAY_MISMATCH.reason, alternative: PAY_MISMATCH.alternative });
+  return found;
+}
+
+/** The flags nobody has dealt with yet; publishing waits for none to be left. */
 export function unresolvedFlags(packet: { provenance: { flags?: PacketFlag[] } } | null | undefined): PacketFlag[] {
   return (packet?.provenance.flags ?? []).filter((f) => !f.kept);
 }
 
-/** What a person reads when approval is refused for open flags. */
+/** What a person reads when publishing or saving is refused for open flags. */
 export function openFlagsMessage(count: number): string {
-  return `${count === 1 ? "One phrase in this role needs" : `${count} phrases in this role need`} a decision first: edit ${count === 1 ? "it" : "them"} out, or keep ${count === 1 ? "it" : "them"} and say why.`;
+  return `${count === 1 ? "One phrase in this job needs" : `${count} phrases in this job need`} a decision first: edit ${count === 1 ? "it" : "them"} out, or keep ${count === 1 ? "it" : "them"} and say why.`;
 }

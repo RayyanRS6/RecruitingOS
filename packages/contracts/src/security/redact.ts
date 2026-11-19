@@ -1,8 +1,8 @@
 /**
  * What counts as a secret, and how to remove it from anything that leaves the process (founder decision I-series and
  * correction 10 of 18 September 2026: tokens must never appear in logs, errors, analytics, audit records, support
- * messages, screenshots, or documentation). Pure functions; the runtime registry of values actually read from the
- * secret store lives in @ros/core and is passed in as `values`.
+ * messages, screenshots, or documentation). Pure functions; the runtime registry of the secret values a process
+ * actually holds lives in @ros/core and is passed in as `values`.
  */
 
 export const REDACTED = "[redacted]";
@@ -23,7 +23,7 @@ export const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   /\bAC[a-f0-9]{32}\b(?=.*(?:auth|token))/gi, // Twilio SIDs only when paired with a token in the same text
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack
   /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key ids
-  /(?<=\/c\/(?:status|screen|schedule|confirm-answers)\/)[A-Za-z0-9_-]{20,}/g, // candidate link tokens in paths (21 Sep, item 3; the repeat-confirmation link, known-bugs row 80): the path stays, the token goes
+  /(?<=\/c\/(?:status|screen)\/)[A-Za-z0-9_-]{20,}/g, // candidate link tokens in paths (21 Sep, item 3): the path stays, the token goes
   /(?<=\/c\/privacy-request\/verify\/)[A-Za-z0-9._-]{20,}/g, // the privacy-request confirmation link (a sealed token with dots), same rule
   // query strings (a person's address or number is not for logs either, nor the identity service's own words on a refused
   // sign-in, `error_description`, which can name the person's address: 10 November 2026; `error` and `error_code` are codes and stay)

@@ -7,7 +7,7 @@ import { cspReports, type Queryable } from "@ros/db";
  * server-rendered and need no JavaScript, so the policy allows nothing by default: no external origin at all, styles and
  * the structured-data script only with the per-request nonce, inline event handlers never. Analytics never widen this
  * policy; candidate pages load no analytics (founder decision, correction 14). Report-only first; enforcement waits for
- * a review of the reports (docs/readiness/18).
+ * a review of the reports (docs/14-deployment-and-environment.md).
  */
 export type CspMode = "report-only" | "enforce";
 
@@ -43,7 +43,7 @@ export function cspHeaderName(mode: CspMode): "Content-Security-Policy" | "Conte
 
 export type NormalizedCspReport = { mode: string; surface: "candidate" | "app"; documentPath: string; violatedDirective: string; effectiveDirective: string | null; blockedOrigin: string | null; sourceFile: string | null; lineNumber: number | null; userAgent: string | null };
 
-const TOKEN_PATH = /\/c\/(status|screen|schedule|confirm-answers|privacy-request\/verify)\/[^/?#]+/g;
+const TOKEN_PATH = /\/c\/(status|screen|privacy-request\/verify)\/[^/?#]+/g;
 
 /** A request path with every candidate link token replaced by `[token]`: safe for audit records, error reports and logs. */
 export function maskTokenPath(path: string): string {
@@ -51,12 +51,12 @@ export function maskTokenPath(path: string): string {
 }
 
 /** The same candidate links inside free text (an email's body): the tokens are base64url, so the match stops at anything else. */
-const CANDIDATE_LINK_IN_TEXT = /\/c\/(status|screen|schedule|confirm-answers|privacy-request\/verify)\/[A-Za-z0-9_-]+/g;
+const CANDIDATE_LINK_IN_TEXT = /\/c\/(status|screen|privacy-request\/verify)\/[A-Za-z0-9_-]+/g;
 
 /**
  * A message's text with every candidate link's token replaced by `[link]`, for showing a message we sent to the team.
- * A link's token is all that lets someone act as the candidate (withdraw, opt out, confirm answers given after applying
- * again, ask for their data), and some never expire, so it stays with the candidate: never in what the team is shown.
+ * A link's token is all that lets someone act as the candidate (withdraw, answer the AI interview, ask for their data),
+ * and some never expire, so it stays with the candidate: never in what the team is shown.
  */
 export function maskCandidateLinks<T extends string | null | undefined>(text: T): T {
   return (typeof text === "string" ? text.replace(CANDIDATE_LINK_IN_TEXT, "/c/$1/[link]") : text) as T;

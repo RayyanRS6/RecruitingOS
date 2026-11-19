@@ -1,15 +1,5 @@
-import type { RolePacket } from "@ros/contracts";
-
-/** Founder decision F4: only verified states. `live` means connected and working; boards use the posting states below. */
+/** Founder decision F4: only verified states. `live` means connected and working. */
 export type AdapterStatus = "live" | "not_connected" | "manual_action_required" | "awaiting_verification" | "fake" | "disabled";
-
-/**
- * The nine posting states (docs/spec/20 item 11; the table and the transitions live in packages/core/src/postings.ts).
- * An adapter's publish result names the state its channel reaches on publish: `ready_to_post` (a package and a link
- * exist; nothing is on the board yet), `submitted_integration` (sent through a native integration and awaiting the
- * provider) or `live_verified` (only when the channel is verified by construction, such as a configured intake address).
- */
-export type PostingState = "draft" | "approved" | "ready_to_post" | "posted_manually" | "submitted_integration" | "live_verified" | "paused" | "failed" | "closed";
 
 export type OutboundEmail = {
   to: string;
@@ -24,7 +14,7 @@ export type OutboundEmail = {
    */
   idempotencyKey: string;
   tags?: Record<string, string>;
-  /** Small files such as an iCalendar invitation; content is base64. */
+  /** Small files such as the copy of their information a privacy request sends; content is base64. */
   attachments?: Array<{ filename: string; contentType: string; contentBase64: string }>;
 };
 
@@ -39,63 +29,11 @@ export type SendResult =
    */
   | { status: "failed"; error: string; retryable: boolean; uncertain?: boolean; aboutAddress?: boolean };
 
-export type InboundAttachment = { filename: string; contentType: string; contentBase64: string; sizeBytes: number };
-
-export type InboundEmail = {
-  to: string;
-  from: string;
-  fromName?: string;
-  subject: string;
-  text: string;
-  html?: string;
-  attachments: InboundAttachment[];
-  messageId?: string;
-  receivedAt: string;
-};
 
 export interface EmailAdapter {
   readonly id: string;
   readonly status: AdapterStatus;
   send(msg: OutboundEmail): Promise<SendResult>;
-}
-
-export type OutboundSms = { to: string; body: string; idempotencyKey: string };
-
-export interface SmsAdapter {
-  readonly id: string;
-  readonly status: AdapterStatus;
-  send(msg: OutboundSms): Promise<SendResult>;
-}
-
-export type PostingInput = {
-  roleId: string;
-  companyName: string;
-  companySlug: string;
-  packet: RolePacket;
-  jobUrl: string;
-  /** For a board, its own tracked apply link; otherwise the plain apply page. */
-  applyUrl: string;
-  intakeAddress?: string;
-};
-
-export type PublishResult =
-  | { status: "ready_to_post" | "submitted_integration" | "live_verified"; externalId?: string; externalUrl?: string; instructions?: string; steps?: string[] }
-  | { status: "failed"; error: string; retryable: boolean };
-
-export interface JobBoardAdapter {
-  readonly channel: string;
-  readonly status: AdapterStatus;
-  publish(input: PostingInput): Promise<PublishResult>;
-  expire(input: { roleId: string; externalId?: string | null }): Promise<void>;
-}
-
-/** `approximate` (with the broader `occupation` it was read from) when the job has no occupation of its own. */
-export type CompBenchmark = { metro: string; basis: "hourly" | "salary"; p25: number; p50: number; p75: number; source: string; asOf: string; approximate?: true; occupation?: string };
-
-export interface CompAdapter {
-  readonly id: string;
-  readonly status: AdapterStatus;
-  benchmark(query: { title: string; socCode?: string; locationText?: string; basis?: "hourly" | "salary" }): Promise<CompBenchmark | null>;
 }
 
 export type StoredObjectInfo = { size: number; contentType: string | null };

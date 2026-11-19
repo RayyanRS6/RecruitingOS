@@ -1,27 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { HomeView } from "@ros/contracts";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs } from "./test-helpers";
+import { signInByEmailLink } from "./test-helpers";
 
 /**
- * The first screens (plan item 0.10): the company keeps the time zone its owner chose instead of a silent Los Angeles,
- * and a brand-new company's Today offers a way forward instead of an "All clear" with no button: the getting-started
- * card's first-role step (plan B2) for those who can start a hire, an honest line for those who cannot.
+ * The first screens: the company keeps the time zone its owner chose instead of a silent Los Angeles, and a brand-new
+ * company's Home has room to start a hire, with nothing else on it.
  */
-describe("sign-up and the first Today", () => {
+describe("sign-up and the first Home", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
-  let companyId = "";
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-  type Card = { kind: string; title: string; body: string; actions: Array<{ label: string; method: string; path: string }> };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
     app = createApp(container);
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@first.test" }) });
-    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
-    owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
+    owner = await signInByEmailLink(app, "owner@first.test");
   });
   afterAll(async () => {
     await container.close();
@@ -32,23 +28,20 @@ describe("sign-up and the first Today", () => {
     expect(bad.status).toBe(400);
     const r = await json(owner, "POST", "/api/v1/companies", { name: "First Dental", vertical: "dental", sizeBand: "1-19", timezone: "America/Chicago", locations: [{ city: "Austin", region: "TX", country: "US" }] });
     expect(r.status).toBe(201);
-    companyId = ((await r.json()) as { id: string }).id;
     const current = (await (await json(owner, "GET", "/api/v1/companies/current")).json()) as { timezone: string };
     expect(current.timezone).toBe("America/Chicago");
   });
 
-  it("a brand-new company's Today offers 'Start a hire' to those who can, and an honest line to those who cannot", async () => {
-    // Getting started (plan B2) leads, and its first-role step carries "Start a hire", so the empty card steps aside
-    const cards = ((await (await json(owner, "GET", "/api/v1/brief")).json()) as { cards: Array<Card & { gettingStarted?: { steps: Array<{ key: string; done: boolean; actions: Array<{ label: string; method: string; path: string }> }> } }> }).cards;
-    expect(cards.map((c) => c.kind)).toEqual(["getting_started"]);
-    const firstRole = cards[0].gettingStarted?.steps.find((s) => s.key === "first_role");
-    expect(firstRole?.done).toBe(false);
-    expect(firstRole?.actions[0]).toEqual({ label: "Start a hire", method: "GET", path: "/roles/new" });
-    const hr = await signInAs(container, app, { companyId, role: "hr" });
-    // HR's only step is inviting the team, done now that HR is on it, so HR's Today is the honest empty card alone
-    const theirs = ((await (await json(hr, "GET", "/api/v1/brief")).json()) as { cards: Card[] }).cards;
-    expect(theirs.map((c) => c.kind)).toEqual(["empty"]);
-    expect(theirs[0].title).toBe("No jobs are open yet");
-    expect(theirs[0].actions).toEqual([]);
+  it("a brand-new company's Home has room to start a hire: no job, no draft and no notice yet, and the plan has a place free", async () => {
+    const r = await json(owner, "GET", "/api/v1/home");
+    expect(r.status).toBe(200);
+    const home = (await r.json()) as HomeView;
+    expect(home.jobs).toEqual([]);
+    expect(home.drafts).toEqual([]);
+    expect(home.notices).toEqual([]);
+    expect(home.room).toMatchObject({ ok: true, used: 0, holding: [], message: null, ask: null });
+    // and the first draft starts
+    expect((await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental assistant in Austin, $24 to $28 an hour, full time." })).status).toBe(201);
+    expect(((await (await json(owner, "GET", "/api/v1/home")).json()) as HomeView).drafts).toHaveLength(1);
   });
 });

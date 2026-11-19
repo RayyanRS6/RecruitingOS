@@ -7,7 +7,7 @@ import { seatRoom } from "./entitlements";
 import { emit } from "./events";
 
 /**
- * Team invitations (docs/spec/21, area A; migration 0022).
+ * Team invitations (docs/PRODUCT.md, D1; migration 0022).
  *
  * An invitation is a row: company, address, role, who sent it, and the hash of the token in the emailed link. The link
  * opens a page on the API that offers Google or Microsoft sign-in (and the email link where a deployment enables it)
@@ -15,7 +15,7 @@ import { emit } from "./events";
  * path calls `acceptPendingInvitations`, which joins the person to the company with the invited role when the verified
  * address is the invited one, and refuses the sign-in when it is not. Every pending invitation for the verified address
  * is accepted at any sign-in, so a person who lost the link still joins by signing in with the invited address. ITS
- * staff accounts never join by invitation; they get access through a scoped grant.
+ * staff accounts never join by invitation.
  *
  * This module deliberately imports nothing from ./auth or ./identity (both call into it), so the token hash and the
  * address normalisation are computed here with the same recipes.
@@ -39,20 +39,15 @@ export function invitationLink(appBaseUrl: string, token: string): string {
   return `${appBaseUrl}/api/v1/auth/invite?token=${encodeURIComponent(token)}`;
 }
 
-/** The role in plain words, as the invitation email and the team page say it. */
+/** The role in plain words, as the invitation email and the invitation page say it: the words Settings shows (`MEMBERSHIP_ROLE_LABEL`). */
 export function roleInWords(role: string): string {
-  return ({ owner: "an owner", admin: "an administrator", hiring_manager: "a hiring manager", interviewer: "an interviewer", hr: "HR", recruiter: "a recruiter" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
+  return ({ owner: "an owner", admin: "an admin", hiring_manager: "a member" } as Record<string, string>)[role] ?? role.replace(/_/g, " ");
 }
 
 /** What an invitation is right now. A pending row past its expiry reads as expired even before anything marks it. */
 export function invitationState(row: Pick<InvitationRow, "status" | "expiresAt">, now: Date = new Date()): InvitationState {
   if (row.status === "accepted" || row.status === "revoked" || row.status === "expired") return row.status;
   return Date.parse(row.expiresAt) > now.getTime() ? "pending" : "expired";
-}
-
-/** What a team member may see about an invitation. Never the token hash. */
-export function publicInvitation(row: InvitationRow, now: Date = new Date()) {
-  return { id: row.id, email: row.email, role: row.role, name: row.name, status: invitationState(row, now), expiresAt: row.expiresAt, invitedBy: { name: row.invitedBy.name ?? null }, createdAt: row.createdAt, acceptedAt: row.acceptedAt, revokedAt: row.revokedAt };
 }
 
 /**
@@ -83,7 +78,7 @@ export async function createInvitation(
 /** A fresh token and another seven days for an invitation that is still open (or lapsed unanswered); the old link stops working. */
 export async function resendInvitation(
   q: Queryable,
-  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number; /** what the record says, when the new link goes some other way than an email (it is copied to be sent by hand) */ reason?: string },
+  input: { invitationId: string; companyId: string; actor: Actor; now?: Date; ttlMs?: number },
 ): Promise<{ row: InvitationRow; token: string } | null> {
   const now = input.now ?? new Date();
   const [existing] = await q.select().from(invitations).where(and(eq(invitations.id, input.invitationId), eq(invitations.companyId, input.companyId))).limit(1);
@@ -96,7 +91,7 @@ export async function resendInvitation(
     .set({ tokenHash: sha256(token), status: "pending", expiresAt: new Date(now.getTime() + (input.ttlMs ?? INVITATION_TTL_MS)).toISOString() })
     .where(eq(invitations.id, existing.id))
     .returning();
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: input.reason ?? `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "invitation.resent", target: { type: "invitation", id: row.id }, reason: `sent again to ${row.email}`, details: { email: row.email, role: row.role, wasExpired: state === "expired" } });
   return { row, token };
 }
 

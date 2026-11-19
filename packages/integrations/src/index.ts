@@ -1,13 +1,8 @@
 export * from "./types";
 export * from "./registry";
-export { FakeEmailAdapter, FakeSmsAdapter } from "./email/fake";
+export { FakeEmailAdapter } from "./email/fake";
 export { PostmarkEmailAdapter } from "./email/postmark";
-export { parsePostmarkInbound, extractIntakeToken, intakeAddress, extractApplicantFromInbound, extractReplyToken, replyAddress } from "./email/inbound";
 export { mailbox } from "./email/mailbox";
-export { jobPostingJsonLd, jobValidThrough, schemaEmploymentType, SCHEMA_EMPLOYMENT_TYPE, EMAIL_IN_NOT_CONFIGURED, type JobPostingJsonLdInput } from "./jobboards/native";
-export { linkedInFeedXml, jobFeedXml, jobFeedJson, feedSalaryText, type FeedJob, type FeedMeta } from "./jobboards/external";
-export { RealUrlVerifier, FakeUrlVerifier, titleMatches, normalizeForTitleMatch, LINK_CHECK_USER_AGENT, LINK_CHECK_TIMEOUT_MS, LINK_CHECK_MAX_BYTES, type UrlVerifier, type VerifyResult, type FakeAnswer } from "./jobboards/verify";
-export { BlsOewsAdapter } from "./comp/bls";
 export { LocalStorageAdapter, MemoryStorageAdapter } from "./storage/local";
 export { GrantSigner, type GrantPayload } from "./storage/grants";
 export { SupabaseStorageAdapter, StorageError } from "./storage/supabase";
@@ -15,10 +10,8 @@ export { LOGO_FILE, LOGO_MAX_BYTES, LOGO_MAX_SIDE, LOGO_MIME_BY_EXTENSION, LOGO_
 export { FakeMalwareScanner, EICAR_TEST_STRING } from "./scanning/fake";
 export { ClamAvScanner, parseClamdReply, CLAMAV_DEFAULT_PORT, CLAMAV_DEFAULT_TIMEOUT_MS, type ClamAvOptions } from "./scanning/clamav";
 export type { MalwareScanner, ScanResult } from "./scanning/types";
-export { MemorySecretStore } from "./secrets/memory";
 export { FakeAnalyticsAdapter, PostHogServerAdapter } from "./analytics/adapters";
 export { toProductEvent, refFor } from "./analytics/mapping";
-export { CalendarCredentialRevoker, FakeCredentialRevoker, type CredentialRevoker } from "./secrets/revoke";
 export { SuppressingEmailAdapter, fakePostmarkEvent, guardEmailAdapter, parsePostmarkEvent, verifyPostmarkWebhookAuth, type EmailEvent } from "./email/postmark-webhooks";
 export { FakeIdentityProvider, type FakeMintInput } from "./identity/fake";
 export { SupabaseIdentityProvider, scalableSvg } from "./identity/supabase";
@@ -26,11 +19,5 @@ export { IdentityError, type IdentityProvider, type VerifiedIdentity, type MfaFa
 export { totp, hotp, verifyTotp, generateTotpSecret, otpauthUri, base32Encode, base32Decode } from "./identity/totp";
 export { verifyJwt, signHs256, decodeJwt, base64url } from "./identity/jwt";
 export { identityFromClaims } from "./identity/claims";
-export { FakeGoogleCalendarProvider } from "./calendar/fake-google";
-export { GoogleCalendarProvider } from "./calendar/google";
-export { CalendarError, GOOGLE_CALENDAR_SCOPES, type CalendarProvider, type CalendarAccount, type CalendarCredential, type CalendarEventInput, type CalendarEventRef, type TimeRange } from "./calendar/types";
 export { scrubObservabilityEvent, sentryBaseOptions } from "./observability/sentry";
 export { PRODUCT_EVENT_NAMES, type AnalyticsAdapter, type ProductEvent, type ProductEventName } from "./analytics/types";
-export { SupabaseVaultSecretStore } from "./secrets/vault";
-export type { SecretStore, SqlExecutor } from "./secrets/types";
-export { TwilioSmsAdapter, parseTwilioInbound, verifyTwilioSignature, smsKeyword, type InboundSms } from "./sms/twilio";

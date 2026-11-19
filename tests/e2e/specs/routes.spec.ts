@@ -1,23 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
-import { createCompanyThroughTheForm, expectAccessible, gotoSettled, seedRoleAndApplicant, signIn, skipWithoutFakeSignIn } from "./helpers";
+import { ADMIN, PERSONAS, applyThroughTheForm, createCompanyThroughTheForm, expectAccessible, gotoSettled, noSidewaysScroll, publishedJobThroughTheApi, signIn, skipWithoutFakeSignIn, statusPathFromEmail, type Applicant } from "./helpers";
 
 /**
- * Route inventory coverage (docs/spec/16): every final Next.js route is visited signed out (redirect), signed in with the
- * wrong permission (redirect), and signed in correctly (renders, passes axe, no horizontal overflow on a phone).
+ * Route inventory: every page of the app is visited signed out (sent to sign in), signed in as the wrong role (sent
+ * where that person belongs) and as the right one (it renders, passes axe, and never scrolls sideways on this
+ * viewport), and the address of a page that is gone leads to the nearest page that exists. Runs on a desk and on a
+ * phone.
  */
 const run = Date.now().toString(36);
 
-async function noHorizontalOverflow(page: Page, name: string) {
-  const { scrollWidth, innerWidth } = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
-  expect(scrollWidth, `${name} scrolls sideways on this viewport`).toBeLessThanOrEqual(innerWidth + 1);
-}
-
-/** No table scrolls sideways inside its own box either (redesign spec 3.8: five columns at most, fitting 1280 px and up). */
+/** No table scrolls sideways inside its own box on a desk (on a phone a table may; the page may not). */
 async function noTableOverflow(page: Page, name: string) {
-  if ((page.viewportSize()?.width ?? 0) < 1280) return; // on a phone a table may scroll inside its box; the page may not
+  if ((page.viewportSize()?.width ?? 0) < 1280) return;
   const wide = await page.evaluate(() => [...document.querySelectorAll(".table-wrap")].filter((t) => t.scrollWidth > t.clientWidth + 1).length);
   expect(wide, `${name}: a table scrolls sideways`).toBe(0);
 }
+
+/** The frame's links sit in the side rail from 900px, and behind the Menu button under it. */
+const sideRail = (page: Page) => (page.viewportSize()?.width ?? 0) > 900;
 
 test.describe("route inventory", () => {
   test("every application page and every candidate page answers with one content-security policy and a nonce", async ({ page, baseURL }) => {
@@ -37,7 +37,7 @@ test.describe("route inventory", () => {
     }
     const privacy = await page.request.get(`${baseURL}/privacy`);
     expect(policyOf(privacy.headers(), "/privacy")).toContain("default-src 'none'");
-    // a path mounted on Hono keeps Hono's own headers: the shell's configuration replaces none of them
+    // a path mounted on the API keeps the API's own headers: the shell's configuration replaces none of them
     expect(privacy.headers()["x-frame-options"]).toBe("SAMEORIGIN");
     expect(privacy.headers()["referrer-policy"]).toBe("no-referrer");
     // the shell's own scripts carry the nonce the header names
@@ -48,153 +48,187 @@ test.describe("route inventory", () => {
     const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
     expect(scripts.length).toBeGreaterThan(0);
     for (const attrs of scripts) if (!/type="application\/(ld\+)?json"/.test(attrs)) expect(attrs, `<script${attrs}>`).toContain(`nonce="${nonce}"`);
+    // the addresses of removed endpoints are served by nobody
+    for (const gone of ["/a/abcdefghijkl", "/feeds/jobs.xml"]) expect((await page.request.get(`${baseURL}${gone}`, { maxRedirects: 0 })).status(), gone).toBe(404);
   });
 
-  test("signed out, every private route sends the person to sign in", async ({ page }) => {
-    for (const path of ["/roles", "/roles/new", "/talent", "/interviews", "/setup", "/updates", "/recruiter/queue", "/admin"]) {
+  test("signed out, every private page sends the person to sign in, and the welcome page has one way in", async ({ page }) => {
+    for (const path of ["/roles", "/roles/new", "/talent", "/setup", "/updates", "/setup/company", "/admin", "/admin/privacy", "/admin/system", "/people", "/interviews", "/admin/customers", "/admin/problems"]) {
       await page.goto(path);
-      await expect(page).toHaveURL(/\/login/);
+      await expect(page, path).toHaveURL(/\/login/);
     }
-    // Home's address shows the public welcome page instead (October 2026 redesign), and its Sign in leads to the same form.
+    // Home's address shows the public welcome page instead, and so does an old address that led Home
+    await page.goto("/recruiter/queue");
+    await expect(page).toHaveURL(/\/welcome$/);
     await page.goto("/");
     await expect(page).toHaveURL(/\/welcome$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Hiring, made more manageable.");
     await expectAccessible(page, "welcome");
-    await noHorizontalOverflow(page, "welcome");
+    await noSidewaysScroll(page, "welcome");
+    // every way in says the same, and nobody is told to wait for an invitation
+    const waysIn = page.getByRole("link", { name: "Get started" });
+    expect(await waysIn.count()).toBeGreaterThan(1);
+    for (const link of await waysIn.all()) await expect(link).toHaveAttribute("href", "/login");
+    await expect(page.getByText(/invitation/i)).toHaveCount(0);
     await page.getByRole("link", { name: "Sign in", exact: true }).first().click();
     await expect(page).toHaveURL(/\/login/);
+    await expect(page.getByRole("link", { name: /^Continue with / }).first()).toBeVisible({ timeout: 30_000 });
+    await expectAccessible(page, "sign-in");
+    await noSidewaysScroll(page, "sign-in");
   });
 
-  test("an owner sees every company route; recruiter and admin routes send them home", async ({ page, baseURL }) => {
+  test("an owner sees every company page and every candidate page; the admin dashboard sends them home; old addresses lead to the nearest page", async ({ page, browser, baseURL }, info) => {
     skipWithoutFakeSignIn();
-    test.setTimeout(300_000); // eight routes with accessibility scans, then the candidate pages: long on a loaded runner
-    await signIn(page, { email: `owner+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
-    await createCompanyThroughTheForm(page, `Brightline ${run}`);
-    const seeded = await seedRoleAndApplicant(page.request, baseURL!, "Luis", "Ortega");
-    const routes: Array<[string, RegExp | string]> = [
+    test.setTimeout(480_000);
+    const base = baseURL!;
+    const tag = `${run}${info.project.name}`;
+    await signIn(page, { email: `owner+${tag}@brightline.test`, name: "Dana Whitfield", provider: "google" });
+    await createCompanyThroughTheForm(page, `Brightline ${tag}`);
+    const job = await publishedJobThroughTheApi(page.request, base);
+    const luis: Applicant = { first: "Luis", last: "Ortega", email: `luis.ortega+${tag}@example.com`, resume: PERSONAS.strong.resume };
+    const applied = await applyThroughTheForm(browser, base, job.jobUrl, luis);
+    await applied.context.close();
+    const statusPath = await statusPathFromEmail(page.request, base, luis.email);
+    const { rows } = (await (await page.request.get(`${base}/api/v1/roles/${job.roleId}/applications?tab=new`)).json()) as { rows: Array<{ id: string }> };
+    expect(rows).toHaveLength(1);
+
+    // every company page, as the right role: its heading, the frame, axe, and no sideways scrolling
+    const rail = page.getByRole("navigation", { name: "Main" });
+    const pages: Array<[string, RegExp | string]> = [
       ["/", /Good (morning|afternoon|evening)/],
       ["/roles", "Jobs"],
-      // the job builder's own page (plan C4): opening it saves nothing
       ["/roles/new", "Who are you hiring?"],
-      [`/roles/${seeded.roleId}`, /Hygienist/i],
-      // the Talent page is headed by the role it shows (Wave A: "JOB · <company>" above the role's title)
-      [`/roles/${seeded.roleId}/talent`, /Hygienist/i],
-      ["/talent", /Hygienist/i],
-      ["/interviews", "Interviews"],
+      [`/roles/${job.roleId}`, job.title],
+      [`/roles/${job.roleId}?tab=share`, job.title],
+      [`/roles/${job.roleId}/talent`, job.title],
+      [`/roles/${job.roleId}/talent?tab=not_selected`, job.title],
+      ["/talent", "Candidates"],
       ["/setup", "Settings"],
-      // every earlier update, read and unread (plan B3), reached from Home
       ["/updates", "Updates"],
     ];
-    for (const [path, heading] of routes) {
+    for (const [path, heading] of pages) {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 }).first()).toContainText(heading, { timeout: 30_000 });
-      await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
-      // Sign out stays reachable in the phone's top bar too, and the menu does not name the AI company
-      await expect(page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: "Sign out" })).toBeVisible();
-      await expect(page.getByRole("navigation", { name: "Main" })).not.toContainText("AI:");
+      // Start a hire and Sign out stay reachable in the phone's top bar too
+      await expect(rail.getByRole("link", { name: "Start a hire" })).toBeVisible();
+      await expect(rail.getByRole("button", { name: "Sign out" })).toBeVisible();
       await expectAccessible(page, path);
-      await noHorizontalOverflow(page, path);
+      await noSidewaysScroll(page, path);
     }
-    // The rail (Wave DS): "Start a hire" is in it for an owner; the open role is listed under Roles on a wide screen,
-    // and on a phone the links open from the Menu button while Start a hire and Sign out stay in the bar.
+    // the candidate panel has an address of its own
+    await page.goto(`/roles/${job.roleId}/talent?open=${rows[0].id}`);
+    await expect(page.getByRole("dialog", { name: "Luis Ortega" })).toBeVisible({ timeout: 30_000 });
+    await expectAccessible(page, "the candidate panel");
+    await noSidewaysScroll(page, "the candidate panel");
+
+    // the rail: a company's four places and nothing else; on a phone they open from the Menu button
     await page.goto("/roles");
-    const rail = page.getByRole("navigation", { name: "Main" });
-    await expect(rail.getByRole("link", { name: "Start a hire" })).toBeVisible({ timeout: 30_000 });
-    if ((page.viewportSize()?.width ?? 0) > 900) {
-      await expect(rail.getByRole("link", { name: /Hygienist/i })).toBeVisible({ timeout: 30_000 });
-    } else {
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Jobs", { timeout: 30_000 });
+    if (!sideRail(page)) {
       await rail.getByRole("button", { name: "Menu" }).click();
-      await expect(rail.getByRole("link", { name: "Interviews" })).toBeVisible();
-      await expectAccessible(page, "phone menu open");
+      await expectAccessible(page, "the phone menu, open");
     }
-    // N outside a text field opens the job builder; opening it saves nothing (the draft starts with the first message),
-    // so a stray key leaves no draft behind. An old "/?start=1" link lands there too.
-    await page.keyboard.press("n");
-    await expect(page).toHaveURL(/\/roles\/new$/, { timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: "Who are you hiring?" })).toBeVisible({ timeout: 30_000 });
-    const draft = await page.request.get(`${baseURL}/api/v1/intake/sessions/current`);
-    expect(((await draft.json()) as { session: unknown }).session).toBeNull();
-    await page.goto("/?start=1");
-    await expect(page).toHaveURL(/\/roles\/new$/, { timeout: 30_000 });
-    // and on a page where something was typed but not saved, N is left alone so the typing is not thrown away
-    // (the availability card sits on the Settings page's Notifications tab)
-    await page.goto("/setup?tab=notifications");
-    await page.getByLabel("Buffer between interviews (minutes)").fill("25");
-    await page.getByRole("heading", { level: 1 }).click();
-    await page.keyboard.press("n");
-    await page.waitForTimeout(1_000);
-    await expect(page).toHaveURL(/\/setup\?tab=notifications$/);
-    await expect(page.getByLabel("Buffer between interviews (minutes)")).toHaveValue("25");
-    await page.goto(`/roles/${seeded.roleId}/people`);
-    await expect(page).toHaveURL(new RegExp(`/roles/${seeded.roleId}/talent`));
-    await page.goto("/people");
-    await expect(page).toHaveURL(/\/talent$/, { timeout: 30_000 });
-    await page.goto("/recruiter/queue");
-    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
-    await page.goto("/admin");
-    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 });
-    await page.goto("/login");
-    await expect(page).toHaveURL(/\/$/, { timeout: 30_000 }); // signed in: no second sign-in form
+    for (const place of ["Home", "Jobs", "Candidates", "Settings"]) await expect(rail.getByRole("link", { name: place, exact: true })).toBeVisible();
+    for (const gone of ["Interviews", "People", "Companies", "System"]) await expect(rail.getByRole("link", { name: gone, exact: true })).toHaveCount(0);
+    await expect(rail.getByRole("link", { name: /^Updates/ })).toBeVisible();
+
+    // as the wrong role: the admin dashboard sends an owner home
+    for (const path of ["/admin", "/admin/privacy", "/admin/system"]) {
+      await page.goto(path);
+      await expect(page, path).toHaveURL(/\/$/, { timeout: 30_000 });
+    }
+    // the addresses of pages that are gone lead to the nearest page that exists
+    const moved: Array<[string, RegExp]> = [
+      ["/people", /\/talent$/],
+      ["/interviews", /\/talent$/],
+      ["/interviews/00000000-0000-4000-8000-000000000000", /\/talent$/],
+      [`/roles/${job.roleId}/people`, new RegExp(`/roles/${job.roleId}/talent$`)],
+      ["/recruiter/queue", /\/$/],
+      ["/admin/customers", /\/$/],
+      ["/admin/problems", /\/$/],
+    ];
+    for (const [from, to] of moved) {
+      await page.goto(from);
+      await expect(page, from).toHaveURL(to, { timeout: 30_000 });
+    }
+    // signed in with a company: no second sign-in form, and no second company form
+    for (const path of ["/login", "/setup/company"]) {
+      await page.goto(path);
+      await expect(page, path).toHaveURL(/\/$/, { timeout: 30_000 });
+    }
     await page.goto("/nothing-here");
-    await expect(page.getByRole("heading", { name: /does not exist/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "That page does not exist" })).toBeVisible();
     await expectAccessible(page, "not found");
-    // the candidate pages on this viewport too
-    await page.goto(`/careers/${seeded.slug}/jobs/${seeded.roleId}`);
-    await noHorizontalOverflow(page, "job page");
-    await page.goto(seeded.statusPath);
-    await expectAccessible(page, "status page");
-    await noHorizontalOverflow(page, "status page");
+
+    // the candidate's pages on this viewport too
+    const candidatePages: Array<[string, string]> = [
+      [`/careers/${job.slug}`, "the careers page"],
+      [`/careers/${job.slug}/jobs/${job.roleId}`, "the job page"],
+      [`/careers/${job.slug}/jobs/${job.roleId}/apply`, "the application form"],
+      [statusPath, "the status page"],
+      ["/c/link-request", "Lost your link?"],
+      ["/c/privacy-request", "the privacy request form"],
+      ["/privacy", "the privacy notice"],
+    ];
+    for (const [path, name] of candidatePages) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({ timeout: 30_000 });
+      await expectAccessible(page, name);
+      await noSidewaysScroll(page, name);
+    }
   });
 
-  test("a seeded platform administrator reaches the queue and the console; both pass accessibility", async ({ page }) => {
+  test("a platform administrator lands on the admin dashboard, every section passes accessibility, and the company pages send them back", async ({ page }) => {
     skipWithoutFakeSignIn();
-    await signIn(page, { email: "admin-e2e@identifiedtalent.com", name: "Admin", provider: "azure", aal2: true });
-    await gotoSettled(page, "/recruiter/queue");
-    await expect(page.getByRole("heading", { name: "Recruiter queue" })).toBeVisible({ timeout: 30_000 });
-    await expectAccessible(page, "recruiter queue");
-    await noHorizontalOverflow(page, "recruiter queue");
-    // The console (Wave S6): /admin lands on Overview; the rail lists the five sections under Console and marks the one
-    // open; each section's parts are tabs. Every section and part passes axe and never scrolls sideways, the page or a table.
-    await gotoSettled(page, "/admin");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(/Good (morning|afternoon|evening)/, { timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: /Needs attention/ })).toBeVisible({ timeout: 30_000 });
-    await expectAccessible(page, "console overview");
-    await noHorizontalOverflow(page, "console overview");
-    await noTableOverflow(page, "console overview");
+    test.setTimeout(300_000);
+    await signIn(page, ADMIN);
+    // sign-in lands on Companies, with the requests first
+    await expect(page).toHaveURL(/\/admin$/, { timeout: 30_000 });
+    await expect(page.getByRole("heading", { level: 1, name: "Companies" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { name: "Waiting for approval" })).toBeVisible();
     const rail = page.getByRole("navigation", { name: "Main" });
-    const wide = (page.viewportSize()?.width ?? 0) > 900;
+    // no company to hire for: the rail holds the dashboard's three places only
+    await expect(rail.getByRole("link", { name: "Start a hire" })).toHaveCount(0);
     const sections: Array<[string, string, string[]]> = [
-      ["Overview", "/admin", []],
-      ["Customers", "/admin/customers", ["All customers", "Hiring outcomes"]],
+      ["Companies", "/admin", []],
       ["Privacy requests", "/admin/privacy", ["Open", "Closed"]],
-      ["Problems", "/admin/problems", ["Alerts", "Failed work", "Email", "Security reports"]],
-      ["System and settings", "/admin/system", ["Costs", "Workflows", "AI runs", "Queue health", "Business calendar", "Administrators"]],
+      ["System", "/admin/system", ["Health", "Costs", "Email", "Security reports", "Administrators"]],
     ];
     for (const [label, path, parts] of sections) {
-      // on a phone the sections sit in the rail's Menu (still open after a link to the page already shown, Overview on /admin)
-      if (!wide) {
+      // on a phone the sections sit behind the Menu button, which closes once a link is followed
+      if (!sideRail(page)) {
         const menu = rail.getByRole("button", { name: "Menu" });
         if ((await menu.getAttribute("aria-expanded")) !== "true") await menu.click();
       }
-      await rail.getByRole("list", { name: "Console sections" }).getByRole("link", { name: label, exact: true }).click();
+      await rail.getByRole("link", { name: label, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${path}(\\?|$)`), { timeout: 30_000 });
-      // (on a phone the Menu closes once the link is followed, so the mark is read from the closed menu)
-      await expect(rail.getByRole("list", { name: "Console sections", includeHidden: true }).getByRole("link", { name: label, exact: true, includeHidden: true })).toHaveAttribute("aria-current", "page");
-      if (label !== "Overview") await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible({ timeout: 30_000 });
-      await expectAccessible(page, `console ${label}`);
-      await noHorizontalOverflow(page, `console ${label}`);
-      await noTableOverflow(page, `console ${label}`);
+      await expect(rail.getByRole("link", { name: label, exact: true, includeHidden: true })).toHaveAttribute("aria-current", "page");
+      await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible({ timeout: 30_000 });
+      await expectAccessible(page, `admin: ${label}`);
+      await noSidewaysScroll(page, `admin: ${label}`);
+      await noTableOverflow(page, `admin: ${label}`);
       for (const part of parts) {
-        await page.getByRole("tab", { name: new RegExp(`^${part}\\b`) }).click();
-        await expectAccessible(page, `console ${label} › ${part}`);
-        await noHorizontalOverflow(page, `console ${label} › ${part}`);
-        await noTableOverflow(page, `console ${label} › ${part}`);
+        const tab = page.getByRole("tab", { name: new RegExp(`^${part}\\b`) });
+        await tab.click();
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        await expectAccessible(page, `admin: ${label}, ${part}`);
+        await noSidewaysScroll(page, `admin: ${label}, ${part}`);
+        await noTableOverflow(page, `admin: ${label}, ${part}`);
       }
     }
     // a part is in the address: a reload lands on it
-    await gotoSettled(page, "/admin/system?view=calendar");
-    await expect(page.getByRole("tab", { name: /^Business calendar\b/ })).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
-    await page.goto("/setup");
-    await expect(page).toHaveURL(/recruiter\/queue/); // no company: owner routes are not for staff
+    await expect(page).toHaveURL(/\/admin\/system\?view=admins$/);
+    await page.reload();
+    await expect(page.getByRole("tab", { name: /^Administrators\b/ })).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
+    // the addresses of the old console lead to the dashboard, a company's own link included
+    await gotoSettled(page, "/admin/customers?open=00000000-0000-4000-8000-000000000000");
+    await expect(page).toHaveURL(/\/admin\?open=00000000-0000-4000-8000-000000000000$/, { timeout: 30_000 });
+    await gotoSettled(page, "/admin/problems");
+    await expect(page).toHaveURL(/\/admin\/system$/, { timeout: 30_000 });
+    // as the wrong role: an administrator has no company, so a company's pages send them back to the dashboard
+    for (const path of ["/", "/roles", "/roles/new", "/talent", "/setup", "/updates"]) {
+      await gotoSettled(page, path);
+      await expect(page, path).toHaveURL(/\/admin$/, { timeout: 30_000 });
+    }
   });
 });

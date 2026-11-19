@@ -3,7 +3,7 @@ import { dockFocusDue, focusLost, rowFocusAfterMove } from "../../apps/web/src/f
 
 /**
  * Where keyboard focus goes when the control that had it goes away (docs/07): the job builder's question cards after
- * Send, and a Talent row whose stage button moved the person out of the view. Pure rules, tested here; the pages act on
+ * Send, and a candidate row whose action moved the person out of the tab. Pure rules, tested here; the pages act on
  * them only when focus really was lost.
  */
 describe("focus lost", () => {
@@ -35,16 +35,16 @@ describe("the job builder's cards after Send", () => {
   });
 });
 
-describe("a Talent row after its stage button moved the person", () => {
-  it("goes to the person now in that place when the row left the view", () => {
-    // Priya (b) was second in a, b, c and is no longer in this view
+describe("a candidate row after an action moved the person", () => {
+  it("goes to the person now in that place when the row left the tab", () => {
+    // b was second in a, b, c and is no longer in this tab
     expect(rowFocusAfterMove(["a", "c"], { id: "b", index: 1 })).toEqual({ id: "c", same: false });
     // the last one moved: the one before takes it
     expect(rowFocusAfterMove(["a", "b"], { id: "c", index: 2 })).toEqual({ id: "b", same: false });
     expect(rowFocusAfterMove(["b", "c"], { id: "a", index: 0 })).toEqual({ id: "b", same: false });
   });
 
-  it("stays on the same row when it is still listed, and leaves an empty list to the list panel", () => {
+  it("stays on the same row when it is still listed, and leaves an empty list to the page (the tab takes the focus)", () => {
     expect(rowFocusAfterMove(["a", "b", "c"], { id: "b", index: 1 })).toEqual({ id: "b", same: true });
     expect(rowFocusAfterMove([], { id: "a", index: 0 })).toBeNull();
     // a row whose place was not known

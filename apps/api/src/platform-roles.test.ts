@@ -13,7 +13,7 @@ import { signInWithIdentity } from "./test-helpers";
 describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant refusal, two-person visibility", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
-  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", ITS_QUEUE_EMAIL: "queue@identifiedtalent.com", BOOTSTRAP_ADMIN_EMAILS: "first@identifiedtalent.com,second@identifiedtalent.com" };
+  const env = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake", ITS_QUEUE_EMAIL: "queue@identifiedtalent.com", BOOTSTRAP_ADMIN_EMAILS: "first@identifiedtalent.com,second@identifiedtalent.com" };
   const admin = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "platform roles test" }, body: body ? JSON.stringify(body) : undefined });
   const email = () => container.integrations.email as FakeEmailAdapter;
   let first = "";
@@ -52,7 +52,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     second = await signInWithIdentity(app, container, { email: "second@identifiedtalent.com", name: "Second Person", provider: "azure", aal2: true });
     const [u] = await container.db.select().from(users).where(eq(users.email, "second@identifiedtalent.com"));
     expect(u.platformRole).toBe("none");
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const ignored = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "bootstrap.ignored"));
     expect(ignored.some((a) => a.target?.id === u.id)).toBe(true);
     // and the same for the first administrator signing in again: no second ledger row appears
@@ -69,26 +69,24 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     const [u] = await container.db.select().from(users).where(eq(users.email, "first@identifiedtalent.com"));
     const rows = await container.db.select().from(sessions).where(eq(sessions.userId, u.id));
     await container.db.update(sessions).set({ aal: "aal1" }).where(eq(sessions.id, rows[0].id));
-    const r = await admin(first, "GET", "/api/v1/admin/runs");
+    const r = await admin(first, "GET", "/api/v1/admin/queue");
     expect(r.status).toBe(403);
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("mfa_required");
     await container.db.update(sessions).set({ aal: "aal2" }).where(eq(sessions.id, rows[0].id));
-    expect((await admin(first, "GET", "/api/v1/admin/runs")).status).toBe(200);
+    expect((await admin(first, "GET", "/api/v1/admin/queue")).status).toBe(200);
   });
 
   it("nobody can grant themselves a role, and grants need a reason, a staff domain and a Microsoft sign-in", async () => {
     const self = await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "first@identifiedtalent.com", role: "platform_admin", reason: "I want more", confirm: true });
     expect(self.status).toBe(403); // the self-grant rule fires before anything else
-    const selfRecruiter = await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "first@identifiedtalent.com", role: "its_recruiter", reason: "I want more", confirm: true });
-    expect(selfRecruiter.status).toBe(403);
-    expect(((await selfRecruiter.json()) as { error: { code: string } }).error.code).toBe("self_grant");
+    expect(((await self.json()) as { error: { code: string } }).error.code).toBe("self_grant");
     expect((await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "second@identifiedtalent.com", role: "platform_admin", reason: "", confirm: true })).status).toBe(400);
     expect((await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "second@identifiedtalent.com", role: "platform_admin", reason: "covering on-call", confirm: false })).status).toBe(400);
     expect(((await (await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "someone@customer.test", role: "platform_admin", reason: "covering on-call", confirm: true })).json()) as { error: { code: string } }).error.code).toBe("not_staff_domain");
     expect((await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "never-signed-in@identifiedtalent.com", role: "platform_admin", reason: "covering on-call", confirm: true })).status).toBe(404);
     // an account that exists but was never verified through Microsoft (here: created by a Google sign-in before the domain became a staff domain) cannot be granted a role
     await container.db.insert(users).values({ email: "google-only@identifiedtalent.com", name: "G Only", authProvider: "google", authSubject: "google-subject-1" });
-    const notStaff = await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "google-only@identifiedtalent.com", role: "its_recruiter", reason: "covering on-call", confirm: true });
+    const notStaff = await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "google-only@identifiedtalent.com", role: "platform_admin", reason: "covering on-call", confirm: true });
     expect(notStaff.status).toBe(409);
     expect(((await notStaff.json()) as { error: { code: string } }).error.code).toBe("not_staff_provider");
   });
@@ -99,7 +97,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     expect(r.status).toBe(201);
     secondGrantId = ((await r.json()) as { grantId: string }).grantId;
     // the existing session of the grantee gains access immediately
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(200);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(200);
     const ledger = await container.db.select().from(platformRoleGrants).where(eq(platformRoleGrants.id, secondGrantId));
     expect(ledger[0]).toMatchObject({ role: "platform_admin", source: "console", grantReason: "second administrator per the founder" });
     expect(ledger[0].grantedBy).toMatchObject({ kind: "user", name: "First Admin" });
@@ -121,18 +119,18 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     // the ledger, not the cached column, is what a request trusts: a column write without a ledger row grants nothing
     const [ghost] = await container.db.insert(users).values({ email: "ghost@identifiedtalent.com", name: "Ghost", authProvider: "azure", authSubject: "ghost-subject", platformRole: "platform_admin" }).returning();
     const ghostCookie = await signInWithIdentity(app, container, { email: "ghost@identifiedtalent.com", provider: "azure", aal2: true, subject: "ghost-subject" });
-    expect((await admin(ghostCookie, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(ghostCookie, "GET", "/api/v1/admin/queue")).status).toBe(403);
     expect(ghost.platformRole).toBe("platform_admin"); // the column said admin; the request said no
   });
 
   it("revocation is immediate, audited, alerted, and the last administrator cannot be removed", async () => {
     third = await signInWithIdentity(app, container, { email: "third@identifiedtalent.com", name: "Third", provider: "azure", aal2: true });
-    const grant = (await (await admin(second, "POST", "/api/v1/admin/platform-roles", { email: "third@identifiedtalent.com", role: "its_recruiter", reason: "new recruiter on the queue", confirm: true })).json()) as { grantId: string };
-    expect((await app.request("/api/v1/escalations", { headers: { cookie: third } })).status).toBe(200);
+    const grant = (await (await admin(second, "POST", "/api/v1/admin/platform-roles", { email: "third@identifiedtalent.com", role: "platform_admin", reason: "covering the console this month", confirm: true })).json()) as { grantId: string };
+    expect((await admin(third, "GET", "/api/v1/admin/queue")).status).toBe(200);
     email().sent.length = 0;
     const rv = await admin(first, "POST", `/api/v1/admin/platform-roles/${grant.grantId}/revoke`, { reason: "left the team", confirm: true });
     expect(rv.status).toBe(200);
-    expect((await app.request("/api/v1/escalations", { headers: { cookie: third } })).status).toBe(403);
+    expect((await admin(third, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const [row] = await container.db.select().from(platformRoleGrants).where(eq(platformRoleGrants.id, grant.grantId));
     expect(row.revokedAt).toBeTruthy();
     expect(row.revokeReason).toBe("left the team");
@@ -144,16 +142,17 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     const { suppressAddress } = await import("@ros/core");
     await suppressAddress(container.db, { address: "second@identifiedtalent.com", reason: "hard_bounce", source: "admin", actor: { kind: "system", id: "test" } });
     const fifth = await signInWithIdentity(app, container, { email: "fifth@identifiedtalent.com", name: "Fifth", provider: "azure", aal2: true });
-    const quiet = (await (await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "fifth@identifiedtalent.com", role: "its_recruiter", reason: "recruiter while an address bounces", confirm: true })).json()) as { ok: boolean; failed: number; notified: number };
+    const quiet = (await (await admin(first, "POST", "/api/v1/admin/platform-roles", { email: "fifth@identifiedtalent.com", role: "platform_admin", reason: "an administrator while an address bounces", confirm: true })).json()) as { grantId: string; ok: boolean; failed: number; notified: number };
     expect(quiet.ok).toBe(true);
     expect(quiet.failed).toBe(1);
     expect(quiet.notified).toBeGreaterThanOrEqual(1);
     expect((await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "platform_role.notify_failed"))).length).toBe(1);
     expect(JSON.stringify(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "platform_role.notify_failed")))).not.toContain("second@identifiedtalent.com");
     void fifth;
-    // the second and fourth administrators are revoked; then the first is the last one and cannot be revoked
+    // the second, fourth and fifth administrators are revoked; then the first is the last one and cannot be revoked
+    expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${quiet.grantId}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
     expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${secondGrantId}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
-    expect((await admin(second, "GET", "/api/v1/admin/runs")).status).toBe(403);
+    expect((await admin(second, "GET", "/api/v1/admin/queue")).status).toBe(403);
     const [fourthUser] = await container.db.select().from(users).where(eq(users.email, "fourth@identifiedtalent.com"));
     const [fourthGrant] = await container.db.select().from(platformRoleGrants).where(and(eq(platformRoleGrants.userId, fourthUser.id), isNull(platformRoleGrants.revokedAt)));
     expect((await admin(first, "POST", `/api/v1/admin/platform-roles/${fourthGrant.id}/revoke`, { reason: "rotation test", confirm: true })).status).toBe(200);
@@ -173,7 +172,7 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     const cookie = await signInWithIdentity(legacyApp, legacy, { email: "legacy@identifiedtalent.com", provider: "azure", aal2: true });
     const me = (await (await legacyApp.request("/api/v1/auth/me", { headers: { cookie } })).json()) as { user: { platformRole: string } };
     expect(me.user.platformRole).toBe("none");
-    expect((await legacyApp.request("/api/v1/admin/runs", { headers: { cookie, "x-admin-reason": "x" } })).status).toBe(403);
+    expect((await legacyApp.request("/api/v1/admin/queue", { headers: { cookie, "x-admin-reason": "x" } })).status).toBe(403);
     expect(await legacy.db.select().from(platformRoleGrants)).toHaveLength(0);
     await legacy.close();
     // no personal staff address anywhere in the authorization code paths (a domain default is not an address)

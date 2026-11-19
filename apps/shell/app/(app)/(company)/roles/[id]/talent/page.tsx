@@ -1,5 +1,6 @@
-import { People } from "@ros/web/src/pages/People";
+import { Candidates } from "@ros/web/src/pages/Candidates";
 
-export default function RoleTalentPage() {
-  return <People />;
+/** A job's Candidates tab; ?open=<applicationId> opens that person's panel over the list. */
+export default function JobCandidatesPage() {
+  return <Candidates />;
 }

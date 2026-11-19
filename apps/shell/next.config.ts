@@ -12,26 +12,40 @@ process.env.ROS_MIGRATIONS_DIR ??= join(repoRoot, "packages", "db", "migrations"
  * single routes exactly. Hono sets those responses' headers itself, and Next.js keeps a configured header over the one a
  * route sets, so a header meant for the application's pages must not reach them.
  */
-const appPages = "/((?!(?:api|c|careers|a|files|webhooks|feeds|dev)(?:/|$)|(?:privacy|healthz|sitemap\\.xml|robots\\.txt)$).*)";
+const appPages = "/((?!(?:api|c|careers|files|webhooks|dev)(?:/|$)|(?:privacy|healthz|sitemap\\.xml|robots\\.txt)$).*)";
+
+/**
+ * The addresses of pages that are gone, each sent to the nearest page that exists, so a bookmark or a link in an older
+ * email still lands somewhere. The query string goes with it: `/admin/customers?open=<id>` opens that company, and
+ * `/admin/problems?view=email` the Email part of System.
+ */
+const movedPages = [
+  { source: "/people", destination: "/talent" },
+  { source: "/roles/:id/people", destination: "/roles/:id/talent" },
+  { source: "/interviews/:path*", destination: "/talent" },
+  { source: "/recruiter/:path*", destination: "/" },
+  { source: "/admin/customers", destination: "/admin" },
+  { source: "/admin/problems", destination: "/admin/system" },
+];
 
 /**
  * Staging stays out of search engines (GAP3-3): a hosted deployment that is not production (a Vercel Preview deployment,
  * or DEPLOY_ENV=staging: the same test as DEPLOY_ENV in apps/api/src/env.ts) sends X-Robots-Tag on every response, the
  * application's pages, the paths mounted on Hono and the static files alike, beside robots.txt's Disallow: /
- * (apps/api/src/pages/public-feeds.ts). Read from the deployment's variables when the build writes its routes; a
+ * (apps/api/src/pages/sitemap.ts). Read from the deployment's variables when the build writes its routes; a
  * person's machine and the tests send none.
  */
 const hostedStaging = () => process.env.VERCEL_ENV === "preview" || process.env.DEPLOY_ENV === "staging";
 
 /**
- * The application shell on Vercel (decision D20, slice 5 step 5). One Next.js app serves the owner, recruiter and admin
+ * The application shell on Vercel (decision D20, slice 5 step 5). One Next.js app serves the owner and admin
  * interface and mounts the existing Hono API and candidate pages under catch-all route handlers, so the API code is
  * retained unchanged. Workspace packages are TypeScript sources and are transpiled here; native database drivers stay
  * external so they load at runtime.
  */
 const config: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai", "@ros/playbooks"],
+  transpilePackages: ["@ros/api", "@ros/web", "@ros/ui", "@ros/core", "@ros/db", "@ros/contracts", "@ros/integrations", "@ros/workflows", "@ros/agents", "@ros/ai"],
   serverExternalPackages: ["@electric-sql/pglite", "pg", "@anthropic-ai/sdk"],
   // Production boot compares the database with the migration files (a release migrates first, docs/14), so the SQL
   // files ship with every server function. Traced from the workspace root, they land at
@@ -39,10 +53,11 @@ const config: NextConfig = {
   outputFileTracingRoot: repoRoot,
   outputFileTracingIncludes: { "/**": ["../../packages/db/migrations/*.sql"] },
   poweredByHeader: false,
+  redirects: async () => movedPages.map((moved) => ({ ...moved, permanent: false })),
   // Candidate pages set their own headers inside Hono; the shell adds nothing that could leak. The self-hosted font
   // files (public/fonts, scripts/fetch-fonts.ts) are kept by browsers for a year: a changed font needs a new file name.
   // No other site may frame the application's pages: X-Frame-Options says what the policy's frame-ancestors 'none' says,
-  // and holds while CSP_MODE is report-only. DENY, because nothing frames these pages; the résumé framed in the candidate
+  // and holds while CSP_MODE is report-only. DENY, because nothing frames these pages; the resume framed in the candidate
   // panel is an /api response, which Hono sends with SAMEORIGIN. The referrer policy is the application's pages' too:
   // Hono's own (no-referrer on candidate pages, same-origin on the API's form pages) must reach the browser unchanged.
   headers: async () => [

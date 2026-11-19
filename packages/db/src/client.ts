@@ -30,7 +30,7 @@ export type DbHandle = {
    * was interrupted halfway can be completed. Returns the indexes of skipped statements.
    */
   execAtomic(statements: string[], opts?: { onDuplicate?: "skip" | "fail" }): Promise<{ skipped: number[] }>;
-  /** Parameterised query for adapters that need SQL without the ORM (the secret store). Values are never logged. */
+  /** Parameterised query for callers that need SQL without the ORM (the database status report). Values are never logged. */
   query(text: string, params: unknown[]): Promise<Array<Record<string, unknown>>>;
   /**
    * Resolves once no connection is open, or after maxWaitMs (default: the idle timeout plus one second). The Vercel

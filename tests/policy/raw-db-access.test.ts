@@ -7,7 +7,7 @@ import { glob } from "node:fs/promises";
 /**
  * Tenant isolation lives in row-level security, and row-level security only applies inside `withTenant` (or, for
  * platform tables, `withPlatform`). A query made straight on `container.db` runs as the connection's own role, which
- * sees every company. Some routes need that (a token lookup before any tenant is known, a platform-wide feed); most
+ * sees every company. Some routes need that (a token lookup before any tenant is known); most
  * do not. Tests cannot catch a missed wrapper (PGlite runs as a superuser), so this test holds the line instead: the
  * number of raw queries per file may go down, never up, without a deliberate change here.
  */
@@ -18,18 +18,14 @@ const RAW_QUERY = /(?:container|c\.get\("container"\)|handle)\.db\.(?:select|ins
 const ALLOWED: Record<string, number> = {
   "apps/api/src/app.ts": 1,
   // Wave S7 (S7-0) split pages/candidate.tsx (9) into files of their own, each query moving with its code; the total is unchanged:
-  "apps/api/src/pages/application-record.tsx": 7, // the status page's forms look up their status token before any tenant is known (+1 Wave 0: the talent-pool choice)
+  "apps/api/src/pages/application-record.tsx": 4, // the status page's forms look up their status token before any tenant is known
   "apps/api/src/pages/candidate-shared.tsx": 1, // whether the person behind a link was deleted
   "apps/api/src/pages/conversation-frame.tsx": 1, // the application a conversation link names
-  "apps/api/src/routes/admin.ts": 11,
   "apps/api/src/routes/auth-mfa.tsx": 3,
   "apps/api/src/routes/auth-shared.ts": 1,
-  "apps/api/src/routes/auth.ts": 3,
-  "apps/api/src/routes/companies.ts": 2,
-  "apps/api/src/routes/privacy-requests.ts": 4,
-  "apps/api/src/test-helpers.ts": 5, // +1 Wave 0: statusTokenFor reads a test application's link, which now travels only by email
-  "apps/api/src/webhooks/postmark.ts": 8,
-  "apps/api/src/webhooks/twilio.ts": 1,
+  "apps/api/src/routes/auth.ts": 1,
+  "apps/api/src/routes/privacy-requests.ts": 2,
+  "apps/api/src/test-helpers.ts": 3, // statusTokenFor reads a test application's link, which travels only by email
 };
 
 describe("raw database access outside a tenant transaction", () => {

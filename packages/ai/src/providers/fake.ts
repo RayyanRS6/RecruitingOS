@@ -8,7 +8,7 @@ export type FakeFailure = "invalid" | "refused" | "throw" | "unusable";
 /**
  * Deterministic test adapter. Handlers are registered per task by the agents package
  * (`registerFakeHandlers`) so unit tests, the scenario test, and evals run without a model.
- * It refuses to run in production: `createProvider` throws if NODE_ENV=production and AI_PROVIDER=fake.
+ * It refuses to run in production: `createRuntime` throws if NODE_ENV=production and AI_PROVIDER=fake.
  * Scripts may also inject failures to test recovery paths.
  */
 export class FakeProvider implements AiProvider {

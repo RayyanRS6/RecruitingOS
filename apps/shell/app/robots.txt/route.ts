@@ -1,8 +1,8 @@
 import { honoHandler } from "../../lib/hono";
 
 /**
- * robots.txt, built by Hono (apps/api/src/pages/public-feeds.ts): on the production deployment it lets crawlers into
- * /careers/ and points them at the sitemap (docs/spec/20 item 5); anywhere else it disallows everything.
+ * robots.txt, built by Hono (apps/api/src/pages/sitemap.ts): on the production deployment it lets crawlers into
+ * /careers/ and points them at the sitemap (docs/PRODUCT.md, D5); anywhere else it disallows everything.
  */
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

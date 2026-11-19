@@ -7,21 +7,12 @@ export type TaskKey =
   | "intake.turn"
   | "intake.compile"
   | "intake.extract"
-  | "intake.suggest"
-  | "packet.revise"
   | "company.about"
+  | "job.posts"
   | "resume.extract"
   | "triage.assess"
   | "screen.turn"
-  | "screen.assess"
-  | "screen.writeup"
-  | "brief.compose"
-  | "owner.reply"
-  | "interview.brief"
-  | "scorecard.draft"
-  | "debrief.compose"
-  | "offer.propose"
-  | "message.freeform";
+  | "screen.assess";
 
 export type SystemBlock = { text: string; cache?: boolean };
 

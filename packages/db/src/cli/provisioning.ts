@@ -24,7 +24,7 @@ export function withSsl(u: string): URL {
 
 /**
  * The application role's connection string: the same host and port as the owner's (the Session pooler, whose
- * per-connection state the application relies on; see docs/runbooks/staging-database-setup.md), the role in place
+ * per-connection state the application relies on; see docs/runbooks/production-setup.md, "Database setup"), the role in place
  * of the owner, TLS options kept.
  */
 export function roleUrl(ownerUrl: URL, role: AppRole, password: string): string {

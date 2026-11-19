@@ -23,8 +23,8 @@ const EXTRA: Array<{ name: string; re: RegExp }> = [
 ];
 /**
  * `[YOUR-PASSWORD]` is the Supabase dashboard's own placeholder: a connection string still holding it carries no secret.
- * `DELIBERATE-TEST-VALUE` is the fake key the observability test error carries on purpose (apps/api/src/routes/observability.ts)
- * so staging can prove the error reporter scrubs key-shaped values.
+ * `DELIBERATE-TEST-VALUE` is in the fake key the redaction tests carry on purpose, to prove that key-shaped values are
+ * scrubbed.
  */
 const ALLOW = [/dev-only-[a-z-]+/, /fake-issuer-development-secret-not-for-prod/, /whsec-test/, /DELIBERATE-TEST-VALUE/, /example\.(com|test|invalid)/, /:(?:pass|password|CHANGE_ME|<[^>]+>|\[YOUR-PASSWORD\])@/];
 

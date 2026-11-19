@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, desc, eq } from "drizzle-orm";
-import { entitlements } from "@ros/core";
+import { and, eq } from "drizzle-orm";
+import { ACTION_BLOCKED } from "@ros/contracts";
 import { adminAlerts, applications, auditRecords, candidates, communications, emailSuppressions, events, jobs, notifications, users, webhookReceipts } from "@ros/db";
-import { fakePostmarkEvent, type FakeEmailAdapter, type FakeSmsAdapter } from "@ros/integrations";
+import { fakePostmarkEvent, type FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, signInAdmin, usePlan } from "./test-helpers";
 
 /**
- * Item 5 of the founder's instruction of 18 September 2026: bounce and spam-complaint webhooks with authentication and
- * duplicate protection; suppression that every send consults; administrator alerts; a text fallback for candidates who
- * agreed to texts; soft-bounce retries; release by an administrator with a reason; every outcome an event.
+ * Emails that do not arrive: bounce and spam-complaint webhooks with authentication and duplicate protection;
+ * suppression that every send consults; administrator alerts; soft-bounce retries; release by an administrator with a
+ * reason; every outcome an event.
  */
 describe("email failure handling", () => {
   let container: Container;
@@ -18,49 +18,29 @@ describe("email failure handling", () => {
   const SECRET = "wh-secret-for-tests-1234567890";
   const BASE = (() => { const d = new Date(); d.setUTCHours(19, 0, 0, 0); return d.getTime(); })();
   const setClock = (offsetMs: number) => { (container.engine as unknown as { now: () => Date }).now = () => new Date(BASE + offsetMs); };
-  const signIn = async (email: string) => {
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const token = new URL(devLink).searchParams.get("token")!;
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
-    return r2.headers.get("set-cookie")!.split(";")[0];
-  };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "email test" }, body: body ? JSON.stringify(body) : undefined });
   const webhook = (payload: unknown, auth: Record<string, string> = { authorization: `Basic ${Buffer.from(`postmark:${SECRET}`).toString("base64")}` }) => app.request("/webhooks/postmark/bounces", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(payload) });
   const fake = () => container.integrations.email as FakeEmailAdapter;
-  const sms = () => container.integrations.sms as FakeSmsAdapter;
 
   let owner = "";
   let admin = "";
   let companyId = "";
-  let companySlug = "";
   let roleId = "";
   let applicationId = "";
   let candidateId = "";
   let ackMessageId = "";
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET, SMS_ENABLED: "true" } }); // texting on: the fallback text after an email failure needs a consenting applicant
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
     app = createApp(container);
     setClock(0);
-    owner = await signIn("owner@harbor.test");
+    const company = await seedCompany(app, { email: "owner@harbor.test", name: "Harbor Dental" });
+    ({ owner, companyId } = company);
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
     await container.db.update(users).set({ platformRole: "platform_admin", name: "admin" }).where(eq(users.email, "admin@its.test"));
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Harbor Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Newport Beach", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    companySlug = co.slug;
-    await entitlements.applyPlan(container.db, companyId, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a registered dental hygienist in Newport Beach, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = (await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json() as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Maria"); fd.set("lastName", "Reyes"); fd.set("email", "maria.reyes@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "yes"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Maria Reyes, RDH\nRegistered Dental Hygienist at Coastal Family Dentistry 2019 - present"], "maria.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
+    await usePlan(container, companyId);
+    roleId = await plantJob(container, { companyId, title: "Registered Dental Hygienist" });
+    expect((await app.request(`/careers/${company.slug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ phone: "(949) 555-0100" }) })).status).toBe(302);
     await container.drain();
     const [a] = await container.db.select().from(applications).where(eq(applications.roleId, roleId));
     applicationId = a.id;
@@ -101,7 +81,7 @@ describe("email failure handling", () => {
     setClock(0);
   });
 
-  it("a hard bounce suppresses the address, tells the owner, and texts the candidate a link to their status page", async () => {
+  it("a hard bounce suppresses the address and tells the owner to call the candidate", async () => {
     const [retry] = await container.db.select().from(communications).where(and(eq(communications.toAddress, "maria.reyes@example.com"), eq(communications.retryAttempt, 1)));
     const r = await webhook(fakePostmarkEvent({ providerMessageId: retry.providerMessageId!, email: "maria.reyes@example.com", type: "HardBounce", id: 1002 }));
     expect(((await r.json()) as { action: string }).action).toBe("suppressed");
@@ -109,11 +89,9 @@ describe("email failure handling", () => {
     expect(sup.active).toBe(true);
     expect(sup.reason).toBe("hard_bounce");
     const note = (await container.db.select().from(notifications).where(and(eq(notifications.companyId, companyId), eq(notifications.kind, "candidate.unreachable")))).pop()!;
-    expect(note.body).toMatch(/texted them a link|goes out when contact hours open/);
-    // it opens that candidate, never the whole list (6 November 2026)
+    expect(note.body).toMatch(/^Their address bounced \(.+\)\. Please call them\.$/);
+    // it opens that candidate, never the whole list
     expect(note.action).toEqual({ label: "Open the candidate", href: `/roles/${roleId}/talent?open=${applicationId}` });
-    const text = sms().sent.find((m) => m.to === "+19495550100" && /could not reach you by email/.test(m.body));
-    if (/texted them/.test(note.body)) expect(text).toBeTruthy();
     expect((await container.db.select().from(events).where(eq(events.type, "message.suppressed"))).length).toBeGreaterThanOrEqual(1);
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.action, "suppression.added"))).length).toBeGreaterThanOrEqual(1);
   });
@@ -125,15 +103,16 @@ describe("email failure handling", () => {
     expect(r.status).toBe("failed");
     expect(r.status === "failed" && r.retryable).toBe(false);
     expect(fake().sent.length).toBe(before);
-    // the decision message a person sends after a decline goes through the same guard and shows up as a failed
-    // communication with the reason; the candidate still counts as not told (founder decision B6)
-    const decline = await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject", reason: "not_a_match_experience", note: "Not this time." });
+    // the decision email a person asks for after marking them Not selected is refused in plain words, before anything is
+    // written: nothing can reach that address, and the candidate still counts as not told
+    const decline = await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "reject" });
     expect(decline.status).toBe(200);
-    expect((await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "send_decision" })).status).toBe(200);
-    const [failed] = await container.db.select().from(communications).where(and(eq(communications.applicationId, applicationId), eq(communications.templateKey, "disposition:human"))).orderBy(desc(communications.createdAt)).limit(1);
-    expect(failed.status).toBe("failed");
-    expect(failed.error).toMatch(/suppressed/);
+    const send = await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "send_decision" });
+    expect(send.status).toBe(409);
+    expect(((await send.json()) as { error: { code: string; message: string } }).error).toMatchObject({ code: "action_not_allowed", message: ACTION_BLOCKED.noEmail });
+    expect(await container.db.select().from(communications).where(and(eq(communications.applicationId, applicationId), eq(communications.templateKey, "disposition")))).toEqual([]);
     expect((await container.db.select().from(applications).where(eq(applications.id, applicationId)))[0].toldState).toBe("not_told");
+    expect(fake().sent.length).toBe(before);
   });
 
   it("an administrator releases a suppression with a reason; email flows again; a spam complaint suppresses for good and alerts", async () => {

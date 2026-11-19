@@ -1,70 +1,38 @@
-import type { CustomerAccessRequest, Location, TrialStanding, TrialTerm } from "@ros/contracts";
-import type { ApplyMode } from "../../apply-flow";
-import type { RecruiterAskStanding } from "../../recruiter-requests";
-
 /**
- * What every part of the ITS console shares (redesign spec 3.4): the reason header the API audits each read with, the
- * query keys, the rows the API answers with that more than one section reads, and the section contract.
+ * What every part of the admin dashboard shares: the reason sent with each call, the query keys, and how a section with
+ * several parts chooses the one to show. The shapes the API answers with are in @ros/contracts.
  */
 
-/** Sent with every console call; the API writes it on the audit row of each read (routes/admin.ts). */
-export const reason = { headers: { "x-admin-reason": "admin console" } };
+/** Sent with every dashboard call; the API writes it on the audit record of each one, reads included. */
+export const reason = { headers: { "x-admin-reason": "admin dashboard" } };
 
-/** The same header naming the part of the console that reads, for example `adminReason("overview")`. */
-export function adminReason(where: string): { headers: { "x-admin-reason": string } } {
-  return { headers: { "x-admin-reason": `admin console: ${where}` } };
+/** The same header naming what was pressed, for example `adminReason("access request")`. */
+export function adminReason(what: string): { headers: { "x-admin-reason": string } } {
+  return { headers: { "x-admin-reason": `admin dashboard: ${what}` } };
 }
 
 /**
- * The console's query keys, as the sections use them today. A section that reads the same thing uses the same key, so
- * one answer serves the Overview and the section, and a change invalidates both.
+ * The dashboard's query keys. Two parts that read the same thing use the same key, so one answer serves both and one
+ * change refreshes both. A company's jobs sit under `companies`, so a change to a company reads its jobs again too.
  */
 export const adminKeys = {
-  customers: ["admin", "customers"],
-  alerts: ["admin", "alerts"],
+  companies: ["admin", "companies"],
+  companyJobs: (companyId: string) => ["admin", "companies", companyId, "jobs"],
   plans: ["admin", "plans"],
-  customerReport: (companyId: string) => ["admin", "customer-report", companyId],
-  runs: (status: string) => ["admin", "runs", status],
-  run: (id: string) => ["admin", "run", id],
-  aiRuns: ["admin", "ai"],
+  queue: ["admin", "queue"],
   failures: ["admin", "failures"],
+  costs: ["admin", "costs"],
   suppressions: ["admin", "suppressions"],
   csp: ["admin", "csp"],
-  failedEmailApplications: ["admin", "failed-email-applications"],
-  costs: ["admin", "costs"],
-  queue: ["admin", "queue"],
-  calendar: ["admin", "calendar"],
   privacy: ["admin", "privacy"],
   privacyRequest: (id: string) => ["admin", "privacy", id],
   platformRoles: ["admin", "platform-roles"],
-  outcomes: ["admin", "outcomes"],
 } as const;
 
 /**
- * A customer as GET /admin/customers lists it. `applyFlowDefault`: how the company's roles meet the screening
- * conversation unless a role has its own setting (plan E1). `candidateScoreShown`: whether its candidates see their
- * match score after sending (founder decision S7-1; on unless ITS turned it off; absent from an older API reads as on).
- * `trial`, `trialTerm` and `seats` (founder decision L-02 B): where the Trial plan's 30 days stand (null on another
- * plan), the dates with every extension, and the people in use of the plan's limit; absent from an older API.
- * `accessRequest` (first sign-in asks for approval): who is asking or was declined; null for every other company, and
- * absent from an older API.
- */
-export type CustomerRow ={ id: string; name: string; slug: string; vertical: string; sizeBand: string; timezone?: string; locations?: Location[]; accessRequest?: CustomerAccessRequest | null; planKey: string; status: string; roles: number; applications: number; aiCostUsd: number; lastActivityAt: string | null; escalations: number; createdAt: string; settings: { website?: string; candidateScoreSetBy?: { at: string; by: { id: string; name?: string }; reason: string } }; verifiedAt: string | null; verifiedBy: { id: string; name?: string } | null; heldMessages: number; jobBoardsConfirmedAt: string | null; recruiterAsks?: RecruiterAskStanding; applyFlowDefault?: ApplyMode; screeningConversations?: { used: number; limit: number | null; resetsAt?: string | null }; candidateScoreShown?: boolean; trial?: TrialStanding | null; trialTerm?: TrialTerm | null; seats?: { used: number; limit: number | null }; /** The AI credit in dollars, only ITS reads this; null when the plan puts no limit on it. */ aiCredit?: AiCreditLine | null; /** How many are locked by the plan's candidates per job. */ lockedApplicants?: number; /** Since when an open request about the plan has waited; null with none. */ planRequestSince?: string | null; /** Who really posts on the boards, the plan first. */ whoPosts?: "its" | "self" };
-
-/** Where a customer stands on its AI credit (GET /admin/customers `aiCredit`), in dollars. */
-export type AiCreditLine = { monthly: boolean; spentUsd: number; limitUsd: number; percent: number; level: "warning" | "used_up" | null; resetsAt: string | null };
-
-/** An alert as GET /admin/alerts and GET /admin/failures list it. */
-export type AlertRow ={ id: string; kind: string; severity: string; title: string; body: string; status: string; companyId: string | null; target: { type: string; id: string } | null; details: Record<string, unknown>; createdAt: string };
-
-/** A privacy request as GET /admin/data-requests lists it. */
-export type DataRequest ={ id: string; companyId: string; companyName?: string; candidateId: string | null; applicationId: string | null; kind: string; details: string | null; requesterEmail: string; channel: string; verificationStatus: string; verificationNote: string | null; status: string; slaDueAt: string; assignedTo: string | null; notes: Array<{ at: string; by: string; text: string }>; counselEscalatedAt: string | null; counselDecision: string | null; counselNote: string | null; resolution: string | null; resolvedAt: string | null; confirmationSentAt: string | null; escalationId: string | null; createdAt: string };
-
-/**
- * The section contract (Wave S6): each console section (Customers, Problems, System and settings, Privacy requests) is
- * one component taking the part of it the address names (`?view=`, null for its first part) and a way to change it. The
- * console draws the page heading and keeps `?view=` in the address; the section draws its own part tabs (with counts,
- * where it has them) and the chosen part. A view it does not know shows its first part.
+ * A section with several parts (Privacy requests, System) is one component taking the part the address names (`?view=`,
+ * null for its first part) and a way to change it. The dashboard draws the page heading and keeps `?view=` in the
+ * address; the section draws its own tabs and the chosen part. A view it does not know shows its first part.
  */
 export type SectionProps = { view: string | null; onView: (v: string) => void };
 

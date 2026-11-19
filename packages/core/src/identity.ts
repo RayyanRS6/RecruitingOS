@@ -3,7 +3,7 @@ import { memberships, randomToken, sessions, users, type Queryable } from "@ros/
 import { audit } from "./audit";
 import { STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
 import { acceptPendingInvitations } from "./invitations";
-import { applyBootstrapAdmin } from "./platform-roles";
+import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 
 /**
  * Sign-in policy on top of the managed identity service (founder decisions F11, D19, D25; correction 4 of 18 September
@@ -12,7 +12,6 @@ import { applyBootstrapAdmin } from "./platform-roles";
 export type IdentityLike = { subject: string; email: string; emailVerified: boolean; name: string | null; provider: string; /** Every provider linked to the account at the identity service, its first (`provider`) included. */ providers?: string[]; aal: "aal1" | "aal2"; mfaVerifiedAt: string | null };
 export type SignInPolicy = { staffDomains: string[]; staffProvider: string; requireStaffMfa: boolean; /** One-time bootstrap list (BOOTSTRAP_ADMIN_EMAILS): honoured only while no administrator exists; never a standing grant. */ bootstrapAdmins?: string[]; /** The providers the deployment offers (AUTH_SIGNIN_PROVIDERS): a session opens through these only. */ allowedProviders?: string[] };
 export const DEFAULT_SIGN_IN_POLICY: SignInPolicy = { staffDomains: ["identifiedtalent.com"], staffProvider: "azure", requireStaffMfa: true, bootstrapAdmins: [], allowedProviders: ["azure", "google"] };
-export const STAFF_ROLES = ["its_recruiter", "platform_admin"] as const;
 const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 
 export type SignInDecision = { ok: true; staff: boolean } | { ok: false; staff: boolean; code: "email_unverified" | "staff_provider_required" | "staff_provider_linked" | "mfa_required"; message: string };
@@ -45,7 +44,7 @@ export function linkedToAnotherSubject(account: { authProvider: string | null; a
 }
 
 export function isStaffAccount(email: string, platformRole: string | null | undefined, policy: SignInPolicy): boolean {
-  if (platformRole && (STAFF_ROLES as readonly string[]).includes(platformRole)) return true;
+  if (platformRole === "platform_admin") return true;
   const domain = normalizeEmail(email).split("@")[1] ?? "";
   return policy.staffDomains.includes(domain);
 }
@@ -76,12 +75,13 @@ export function evaluateSignIn(identity: IdentityLike, existing: { platformRole:
  * delegated sign-in (by verified email), creates the user if new, accepts any open team invitation for the verified
  * address (and the one the browser carried, by its token hash), and records how the session was opened. Never stores
  * the provider's token. An invitation the sign-in cannot honour raises InvitationRefused and nothing is opened.
- * `startedProvider` is the provider the browser flow started with (identityForSignIn).
+ * `startedProvider` is the provider the browser flow started with (identityForSignIn). `platformAdmin`: the person holds
+ * the platform administrator role in the ledger, so they land on the admin dashboard.
  */
 export async function openSessionFromIdentity(
   q: Queryable,
   input: { identity: IdentityLike; startedProvider?: string | null; policy?: SignInPolicy; ip?: string; userAgent?: string; now?: Date; invitationTokenHash?: string | null; openedAt?: Date },
-): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; expiresAt: string; invitationsAccepted: number }> {
+): Promise<{ sessionToken: string; userId: string; activeCompanyId: string | null; staff: boolean; platformAdmin: boolean; expiresAt: string; invitationsAccepted: number }> {
   const policy = input.policy ?? DEFAULT_SIGN_IN_POLICY;
   const now = input.now ?? new Date();
   const email = normalizeEmail(input.identity.email);
@@ -116,7 +116,7 @@ export async function openSessionFromIdentity(
   // bootstrap never applies without Microsoft and a second factor.
   const bootstrap = await applyBootstrapAdmin(q, { userId: user.id, email, listed: (policy.bootstrapAdmins ?? []).includes(email), now });
   if (bootstrap === "granted") user = { ...user, platformRole: "platform_admin" };
-  // Team invitations (docs/spec/21, area A): honoured for customers only; a staff account never joins a company this way.
+  // Team invitations (docs/PRODUCT.md, D1): honoured for customers only; a staff account never joins a company this way.
   const invited = await acceptPendingInvitations(q, { user: { id: user.id, email, name: user.name ?? identity.name }, tokenHash: input.invitationTokenHash ?? null, staff: decision.staff, now, ip: input.ip });
   const ms = await q.select().from(memberships).where(and(eq(memberships.userId, user.id), eq(memberships.status, "active"))).limit(1);
   const activeCompanyId = invited.activeCompanyId ?? ms[0]?.companyId ?? null;
@@ -125,11 +125,12 @@ export async function openSessionFromIdentity(
   const [row] = await q.insert(sessions).values({
     userId: user.id, tokenHash: hashToken(sessionToken), activeCompanyId, expiresAt, lastSeenAt: now.toISOString(), ip: input.ip ?? null, userAgent: input.userAgent ?? null,
     identityProvider: identity.provider, aal: identity.aal, mfaVerifiedAt: identity.mfaVerifiedAt,
-    // When the session opened, on the caller's clock: the freshness rule for policy and notice changes (A12) reads it against the same clock.
+    // When the session opened, on the caller's clock: the recent-sign-in rule (`isRecentlyAuthenticated`) reads it against the same clock.
     createdAt: (input.openedAt ?? now).toISOString(),
   }).returning({ id: sessions.id });
   await audit(q, { companyId: null, actor: { kind: "user", id: user.id, name: user.name ?? user.email }, action: "session.opened", target: { type: "user", id: user.id }, reason: identity.provider, ip: input.ip, details: { sessionId: row.id, provider: identity.provider, aal: identity.aal, staff: decision.staff, mfaVerifiedAt: identity.mfaVerifiedAt } });
-  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, expiresAt, invitationsAccepted: invited.accepted.length };
+  const platformAdmin = (await activeGrantFor(q, user.id))?.role === "platform_admin";
+  return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, platformAdmin, expiresAt, invitationsAccepted: invited.accepted.length };
 }
 
 export class SignInRefused extends Error {

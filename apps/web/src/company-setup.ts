@@ -1,14 +1,14 @@
 import type { SignupRequest } from "@ros/contracts";
-import { zoneWords } from "./publishing";
+import { zoneWords } from "./dates";
 
 /**
- * The sign-up form's choices, kept out of the page so they can be tested: the business types, which of them have a
- * hiring guide behind the drafting, and the time zone the owner's own computer reports, snapped to the list we offer.
- * Also what the screens around a request for access need (SIGNUP_MODE=approval): the look the waiting screen takes every
- * 30 seconds, and how a company's typed kind of business and website may be shown.
+ * The company details form's choices, kept out of the page so they can be tested: the business types, and the time
+ * zone the owner's own computer reports, snapped to the list we offer.
+ * Also what the screens around a company's request need: the look the waiting screen takes every 30 seconds, and how a
+ * company's typed kind of business and website may be shown.
  */
 
-/** The launch wedge first (docs/FOUNDER-CONTEXT.md §06): consumer, beauty, e-commerce, creative and marketing, tech-enabled services. */
+/** The kinds of business the form offers: consumer, beauty, e-commerce, creative and marketing, tech-enabled services first. */
 export const VERTICALS: ReadonlyArray<readonly [string, string]> = [
   ["consumer", "Consumer brand or beauty"],
   ["ecommerce", "Retail or e-commerce"],
@@ -68,21 +68,7 @@ export async function lookAtAccess(get: (path: string) => Promise<unknown>): Pro
 }
 
 /**
- * The business types whose roles are drafted from one of our hiring guides (VERTICAL_TO_PLAYBOOK in packages/playbooks;
- * tests/web/first-screen.test.ts keeps the two in step). Every other type is drafted from what the owner says.
- */
-export const GUIDED_VERTICALS: ReadonlySet<string> = new Set(["consumer", "ecommerce", "marketing", "saas", "professional_services", "dental"]);
-
-/** What the chosen business type means for drafting, said honestly. */
-export function verticalHint(vertical: string): string {
-  if (!vertical) return "This shapes how your jobs are drafted.";
-  return GUIDED_VERTICALS.has(vertical)
-    ? "Your jobs are drafted from our hiring guide for this kind of business: typical jobs, screening questions and pay ranges."
-    : "We do not have a hiring guide for this kind of business yet. Your jobs are drafted from what you tell the assistant and public pay data.";
-}
-
-/**
- * The time zones we offer. Interview times and the hours candidates may be texted are worked out in the one chosen.
+ * The time zones we offer. The company's days, its closing dates among them, are counted in the one chosen.
  * `label` is the sign-up form's own words; `short` is how a screen names it beside a time ("Time (Pacific time)").
  */
 export const ZONE_CHOICES: ReadonlyArray<{ value: string; label: string; short: string }> = [
@@ -96,8 +82,8 @@ export const ZONE_CHOICES: ReadonlyArray<{ value: string; label: string; short: 
 ];
 
 /**
- * A zone in the sign-up form's words, never its id ("America/Los_Angeles" read as raw text on the owner's screens: live
- * test, 12 November 2026): its `label` ("Pacific time (Los Angeles)") where a zone is chosen or stated, its `short` name
+ * A zone in the sign-up form's words, never its id ("America/Los_Angeles" would read as raw text on the owner's
+ * screens): its `label` ("Pacific time (Los Angeles)") where a zone is chosen or stated, its `short` name
  * beside a time. A zone the form does not offer reads as the browser names it ("Eastern Time"), else as it is stored.
  */
 export function zoneName(zone: string, form: "label" | "short" = "label"): string {

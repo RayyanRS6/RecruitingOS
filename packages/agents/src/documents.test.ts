@@ -5,7 +5,7 @@ import { documentToText } from "./documents";
 import { RESUME_LINES, buildResumeDocx, buildResumePdf, buildScannedPdf } from "./fixtures/build";
 
 /**
- * Résumé text extraction on real file formats (docs/spec/21 section 7, P0 row "PDF and DOCX fixtures"): the checked-in
+ * Résumé text extraction on real file formats: the checked-in
  * PDF and Word fixtures yield their text, a scanned PDF with no text layer yields nothing, and a broken file yields
  * nothing without throwing, so the application always continues (the workflow records `resume.extraction_failed`).
  */

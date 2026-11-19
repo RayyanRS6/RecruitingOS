@@ -1,4 +1,4 @@
-# DRAFT FOR ATTORNEY REVIEW. Not legally approved. Operational matrix: `docs/readiness/09-data-retention-matrix.md`. No automatic deletion is enabled.
+# DRAFT FOR ATTORNEY REVIEW. Not legally approved. Operational matrix: `docs/legal-drafts/data-retention-matrix.md`. No automatic deletion is enabled.
 
 # Proposed retention schedule (for the pilot agreement, Exhibit E)
 

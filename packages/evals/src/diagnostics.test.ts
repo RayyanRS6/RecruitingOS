@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScreenTurn } from "@ros/contracts";
 import { TRACE_CHARS, clipDeep, clipText, traceOutcome, traceTranscript, traceTurn } from "./diagnostics";
 
-/** The full record a failing case keeps in the result file (Wave S9): every text cut, the shape and the decisions kept. */
+/** The full record a failing case keeps in the result file: every text cut, the shape and the decisions kept. */
 describe("a failing case's record", () => {
   const long = "a".repeat(TRACE_CHARS + 50);
 

@@ -34,7 +34,7 @@ describe("Postmark delivery events: the receipt and the handling commit together
   const change = { RecordType: "SubscriptionChange", MessageID: "5a1c0de0-6105-42a2-a16a-77a8eac79483", ServerID: 123456, MessageStream: "outbound", ChangedAt: "2026-09-30T15:00:00Z", Recipient: "Blip.Person@example.com", Origin: "Recipient", SuppressSending: true, SuppressionReason: "ManualSuppression", Tag: "acknowledgment", Metadata: {} };
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
     app = createApp(container);
   });
   afterAll(async () => {

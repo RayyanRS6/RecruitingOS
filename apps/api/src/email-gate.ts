@@ -3,7 +3,7 @@ import type { Db } from "@ros/db";
 
 /**
  * The fake email adapter in production (staging before Postmark is set up): it keeps each email in the process's memory
- * and reports it sent, so the company check to ITS, every email to a candidate and every email to a hiring team goes
+ * and reports it sent, so a request for access to ITS, every email to a candidate and every email to a hiring team goes
  * nowhere while the pages say it went. Both processes send email (the app some at once, the worker the outbox), so
  * whichever boots first warns and raises one `email.fake` alert, standing until a person resolves it; each later boot
  * only warns. Keyed off the adapter actually in use, not the variable's spelling: anything but "postmark" is the fake
@@ -17,13 +17,13 @@ export async function checkEmailForProduction(db: Db, input: { nodeEnv: string; 
     await resolveAlertsOfKind(db, "email.fake", { reason: `the real email provider (${input.emailId}) is in use` }).catch((err) => console.warn(`[email] could not resolve the earlier alert: ${errorForLog(err)}`));
     return { raised: false };
   }
-  console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/spec/17-staging-handoff.md)`);
+  console.warn(`[email] production is running with the fake email adapter on the ${input.role}: no email is really sent. Set EMAIL_PROVIDER=postmark with POSTMARK_SERVER_TOKEN (to-do item 14, docs/runbooks/production-setup.md)`);
   try {
     const alert = await raiseAlertOnce(db, {
       kind: "email.fake",
       severity: "high",
       title: "Emails are not being sent",
-      body: "Email is not set up yet, so no email leaves the system, even though the pages say it was sent. That includes the company check sent to ITS, every email to candidates (their links, interview times and updates) and every email to hiring teams. Set up Postmark (to-do item 14: EMAIL_PROVIDER=postmark and POSTMARK_SERVER_TOKEN in Vercel and on the Railway worker), then resolve this alert.",
+      body: "Email is not set up yet, so no email leaves the system, even though the pages say it was sent. That includes each request for access sent to ITS, every email to candidates (their links and updates) and every email to hiring teams. Set up Postmark (to-do item 14: EMAIL_PROVIDER=postmark and POSTMARK_SERVER_TOKEN in Vercel and on the Railway worker), then resolve this alert.",
       details: { provider: input.emailId, process: input.role },
     });
     return { raised: alert.created };

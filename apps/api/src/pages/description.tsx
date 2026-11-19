@@ -2,7 +2,7 @@
 /** @jsxImportSource hono/jsx */
 
 /**
- * The job description as the job page shows it (plan D10): headings and bullet lists only, everything else plain text.
+ * The job description as the job page shows it: headings and bullet lists only, everything else plain text.
  * Descriptions come from the assistant (plain paragraphs today), an owner's edit, or a pasted ad, so the few shapes
  * people actually type are read: "## Heading", a line in **bold** or ending in a colon on its own, and lines starting
  * with -, *, • or 1. as list items. Nothing is ever passed through as markup: every block is text the page escapes, so

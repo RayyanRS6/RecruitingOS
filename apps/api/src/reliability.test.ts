@@ -1,21 +1,19 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { AI_CREDIT_USED_UP } from "@ros/ai";
 import { SEND_MAX_ATTEMPTS } from "@ros/agents";
-import { ESCALATION_OVERDUE_ALERT_KIND, ESCALATION_QUEUE_EMAIL_JOB_KIND, createEscalation, raisedWithoutAPerson, setEscalationQueueEmails } from "@ros/core";
-import { adminAlerts, communications, companies, jobs, recruiterEscalations, withTenant, workflowRuns } from "@ros/db";
+import { adminAlerts, communications, companies, jobs, withTenant, workflowRuns } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { AI_HOLD_CHECK_EVERY_MS, AI_HOLD_CHECK_JOB_KIND, AI_HOLD_KEY, AI_OUTAGE_ALERT_KIND, HELD_RELEASE_SPACING_MS, PROVIDER_OUTAGE_PATIENCE_MS, WorkflowEngine, isProviderOutage, jobRetryDelayMs, outageAttempts, providerProblem, retryDelayMs } from "@ros/workflows";
 import { createContainer, type Container } from "./container";
 import { runHourlyChecks } from "./maintenance";
-import { sendToIts } from "./services/escalation-queue";
 
 /**
  * Wave S5 C2, reliability and ITS operations: provider outages delay work instead of failing it for good, a slow step
- * keeps its lease, interrupted sends and late recruiter requests are found within the hour, and every request (the
- * system's own too) and every direct email reaches the ITS queue mailbox through the outbox, where a failure is seen.
+ * keeps its lease, interrupted sends are found within the hour, and a run that stops for good raises an alert for the
+ * platform administrators.
  */
-const ENV = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" };
+const ENV = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", ITS_QUEUE_EMAIL: "queue@its.test" };
 const sum = (n: number, delay: (i: number) => number) => Array.from({ length: n }, (_, i) => delay(i + 1)).reduce((a, b) => a + b, 0);
 
 describe("the retry schedules outlast an hour's outage", () => {
@@ -100,7 +98,7 @@ describe("an AI provider outage holds work and resumes it", () => {
     }
   }
 
-  it("retries for an hour, then holds every run with one alert and no recruiter request per application", async () => {
+  it("retries for an hour, then holds every run with one alert for the outage and none per application", async () => {
     const a = await start("0192a6b2-0000-7aaa-8bbb-00000000000a");
     const b = await start("0192a6b2-0000-7aaa-8bbb-00000000000b");
     await container.drain();
@@ -117,7 +115,7 @@ describe("an AI provider outage holds work and resumes it", () => {
       expect((run.wait as { keys?: string[] }).keys).toEqual([AI_HOLD_KEY]);
       expect(run.attempts).toBe(outageAttempts());
     }
-    expect(await container.db.select().from(recruiterEscalations).where(eq(recruiterEscalations.companyId, companyId))).toEqual([]);
+    expect(await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "workflow.failed"))).toEqual([]);
     const alerts = await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, AI_OUTAGE_ALERT_KIND));
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({ severity: "critical", status: "open" });
@@ -175,7 +173,7 @@ describe("an AI provider outage holds work and resumes it", () => {
     expect((await runOf(runId)).status).toBe("completed");
   });
 
-  it("a failure that is not an outage still stops after the definition's tries, with a recruiter request", async () => {
+  it("a failure that is not an outage still stops after the definition's tries, with an alert for the administrators", async () => {
     container.engine.register({ key: "test.bad_reply", version: 1, initialStep: "read", maxAttempts: 2, steps: { read: async () => ({ kind: "fail", error: "no valid output: missing field", retryable: true }) } });
     const { runId } = await withTenant(container.db, companyId, (tx) => container.engine.start(tx, { workflowKey: "test.bad_reply", companyId, subject: { type: "application", id: "0192a6b2-0000-7aaa-8bbb-00000000000c" } }));
     await container.drain();
@@ -183,7 +181,9 @@ describe("an AI provider outage holds work and resumes it", () => {
     const run = await runOf(runId);
     expect(run.status).toBe("failed");
     expect(run.attempts).toBe(2);
-    expect(run.escalationId).not.toBeNull();
+    const alerts = (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "workflow.failed"))).filter((a) => a.target?.id === runId);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ severity: "high", status: "open", companyId });
   });
 });
 
@@ -237,7 +237,7 @@ describe("a slow job keeps its lease", () => {
   }, 15_000);
 });
 
-describe("ITS hears about every request, within the hour", () => {
+describe("ITS hears about what stopped, within the hour", () => {
   let container: Container;
   let companyId = "";
   const mail = () => (container.integrations.email as FakeEmailAdapter).sent;
@@ -248,94 +248,33 @@ describe("ITS hears about every request, within the hour", () => {
     const [company] = await container.db.insert(companies).values({ name: "Harbor Dental", slug: "harbor-dental-its", vertical: "dental", sizeBand: "20-49" }).returning({ id: companies.id });
     companyId = company.id;
   });
-  afterEach(() => {
-    setEscalationQueueEmails(null);
-  });
   afterAll(async () => {
     await container.close();
   });
 
-  it("only requests no person raised are emailed from createEscalation", () => {
-    expect(raisedWithoutAPerson({ requestedBy: system })).toBe(true);
-    expect(raisedWithoutAPerson({ requestedBy: { kind: "candidate", id: "a" } })).toBe(true);
-    expect(raisedWithoutAPerson({ requestedBy: { kind: "agent", id: "screening" } })).toBe(true);
-    expect(raisedWithoutAPerson({ requestedBy: { kind: "user", id: "u" } })).toBe(false); // the route emails those
-    expect(raisedWithoutAPerson({ requestedBy: { kind: "recruiter", id: "r" } })).toBe(false);
-    expect(raisedWithoutAPerson({ requestedBy: system, postingId: "p" })).toBe(false); // ITS posting tasks
-  });
-
-  it("a request the system raises (or a candidate through the product) is emailed to the queue mailbox once, through the outbox", async () => {
-    setEscalationQueueEmails(() => container.engine.clock());
-    const before = mail().length;
-    const esc = await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, kind: "candidate_issue", summaryOrigin: "candidate", question: "Nia Brooks asked for a person.", requestedBy: { kind: "candidate", id: "app-1" } }));
-    const byTeam = await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, kind: "ask", question: "Is the pay right?", requestedBy: { kind: "user", id: "owner-1", name: "Dana" } }));
-    expect(await container.db.select().from(jobs).where(eq(jobs.kind, ESCALATION_QUEUE_EMAIL_JOB_KIND))).toHaveLength(1);
-    await container.drain();
-    const sent = mail().slice(before).filter((m) => m.to === "queue@its.test");
-    expect(sent).toHaveLength(1);
-    expect(sent[0].subject).toMatch(/^\[candidate_issue\] /);
-    expect(sent[0].text).toContain("A candidate asked for a person, through the product.");
-    expect(sent[0].text).toContain(`/recruiter/queue/${esc.id}`);
-    expect(sent[0].text).not.toContain("Nia"); // pre-acceptance context only
-    const [row] = await container.db.select().from(communications).where(eq(communications.idempotencyKey, `escalation:${esc.id}`));
-    expect(row).toMatchObject({ status: "sent", toAddress: "queue@its.test", templateKey: "escalation" });
-    expect(await container.db.select().from(communications).where(eq(communications.idempotencyKey, `escalation:${byTeam.id}`))).toHaveLength(0);
-  });
-
-  it("a workflow that stops for good emails the queue about the request it opens", async () => {
-    setEscalationQueueEmails(() => container.engine.clock());
+  it("a workflow that stops for good raises one alert for the administrators and emails nobody", async () => {
     container.engine.register({ key: "test.stops", version: 1, initialStep: "boom", maxAttempts: 1, steps: { boom: async () => ({ kind: "fail", error: "cannot continue", retryable: false }) } });
     const before = mail().length;
     const { runId } = await withTenant(container.db, companyId, (tx) => container.engine.start(tx, { workflowKey: "test.stops", companyId, subject: { type: "role", id: "0192a6b2-0000-7aaa-8bbb-0000000000aa" } }));
     await container.drain();
     const [run] = await container.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId));
-    expect(run.escalationId).not.toBeNull();
-    const sent = mail().slice(before).filter((m) => m.to === "queue@its.test");
-    expect(sent).toHaveLength(1);
-    expect(sent[0].text).toContain("The product raised a request for a recruiter on its own.");
+    expect(run.status).toBe("failed");
+    const alerts = (await container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, "workflow.failed"))).filter((a) => a.target?.id === runId);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].title).toBe("A workflow stopped and needs a look: test.stops");
+    expect(mail().slice(before).filter((m) => m.to === "queue@its.test")).toEqual([]);
   });
 
-  it("a direct email to ITS that fails is recorded and tried again, never lost quietly", async () => {
-    (container.integrations.email as FakeEmailAdapter).failNext(1);
-    const before = mail().length;
-    const r = await sendToIts(container, { companyId, subject: "[access ended] Harbor Dental ended a recruiter's access", text: "Recruiter: Kai", idempotencyKey: "grant_revoked_queue:test-1", template: "staff_access_revoked_queue" });
-    expect(r.status).toBe("pending");
-    let [row] = await container.db.select().from(communications).where(eq(communications.id, r.communicationId));
-    expect(row.status).toBe("queued");
-    expect(row.error).toMatch(/outage/);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date(Date.now() + 60_000);
-    await container.drain();
-    [row] = await container.db.select().from(communications).where(eq(communications.id, r.communicationId));
-    expect(row.status).toBe("sent");
-    expect(mail().slice(before).filter((m) => m.to === "queue@its.test")).toHaveLength(1);
-    // the same key again sends nothing
-    expect((await sendToIts(container, { companyId, subject: "again", text: "again", idempotencyKey: "grant_revoked_queue:test-1", template: "staff_access_revoked_queue" })).status).toBe("sent");
-    expect(mail().slice(before).filter((m) => m.to === "queue@its.test")).toHaveLength(1);
-    (container.engine as unknown as { now: () => Date }).now = () => new Date();
-  });
-
-  it("the hourly check finds interrupted sends and requests past their reply-by time, and alerts once per request", async () => {
+  it("the hourly check finds interrupted sends", async () => {
     const now = new Date();
     const [stuck] = await withTenant(container.db, companyId, (tx) => tx.insert(communications).values({ companyId, direction: "outbound", channel: "email", fromAddress: "x", toAddress: "y@example.com", subject: "s", bodyText: "t", templateKey: "test", provider: "fake-email", status: "sending", sendingAt: new Date(now.getTime() - 20 * 60_000).toISOString(), sentBy: system, idempotencyKey: "hourly-stuck" }).returning({ id: communications.id }));
-    const late = await withTenant(container.db, companyId, (tx) => createEscalation(tx, { companyId, kind: "candidate_issue", question: "A candidate asked for a person.", requestedBy: { kind: "candidate", id: "app-2" } }));
-    await container.db.update(recruiterEscalations).set({ slaDueAt: new Date(now.getTime() - 2 * 3600_000).toISOString() }).where(eq(recruiterEscalations.id, late.id));
     const first = await runHourlyChecks(container.db, now, { workerInline: true });
     expect(first.interruptedSends).toBe(1);
     // the Trial plan's 30 days are settled in the same hour (founder decision L-02 B): nothing to start or end here
     expect(first).toMatchObject({ trialsStarted: 0, trialsEnded: 0 });
-    expect(first.overdueRequests).toBeGreaterThanOrEqual(1);
     expect((await container.db.select().from(communications).where(eq(communications.id, stuck.id)))[0].status).toBe("unknown");
-    const overdue = () => container.db.select().from(adminAlerts).where(eq(adminAlerts.kind, ESCALATION_OVERDUE_ALERT_KIND)).then((rows) => rows.filter((a) => a.target?.id === late.id));
-    expect(await overdue()).toHaveLength(1);
-    expect((await overdue())[0]).toMatchObject({ severity: "high", status: "open" });
-    expect(JSON.stringify(await overdue())).not.toContain("asked for a person"); // the request's words stay with the request
-    // the next hour: nothing new while it waits
+    // the next hour: nothing left to find
     const second = await runHourlyChecks(container.db, new Date(now.getTime() + 3600_000), { workerInline: true });
-    expect(second.overdueRequests).toBe(0);
-    expect(await overdue()).toHaveLength(1);
-    // picked up: the alert is over
-    await container.db.update(recruiterEscalations).set({ status: "claimed" }).where(eq(recruiterEscalations.id, late.id));
-    await runHourlyChecks(container.db, new Date(now.getTime() + 2 * 3600_000), { workerInline: true });
-    expect((await overdue())[0].status).toBe("resolved");
+    expect(second.interruptedSends).toBe(0);
   });
 });

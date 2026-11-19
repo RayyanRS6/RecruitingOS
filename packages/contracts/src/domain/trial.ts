@@ -2,17 +2,18 @@ import { z } from "zod";
 import type { Actor } from "./common";
 
 /**
- * The Trial plan's 30 days and its 3 people (founder decision L-02 B, 16 October 2026).
+ * The Trial plan's 30 days and its 3 people.
  *
- * A company on the Trial plan (`companies.plan_key` = TRIAL_PLAN_KEY) gets 30 days from the day ITS confirms it, the
- * first day it can go live. A company already on Trial when this shipped got its 30 days from the day the hourly check
- * first ran (`switched_on`), never an instant lock. ITS can extend a trial from the console, with a reason; putting the
- * company on another plan ends the trial with nothing to write, because only the Trial plan reads the dates. When the
- * days are over and no other plan was chosen the company is "paused": new applications, new jobs and new screening chats
- * wait, and everything already started carries on. Candidates are never told about a trial or a plan.
+ * A company on the Trial plan (`companies.plan_key` = TRIAL_PLAN_KEY) gets 30 days from the day an administrator accepts
+ * it, the first day it can go live (stored as `its_check`). A company already on Trial when the clock was introduced got
+ * its 30 days from the day the hourly check first ran (`switched_on`), never an instant lock. An administrator can extend
+ * a trial from the dashboard, with a reason; putting the company on another plan ends the trial with nothing to write,
+ * because only the Trial plan reads the dates. When the days are over and no other plan was chosen the company is
+ * "paused": new applications, new jobs and new AI interviews wait, and everything already started carries on. Candidates
+ * are never told about a trial or a plan.
  *
- * The dates live on `companies.settings.trial` (TrialTerm), written only by the ITS check, the hourly check and ITS from
- * the console. Comparing the plan key to the Trial plan goes only through `onTrialPlan`, like the Design Partner rule.
+ * The dates live on `companies.settings.trial` (TrialTerm), written only when a company is accepted, by the hourly check
+ * and by an administrator from the dashboard. Comparing the plan key to the Trial plan goes only through `onTrialPlan`.
  */
 export const TRIAL_PLAN_KEY = "trial";
 export const TRIAL_DAYS = 30;
@@ -33,13 +34,14 @@ export function seatsFullAtSignInLine(limit: number, planKey?: string | null): s
   return onTrialPlan(planKey) ? `This company's trial includes ${limit} people. Ask the person who invited you to choose a plan to add more.` : `This company's plan includes ${limit} people. Ask the person who invited you to upgrade.`;
 }
 
-/** One extension ITS made from the console: how many days, why, who, when, and the end date before and after. */
+/** One extension an administrator made from the dashboard: how many days, why, who, when, and the end date before and after. */
 export type TrialExtension = { days: number; reason: string; by: Actor; at: string; from: string; to: string };
 
 /**
- * A company's trial dates (`companies.settings.trial`). `startedBy` says what started the 30 days: the ITS check, the
- * hourly check for a company already on Trial when this shipped, or a change of plan back to Trial. `endNoticeAt` is
- * when ITS and the owners were told the trial ended; an extension clears it so the next end is told again.
+ * A company's trial dates (`companies.settings.trial`). `startedBy` says what started the 30 days: the company being
+ * accepted (`its_check`), the hourly check for a company already on Trial when the clock was introduced, or a change of
+ * plan back to Trial. `endNoticeAt` is when the administrators and the owners were told the trial ended; an extension
+ * clears it so the next end is told again.
  * `soonNoticeFor` and `lastDayNoticeFor` hold the end date the owners were last emailed about, TRIAL_NOTICE_DAYS before
  * and one day before: each goes once per end date, so an extension that moves the end can be told again.
  */
@@ -65,7 +67,7 @@ export function newTrialTerm(now: Date, startedBy: TrialTerm["startedBy"]): Tria
 }
 
 /**
- * Where a company stands on its trial. `started` false: on Trial and waiting for the ITS check (nothing ends before it
+ * Where a company stands on its trial. `started` false: on Trial and not accepted yet (nothing ends before it
  * starts). `endingSoon`: not ended and within TRIAL_NOTICE_DAYS of the end. `ended`: the end has come (paused unless a
  * plan is chosen). `extendedDays` adds up every extension.
  */
@@ -82,12 +84,12 @@ export function trialStanding(company: { planKey: string | null | undefined; set
   return { started: true, startedAt: term.startedAt, endsAt: term.endsAt, daysLeft: ended ? 0 : Math.ceil(left / DAY_MS), endingSoon: !ended && left <= TRIAL_NOTICE_DAYS * DAY_MS, ended, extendedDays };
 }
 
-/** Whether new applications, new jobs and new screening chats wait: on Trial, and its trial has ended. */
+/** Whether new applications, new jobs and new AI interviews wait: on Trial, and its trial has ended. */
 export function trialPaused(company: { planKey: string | null | undefined; settings: unknown }, now: Date): boolean {
   return trialStanding(company, now)?.ended === true;
 }
 
-/** POST /api/v1/admin/customers/:id/trial: ITS extends a customer's trial by a number of days, with a reason. */
+/** POST /api/v1/admin/customers/:id/trial: an administrator extends a company's trial by a number of days, with a reason. */
 export const TrialExtensionRequest = z.object({
   days: z.number().int("Extend by a whole number of days.").min(1, "Extend by at least one day.").max(90, "Extend by at most 90 days at a time."),
   reason: z.string().trim().min(5, "Say why the trial is extended (at least five characters).").max(500),

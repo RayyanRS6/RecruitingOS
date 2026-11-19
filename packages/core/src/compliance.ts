@@ -2,37 +2,24 @@ import type { LegalCheck, LegalCheckItem, Location } from "@ros/contracts";
 import { closingDayWords } from "./closing-date";
 
 /**
- * Regulation as configuration (docs/08). Notice texts are versioned defaults; companies can
- * override them in settings; every display is recorded with the version shown. Items marked
- * [counsel] in docs/00 must be reviewed by an attorney before use with paying customers.
+ * Regulation as configuration. Notice texts are versioned defaults; a rewording stored in a
+ * company's settings takes a default's place; every display is recorded with the version shown. Items
+ * marked [counsel] must be reviewed by an attorney before use with paying customers.
  */
 
-export type NoticeKey = "ai_use" | "sms_consent" | "recording" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
+export type NoticeKey = "ai_use" | "privacy" | "pay_transparency" | "adverse_decision_explanation";
 
 export type Notice = { key: NoticeKey; version: string; jurisdictions: string[]; text: string };
 
 export const DEFAULT_NOTICES: Notice[] = [
   {
     key: "ai_use",
-    // 2026-10-08 (plan D10): before applying there is no message to reply to, so the notice says how to reach a person then too.
-    version: "2026-10-08",
+    // Nothing reads a reply for a keyword, so the notice names the two ways to a person that work: the contact on the job page, and the links in our messages.
+    version: "2026-11-18",
     jurisdictions: ["*"],
     text:
       "This employer uses software that includes artificial intelligence to help organize applications, ask screening questions, and summarize information for the hiring team. " +
-      "People make the hiring decisions. You can ask to talk to a person at any point: before you apply, use the contact on the job page; after you apply, reply HUMAN to any of our messages or use the link in it.",
-  },
-  {
-    key: "sms_consent",
-    version: "2026-09-01",
-    jurisdictions: ["*"],
-    text:
-      "Yes, you may send me text messages about this application (scheduling, questions, updates). Message and data rates may apply. Reply STOP to opt out at any time. Consent is not a condition of applying.",
-  },
-  {
-    key: "recording",
-    version: "2026-09-01",
-    jurisdictions: ["*"],
-    text: "This conversation may be recorded and transcribed for the hiring team, with your consent. Say or type \"I agree\" to continue, or tell us you prefer not to be recorded.",
+      "People make the hiring decisions. You can ask to talk to a person at any point: before you apply, use the contact on the job page; after you apply, write to that contact or use the link in any of our messages.",
   },
   {
     key: "privacy",
@@ -89,76 +76,26 @@ export function payTransparencyApplies(notices: Notice[]): boolean {
 /**
  * Whether candidates see the pay range (Wave 0 item 0.8): when the owner chose to show it, and always where a pay
  * transparency law covers the job, since that notice tells the candidate the range is "shown above". The job page, the
- * apply form, the feeds, the board packages, the screening assistant and the owner's role page all ask this one question.
+ * apply form, the screening assistant and the owner's role page all ask this one question.
  */
 export function payShown(compensation: { discloseRange: boolean }, notices: Notice[]): boolean {
   return compensation.discloseRange || payTransparencyApplies(notices);
 }
 
 /**
- * The notices a candidate page renders as text. Two keys stay defined but are never shown as notices: `recording` is
- * for a feature release 1 does not have (docs/readiness/20 section F), and `sms_consent` is a consent checkbox, not a
- * notice, rendered by the apply form only while texting is on. Neither belongs in the versions recorded as shown.
- */
-export const NOTICES_NOT_RENDERED: readonly NoticeKey[] = ["recording", "sms_consent"];
-
-export function candidateNotices(notices: Notice[]): Notice[] {
-  return notices.filter((n) => !NOTICES_NOT_RENDERED.includes(n.key));
-}
-
-export type NoticeOverrides = Record<string, { version: string; text: string; jurisdictions: string[] }>;
-
-/** A notice version is the date of the change (docs/08): what the candidate saw is recorded as `key@version`. */
-export function noticeVersionFor(now: Date): string {
-  return now.toISOString().slice(0, 10);
-}
-
-/**
- * Applies a company's rewording of its notices (audit finding A8). A new text gets today's version and keeps the
- * default's jurisdictions; null puts the standard text back; an unchanged text changes nothing (the version stays).
- * Returns the new override map and what changed, so the caller can audit each key with its versions.
- */
-export function applyNoticeOverrides(
-  existing: NoticeOverrides | undefined,
-  changes: Partial<Record<NoticeKey, { text: string } | null>>,
-  now: Date,
-): { notices: NoticeOverrides; changed: Array<{ key: NoticeKey; version: string | null; previousVersion: string | null }> } {
-  const notices: NoticeOverrides = { ...(existing ?? {}) };
-  const changed: Array<{ key: NoticeKey; version: string | null; previousVersion: string | null }> = [];
-  for (const [k, change] of Object.entries(changes)) {
-    const key = k as NoticeKey;
-    const base = DEFAULT_NOTICES.find((n) => n.key === key);
-    if (!base) continue;
-    const before = notices[key];
-    if (change === null) {
-      if (!before) continue;
-      delete notices[key];
-      changed.push({ key, version: null, previousVersion: before.version });
-      continue;
-    }
-    if (!change) continue;
-    const text = change.text.trim();
-    if (before?.text === text) continue;
-    const version = noticeVersionFor(now);
-    // several rewordings on one day share the version: the version names the day the text became current
-    notices[key] = { version, text, jurisdictions: before?.jurisdictions ?? base.jurisdictions };
-    changed.push({ key, version, previousVersion: before?.version ?? null });
-  }
-  return { notices, changed };
-}
-
-/**
- * The line a decision message carries for a candidate covered by Colorado's rules on adverse decisions (plan G5): the
- * job is in Colorado, or the candidate is. DRAFT WORDING PENDING COUNSEL (docs/spec/11-counsel-register.md item 24): the
+ * The line a decision message carries for a candidate covered by Colorado's rules on adverse decisions: the job is in
+ * Colorado, or the candidate is. DRAFT WORDING PENDING COUNSEL (docs/legal-drafts/counsel-register.md item 24): the
  * text, its version and the 30-day window are placeholders until counsel answers; nothing goes to real candidates first.
- * A reply asking for the explanation reaches the ITS compliance queue (a human-review request), never the assistant.
+ * A reply to a decision message lands with the company's own hiring contact when it set one, otherwise in the reply
+ * mailbox a person at ITS reads (packages/agents/src/coordinator.ts, `replyToFor`), and never with the assistant. With a
+ * contact of its own, who answers, and so the line's "someone who was not part of the decision", is the company's to keep.
  */
 export const ADVERSE_DECISION_LINE = {
   key: "adverse_decision_explanation" as const,
-  version: "2026-10-09-draft",
+  version: "2026-11-18-draft",
   counselStatus: "draft" as const,
   jurisdictions: ["US-CO"],
-  text: "Colorado: you may ask us to explain the main reasons for this decision and to have a person review it. Reply to this email with the word EXPLAIN within 30 days, and someone who was not part of the decision will answer you.",
+  text: "Colorado: you may ask us to explain the main reasons for this decision and to have a person review it. Reply to this email within 30 days, and someone who was not part of the decision will answer you.",
 };
 
 const STATE_CODES: Record<string, string> = {
@@ -191,10 +128,20 @@ export function adverseDecisionLineApplies(input: { jobLocations: Array<Location
   return places.some((p) => ADVERSE_DECISION_LINE.jurisdictions.includes(p));
 }
 
-/** The disclosure line every automated candidate message carries. */
+/**
+ * The disclosure line every automated candidate message carries when the job has none of its own. How to reach a
+ * person is the job's other line, beside it in every such message (`REACH_A_PERSON_LINE` when the job has none).
+ */
 export function disclosureLine(companyName: string): string {
-  return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant. Reply HUMAN at any time to reach a person.`;
+  return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant.`;
 }
+
+/**
+ * How to reach a person, as a job stores it when it has no line of its own. It is true wherever a job's line is shown:
+ * under an email, where a reply lands with a person (packages/agents/src/coordinator.ts, `replyToFor`), and on the AI
+ * interview's first page, since every job page prints a contact. Nothing reads a reply for a keyword, so it names none.
+ */
+export const REACH_A_PERSON_LINE = "To reach a person at any time, reply to any of our emails or use the contact on the job page.";
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* What the law asks of a job ad before it goes public (plan D5; Track L: counsel confirms the lists first).      */
@@ -206,7 +153,7 @@ export const PAY_TRANSPARENCY_JURISDICTIONS: readonly string[] = DEFAULT_NOTICES
 /**
  * Candidates for that list, PENDING COUNSEL: Washington DC (pay range on job ads and health benefits before the first
  * interview) and Rhode Island (pay range on request and before discussing pay). Until our lawyer confirms them they are
- * named on the approval card as advisory, never block approval, and are not added to the candidate notice.
+ * named in the legal check as advisory, never block publishing, and are not added to the candidate notice.
  */
 export const PAY_TRANSPARENCY_CANDIDATES: ReadonlyArray<{ jurisdiction: string; note: string; pendingCounsel: true }> = [
   { jurisdiction: "US-DC", note: "Washington DC asks for the pay range on job ads and for health benefits to be described before the first interview.", pendingCounsel: true },
@@ -254,10 +201,10 @@ export function closingDateRequired(input: { jobLocations: Array<Location | null
 }
 
 /**
- * The legal check before a role is approved (plan D5): for the job's places, the pay range, a short benefits
- * description and Colorado's closing date. A missing legal requirement blocks approval (POST /roles/:id/approve answers
- * 409 `legal_check` with the missing items); places pending counsel only add a note. A closing date the law needs and
- * nobody set is not missing: the role gets `defaultClosesOn` when it opens, and the item says so.
+ * The legal check before a job is published (plan D5): for the job's places, the pay range, a short benefits
+ * description and Colorado's closing date. A missing legal requirement blocks publishing (409 `not_ready`, one blocker
+ * for each missing item); places pending counsel only add a note. A closing date the law needs and nobody set is not
+ * missing: the role gets `defaultClosesOn` when it opens, and the item says so.
  */
 export function postingLegalCheck(input: {
   packet: { identity: { locations: Location[]; remotePolicy?: string | null }; compensation?: { min: number; max: number; benefitsSummary?: string | null } | null };
@@ -289,7 +236,7 @@ export function postingLegalCheck(input: {
     items.push({
       key: "benefits", label: "A short description of the benefits", met, blocking: true, jurisdictions: benefitPlaces, pendingCounsel: [],
       detail: met ? "The job ad describes the benefits." : `The law in ${placeNames(benefitPlaces)} asks for a short description of the benefits on the job ad${remote ? ", and this remote job could be done there" : ""}.`,
-      fix: met ? null : "Describe the benefits on the job's approval card, or in Settings (used for every job).",
+      fix: met ? null : "Describe the benefits in the job's pay section, or in Settings (used for every job).",
     });
   }
 

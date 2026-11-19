@@ -1,36 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { SCORING_PLACEHOLDER } from "@ros/agents";
-import type { ScreenContext } from "@ros/ai";
-// The packet tool tests' complete, valid packet (not exported by @ros/agents): read by path, as suites.ts reads core.
+// A complete, valid job (not exported by @ros/agents): read by path, as suites.ts reads core.
 import { samplePacket } from "../../agents/src/fixtures/sample-packet";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EvalApplication } from "./scoring-inputs";
-import { EARLIER_REJECTION, SCREEN_CANDIDATE, biasPairs, redactionCases, screenRedactionCases } from "./suites";
+import { EARLIER_REJECTION, SCREEN_CANDIDATE, biasPairs, formAnswersFor, redactionCases, screenRedactionCases, sentInterview } from "./suites";
 
 /**
- * What the evals send the scoring readings (founder decision D-04 = C), checked without any model: the inputs are built
- * by the app's own `scoringInput` and `scorecardInput`, so these hold for every provider, the real models included.
+ * What the evals send the two readings that score, checked without any model: the inputs are built by the app's own
+ * `scoringInput` and `scorecardInput`, so these hold for every provider, the real models included.
  */
 const packet = samplePacket();
-const application = (over: Partial<EvalApplication>): EvalApplication => ({
-  packet,
-  extraction: null,
-  resumeText: null,
-  applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" } },
-  eligibility: { evaluatedAt: "2026-10-14T09:00:00.000Z", passed: true, failedRules: [], unverifiable: [] },
-  identity: {},
-  ...over,
-});
+const application = (over: Partial<EvalApplication>): EvalApplication => ({ packet, extraction: null, resumeText: "", formAnswers: formAnswersFor(packet), identity: {}, ...over });
 const pair = (id: string) => biasPairs.find((p) => p.id === id)!;
 
 describe("triage.redaction: the CV reading is sent none of the personal details", () => {
   for (const c of redactionCases) {
     it(c.id, () => {
-      const { text, messages } = triageModelInput(application({ resumeText: c.resumeText, applicationAnswers: { eligibility: { rdh_license: "yes", schedule: "yes" }, ...(c.noResumeSummary ? { noResumeSummary: c.noResumeSummary } : {}) }, identity: c.candidate, earlierApplications: c.earlier ?? [] }));
+      const { text, messages } = triageModelInput(application({ resumeText: c.resumeText, identity: c.candidate, earlierApplications: c.earlier ?? [] }));
       expect(leakedDetails(text, c.personal)).toEqual([]);
       expect(lostEvidence(messages, c.kept)).toEqual([]);
       expect(text).toContain(SCORING_PLACEHOLDER.name);
     });
   }
+});
+
+describe("what the CV reading is sent of the job and the form", () => {
+  it("every answer on the form as a sentence, and of the job only what the score counts", () => {
+    const { text, messages, promptInput } = triageModelInput(application({ resumeText: "Dental Assistant at Harbor Dental 2020 - present" }));
+    expect(promptInput.answerSentences).toEqual(["Are you available Monday to Friday, 8 to 5? Yes."]);
+    expect(messages).toContain("Are you available Monday to Friday, 8 to 5? Yes.");
+    expect(text).toContain("[mh_xray] Radiography certificate");
+    expect(text).toContain("[chairside] Chairside skill");
+    // a nice-to-have and the pay are not in the score, so the reading is not sent them
+    expect(text).not.toContain("Dentrix experience");
+    expect(text).not.toMatch(/\b24\b.*\b28\b/);
+  });
 });
 
 describe("triage.bias_pairs: a cue the reading never sees gives the very same input", () => {
@@ -42,8 +46,7 @@ describe("triage.bias_pairs: a cue the reading never sees gives the very same in
     const b = triageModelInput(application({ resumeText: p.b, identity: p.candidates[1], earlierApplications: p.earlier?.[1] }));
     expect(modelInputDifference(a.text, b.text)).toEqual([]);
     expect(b.promptInput).not.toHaveProperty("earlierApplications");
-    expect(b.promptInput).not.toHaveProperty("priorApplications");
-    expect(leakedDetails(b.text, ["March 2025", EARLIER_REJECTION.note!, "not_moving_forward"])).toEqual([]);
+    expect(leakedDetails(b.text, ["March 2025", EARLIER_REJECTION.note!, EARLIER_REJECTION.outcome])).toEqual([]);
   });
 
   it("two names are hidden alike, so the candidate's texts read the same", () => {
@@ -68,18 +71,21 @@ describe("triage.bias_pairs: a cue the reading never sees gives the very same in
 describe("screen.redaction: the scorecard is sent none of the personal details", () => {
   for (const c of screenRedactionCases) {
     it(c.id, () => {
-      const input = c.build(packet);
-      const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: c.candidate.firstName ?? "there" }, channel: "web", progress: input.progress, answers: input.answers, transcript: input.transcript, focusUnknowns: [], latestCandidateMessage: null, incomplete: null };
-      const { ctx: seen, text, messages } = scorecardModelInput(ctx, c.candidate);
-      expect(seen.candidate.firstName).toBe(SCORING_PLACEHOLDER.name);
+      const { text, messages } = scorecardModelInput(c.build(packet));
       expect(leakedDetails(text, c.personal)).toEqual([]);
       expect(lostEvidence(messages, c.kept)).toEqual([]);
+      expect(text).toContain(SCORING_PLACEHOLDER.name);
     });
   }
 
-  it("the screen.assess cases are sent no first name either", () => {
-    const ctx: ScreenContext = { company: { name: "Eval Dental" }, packet, candidate: { firstName: SCREEN_CANDIDATE.firstName! }, channel: "web", progress: { askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0 }, answers: {}, transcript: [], focusUnknowns: [], latestCandidateMessage: null, incomplete: null };
-    expect(leakedDetails(scorecardModelInput(ctx, SCREEN_CANDIDATE).text, [SCREEN_CANDIDATE.firstName!])).toEqual([]);
+  it("the scorecard is sent the questions asked and the answers, and no first name", () => {
+    const interview = sentInterview(packet, { gaps: ["mh_xray"] });
+    const { ctx, text } = scorecardModelInput(interview);
+    expect(ctx.asked.map((a) => a.key)).toEqual(["recent", "nervous", "available", "pay", "mh_xray"]);
+    expect(ctx.asked.find((a) => a.key === "mh_xray")?.mustHave).toBe("Radiography certificate");
+    expect(ctx.asked.find((a) => a.key === "recent")?.standard).toBe("Specific procedures");
+    expect(Object.keys(ctx.answers)).toEqual(["recent", "nervous", "available", "pay", "mh_xray"]);
+    expect(leakedDetails(text, [SCREEN_CANDIDATE.firstName!, SCREEN_CANDIDATE.lastName!, SCREEN_CANDIDATE.email!])).toEqual([]);
   });
 });
 

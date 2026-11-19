@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 const subscribe = () => () => {};
 
 /**
- * Whether the page is the browser's own yet (Wave S2: one clean first draw). False while the server draws the page and
+ * Whether the page is the browser's own yet (one clean first draw). False while the server draws the page and
  * while the browser takes that drawing over (hydration), so both draw exactly the same; true from the very next draw,
  * and at once on a page opened from inside the app (no hydration there, so nothing waits).
  *

@@ -15,7 +15,7 @@ import { raiseAlert } from "./alerts";
  * honoured only while no administrator exists; after that it is ignored and audited. Every grant and revocation names
  * the administrator who made it, the reason, and raises an alert that a different administrator must acknowledge.
  */
-export type PlatformRole = "its_recruiter" | "platform_admin";
+export type PlatformRole = "platform_admin";
 export type PlatformRoleGrant = typeof platformRoleGrants.$inferSelect;
 
 /** Administrators according to the ledger, which is the only authority (migration 0014 backfilled every earlier role). */

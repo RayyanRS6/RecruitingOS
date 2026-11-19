@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/nextjs";
 import { scrubObservabilityEvent } from "@ros/contracts";
 
 /**
- * Browser-side error reporting for the owner, recruiter and administrator app only (candidate pages carry no script).
+ * Browser-side error reporting for the owner and administrator app only (candidate pages carry no script).
  * No replay, no session capture, no tracing, no PII; every event is scrubbed by shape. Off without a public DSN.
  */
 if (process.env.NEXT_PUBLIC_SENTRY_DSN) {

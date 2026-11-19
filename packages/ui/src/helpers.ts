@@ -1,6 +1,6 @@
 /**
  * Pure helpers behind the design-system components (docs/07). No React and no DOM, so server components, client
- * components and the unit tests share one copy of each rule: initials, score bands, keyboard movement, toast messages.
+ * components and the unit tests share one copy of each rule: initials, keyboard movement, toast messages, table sorting.
  */
 
 /** The tones every pill, chip, dot and badge draws from. Colour never carries meaning alone: a word always goes with it. */
@@ -31,76 +31,6 @@ export function initials(name: string | null | undefined, letters: 1 | 2 = 2): s
   if (words.length === 0) return "?";
   const picked = letters === 1 || words.length === 1 ? [words[0]] : [words[0], words[words.length - 1]];
   return picked.join("").toLocaleUpperCase();
-}
-
-export type ScoreBand = "very_high" | "high" | "medium" | "low";
-
-/**
- * Match-score bands (plan adjustments §1). The badge is green from 70 and amber from 55; below that it stays plain grey,
- * because a low score is not an alarm. Red is kept for a missing must-have, which is shown as its own chip. The words
- * describe the number the code worked out and never reuse the AI reading's words ("Strong match", "Potential match",
- * "Weak match"), so nobody mistakes one for the other when both are on screen.
- */
-export const SCORE_BANDS: ReadonlyArray<{ band: ScoreBand; min: number; label: string; tone: Tone }> = [
-  { band: "very_high", min: 85, label: "Very high", tone: "good" },
-  { band: "high", min: 70, label: "High", tone: "good" },
-  { band: "medium", min: 55, label: "Medium", tone: "caution" },
-  { band: "low", min: 0, label: "Low", tone: "neutral" },
-];
-
-/** The band for a 0-100 score (rounded and kept inside 0-100), or null when there is no score yet. */
-export function scoreBand(score: number | null | undefined): { score: number; band: ScoreBand; label: string; tone: Tone } | null {
-  if (score === null || score === undefined || !Number.isFinite(score)) return null;
-  const s = Math.min(100, Math.max(0, Math.round(score)));
-  const b = SCORE_BANDS.find((x) => s >= x.min) ?? SCORE_BANDS[SCORE_BANDS.length - 1];
-  return { score: s, band: b.band, label: b.label, tone: b.tone };
-}
-
-export type OwnerStage = "no_ai_interview" | "new" | "longlist" | "shortlist" | "interviewing" | "cancelled" | "on_hold" | "offer" | "hired" | "not_moving_forward";
-
-/**
- * The stages an owner sees for a candidate (plan adjustments §2), in the order the stage strip and the stage button list
- * them, each with the colour of its dot: green for good news, amber for cancelled and on hold, ink for work under way,
- * grey for "No AI interview yet" (20 Oct 2026, R20-7: everyone starts there), new and not moving forward (never red: a
- * decision is not an error, and neither is a cancelled interview). A view over the internal stages, which stay.
- */
-export const OWNER_STAGES: ReadonlyArray<{ id: OwnerStage; label: string; tone: Tone }> = [
-  { id: "no_ai_interview", label: "No AI interview yet", tone: "neutral" },
-  { id: "new", label: "New", tone: "neutral" },
-  { id: "longlist", label: "Longlist", tone: "accent" },
-  { id: "shortlist", label: "Shortlist", tone: "good" },
-  { id: "interviewing", label: "Interviewing", tone: "accent" },
-  { id: "cancelled", label: "Cancelled", tone: "caution" },
-  { id: "on_hold", label: "On hold", tone: "caution" },
-  { id: "offer", label: "Offer", tone: "good" },
-  { id: "hired", label: "Hired", tone: "good" },
-  { id: "not_moving_forward", label: "Not moving forward", tone: "neutral" },
-];
-
-/** One stage's word and colour; an unknown one reads as New rather than showing a raw name. */
-export function ownerStage(id: string): { id: OwnerStage; label: string; tone: Tone } {
-  return OWNER_STAGES.find((s) => s.id === id) ?? OWNER_STAGES.find((s) => s.id === "new")!;
-}
-
-/** One line of the stage button's menu. */
-export type StageChoice = { id: OwnerStage; label: string; tone: Tone; current: boolean; disabled?: boolean; reason?: string };
-
-/**
- * The stage button's choices: every stage, the current one marked, and each move that is not allowed now kept in the
- * list, greyed, with its reason (`blocked`, from the page that knows the candidate), so nobody wonders where it went.
- */
-export function stageMenuItems(current: string, blocked: Partial<Record<OwnerStage, string>> = {}): StageChoice[] {
-  const now = ownerStage(current).id;
-  return OWNER_STAGES.map((s) => {
-    const reason = s.id === now ? undefined : blocked[s.id];
-    return reason ? { ...s, current: false, disabled: true, reason } : { ...s, current: s.id === now };
-  });
-}
-
-/** What a screen reader hears for a score badge. */
-export function scoreLabel(score: number | null | undefined): string {
-  const b = scoreBand(score);
-  return b ? `Match score ${b.score} out of 100` : "No match score yet";
 }
 
 export type Move = "next" | "prev" | "first" | "last";
