@@ -16,7 +16,7 @@ describe("cross-site changes to the API", () => {
   let app: ReturnType<typeof createApp>;
   /** One signed-in person for the checks that leave the session open. */
   let cookie = "";
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: APP, JOBS_BASE_URL: JOBS };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: APP, JOBS_BASE_URL: JOBS };
   const signIn = async (email: string) => {
     const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
     const { devLink } = (await r1.json()) as { devLink: string };
@@ -114,7 +114,7 @@ describe("cross-site changes to the API", () => {
   it("the API's own form pages keep their real origin on their posts (Referrer-Policy: same-origin); everything else keeps no-referrer", async () => {
     const policy = async (path: string) => (await app.request(path, { headers: { cookie } })).headers.get("referrer-policy");
     // the sign-in link, the invitation, the second factor (no step open: a redirect, same header), the development consent pages
-    for (const path of ["/api/v1/auth/consume?token=t", "/api/v1/auth/invite?token=t", "/api/v1/auth/mfa", "/api/v1/auth/mfa/backup", "/api/v1/auth/fake/authorize?provider=google", "/api/v1/integrations/calendar/fake/authorize"]) {
+    for (const path of ["/api/v1/auth/consume?token=t", "/api/v1/auth/invite?token=t", "/api/v1/auth/mfa", "/api/v1/auth/mfa/backup", "/api/v1/auth/fake/authorize?provider=google"]) {
       expect(await policy(path), path).toBe("same-origin");
     }
     // the page the invitation's own form answers with
@@ -124,7 +124,7 @@ describe("cross-site changes to the API", () => {
   });
 
   it("webhooks are outside /api and keep their own checks", async () => {
-    const r = await app.request("/webhooks/postmark/inbound", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", origin: EVIL }, body: "{}" });
+    const r = await app.request("/webhooks/postmark/events", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", origin: EVIL }, body: "{}" });
     expect(await r.text()).not.toContain("cross_site");
   });
 });

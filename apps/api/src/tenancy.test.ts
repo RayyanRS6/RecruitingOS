@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { companies } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAs, signInStaff, signInWithIdentity, testContainerOptions } from "./test-helpers";
+import { plantApplicant, plantJob, signInAdmin, signInAs, signInWithIdentity, testContainerOptions } from "./test-helpers";
 
 /**
  * Founder decision F1 through the HTTP layer: no request header selects a tenant; tenancy comes from the
@@ -31,18 +31,17 @@ describe("tenant selection and isolation at the API", () => {
   let roleA = "";
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     cookieA = await signIn("owner-a@example.test");
     cookieB = await signIn("owner-b@example.test");
-    cookieStaff = await signInStaff(app, container, "recruiter@its.test", "its_recruiter", "recruiter");
+    cookieStaff = await signInAdmin(app, container, "admin@its.test", "admin");
     const ca = (await (await json(cookieA, "POST", "/api/v1/companies", { name: "Company A", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string };
     const cb = (await (await json(cookieB, "POST", "/api/v1/companies", { name: "Company B", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Denver", region: "CO", country: "US" }] })).json()) as { id: string };
     companyA = ca.id;
     companyB = cb.id;
-    const intake = (await (await json(cookieA, "POST", "/api/v1/intake/conversation/messages", { message: "I need a dental hygienist in Irvine. Full time. $45 to $55 an hour. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license." })).json()) as { intakeSessionId: string };
-    const compiled = (await (await json(cookieA, "POST", `/api/v1/intake/sessions/${intake.intakeSessionId}/compile`)).json()) as { roleId: string };
-    roleA = compiled.roleId;
+    roleA = await plantJob(container, { companyId: companyA, title: "Dental Hygienist" });
+    await plantApplicant(container, { companyId: companyA, roleId: roleA, mark: "Avery" });
   });
   afterAll(async () => {
     await container.close();
@@ -58,8 +57,13 @@ describe("tenant selection and isolation at the API", () => {
   it("a member of one company cannot read another company's role, even by id", async () => {
     expect((await json(cookieA, "GET", `/api/v1/roles/${roleA}`)).status).toBe(200);
     expect((await json(cookieB, "GET", `/api/v1/roles/${roleA}`)).status).toBe(404);
-    expect((await json(cookieB, "GET", `/api/v1/roles/${roleA}/applications`)).status).toBe(200);
-    expect(((await (await json(cookieB, "GET", `/api/v1/roles/${roleA}/applications`)).json()) as unknown[]).length).toBe(0);
+    // its candidates neither: the owner reads the one who applied, the other company nothing of them
+    const own = await json(cookieA, "GET", `/api/v1/roles/${roleA}/applications`);
+    expect(own.status).toBe(200);
+    expect(await own.text()).toContain("Avery");
+    const other = await json(cookieB, "GET", `/api/v1/roles/${roleA}/applications`);
+    expect(other.status).toBe(404);
+    expect(await other.text()).not.toContain("Avery");
   });
 
   it("switching companies requires a verified membership", async () => {
@@ -72,7 +76,7 @@ describe("tenant selection and isolation at the API", () => {
     expect((await json(cookieStaff, "GET", "/api/v1/roles", undefined, { "x-company-id": companyA })).status).toBe(403);
     expect((await json(cookieStaff, "POST", "/api/v1/auth/switch", { companyId: companyA })).status).toBe(403);
     const me = (await (await json(cookieStaff, "GET", "/api/v1/auth/me")).json()) as { activeCompanyId: string | null; user: { platformRole: string } };
-    expect(me.user.platformRole).toBe("its_recruiter");
+    expect(me.user.platformRole).toBe("platform_admin");
     expect(me.activeCompanyId).toBeNull();
   });
 });
@@ -94,7 +98,7 @@ describe("a second company of one's own", () => {
   let firstCompany = "";
 
   beforeAll(async () => {
-    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
+    container = await createContainer(testContainerOptions({ ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" }));
     app = createApp(container);
     first = await signInWithIdentity(app, container, { email: "fay@second.test", name: "Fay First", provider: "google", aal2: false });
     const made = await create(first, "First Dental");
@@ -113,7 +117,7 @@ describe("a second company of one's own", () => {
   });
 
   it("refuses someone invited into another company: they keep that company, and ITS opens a company of their own", async () => {
-    const ian = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "ian@second.test", name: "Ian" });
+    const ian = await signInAs(container, app, { companyId: firstCompany, role: "hiring_manager", email: "ian@second.test", name: "Ian" });
     const r = await create(ian, "Ian Dental");
     expect(r.status).toBe(409);
     expect(await r.json()).toMatchObject(refusal);
@@ -131,7 +135,7 @@ describe("a second company of one's own", () => {
   });
 
   it("lets someone who was removed from another person's company open their own", async () => {
-    const rex = await signInAs(container, app, { companyId: firstCompany, role: "interviewer", email: "rex@second.test", name: "Rex" });
+    const rex = await signInAs(container, app, { companyId: firstCompany, role: "hiring_manager", email: "rex@second.test", name: "Rex" });
     const rexId = ((await (await json(rex, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } }).user.id;
     expect((await json(first, "PATCH", `/api/v1/companies/current/members/${rexId}`, { status: "removed" })).status).toBe(200);
     const again = await signInWithIdentity(app, container, { email: "rex@second.test", name: "Rex", provider: "google", aal2: false });
@@ -139,7 +143,7 @@ describe("a second company of one's own", () => {
   });
 
   it("lets a platform admin set companies up as before", async () => {
-    const admin = await signInStaff(app, container, "ada@its.test", "platform_admin", "Ada Admin");
+    const admin = await signInAdmin(app, container, "ada@its.test", "Ada Admin");
     expect((await create(admin, "Set Up One")).status).toBe(201);
     expect((await create(admin, "Set Up Two")).status).toBe(201);
   });

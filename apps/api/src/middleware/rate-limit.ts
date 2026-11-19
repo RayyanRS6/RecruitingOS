@@ -24,46 +24,31 @@ export const POLICIES = {
   /** "Email me a sign-in link" on the team invitation page: the link goes to the invited address only, so the second rule is per invitation (the form's token), whoever holds the link and from wherever they post it. */
   authInviteEmail: { name: "auth.invite_email", rules: [{ by: "ip", windowMs: 15 * MIN, limit: 10 }, { by: "token", windowMs: 15 * MIN, limit: 3, field: "token" }] },
   /**
-   * Plan E14: a conversation is now part of applying, and people often apply from one shared address (a library, a
-   * school, a workplace), so the per-address limits are raised and the conversation is limited mainly per link. The
-   * form has no link, so it stays per address and per role.
+   * People often apply from one shared address (a library, a school, a workplace), so the per-address limits are
+   * generous. The application form has no link, so it is limited per address and per job; the AI interview is limited
+   * mainly per link.
    */
   apply: { name: "apply", rules: [{ by: "ip", windowMs: HOUR, limit: 60 }, { by: "role", windowMs: HOUR, limit: 600, param: "roleId" }] },
-  /** Every conversation post (an answer, a skip, a tap, Start, an edit, Send): one conversation is about twenty, so two hundred per link is ample. */
+  /** Every post of the AI interview (an answer, a skip, a tap, Start, an edit, Send): one interview is about twenty, so two hundred per link is ample. */
   screen: { name: "candidate.screen", rules: [{ by: "token", windowMs: HOUR, limit: 200, param: "token" }, { by: "ip", windowMs: HOUR, limit: 1200 }] },
+  /** "I'd rather talk to a person" in the AI interview. */
   screenHuman: { name: "candidate.screen_human", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 150 }] },
-  /** "Do this later" sends an email: a handful per link. */
-  screenLater: { name: "candidate.screen_later", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
-  /** The emailed link that confirms a repeat submission's answers: per link and per address. */
-  confirmAnswers: { name: "candidate.confirm_answers", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   privacy: { name: "candidate.privacy_request", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 10 }] },
   /** The public privacy-request form (no link to bind to): per address, and per mailbox typed into the form (the email is normalized, so a change of case is the same mailbox). */
   privacyForm: { name: "candidate.privacy_form", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 5, field: "email" }] },
   /** Pressing the confirmation button on the emailed privacy-request link: per link (the posted token) and per address. */
   privacyVerify: { name: "candidate.privacy_verify", rules: [{ by: "token", windowMs: HOUR, limit: 10, field: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   withdraw: { name: "candidate.withdraw", rules: [{ by: "token", windowMs: HOUR, limit: 5, param: "token" }, { by: "ip", windowMs: HOUR, limit: 20 }] },
-  smsPref: { name: "candidate.sms_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
-  /** "Don't keep me for future roles" on the status page: per link and per address. */
-  talentPoolPref: { name: "candidate.talent_pool_pref", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }, { by: "ip", windowMs: HOUR, limit: 30 }] },
   /** "Lost your link?": anyone may ask, so per address and per mailbox typed (normalized); the answer is the same whether or not the address is known. */
   linkRequest: { name: "candidate.link_request", rules: [{ by: "ip", windowMs: HOUR, limit: 10 }, { by: "email", windowMs: HOUR, limit: 3, field: "email" }] },
-  schedule: { name: "candidate.schedule", rules: [{ by: "token", windowMs: HOUR, limit: 30, param: "token" }, { by: "ip", windowMs: HOUR, limit: 60 }] },
-  scheduleNoneWork: { name: "candidate.schedule_none", rules: [{ by: "token", windowMs: HOUR, limit: 20, param: "token" }] },
-  reschedule: { name: "candidate.reschedule", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }] },
-  cancelInterview: { name: "candidate.cancel_interview", rules: [{ by: "token", windowMs: HOUR, limit: 10, param: "token" }] },
   apiUser: { name: "api.user", rules: [{ by: "user", windowMs: MIN, limit: 600 }] },
   apiTenant: { name: "api.tenant", rules: [{ by: "tenant", windowMs: MIN, limit: 3000 }] },
   apiAnonymous: { name: "api.anonymous", rules: [{ by: "ip", windowMs: MIN, limit: 300 }] },
   webhookProvider: { name: "webhook.provider", rules: [{ by: "provider", windowMs: MIN, limit: 6000 }] },
   webhookAuthFailed: { name: "webhook.auth_failed", rules: [{ by: "auth_failure", windowMs: 10 * MIN, limit: 60 }] },
   cspReport: { name: "csp.report", rules: [{ by: "ip", windowMs: MIN, limit: 60 }] },
-  /** Every candidate-facing page and feed, read or written, per address: generous, but not unbounded. */
+  /** Every candidate-facing page, read or written, per address: generous, but not unbounded. */
   candidatePages: { name: "candidate.pages", rules: [{ by: "ip", windowMs: MIN, limit: 240 }] },
-  /**
-   * The quick start's AI suggestions (Wave S3): each request is a paid model call that makes no draft and uses no plan
-   * room. The page asks once per set of answers; this caps a script or a stuck page.
-   */
-  intakeSuggest: { name: "intake.suggest", rules: [{ by: "user", windowMs: HOUR, limit: 30 }, { by: "tenant", windowMs: HOUR, limit: 200 }] },
   /**
    * A request for access (SIGNUP_MODE=approval, the review of 6 November 2026): each one is a company row and two emails, and
    * one account makes one request, so many accounts from one address are what this bounds. The direct door is not limited.

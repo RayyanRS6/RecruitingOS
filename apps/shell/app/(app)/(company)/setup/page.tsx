@@ -1,5 +1,5 @@
-import { Setup } from "@ros/web/src/pages/Setup";
+import { Settings } from "@ros/web/src/pages/Settings";
 
-export default function SetupPage() {
-  return <Setup />;
+export default function SettingsPage() {
+  return <Settings />;
 }

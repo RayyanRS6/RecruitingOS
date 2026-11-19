@@ -15,7 +15,7 @@ export function isPublicPlanKey(key: string | null | undefined): key is PublicPl
   return (PUBLIC_PLAN_KEYS as readonly string[]).includes(key ?? "");
 }
 
-/** Jobs at a time: while a job waits for approval, is sent back, is open or is paused. Closing one gives its place back. */
+/** Jobs at a time: while a job is a draft, open or paused. Closing one gives its place back. */
 export const ACTIVE_ROLES = "active_roles";
 /** Jobs ever, counted live from the roles: one that ever went live counts for good; one closed before it opened gives its place back. */
 export const JOBS_TOTAL = "jobs_total";
@@ -27,19 +27,15 @@ export const TEXT_SCREENS = "text_screens";
 export const AI_CREDIT_TOTAL_CENTS = "ai_credit_total_cents";
 /** The AI credit a month, in cents, summed live from ai_runs from the period's start. */
 export const AI_CREDIT_MONTHLY_CENTS = "ai_credit_monthly_cents";
-/** The recruiter requests a month: counted, never refused (founder decision Q33). */
-export const RECRUITER_ASKS = "recruiter_asks";
 /** The people on the team, counting invitations not yet answered. */
 export const SEATS = "seats";
-/** ITS staff time on posting: 0 means none (the team posts its own job boards); null means ITS does. */
-export const ITS_WORK = "its_work";
 
 /**
  * The keys every plan names, null where it has no limit. `applyPlan` writes only the keys a plan lists and never clears
  * another, so a plan that left one out would keep a company on its old limit after a change of plan.
  * packages/db/src/seed.test.ts pins this.
  */
-export const PLAN_LIMIT_KEYS = [ACTIVE_ROLES, JOBS_TOTAL, CANDIDATES_PER_JOB, TEXT_SCREENS, AI_CREDIT_TOTAL_CENTS, AI_CREDIT_MONTHLY_CENTS, RECRUITER_ASKS, SEATS, ITS_WORK] as const;
+export const PLAN_LIMIT_KEYS = [ACTIVE_ROLES, JOBS_TOTAL, CANDIDATES_PER_JOB, TEXT_SCREENS, AI_CREDIT_TOTAL_CENTS, AI_CREDIT_MONTHLY_CENTS, SEATS] as const;
 export type PlanLimitKey = (typeof PLAN_LIMIT_KEYS)[number];
 
 /** Whether a limit key is the AI credit: money, which customers read as words or a percentage, never dollars. */
@@ -97,8 +93,8 @@ export function publicPlanView(row: PlanRowForView, currentPlanKey: string | nul
   };
 }
 
-/** GET /api/v1/plans: the public plans in their order, and whether ITS already has an open request about the plan from this company. */
-export type PublicPlans = { plans: PublicPlan[]; requested: boolean };
+/** GET /api/v1/plans: the public plans in their order, and when this company's open request about its plan was sent (null with none open). */
+export type PublicPlans = { plans: PublicPlan[]; requestedAt: string | null };
 
 /** The private pilot: never listed for a customer, and ITS gives it, so it is never offered an upgrade. */
 const PRIVATE_PLAN_KEY = "design_partner";
@@ -111,25 +107,24 @@ export function mayOfferUpgrade(planKey: string | null | undefined): boolean {
   return !!planKey && planKey !== PRIVATE_PLAN_KEY && planKey !== PUBLIC_PLAN_KEYS[PUBLIC_PLAN_KEYS.length - 1];
 }
 
-/** What the queue shows of a plan request before anyone accepts it: template words, never the customer's. */
-export const PLAN_REQUEST_SUMMARY = "A customer asked about their plan.";
-/** What it needs from whoever picks it up. */
-export const PLAN_REQUEST_EXPERTISE = "plan and billing";
-/** Said when ITS already has an open request about the plan: a second one is not raised. */
-export const PLAN_REQUEST_OPEN_LINE = "ITS has your request.";
+/**
+ * A company's request about its plan, as ITS gets it: one open alert in the admin console per company, with the plan
+ * asked for, why, the person's note and who asked. There is no payment system, so nothing changes until an
+ * administrator changes the plan, which closes the alert.
+ */
+export const PLAN_REQUEST_ALERT_KIND = "plan.requested";
 /** The upgrade sheet's one plain line: there is no payment system. */
 export const UPGRADE_SHEET_LINE = "No card is charged. ITS will contact you, and nothing changes until then.";
 
-/** The question a plan request carries: the plan by name, then why, then the person's own note. Null: no plan to name, because nothing is above theirs. */
-export function planRequestQuestion(planName: string | null, opts: { reason?: string | null; note?: string | null } = {}): string {
+/** What the alert says the company wants: the plan by name, then why, then the person's own note. Null: no plan to name, because nothing is above theirs. */
+export function planRequestWords(planName: string | null, opts: { reason?: string | null; note?: string | null } = {}): string {
   return [planName ? `We would like to move to the ${planName} plan.` : "We would like to talk about our plan.", opts.reason?.trim(), opts.note?.trim()].filter(Boolean).join(" ");
 }
 
-/** What the team is told when ITS changes the plan, and the answer it puts on the open plan request. `opened`: how many locked people the new plan opened. */
-export function planChangedWords(planName: string, opened = 0): { title: string; body: string; answer: string } {
+/** What the team is told when ITS changes the plan. `opened`: how many locked people the new plan opened. */
+export function planChangedWords(planName: string, opened = 0): { title: string; body: string } {
   const people = opened ? ` ${opened === 1 ? "1 candidate who was locked is open now" : `${opened} candidates who were locked are open now`}.` : "";
-  const answer = `Your company is on the ${planName} plan now.`;
-  return { title: `Your plan is now ${planName}`, body: `${answer} The new limits apply at once.${people}`, answer };
+  return { title: `Your plan is now ${planName}`, body: `Your company is on the ${planName} plan now. The new limits apply at once.${people}` };
 }
 
 /** Why another job is refused once the plan's jobs are all used: "Your Free plan includes one job. Upgrade to post more." */
@@ -140,10 +135,6 @@ export function jobsTotalLine(planName: string | null | undefined, limit: number
 /** Why that refusal's Upgrade is asked for, after the plan's name in the question. */
 export const MORE_JOBS_UPGRADE_QUESTION = "We would like to post more jobs.";
 
-/** Said when a company on a plan with no ITS staff time asks ITS to post its jobs. */
-export const ITS_POSTING_UPGRADE_LINE = "On your plan your team posts the jobs on the boards. Upgrade to have ITS post them.";
-/** Why that Upgrade is asked for. */
-export const ITS_POSTING_UPGRADE_QUESTION = "We would like ITS to post our jobs on the boards.";
 /** Why an Upgrade is asked for when every place for a person on the team is in use. */
 export const MORE_PEOPLE_UPGRADE_QUESTION = "We would like to add more people.";
 
@@ -162,24 +153,11 @@ export function moreAppliedTitle(roleTitle: string): string {
 /** Why an Upgrade is asked for when it is more candidates the company wants to see. */
 export const MORE_CANDIDATES_UPGRADE_QUESTION = "We would like to view more candidates.";
 
-/** A recruiter request about someone locked, as the team's own list shows it: their words, and ITS's, stay with ITS. */
-export const LOCKED_REQUEST_LINE = "An ITS recruiter is helping a candidate you cannot see yet.";
+/** Why an Upgrade is asked for when the month's AI interviews are used up. */
+export const MORE_INTERVIEWS_UPGRADE_QUESTION = "We would like to send more AI interviews.";
 
-/**
- * What closing a job does for the people past the plan's candidates per job still in process (Rule 2), a number and never who:
- * it moves them too, and the closing message goes to them by itself, at the latest five working days on, whatever the settings
- * say (`runUntoldSafetyNet`), or when someone sends it to the others. They are not kept in the talent pool, so it never says
- * they move there. On the hire sheet, the close card and the toast after a close (the release review, 11 November 2026).
- */
-export function lockedClosingLine(n: number): string {
-  return `The closing message goes by itself, within 5 working days, to the ${n === 1 ? "1 more person" : `${n} more people`} you cannot see yet.`;
-}
-
-/**
- * Why nothing starts for someone locked: on the button, and in the route's refusal. Only ITS staff who may read them see it
- * (a grant naming them, or break glass); the team is refused at the door and never reads it.
- */
-export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help, no AI interview and no interview until an upgrade opens them.";
+/** Why nothing starts for someone locked: the route's refusal, behind the door that already refuses the team. */
+export const NO_WORK_WHILE_LOCKED = "Locked on the company's plan: no AI help and no AI interview until an upgrade opens them.";
 
 /** One locked person on a job's list: where they came in, and when. Nothing else about them. */
 export type LockedCard = { position: number; appliedAt: string };
@@ -204,7 +182,7 @@ const BUSY = "Your plan's AI help is finishing other work.";
 
 /**
  * What the owner reads when the AI help stops something they asked for: words only, never dollars
- * (docs/FOUNDER-CONTEXT.md, "AI credit math"). A candidate never reads any of these.
+ * (docs/DECISIONS.md, PL-10). A candidate never reads any of these.
  */
 export const AI_HELP_LINE = {
   /** A chat turn in the job builder: their words stay saved. */
@@ -212,15 +190,10 @@ export const AI_HELP_LINE = {
   /** Writing the job's draft, the dearest call: what they confirmed is kept. */
   draft: `${USED_UP} Everything you confirmed is kept. Upgrade to write the draft.`,
   draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. Upgrade to write the draft.`,
-  /** Changing a job by chat: the editor needs no AI. */
-  revise: `${USED_UP} Nothing was changed. You can still make the change in the editor.`,
-  /**
-   * Changing a draft by chat, before the job exists: no editor is named, since a draft's Edit changes the answers and
-   * writing the draft again with them needs AI help too (live test, 12 Nov 2026).
-   */
-  reviseDraft: `${USED_UP} Nothing was changed.`,
   /** The text about the company: the person can write it. */
   about: `${USED_UP} You can write this text yourself; it shows the same way.`,
+  /** The LinkedIn and Indeed posts on a job's Share tab: the person can write them. */
+  posts: `${USED_UP} You can write these posts yourself.`,
   /** A new job, before anyone types. */
   newJob: `${USED_UP} Upgrade to keep going.`,
   newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. Upgrade to keep going.`,
@@ -238,9 +211,8 @@ export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: str
     turn: `${USED_UP} Your draft is saved. ${way}`,
     draft: `${USED_UP} Everything you confirmed is kept. ${way}`,
     draftTooBig: `${NEARLY_USED_UP}, and writing the draft needs more than is left. Everything you confirmed is kept. ${way}`,
-    revise: AI_HELP_LINE.revise,
-    reviseDraft: AI_HELP_LINE.reviseDraft,
     about: AI_HELP_LINE.about,
+    posts: AI_HELP_LINE.posts,
     newJob: `${USED_UP} ${way}`,
     newJobTooBig: `${NEARLY_USED_UP}, and a new job needs more than is left. ${way}`,
   };
@@ -251,8 +223,6 @@ export function aiHelpLine(key: keyof typeof AI_HELP_LINE, opts: { planKey?: str
 export const AI_HELP_BUSY_LINE = {
   turn: `${BUSY} Your draft is saved. Try again in a few minutes.`,
   draft: `${BUSY} Everything you confirmed is kept. Try again in a few minutes.`,
-  revise: `${BUSY} Nothing was changed. Try again in a few minutes, or make the change in the editor.`,
-  reviseDraft: `${BUSY} Nothing was changed. Try again in a few minutes.`,
   about: `${BUSY} Try again in a few minutes, or write this text yourself; it shows the same way.`,
 } as const;
 

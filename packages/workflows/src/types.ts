@@ -9,12 +9,12 @@ export type RunRow = typeof workflowRuns.$inferSelect;
 export type Services = {
   ai: AiRuntime;
   integrations: Integrations;
-  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link and tracked link is built from it. `smsEnabled` is SMS_ENABLED: while off, candidate copy promises nothing by text. */
-  env: { appBaseUrl: string; jobsBaseUrl: string; itsQueueEmail: string; smsEnabled: boolean };
+  /** `jobsBaseUrl` is the public job-page host (JOBS_BASE_URL): every candidate-facing job link is built from it. */
+  env: { appBaseUrl: string; jobsBaseUrl: string };
   engine: WorkflowEngine;
 };
 
-export type WakePayload = { kind: "event" | "timer" | "human" | "manual"; key?: string; payload?: Record<string, unknown> } | null;
+export type WakePayload = { kind: "event" | "timer" | "manual"; key?: string; payload?: Record<string, unknown> } | null;
 
 export type StepContext<S extends Record<string, unknown> = Record<string, unknown>> = {
   run: RunRow;
@@ -77,9 +77,7 @@ export type WorkflowDefinition<S extends Record<string, unknown> = Record<string
   initialStep: string;
   steps: Record<string, StepDef<S>>;
   maxAttempts?: number;
-  /** Escalation kind created when the run fails for good. */
-  escalationKind?: string;
-  /** Called after the run fails for good (after the escalation is created). */
+  /** Called after the run fails for good. */
   onFailure?: (ctx: StepContext<S>, error: string) => Promise<void>;
 };
 

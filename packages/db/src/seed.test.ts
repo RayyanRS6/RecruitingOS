@@ -25,16 +25,16 @@ describe("the plan rows", () => {
   });
 
   it("holds the four public plans at the numbers decided", () => {
-    expect(byKey("free")).toEqual({ key: "free", name: "Free", prices: { monthlyUsd: 0 }, active: true, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, recruiter_asks: 1, seats: 2, its_work: 0 } });
-    expect(byKey("basic")).toEqual({ key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, active: true, limits: { active_roles: 3, jobs_total: null, candidates_per_job: 25, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 2000, recruiter_asks: 1, seats: 3, its_work: 0 } });
-    expect(byKey("pro")).toEqual({ key: "pro", name: "Pro", prices: { monthlyUsd: 149 }, active: true, limits: { active_roles: 10, jobs_total: null, candidates_per_job: 100, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 6000, recruiter_asks: 3, seats: 10, its_work: null } });
-    expect(byKey("ultra")).toEqual({ key: "ultra", name: "Ultra", prices: { monthlyUsd: 399 }, active: true, limits: { active_roles: 30, jobs_total: null, candidates_per_job: null, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 20000, recruiter_asks: 6, seats: null, its_work: null } });
+    expect(byKey("free")).toEqual({ key: "free", name: "Free", prices: { monthlyUsd: 0 }, active: true, limits: { active_roles: 1, jobs_total: 1, candidates_per_job: 5, text_screens: null, ai_credit_total_cents: 1000, ai_credit_monthly_cents: null, seats: 2 } });
+    expect(byKey("basic")).toEqual({ key: "basic", name: "Basic", prices: { monthlyUsd: 49 }, active: true, limits: { active_roles: 3, jobs_total: null, candidates_per_job: 25, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 2000, seats: 3 } });
+    expect(byKey("pro")).toEqual({ key: "pro", name: "Pro", prices: { monthlyUsd: 149 }, active: true, limits: { active_roles: 10, jobs_total: null, candidates_per_job: 100, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 6000, seats: 10 } });
+    expect(byKey("ultra")).toEqual({ key: "ultra", name: "Ultra", prices: { monthlyUsd: 399 }, active: true, limits: { active_roles: 30, jobs_total: null, candidates_per_job: null, text_screens: null, ai_credit_total_cents: null, ai_credit_monthly_cents: 20000, seats: null } });
   });
 
   it("the older plans keep their numbers and have no new limit", () => {
-    const old = { design_partner: [3, 300, 10, null], trial: [1, 25, 1, 3], core: [2, 150, 1, null], growth: [5, 500, 3, null], company: [12, 1500, 6, null] };
-    for (const [key, [roles, screens, asks, seats]] of Object.entries(old)) {
-      expect(byKey(key).limits, key).toMatchObject({ active_roles: roles, text_screens: screens, recruiter_asks: asks, seats, jobs_total: null, candidates_per_job: null, ai_credit_total_cents: null, ai_credit_monthly_cents: null, its_work: null });
+    const old = { design_partner: [3, 300, null], trial: [1, 25, 3], core: [2, 150, null], growth: [5, 500, null], company: [12, 1500, null] };
+    for (const [key, [roles, screens, seats]] of Object.entries(old)) {
+      expect(byKey(key).limits, key).toMatchObject({ active_roles: roles, text_screens: screens, seats, jobs_total: null, candidates_per_job: null, ai_credit_total_cents: null, ai_credit_monthly_cents: null });
     }
   });
 

@@ -2,6 +2,7 @@
 /** @jsxImportSource hono/jsx */
 import { Hono, type Context } from "hono";
 import { eq } from "drizzle-orm";
+import { appPaths } from "@ros/contracts";
 import { audit, MFA_MAX_ATTEMPTS, MFA_PERSON_ATTEMPTS, MFA_PERSON_WINDOW_MS, MFA_TRANSACTION_TTL_MS, normalizeEmail, openMfaTransaction, rateLimitKey, revokeAllSessions, sealMfaTransaction, SignInRefused, type MfaTransaction } from "@ros/core";
 import { sessions, users } from "@ros/db";
 import { hashToken } from "@ros/core";
@@ -11,7 +12,7 @@ import { clientIp, type Vars } from "../middleware/session";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
 import { fromThisSite } from "../middleware/same-site";
 import { BackupOfferPage, EnrolPage, VerifyPage } from "../pages/mfa";
-import { clearMfaCookie, openSession, readMfaCookie, setMfaCookie, setSessionCookie } from "./auth-shared";
+import { clearMfaCookie, landingFor, openSession, readMfaCookie, setMfaCookie, setSessionCookie } from "./auth-shared";
 
 /**
  * The staff second factor (founder approval of 22 September 2026). After Microsoft has vouched for an ITS staff member,
@@ -34,7 +35,18 @@ const WRONG_CODE = "That code is not right. Check the app and try again.";
 
 function paths(container: Container) {
   const base = `${container.env.APP_BASE_URL}/api/v1/auth/mfa`;
-  return { base, backup: `${base}/backup`, skip: `${base}/skip`, cancel: `${base}/cancel`, home: `${container.env.APP_BASE_URL}/` };
+  return { base, backup: `${base}/backup`, skip: `${base}/skip`, cancel: `${base}/cancel` };
+}
+
+/**
+ * Where the step ends: where this sign-in lands (`opened`, the session it has just opened), or, on the backup pages,
+ * where the person already signed in lands (a platform administrator on the admin dashboard). With nobody signed in,
+ * the app's own front door decides.
+ */
+function landing(c: Context<Vars>, container: Container, opened?: { platformAdmin: boolean; activeCompanyId: string | null }): string {
+  const s = c.get("session");
+  const who = opened ?? (s ? { platformAdmin: s.user.platformRole === "platform_admin", activeCompanyId: s.activeCompanyId } : null);
+  return `${container.env.APP_BASE_URL}${who ? landingFor(who) : appPaths.home}`;
 }
 
 function readTx(c: Context<Vars>, container: Container): MfaTransaction | null {
@@ -48,7 +60,7 @@ function clearTx(c: Context<Vars>) {
 }
 function toLogin(c: Context<Vars>, container: Container, code: string | null) {
   clearTx(c);
-  return c.redirect(`${container.env.APP_BASE_URL}/login${code ? `?error=${encodeURIComponent(code)}` : ""}`, 302);
+  return c.redirect(`${container.env.APP_BASE_URL}${appPaths.login}${code ? `?error=${encodeURIComponent(code)}` : ""}`, 302);
 }
 function providerFailure(c: Context<Vars>, container: Container, err: unknown) {
   if (err instanceof IdentityError) return toLogin(c, container, err.code === "mfa_session_invalid" ? "mfa_expired" : "mfa_unavailable");
@@ -107,7 +119,7 @@ mfaRoutes.get("/", async (c) => {
   const p = paths(container);
   try {
     if (tx.stage === "backup_offer") {
-      if (!sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
+      if (!sessionOf(c, tx)) { clearTx(c); return c.redirect(landing(c, container), 302); }
       return c.html(<BackupOfferPage backupHref={p.backup} skipAction={p.skip} />);
     }
     // A refresh shows the same setup key the person may already have scanned, and the message from a wrong code once.
@@ -135,7 +147,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
   // A request that says it came from another site never answers a transaction (also refused app-wide, middleware/same-site.ts).
   if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
   if (tx.stage !== "enrol" && tx.stage !== "verify" && tx.stage !== "backup_enrol") return c.redirect(p.base, 302);
-  if (tx.stage === "backup_enrol" && !sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
+  if (tx.stage === "backup_enrol" && !sessionOf(c, tx)) { clearTx(c); return c.redirect(landing(c, container), 302); }
   const form = await c.req.parseBody();
   const code = String(typeof form.code === "string" ? form.code : "").replace(/\s+/g, "");
   const ip = clientIp(c);
@@ -182,7 +194,7 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
     const s = sessionOf(c, tx)!;
     await audit(container.db, { companyId: null, actor: { kind: "user", id: s.user.id, name: s.user.name ?? s.user.email }, action: "mfa.backup_enrolled", target: { type: "user", id: s.user.id }, ip, details: { email: tx.email } });
     clearTx(c);
-    return c.redirect(p.home, 302);
+    return c.redirect(landing(c, container), 302);
   }
   // Only the service's re-issued token, verified like any other, opens the session.
   let result: Awaited<ReturnType<typeof openSession>>;
@@ -227,31 +239,29 @@ mfaRoutes.post("/", rateLimit(POLICIES.authMfa), async (c) => {
     // The backup offer is a convenience; the session stands.
   }
   clearTx(c);
-  return c.redirect(p.home, 302);
+  return c.redirect(landing(c, container, result), 302);
 });
 
 /** Enrol a second authenticator while the level-2 token from this sign-in is still at hand. */
 mfaRoutes.get("/backup", async (c) => {
   const container = c.get("container");
   const tx = readTx(c, container);
-  const p = paths(container);
-  if (!tx || (tx.stage !== "backup_offer" && tx.stage !== "backup_enrol") || !sessionOf(c, tx)) { clearTx(c); return c.redirect(p.home, 302); }
+  if (!tx || (tx.stage !== "backup_offer" && tx.stage !== "backup_enrol") || !sessionOf(c, tx)) { clearTx(c); return c.redirect(landing(c, container), 302); }
   try {
     // A refresh keeps the setup key the person may already have scanned.
     if (tx.stage === "backup_enrol" && tx.secret && tx.factorIds.length) return renderStage(c, container, tx);
     return await beginEnrolment(c, container, tx, true);
   } catch (err) {
-    if (err instanceof IdentityError && (err.code === "mfa_factor_conflict" || err.code === "mfa_aal2_required")) { clearTx(c); return c.redirect(p.home, 302); }
+    if (err instanceof IdentityError && (err.code === "mfa_factor_conflict" || err.code === "mfa_aal2_required")) { clearTx(c); return c.redirect(landing(c, container), 302); }
     return providerFailure(c, container, err);
   }
 });
 
 mfaRoutes.post("/skip", async (c) => {
   const container = c.get("container");
-  const p = paths(container);
-  if (!fromThisSite(c, container.env)) return c.redirect(p.base, 302);
+  if (!fromThisSite(c, container.env)) return c.redirect(paths(container).base, 302);
   clearTx(c);
-  return c.redirect(p.home, 302);
+  return c.redirect(landing(c, container), 302);
 });
 
 mfaRoutes.post("/cancel", async (c) => {

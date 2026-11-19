@@ -1,112 +1,83 @@
 import { z } from "zod";
-import { Actor, Evidence, ISODate, Location } from "./common";
-import { CompanyQuestions } from "./apply-questions";
-import { Importance } from "./match";
+import { Actor, Location } from "./common";
+import { FormQuestion, formQuestionsOfStored } from "./apply-questions";
+import { Importance, importanceOf } from "./score";
 
 /**
- * The Role Packet is the central object of the system (docs/02). Every agent reads it;
- * only the Intake agent proposes it and only humans approve or edit it. Versions are
- * append-only.
+ * The job record ("role packet"): one versioned document per job. The job builder's AI drafts it from the company's own
+ * words, a person edits it in the one editor, and the company publishes it. Every save of an open job is a new version,
+ * live at once. It holds only what the product uses:
+ *
+ * - `identity`, `compensation`, `description`, `requirements`: the structured posting candidates read on the job page.
+ * - `competencies`: the skills the CV score counts beside the must-haves, each Essential, Important or Helpful.
+ * - `formQuestions`: the application form's questions ("Screening questions" on screen).
+ * - `screening`: the AI interview's questions and its advertised length (the AI interview is "screen" in code).
+ * - `communication`, `compliance`: the texts and notices emails and candidate pages read.
+ * - `provenance`: which AI runs wrote it, what was assumed, the wording flags and who confirmed the pay.
  */
 
 export const EmploymentType = z.enum(["full_time", "part_time", "contract", "temporary", "per_diem", "internship"]);
+export type EmploymentType = z.infer<typeof EmploymentType>;
+export const EMPLOYMENT_TYPE_LABEL: Record<EmploymentType, string> = { full_time: "Full time", part_time: "Part time", contract: "Contract", temporary: "Temporary", per_diem: "Per diem", internship: "Internship" };
 export const CompensationBasis = z.enum(["hourly", "salary"]);
+export type CompensationBasis = z.infer<typeof CompensationBasis>;
+/** The work arrangement. The job builder asks for it; it is never assumed. */
 export const RemotePolicy = z.enum(["onsite", "hybrid", "remote"]);
-export const HireReason = z.enum(["new_position", "replacement", "growth", "seasonal", "other"]);
+export type RemotePolicy = z.infer<typeof RemotePolicy>;
+export const REMOTE_POLICY_LABEL: Record<RemotePolicy, string> = { onsite: "On site", hybrid: "Hybrid", remote: "Remote" };
 
-/**
- * Eligibility rules are the ONLY criteria that may automatically hold an application.
- * They are an enum on purpose: free-text knockouts are how illegal criteria sneak in.
- */
-export const EligibilityRuleType = z.enum([
-  "license",
-  "certification",
-  "work_authorization",
-  "schedule_availability",
-  "start_date",
-  "location_radius",
-  "physical_requirement_bona_fide",
-  "minimum_age_legal",
-]);
-export type EligibilityRuleType = z.infer<typeof EligibilityRuleType>;
-
-export const EligibilityRule = z.object({
-  key: z.string().min(1),
-  type: EligibilityRuleType,
-  /** Plain-language statement shown to candidates as a question. */
-  question: z.string().min(1),
-  /** Machine-checkable expectation, e.g. {license:"RDH", jurisdiction:"CA"} or {days:["Sat"]} */
-  expectation: z.record(z.string(), z.unknown()),
-  rationale: z.string().min(1),
-  /** true = failing this rule holds the application as ineligible (owner-authored). */
-  knockout: z.boolean().default(true),
-});
-export type EligibilityRule = z.infer<typeof EligibilityRule>;
-
+/** A must-have or a nice-to-have, in the company's words. `rationale`: why it matters, for the CV reading; never on the job page. */
 export const Requirement = z.object({
   key: z.string().min(1),
   text: z.string().min(1),
-  rationale: z.string().min(1),
-  /** How the requirement will be evidenced. */
-  evidencedBy: z.array(z.enum(["resume", "application", "screen", "interview"])).min(1),
+  rationale: z.string().optional(),
 });
 export type Requirement = z.infer<typeof Requirement>;
 
-export const Competency = z.object({
+/** A job version from before the importance labels carries a 1-5 weight instead: it reads as the label it stands for. */
+const storedCompetency = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const c = raw as { weight?: unknown; importance?: unknown };
+  if (c.importance) return raw;
+  return { ...c, importance: importanceOf({ weight: typeof c.weight === "number" ? c.weight : null }) };
+};
+
+/** A skill the CV score counts: Essential weighs 3, Important 2, Helpful 1. `indicators`: what shows it, for the CV reading. */
+export const Competency = z.preprocess(storedCompetency, z.object({
   key: z.string().min(1),
   name: z.string().min(1),
-  definition: z.string().min(1),
-  weight: z.number().min(1).max(5),
-  /** Essential, Important or Helpful, as a person picked it (plan F3); without it the weight stands for one (`importanceOf`). */
-  importance: Importance.optional(),
-  evaluatedIn: z.enum(["screen", "interview", "both"]),
-  indicators: z.array(z.string()).min(1),
-});
+  definition: z.string().default(""),
+  importance: Importance,
+  indicators: z.array(z.string()).default([]),
+}));
 export type Competency = z.infer<typeof Competency>;
 
+/**
+ * One question of the AI interview. `modelAnswer`: what a good answer shows, the job's standard the scorecard holds the
+ * answer to; never shown to a candidate. `kind` only decides whether the chat offers a tap answer.
+ */
 export const ScreeningQuestion = z.object({
   key: z.string().min(1),
   question: z.string().min(1),
-  competencyKey: z.string().optional(),
-  kind: z.enum(["skills", "behavioral", "compensation", "availability", "eligibility", "motivation", "logistics"]),
+  kind: z.enum(["skills", "behavioral", "compensation", "availability", "eligibility", "motivation", "logistics"]).default("skills"),
   modelAnswer: z.string().optional(),
-  followUpIf: z.string().optional(),
 });
 export type ScreeningQuestion = z.infer<typeof ScreeningQuestion>;
 
-export const InterviewRound = z.object({
-  key: z.string().min(1),
-  title: z.string().min(1),
-  purpose: z.string().min(1),
-  durationMinutes: z.number().int().min(15).max(240),
-  format: z.enum(["video", "phone", "onsite", "working_session"]),
-  interviewerUserIds: z.array(z.string()).default([]),
-  interviewerRoles: z.array(z.string()).default([]),
-  competencyKeys: z.array(z.string()).min(1),
-  suggestedQuestions: z.array(z.string()).default([]),
-});
-export type InterviewRound = z.infer<typeof InterviewRound>;
+/** The least and most questions an AI interview may have. */
+export const SCREENING_QUESTIONS_MIN = 3;
+export const SCREENING_QUESTIONS_MAX = 12;
 
-export const ScorecardTemplate = z.object({
-  scale: z.object({ min: z.number().int(), max: z.number().int(), labels: z.record(z.string(), z.string()) }),
-  requireEvidence: z.boolean().default(true),
-  overallRecommendationOptions: z.array(z.string()).default(["strong_yes", "yes", "no", "strong_no"]),
-});
-
+/** Pay as the job page shows it. A draft carries it only once a person set or confirmed it. */
 export const CompensationGuidance = z.object({
   basis: CompensationBasis,
   currency: z.string().default("USD"),
   min: z.number().nonnegative(),
-  mid: z.number().nonnegative().optional(),
   max: z.number().nonnegative(),
-  /** Hard ceiling the Offer agent may never exceed without a new approval. */
-  ceiling: z.number().nonnegative(),
-  bonus: z.string().optional(),
+  /** The benefits line on the job page; where a state asks for one and this is empty, the company's own from Settings is used. */
   benefitsSummary: z.string().optional(),
+  /** Whether candidates see the range. Where a pay transparency law applies they see it whatever this says. */
   discloseRange: z.boolean().default(true),
-  sources: z.array(z.object({ name: z.string(), detail: z.string().optional(), evidence: Evidence.optional() })).default([]),
-  /** When the owner stated the range and no benchmark was available. */
-  ownerStated: z.boolean().default(false),
 });
 export type CompensationGuidance = z.infer<typeof CompensationGuidance>;
 
@@ -119,56 +90,23 @@ export const CommunicationPolicy = z.object({
   disclosureText: z.string().min(1),
   humanAlternativeText: z.string().min(1),
 });
-
-export const ApprovalRules = z.object({
-  packetApproverRoles: z.array(z.string()).default(["owner", "admin", "hiring_manager"]),
-  interviewApproverRoles: z.array(z.string()).default(["owner", "hiring_manager", "recruiter"]),
-  offerApproverRoles: z.array(z.string()).default(["owner", "admin"]),
-});
+export type CommunicationPolicy = z.infer<typeof CommunicationPolicy>;
 
 export const CompliancePolicy = z.object({
   jurisdictions: z.array(z.string()).default([]), // e.g. ["US-CA"]
   notices: z.array(z.string()).default([]), // notice keys applied
-  retentionClass: z.enum(["decision_data_4y", "standard_2y", "custom"]).default("decision_data_4y"),
-  recordingPolicy: z.enum(["consent_required", "disabled"]).default("consent_required"),
-  smsRequiresConsent: z.boolean().default(true),
 });
+export type CompliancePolicy = z.infer<typeof CompliancePolicy>;
 
-export const SourcingStrategy = z.object({
-  summary: z.string().min(1),
-  channels: z.array(z.enum(["careers_page", "google_jobs", "indeed", "linkedin_basic", "ziprecruiter", "referrals", "rediscovery", "associations", "schools", "other"])).min(1),
-  targetSources: z.array(z.string()).default([]),
-  sponsoredDailyBudget: z.number().nonnegative().default(0),
-  referralPrompt: z.string().optional(),
-  rediscovery: z.boolean().default(true),
-});
-
-export const HiringTimeline = z.object({
-  targetStartDate: ISODate.optional(),
-  targetOfferDate: ISODate.optional(),
-  urgency: z.enum(["low", "normal", "high", "critical"]).default("normal"),
-  inactivityDays: z.number().int().min(3).max(60).default(10),
-});
-
-export const HiringManagerPreferences = z.object({
-  decisionMakerUserId: z.string().optional(),
-  /** The decision maker as the owner named them in the conversation ("Dr Chen"); matched to a team member when the approval is requested. */
-  decisionMakerName: z.string().optional(),
-  dealBreakersInTheirWords: z.array(z.string()).default([]),
-  whatFailureLooksLike: z.string().optional(),
-  schedulingWindows: z.array(z.string()).default([]),
-  interviewStyle: z.string().optional(),
-});
-
-/** A request the assistant would not build into the role, with the reason the owner was given (C1: kept on the packet). */
+/** A request the assistant would not build into the job, with the reason the owner was given (kept on the record). */
 export const DeclinedCriterion = z.object({ requested: z.string(), reason: z.string(), alternative: z.string().optional(), rule: z.string().optional() });
 export type DeclinedCriterion = z.infer<typeof DeclinedCriterion>;
 
 /**
- * Wording the packet guard found that may stand in for a protected trait (packages/core/src/packet-guard.ts). The role
- * cannot be approved while a flag is open: a person edits the words out, or keeps them and says why. `keepReason` is
- * how a client asks to keep one; the server replaces it with `kept`, stamped with who kept it and when, and never
- * trusts a `kept` it did not write.
+ * Wording the fairness guard found that may stand in for a protected trait (packages/core/src/packet-guard.ts). A job
+ * cannot be published, and an edit to an open job cannot be saved, while a flag is open: a person edits the words out,
+ * or keeps them and says why. `keepReason` is how a client asks to keep one; the server replaces it with `kept`, stamped
+ * with who kept it and when, and never trusts a `kept` it did not write.
  */
 export const PacketFlag = z.object({
   id: z.string(),
@@ -185,159 +123,115 @@ export const PacketFlag = z.object({
 });
 export type PacketFlag = z.infer<typeof PacketFlag>;
 
-/**
- * The market figure the pay was checked against. "market" is government wage data; "its_estimate" is ITS's own pay table
- * in the playbook, which is labelled as an estimate wherever it is shown (C8).
- */
-export const PayBenchmark = z.object({
-  basis: CompensationBasis,
-  p25: z.number(),
-  p50: z.number(),
-  p75: z.number(),
-  source: z.string(),
-  metro: z.string(),
-  asOf: z.string().optional(),
-  origin: z.enum(["market", "its_estimate"]),
-  /**
-   * Set when the figures are for a broader group of jobs than this one (no occupation of its own: a social media manager
-   * is read as a marketing specialist): `occupation` names that group, and the pay check calls the figures a rough guide.
-   */
-  approximate: z.boolean().optional(),
-  occupation: z.string().optional(),
-});
-export type PayBenchmark = z.infer<typeof PayBenchmark>;
-
-/** How the advertised range was decided: typed by a person, set on the pay card, edited, or confirmed from an ad or an earlier role. */
+/** How the advertised range was decided: typed by a person, set on the pay card, edited in the editor, or confirmed from a pasted ad. */
 export const PayOrigin = z.enum(["typed", "pay_card", "edited", "confirmed"]);
 export type PayOrigin = z.infer<typeof PayOrigin>;
 
 export const PacketProvenance = z.object({
-  playbookId: z.string().optional(),
-  playbookVersion: z.number().int().optional(),
   intakeSessionId: z.string().optional(),
   aiRunIds: z.array(z.string()).default([]),
   assumptions: z.array(z.string()).default([]),
-  sources: z.array(z.string()).default([]),
   /** What the owner asked for and was told could not be used; the guard keeps it out of every later version too. */
   declinedCriteria: z.array(DeclinedCriterion).optional(),
   flags: z.array(PacketFlag).optional(),
-  /** Set by the server from the person who set or confirmed the pay, never by the model (C7). */
+  /** Set by the server from the person who set or confirmed the pay, never by the model. */
   payConfirmedBy: z.object({ by: Actor, at: z.string(), via: PayOrigin }).optional(),
   payOrigin: PayOrigin.optional(),
-  benchmark: PayBenchmark.optional(),
+});
+export type PacketProvenance = z.infer<typeof PacketProvenance>;
+
+export const PacketIdentity = z.object({
+  title: z.string().min(2),
+  department: z.string().optional(),
+  locations: z.array(Location).min(1),
+  employmentType: EmploymentType,
+  schedule: z.string().optional(),
+  /** Older versions were stored without it and read as on site; a new job is never published without a person's answer. */
+  remotePolicy: RemotePolicy.default("onsite"),
+});
+export const PacketDescription = z.object({ publicJobDescription: z.string().min(50) });
+/** The least and most must-haves a job may have. */
+export const MUST_HAVES_MIN = 1;
+export const MUST_HAVES_MAX = 6;
+export const PacketRequirements = z.object({
+  mustHaves: z.array(Requirement).min(MUST_HAVES_MIN).max(MUST_HAVES_MAX),
+  niceToHaves: z.array(Requirement).max(10).default([]),
+});
+/** The most skills a job may list beside its must-haves. */
+export const COMPETENCIES_MAX = 8;
+export const PacketScreening = z.object({
+  questions: z.array(ScreeningQuestion).min(SCREENING_QUESTIONS_MIN).max(SCREENING_QUESTIONS_MAX),
+  /** The length the invitation and the chat's first page say: about ten minutes. Advertised only; nothing is timed. */
+  maxMinutes: z.number().int().min(5).max(30).default(10),
 });
 
-export const RolePacket = z.object({
+/** The job record's fields, as a plain object schema: for code that needs one section's schema. Parse with `RolePacket`. */
+export const RolePacketFields = z.object({
   schemaVersion: z.literal(1).default(1),
-  identity: z.object({
-    title: z.string().min(2),
-    department: z.string().optional(),
-    locations: z.array(Location).min(1),
-    employmentType: EmploymentType,
-    schedule: z.string().optional(),
-    remotePolicy: RemotePolicy.default("onsite"),
-    reportsTo: z.string().optional(),
-  }),
-  business: z.object({
-    reason: HireReason,
-    reasonDetail: z.string().optional(),
-    timeline: HiringTimeline,
-  }),
+  identity: PacketIdentity,
   compensation: CompensationGuidance,
-  description: z.object({
-    publicJobDescription: z.string().min(50),
-    internalNotes: z.string().optional(),
-  }),
-  requirements: z.object({
-    mustHaves: z.array(Requirement).min(1).max(6),
-    niceToHaves: z.array(Requirement).max(10).default([]),
-    eligibility: z.array(EligibilityRule).default([]),
-  }),
-  competencies: z.array(Competency).min(3).max(8),
-  evaluation: z.object({
-    criteria: z.array(z.string()).min(1),
-    redFlags: z.array(z.string()).default([]),
-  }),
-  screening: z.object({
-    questions: z.array(ScreeningQuestion).min(3).max(12),
-    // About ten minutes, five or six questions: the conversation now follows the form in the same visit (plan E8).
-    maxMinutes: z.number().int().min(5).max(30).default(10),
-  }),
-  interviews: z.object({
-    plan: z.array(InterviewRound).min(1).max(5),
-    scorecard: ScorecardTemplate,
-  }),
+  description: PacketDescription,
+  requirements: PacketRequirements,
+  competencies: z.array(Competency).max(COMPETENCIES_MAX).default([]),
+  screening: PacketScreening,
+  /** A stored version may hold more than `FORM_QUESTIONS_MAX`; the editor enforces the limit on what a person saves. */
+  formQuestions: z.array(FormQuestion).max(40).default([]),
   communication: CommunicationPolicy,
-  approvals: ApprovalRules,
   compliance: CompliancePolicy,
-  sourcing: SourcingStrategy,
-  preferences: HiringManagerPreferences,
   provenance: PacketProvenance,
-  /**
-   * "Questions every applicant answers" (Wave S7): the company's quick questions on the form and its written questions
-   * in the chat. Optional: a packet without it has none of either (its eligibility questions are still asked).
-   */
-  companyQuestions: CompanyQuestions.optional(),
 });
+
+/**
+ * A stored version from before the form had one list of questions gets it from where the questions were kept
+ * (`formQuestionsOfStored`). Every other part of an older version parses as it is: sections and fields the record no
+ * longer has are dropped, and nothing the record has now is required of a version that lacks it.
+ */
+const storedPacket = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const packet = raw as Record<string, unknown>;
+  return Array.isArray(packet.formQuestions) ? raw : { ...packet, formQuestions: formQuestionsOfStored(packet) };
+};
+
+/** The job record. Parses every version ever stored. */
+export const RolePacket = z.preprocess(storedPacket, RolePacketFields);
 export type RolePacket = z.infer<typeof RolePacket>;
 
 /**
- * The draft written beside the conversation before the role exists (C7). Pay is optional: a draft carries a range only
- * once a person set or confirmed it; until then the panel says "not set yet" and nothing invents one. The company's
- * questions are not part of the draft the model writes (`intake.compile`): a person sets them on the saved job.
+ * The draft written beside the conversation before the job exists. Pay is optional: a draft carries a range only once a
+ * person set or confirmed it; until then the builder says "not set yet" and nothing invents one.
  */
-export const DraftRolePacket = RolePacket.omit({ companyQuestions: true }).extend({ compensation: CompensationGuidance.optional() });
+export const DraftRolePacket = z.preprocess(storedPacket, RolePacketFields.extend({ compensation: CompensationGuidance.optional() }));
 export type DraftRolePacket = z.infer<typeof DraftRolePacket>;
 
 /**
- * Who sees each part of a packet (C15): "public" is on the job page, "asked" is put to candidates (the apply form's
- * eligibility questions, the screening conversation, the lines on every message), "reviewed" is what applications are
- * read against and is never on the job page, "internal" stays with the team. The must-haves and nice-to-haves are
- * listed on the job page in their own words (plan D10), so they are public; why each matters and how it is checked
- * stay "reviewed". Keys are dotted paths; the longest matching prefix wins (`packetVisibility`).
+ * Who sees each part of a job record: "public" is on the job page, "asked" is put to candidates (the form's questions,
+ * the AI interview, the lines on every message), "reviewed" is what applications are read against and is never on the
+ * job page, "internal" stays with the team. Keys are dotted paths; the longest matching prefix wins (`packetVisibility`).
  */
 export type PacketVisibility = "public" | "asked" | "reviewed" | "internal";
 export const PACKET_VISIBILITY: Readonly<Record<string, PacketVisibility>> = {
   identity: "public",
-  "identity.reportsTo": "internal",
   "identity.department": "internal",
-  business: "internal",
-  compensation: "internal",
-  "compensation.basis": "public",
-  "compensation.currency": "public",
-  "compensation.min": "public",
-  "compensation.max": "public",
-  "compensation.bonus": "public",
-  "compensation.benefitsSummary": "public",
+  compensation: "public",
+  "compensation.discloseRange": "internal",
   "description.publicJobDescription": "public",
-  "description.internalNotes": "internal",
   "requirements.mustHaves": "public",
-  "requirements.mustHaves.text": "public",
   "requirements.mustHaves.rationale": "reviewed",
-  "requirements.mustHaves.evidencedBy": "reviewed",
   "requirements.niceToHaves": "public",
-  "requirements.niceToHaves.text": "public",
   "requirements.niceToHaves.rationale": "reviewed",
-  "requirements.niceToHaves.evidencedBy": "reviewed",
-  "requirements.eligibility": "asked",
-  competencies: "internal",
-  evaluation: "internal",
+  competencies: "reviewed",
   "screening.questions": "asked",
+  "screening.questions.modelAnswer": "reviewed",
   "screening.maxMinutes": "asked",
-  interviews: "internal",
+  formQuestions: "asked",
   communication: "internal",
   "communication.disclosureText": "asked",
   "communication.humanAlternativeText": "asked",
-  approvals: "internal",
   compliance: "internal",
-  sourcing: "internal",
-  preferences: "internal",
   provenance: "internal",
-  companyQuestions: "asked",
-  "companyQuestions.written.lookFor": "reviewed",
 };
 
-/** The plain label for each visibility, as the draft panel shows it. */
+/** The plain label for each visibility, as the editor shows it. */
 export const PACKET_VISIBILITY_LABEL: Readonly<Record<PacketVisibility, string>> = {
   public: "Candidates see this",
   asked: "Candidates are asked this",
@@ -345,7 +239,7 @@ export const PACKET_VISIBILITY_LABEL: Readonly<Record<PacketVisibility, string>>
   internal: "Only your team sees this",
 };
 
-/** Who sees the part of the packet at `path` ("screening.questions[2].question" reads as "screening.questions"). */
+/** Who sees the part of the record at `path` ("screening.questions[2].question" reads as "screening.questions"). */
 export function packetVisibility(path: string): PacketVisibility {
   const parts = path.replace(/\[\d+\]/g, "").split(".");
   for (let n = parts.length; n > 0; n -= 1) {
@@ -354,18 +248,3 @@ export function packetVisibility(path: string): PacketVisibility {
   }
   return "internal";
 }
-
-export const RolePacketVersion = z.object({
-  id: z.string(),
-  roleId: z.string(),
-  version: z.number().int().min(1),
-  status: z.enum(["proposed", "approved", "superseded"]),
-  source: z.enum(["intake_agent", "human_edit", "playbook", "import", "agent_revision"]),
-  changeSummary: z.string().optional(),
-  createdBy: Actor,
-  approvedBy: z.string().nullable().optional(),
-  approvedAt: z.string().nullable().optional(),
-  createdAt: z.string(),
-  packet: RolePacket,
-});
-export type RolePacketVersion = z.infer<typeof RolePacketVersion>;

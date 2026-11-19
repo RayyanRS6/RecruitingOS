@@ -1,5 +1,5 @@
-import { Roles } from "@ros/web/src/pages/Roles";
+import { Jobs } from "@ros/web/src/pages/Jobs";
 
-export default function RolesPage() {
-  return <Roles />;
+export default function JobsPage() {
+  return <Jobs />;
 }

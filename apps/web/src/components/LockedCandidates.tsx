@@ -2,7 +2,7 @@
 
 import { LOCKED_WORD, MORE_CANDIDATES_LINE, MORE_CANDIDATES_UPGRADE_QUESTION, type LockedApplicants } from "@ros/contracts";
 import { IconChip } from "@ros/ui";
-import { appliedWhen } from "../talent-list";
+import { appliedWhen } from "../dates";
 import { moreLockedWords } from "../upgrade";
 import { Upgrade } from "./Upgrade";
 
@@ -10,9 +10,9 @@ import { Upgrade } from "./Upgrade";
 const CARDS_SHOWN = 3;
 
 /**
- * A person past the plan's candidates per job (the plans of 5 November 2026, Rule 3): a lock, the word, when they applied, the
- * line and the way on. Never a name, initials, a score, a stage or a source: the server sends none of them. `what` takes the
- * place of the word for a group folded into one card. locked-card is a hook for tests and e2e (no CSS).
+ * A person past the plan's candidates per job: a lock, the word, when they applied, the line and the way on. Never a
+ * name, initials, a score, a stage or a source: the server sends none of them. `what` takes the place of the word for a
+ * group folded into one card. locked-card is a hook for tests and e2e (no CSS).
  */
 function LockedRow({ when, what = LOCKED_WORD }: { when?: string; what?: string }) {
   return (
@@ -27,7 +27,7 @@ function LockedRow({ when, what = LOCKED_WORD }: { when?: string; what?: string 
   );
 }
 
-/** The locked people of one job, after its list and its board: one card each, the rest in one line. */
+/** The locked people of one job, under its candidates: one card each, the rest in one line. */
 export function LockedCandidates({ locked }: { locked: LockedApplicants | null | undefined }) {
   if (!locked?.count) return null;
   const cards = locked.cards.slice(0, CARDS_SHOWN);

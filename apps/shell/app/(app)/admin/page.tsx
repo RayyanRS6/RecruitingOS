@@ -1,6 +1,6 @@
-import { Console } from "@ros/web/src/pages/admin/Console";
+import { Dashboard } from "@ros/web/src/pages/admin/Dashboard";
 
-/** The ITS console lands on Overview: what needs a person, customers, this month's costs and the system (Wave S6). */
-export default function AdminPage() {
-  return <Console section="overview" />;
+/** The admin dashboard lands on Companies: the requests to accept or decline, the list, and one company at `?open=<id>`. */
+export default function AdminCompaniesPage() {
+  return <Dashboard section="companies" />;
 }

@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import type { SignupConfig } from "@ros/contracts";
 import { getShellForRequest } from "./container";
 
-/** Who may create a company (GATE-V2), and this person's own request if they sent one: the `signup` part of GET /api/v1/auth/config (apps/api/src/routes/auth.ts). */
+/** Who may create a company, and this person's own request if they sent one: the `signup` part of GET /api/v1/auth/config (apps/api/src/routes/auth.ts). */
 export type Signup = SignupConfig;
 
 /**

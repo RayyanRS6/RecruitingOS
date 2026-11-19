@@ -32,7 +32,7 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     u.searchParams.set("redirect_to", back.toString());
     u.searchParams.set("code_challenge", input.codeChallenge);
     u.searchParams.set("code_challenge_method", "s256");
-    // Identity scopes only (correction 4): no calendar permission rides on the sign-in registration.
+    // Identity scopes only.
     if (input.provider === "azure") u.searchParams.set("scopes", "openid profile email");
     return u.toString();
   }

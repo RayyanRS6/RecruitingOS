@@ -6,8 +6,8 @@ import { CHAT_BUSY_NOTE } from "./pages/conversation-frame";
 /**
  * The screening conversation's one script (SCREEN_BUSY_JS): a typed answer waits for the assistant inside the request,
  * so the first press locks the page ("Sending…", every button disabled) and a second press, from any form, is stopped.
- * The pages themselves (the nonce, the empty status line, nothing else scripted) are covered in apply-visit-pages.test.ts
- * and csp.test.ts; this runs the script against a small stand-in for the browser's document.
+ * The page itself (every script and style carrying the request's nonce, no inline handler) is covered in csp.test.ts;
+ * this runs the script against a small stand-in for the browser's document.
  */
 type Handler = (ev: FakeEvent) => void;
 type FakeEvent = { submitter?: FakeButton | null; persisted?: boolean; defaultPrevented: boolean; preventDefault(): void };

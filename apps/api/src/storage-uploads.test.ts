@@ -1,52 +1,41 @@
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { MAX_RESUME_BYTES } from "@ros/contracts";
-import { anonymizeCandidate, buildCandidateCsp, entitlements } from "@ros/core";
+import { MAX_RESUME_BYTES, type CandidateList, type CandidatePanel } from "@ros/contracts";
+import { anonymizeCandidate, buildCandidateCsp } from "@ros/core";
 import { applications, auditRecords, candidates, documents, events, withTenant } from "@ros/db";
 import { EICAR_TEST_STRING, type FakeMalwareScanner, type MemoryStorageAdapter } from "@ros/integrations";
 import { discardUnusedObject, examineQuarantinedDocument, processQuarantinedDocument, recordQuarantineVerdict } from "@ros/workflows";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { NO_SCRIPT_MAX_RESUME_BYTES } from "./pages/candidate";
-import { statusTokenFor } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, statusTokenFor, usePlan } from "./test-helpers";
 
 /**
- * Founder decision 2 (22 September 2026): résumés go straight to private storage under short-lived single-object
- * authorizations, sit in quarantine until the worker has checked their bytes and scanned them, move to a random
- * tenant- and candidate-scoped key, are opened by staff only through audited, expiring links, and are removed on
- * deletion. Everything here runs against the in-memory store and the fake scanner, which speak the same contract.
+ * Resumes go straight to private storage under short-lived single-object authorizations, sit in quarantine until the
+ * worker has checked their bytes and scanned them, move to a random tenant- and candidate-scoped key, are opened by the
+ * team only through audited, expiring links, and are removed on deletion. Everything here runs against the in-memory
+ * store and the fake scanner, which speak the same contract.
  */
-describe("résumé storage: direct upload, quarantine, validation, download, deletion", () => {
+describe("resume storage: direct upload, quarantine, validation, download, deletion", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
   let companyId = "";
   let slug = "";
   let roleId = "";
-  let eligibilityKeys: string[] = [];
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3001" };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", APP_BASE_URL: "http://localhost:3001" };
   const storage = () => container.integrations.storage as MemoryStorageAdapter;
   const scanner = () => container.integrations.scanner as FakeMalwareScanner;
   const scanDeps = () => ({ db: container.db, integrations: container.integrations, engine: container.engine });
-  const signIn = async (email: string) => {
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const token = new URL(devLink).searchParams.get("token")!;
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
-    return r2.headers.get("set-cookie")!.split(";")[0];
-  };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
-  /** The apply budget is thirty an hour per address; later cases post from their own address so the earlier ones do not spend it. */
+  /** The apply budget is sixty an hour per address; later cases post from their own address so the earlier ones do not spend it. */
   const intent = (body: unknown, ip?: string) => app.request(`/careers/${slug}/jobs/${roleId}/upload-intent`, { method: "POST", headers: { "content-type": "application/json", ...(ip ? { "x-forwarded-for": ip } : {}) }, body: JSON.stringify(body) });
   let applicant = 0;
+  /** The form with who they are and the tick; `extra` attaches the resume, as a file inside the form or as a direct upload's grant. */
   const apply = async (extra: (fd: FormData) => void, ip?: string) => {
     applicant++;
-    const fd = new FormData();
-    fd.set("firstName", "Dana"); fd.set("lastName", `Example${applicant}`); fd.set("email", `dana${applicant}@example.com`); fd.set("smsConsent", "no"); fd.set("locationText", "Irvine, CA");
-    for (const k of eligibilityKeys) fd.set(`elig_${k}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
+    const fd = applicationForm({ firstName: "Dana", lastName: `Example${applicant}`, email: `dana${applicant}@example.com` }, null);
     extra(fd);
     const r = await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd, headers: ip ? { "x-forwarded-for": ip } : undefined });
     const token = r.status === 302 ? await statusTokenFor(container, { roleId, email: String(fd.get("email")) }) : "";
@@ -71,17 +60,9 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: baseEnv });
     app = createApp(container);
-    owner = await signIn("owner@storage.test");
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Storage Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companyId = co.id;
-    slug = co.slug;
-    await entitlements.applyPlan(container.db, co.id, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    eligibilityKeys = role.currentPacket.packet.requirements.eligibility.map((r) => r.key);
-    await container.drain();
+    ({ owner, companyId, slug } = await seedCompany(app, { email: "owner@storage.test", name: "Storage Dental" }));
+    await usePlan(container, companyId);
+    roleId = await plantJob(container, { companyId, title: "Dental Hygienist" });
   });
   afterAll(async () => {
     await container.close();
@@ -131,8 +112,10 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const rejected = await container.db.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, appRow.id), eq(events.type, "document.rejected")));
     expect(rejected.length).toBe(1);
     expect(JSON.stringify(rejected[0]!.payload)).not.toContain("MZ");
-    // the application still goes on, without the file: to the conversation offered with it (plan E1), or to the team
-    expect(["eligible", "triaged", "received", "screen_invited"]).toContain(appRow.stage);
+    // the application still goes on, without the file: the person is New, with no score, for the team to read themselves
+    expect(appRow.stage).toBe("triaged");
+    const row = ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?tab=new`)).json()) as CandidateList).rows.find((x) => x.id === appRow.id)!;
+    expect(row.cvScore).toMatchObject({ score: null, noScore: "unreadable" });
   });
 
   it("the EICAR test file is flagged by the scanner and refused", async () => {
@@ -216,9 +199,9 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const appRow = await applicationOf(token);
     const doc = await documentOf(appRow.resumeDocumentId!);
     expect(doc.status).toBe("clean");
-    // the detail route shows status, never the key
-    const detail = (await (await json(owner, "GET", `/api/v1/applications/${appRow.id}`)).json()) as { documents: Array<Record<string, unknown>> };
-    expect(detail.documents[0]).toMatchObject({ id: doc.id, status: "clean", uploadedVia: "direct" });
+    // the candidate's panel shows the file's status, never its key
+    const detail = (await (await json(owner, "GET", `/api/v1/applications/${appRow.id}`)).json()) as CandidatePanel;
+    expect(detail.cv).toMatchObject({ id: doc.id, filename: "dana.txt", status: "clean", hasText: true });
     expect(JSON.stringify(detail)).not.toContain(doc.storageKey);
     const r = await app.request(`/api/v1/applications/${appRow.id}/documents/${doc.id}/file`, { headers: { cookie: owner } });
     expect(r.status).toBe(302);
@@ -234,8 +217,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect(reads.some((a) => (a.target as { id: string })?.id === doc.id && a.companyId === companyId)).toBe(true);
     // a signed-out request, and a member of another company, get nothing
     expect((await app.request(`/api/v1/applications/${appRow.id}/documents/${doc.id}/file`)).status).toBe(401);
-    const other = await signIn("owner@other-storage.test");
-    await json(other, "POST", "/api/v1/companies", { name: "Other Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Tustin", region: "CA", country: "US" }] });
+    const { owner: other } = await seedCompany(app, { email: "owner@other-storage.test", name: "Other Dental" });
     const foreign = await app.request(`/api/v1/applications/${appRow.id}/documents/${doc.id}/file`, { headers: { cookie: other } });
     expect([403, 404]).toContain(foreign.status);
     expect(reads.filter((a) => (a.target as { id: string })?.id === doc.id).length).toBe(1);
@@ -263,7 +245,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect(cand!.anonymizedAt).toBeTruthy();
   });
 
-  it("a PDF résumé posted by the form itself, and a Word résumé by the direct upload, are read: the text is on the document and the application understands it", async () => {
+  it("a PDF resume posted by the form itself, and a Word resume by the direct upload, are read: the text is on the document and the application understands it", async () => {
     const ip = "203.0.113.31";
     const fixtures = (name: string) => new Uint8Array(readFileSync(new URL(`../../../packages/agents/src/fixtures/${name}`, import.meta.url)));
     const typesOf = async (applicationId: string) => (await container.db.select({ type: events.type }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId))).orderBy(events.id)).map((e) => e.type);
@@ -293,7 +275,8 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect(docxDoc.storageKey).toMatch(/\.docx$/);
     expect(docxDoc.textExtracted).toContain("Registered Dental Hygienist at Harbor Point Dental");
     expect(await typesOf(docxApp.id)).toEqual(expect.arrayContaining(["document.validated", "resume.ingested"]));
-    // a scanned PDF (no text layer) is kept as a clean file, but the application is told nothing could be read and goes on by its answers
+    // a scanned PDF (no text layer) is kept as a clean file, but nothing could be read from it: the person is New with
+    // no score, and their row says the resume could not be read
     const scan = await apply((fd) => fd.set("resume", new File([fixtures("scanned.pdf")], "scan.pdf", { type: "application/pdf" })), ip);
     expect(scan.r.status).toBe(302);
     await container.drain();
@@ -304,7 +287,9 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const scanTypes = await typesOf(scanApp.id);
     expect(scanTypes).toContain("resume.extraction_failed");
     expect(scanTypes).not.toContain("resume.ingested");
-    expect(["eligible", "triaged", "received", "screen_invited"]).toContain(scanApp.stage);
+    expect(scanApp.stage).toBe("triaged");
+    const scanRow = ((await (await json(owner, "GET", `/api/v1/roles/${roleId}/applications?tab=new`)).json()) as CandidateList).rows.find((x) => x.id === scanApp.id)!;
+    expect(scanRow.cvScore).toMatchObject({ score: null, noScore: "unreadable" });
   });
 
   it("the form itself refuses an oversized file and a wrong-type file with a plain message, keeps what was typed, and stores nothing", async () => {
@@ -350,14 +335,14 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
   });
 
   it("the worker refuses a quarantined file over the limit: removed, recorded without its contents, and the application goes on without it", async () => {
-    // a quarantined row the API could never have produced at this size (it caps before storing), as an inbound attachment might
+    // a quarantined row the API could never have produced at this size (it caps before storing), as a store that did not enforce the size might hold
     const { r, token } = await apply((fd) => fd.set("resume", new File(["Dana Example, RDH"], "dana.txt", { type: "text/plain" })), "203.0.113.34");
     expect(r.status).toBe(302);
     await container.drain();
     const appRow = await applicationOf(token);
     const key = `quarantine/${companyId}/${roleId}/oversized-test.pdf`;
     await storage().put(key, new Uint8Array(MAX_RESUME_BYTES + 1), "application/pdf");
-    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "oversized.pdf", mime: "application/pdf", sizeBytes: MAX_RESUME_BYTES + 1, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "email" }).returning())[0]);
+    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "oversized.pdf", mime: "application/pdf", sizeBytes: MAX_RESUME_BYTES + 1, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "direct" }).returning())[0]);
     const outcome = await processQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId, actor: { kind: "system", id: "test" } });
     expect(outcome).toEqual({ outcome: "rejected", documentId: doc.id, reason: "too_large" });
     const after = await documentOf(doc.id);
@@ -365,7 +350,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     expect(storage().has(key)).toBe(false);
     const rejected = await container.db.select().from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, appRow.id), eq(events.type, "document.rejected")));
     expect(rejected).toHaveLength(1);
-    expect(rejected[0].payload).toMatchObject({ documentId: doc.id, reason: "too_large", via: "email" });
+    expect(rejected[0].payload).toMatchObject({ documentId: doc.id, reason: "too_large", via: "direct" });
     const audits = await container.db.select().from(auditRecords).where(eq(auditRecords.action, "document.rejected"));
     expect(audits.some((a) => (a.target as { id: string })?.id === doc.id && a.reason === "too_large")).toBe(true);
     // a second pass changes nothing: the row is no longer quarantined
@@ -393,7 +378,7 @@ describe("résumé storage: direct upload, quarantine, validation, download, del
     const appRow = await applicationOf(token);
     const key = `quarantine/${companyId}/${roleId}/rollback-test.txt`;
     await storage().put(key, text("Dana Example\nRegistered dental hygienist, 6 years.\n"), "text/plain");
-    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "dana.txt", mime: "text/plain", sizeBytes: 50, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "email" }).returning())[0]);
+    const doc = await withTenant(container.db, companyId, async (tx) => (await tx.insert(documents).values({ companyId, candidateId: appRow.candidateId, applicationId: appRow.id, kind: "resume", filename: "dana.txt", mime: "text/plain", sizeBytes: 50, storageKey: key, sha256: "pending", status: "quarantined", uploadedVia: "direct" }).returning())[0]);
     // phase one: scanned and copied, with no transaction open; the row and the quarantine file are untouched
     const first = await examineQuarantinedDocument(scanDeps(), { documentId: doc.id, companyId });
     expect(first).toMatchObject({ verdict: "clean", documentId: doc.id, storageKey: key });

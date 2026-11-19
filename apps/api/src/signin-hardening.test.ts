@@ -65,7 +65,7 @@ describe("sign-in hardening (audit SEC-8, SEC-25; known bug row 41)", () => {
   const login = (code: string) => `${container.env.APP_BASE_URL}/login?error=${code}`;
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", AUTH_PROVIDER: "fake" } });
     app = createApp(container);
     prod = createApp({ ...container, env: { ...container.env, NODE_ENV: "production" } });
   });

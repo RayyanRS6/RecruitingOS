@@ -2,12 +2,11 @@
 
 import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PLAN_REQUEST_OPEN_LINE, UPGRADE_SHEET_LINE, planRequestQuestion, type PublicPlan, type PublicPlans } from "@ros/contracts";
+import { UPGRADE_SHEET_LINE, type PlanRequest, type PlanRequestSent, type PublicPlan, type PublicPlans } from "@ros/contracts";
 import { Alert, Button, Chip, Drawer, ErrorState, Field, Skeleton } from "@ros/ui";
-import { api, ApiError } from "../api/client";
+import { api, errorWords } from "../api/client";
 import { toast } from "../toast";
-import { firstChoice, planFacts, priceWords } from "../upgrade";
-import { useAskRole } from "./use-ask-role";
+import { firstChoice, planFacts, priceWords, requestSentWords } from "../upgrade";
 
 /** One plan in the sheet: its name, what it costs and what it includes. The kit's option row, stacked. */
 const PLAN = "option-row min-w-0 flex-col items-stretch gap-2.5";
@@ -25,12 +24,12 @@ function PlanWords({ plan }: { plan: PublicPlan }) {
 }
 
 /**
- * The short sheet behind every Upgrade: the four plans side by side with the company's own marked, an optional note, one
- * button "Ask ITS to upgrade" and the one plain line that nothing is charged. It sends the same request as any other (POST
- * /escalations, `topic: "plan"`), which is never counted and gives ITS no access to the company's hiring, so nothing here
- * speaks of access. With a request already open it says so and asks nothing more.
+ * The short sheet behind every Upgrade: the plans side by side with the company's own marked, an optional note, one
+ * button and the one plain line that nothing is charged. It sends one request to ITS (POST /api/v1/plans/request),
+ * which stays open until ITS changes the plan. With a request already open it says when it was sent and asks nothing
+ * more.
  */
-export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSent?: (message: string) => void }) {
+export function UpgradeSheet(props: { reason?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const name = useId();
   const [picked, setPicked] = useState<string | null>(null);
@@ -42,32 +41,32 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
   // On the last plan nothing is above theirs: the same sheet, and the same request, in words that say so.
   const nothingAbove = !!plans[plans.length - 1]?.current;
   const send = useMutation({
-    mutationFn: (plan: PublicPlan | null) => api.post<{ id: string; message: string; alreadyAsked?: boolean }>("/api/v1/escalations", { kind: "ask", scope: "company", topic: "plan", question: planRequestQuestion(plan?.name ?? null, { reason: props.reason, note }) }),
+    mutationFn: (plan: PublicPlan | null) => {
+      const body: PlanRequest = { ...(plan ? { planKey: plan.key } : {}), ...(props.reason ? { reason: props.reason } : {}), ...(note.trim() ? { note: note.trim() } : {}) };
+      return api.post<PlanRequestSent>("/api/v1/plans/request", body);
+    },
     onSuccess: (r) => {
-      setDone(r.message);
+      setDone(`${requestSentWords(r.requestedAt)}.`);
       if (!r.alreadyAsked) toast("Sent to ITS.");
-      props.onSent?.(r.message);
-      qc.invalidateQueries({ queryKey: ["plans"] });
-      qc.invalidateQueries({ queryKey: ["escalations", "mine"] });
-      qc.invalidateQueries({ queryKey: ["brief"] });
+      for (const key of [["plans"], ["company"], ["home"]]) qc.invalidateQueries({ queryKey: key });
     },
   });
   return (
     <Drawer open onClose={props.onClose} title={nothingAbove ? "Your plan" : "Upgrade"} size="lg">
       {done ? (
         <div className="stack gap-4 motion-safe:animate-enter motion-safe:[animation-fill-mode:backwards]">
-          <Alert tone="info">{done} You can follow it under Your recruiter requests on Home.</Alert>
+          <Alert tone="info">{done} {UPGRADE_SHEET_LINE}</Alert>
           <div className="row"><Button onClick={props.onClose}>Done</Button></div>
         </div>
       ) : q.isLoading ? <Skeleton lines={6} /> : q.error || !q.data ? <ErrorState message="Could not load the plans." onRetry={() => q.refetch()} /> : (
         <div className="stack gap-5">
-          {q.data.requested ? <Alert tone="info">{PLAN_REQUEST_OPEN_LINE}</Alert> : null}
+          {q.data.requestedAt ? <Alert tone="info">{requestSentWords(q.data.requestedAt)}. {UPGRADE_SHEET_LINE}</Alert> : null}
           <fieldset className="min-w-0">
             <legend className="sr-only">Which plan</legend>
             {/* side by side once the sheet has room for four (a container query, so a phone stacks them) */}
             <div className="@container">
               <div className="grid gap-2.5 @lg:grid-cols-2 @xl:grid-cols-4">
-                {plans.map((p) => p.current || q.data.requested ? (
+                {plans.map((p) => p.current || q.data.requestedAt ? (
                   // the company's own plan, or a request already with ITS: nothing to choose, so no radio
                   <div key={p.key} className={`${PLAN} cursor-default`}>
                     <span className="flex flex-wrap items-center justify-between gap-1.5"><strong className="font-semibold text-ink">{p.name}</strong>{p.current ? <Chip tone="accent">Your plan</Chip> : null}</span>
@@ -82,12 +81,12 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
               </div>
             </div>
           </fieldset>
-          {q.data.requested ? null : (
+          {q.data.requestedAt ? null : (
             <>
               <Field label="A note for ITS (optional)" htmlFor={`${name}-note`}><textarea id={`${name}-note`} className="textarea" maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
               <div className="stack gap-3 border-t border-line pt-5">
                 <p className="small text-ink-2">{UPGRADE_SHEET_LINE}</p>
-                {send.error ? <Alert tone="critical">{send.error instanceof ApiError ? send.error.message : "Could not send."}</Alert> : null}
+                {send.error ? <Alert tone="critical">{errorWords(send.error, "Could not send.")}</Alert> : null}
                 <div className="row"><Button variant="primary" loading={send.isPending} onClick={() => send.mutate(choice)}>{nothingAbove ? "Ask ITS about our plan" : "Ask ITS to upgrade"}</Button></div>
               </div>
             </>
@@ -99,18 +98,21 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void; onSe
 }
 
 /**
- * The one way to ask for a bigger plan (the plans of 5 November 2026, Rule 5), used by the room alert, the team card, Settings,
- * Home's rows and the locked card. `reason`: why the person got here, sent after the plan's name. Shown only to someone at
- * the company who may ask: ITS staff inside a customer ask nothing about its plan. When payments come, only this changes.
+ * The one way to ask for a bigger plan, wherever the plan stops something. `reason`: why the person got here, sent with
+ * the request. While a request is with ITS, the day it was sent stands in place of the button. `requestedAt`: when the
+ * page already knows whether a request is open (Settings reads it with the plan), so nothing is asked for until the
+ * sheet opens; left out, the button finds out itself.
  */
-export function Upgrade(props: { label?: string; size?: "sm" | "md"; variant?: "primary" | "secondary"; reason?: string; onSent?: (message: string) => void }) {
-  const who = useAskRole();
+export function Upgrade(props: { label?: string; size?: "sm" | "md"; variant?: "primary" | "secondary"; reason?: string; requestedAt?: string | null }) {
   const [open, setOpen] = useState(false);
-  if (!who.ready || !who.mayAsk || who.staff) return null;
+  const known = props.requestedAt !== undefined;
+  const plans = useQuery({ queryKey: ["plans"], queryFn: () => api.get<PublicPlans>("/api/v1/plans"), enabled: !known });
+  const requestedAt = known ? props.requestedAt : plans.data?.requestedAt;
+  if (requestedAt && !open) return <span className="small muted">{requestSentWords(requestedAt)}</span>;
   return (
     <>
       <Button variant={props.variant ?? "secondary"} size={props.size ?? "md"} icon="arrow-up-right" onClick={() => setOpen(true)}>{props.label ?? "Upgrade"}</Button>
-      {open ? <UpgradeSheet reason={props.reason} onSent={props.onSent} onClose={() => setOpen(false)} /> : null}
+      {open ? <UpgradeSheet reason={props.reason} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }

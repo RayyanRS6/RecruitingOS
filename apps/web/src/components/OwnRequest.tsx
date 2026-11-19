@@ -13,7 +13,7 @@ export function ownRequestLine(request: SignupConfig["request"] | undefined): st
 
 /**
  * Someone who asked for access and joined another company by invitation works there, so the waiting screen, the one place
- * that said where their own request stands, never shows again (the review of 6 November 2026). Home says it in one line,
+ * that said where their own request stands, never shows again. Home says it in one line,
  * from the same answer that screen reads (GET /auth/config), with the same "Questions?" for a declined one, and looks again
  * on focus and every minute while there is a request, so the line goes once it is accepted. Nothing shows without one.
  */

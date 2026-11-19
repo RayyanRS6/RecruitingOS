@@ -1,12 +1,12 @@
 import type { ScreenTurn } from "@ros/contracts";
 
 /**
- * The full record a failing case keeps in the result file, so it can be diagnosed next time without running it again
- * (Wave S9, spec rule 5; the real-model run of 15 Oct 2026 kept only the failures' one-line reasons). The chat the model
- * was given, and what the model returned before the code's checks: each turn, each scorecard reading, or the write-up;
- * with the turn after the code's rules where the code decides what is recorded, and the scorecard the team would see.
- * Only failing cases carry it, so the file stays small; every case is synthetic, and the fairness run keeps the file as
- * its "fairness-results" download for 90 days. The short `notes` stay what the run's page shows (summary.ts).
+ * The full record a failing case keeps in the result file, so it can be diagnosed without running it again. The chat the
+ * model was given, and what the model returned before the code's checks: each turn, or each reading of a CV or of a
+ * scorecard; with the turn after the code's rules where the code decides what is recorded, and the reading or scorecard
+ * the team would see. Only failing cases carry it, so the file stays small; every case is synthetic, and the fairness
+ * run keeps the file as its "fairness-results" download for 90 days. The short `notes` stay what the run's page shows
+ * (summary.ts).
  */
 export type CaseDiagnostics = {
   /** The chat in order, each message cut to TRACE_CHARS. */
@@ -15,19 +15,16 @@ export type CaseDiagnostics = {
   turns?: Array<{ model: TraceTurn; afterRules: TraceTurn; move?: string | null }>;
   /** The answers the code recorded, by question, at the end of the conversation. */
   answers?: Record<string, string>;
-  /** The scorecard's readings as the model wrote them (on the scoring view, placeholders and all), or why one gave nothing. */
+  /** The readings as the model wrote them (on the scoring view, placeholders and all), or why one gave nothing. */
   readings?: Array<TraceOutput & { label: string }>;
-  /** The scorecard the team would see: the readings through the code's checks, combined into the middle answer. */
+  /** What the team would see: the readings through the code's checks, combined into the middle answer. */
   shown?: Array<TraceOutput & { label: string }>;
   /**
-   * The role a scorecard was read against (Wave S9 round 3): the job draft is compiled afresh on each run, and which
-   * question is about which skill, and each skill's definition, decide how its answers are read. The triage suites
-   * (Wave S9 round 4) record the compiled golden packet a résumé was read against, which changes every run: each skill's
-   * `importance` and `indicators` too, as the résumé reading is shown them (no questions: the reading is asked none).
+   * The job a case was read against, which is written afresh on each run: the questions its AI interview asked (a
+   * must-have the chat asked about among them), its must-haves, and each skill with its importance, definition and
+   * indicators, as the CV reading is shown them.
    */
-  role?: { questions: Array<{ key: string; kind: string; skill?: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; evaluatedIn?: string; importance?: string; indicators?: string[] }> };
-  /** The write-up as the model wrote it, or why the call gave nothing usable. */
-  writeup?: TraceOutput;
+  role?: { questions: Array<{ key: string; kind: string; text: string }>; mustHaves: Array<{ key: string; text: string }>; skills: Array<{ key: string; name: string; definition: string; importance: string; indicators: string[] }> };
 };
 
 /** How much of one message or one text the record keeps: enough to read what was said, never a whole document. */

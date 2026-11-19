@@ -1,11 +1,11 @@
 import { createHmac } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { expectAccessible, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
+import { expectAccessible, signIn, signInWithoutSecondFactor, skipWithoutFakeSignIn } from "./helpers";
 
 /**
- * The staff second factor in a real browser (founder approval, 22 September 2026): Microsoft vouches for an ITS staff
- * member, the authenticator page enrols an app on the first sign-in, a backup is offered, and every later sign-in asks
- * for a code. The code is computed here exactly as an authenticator app would, from the key the page shows.
+ * The staff second factor in a real browser: Microsoft vouches for an ITS staff member, the authenticator page enrols
+ * an app on the first sign-in, a backup is offered, and every later sign-in asks for a code. The code is computed here
+ * exactly as an authenticator app would, from the key the page shows. Google is refused for a staff address.
  */
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 function base32Decode(s: string): Buffer {
@@ -59,8 +59,8 @@ test.describe("staff second factor", () => {
 
     await page.getByRole("button", { name: "Not now" }).click();
     await page.waitForURL((u) => !u.pathname.startsWith("/api/"));
-    // the first page may still send the person on (a staff member with no company goes to /setup/company): let it settle,
-    // or the next sign-in's page.goto is interrupted by that navigation on a loaded dev server
+    // the first page may still send the person on (a staff member with no company goes to the company details): let it
+    // settle, or the next sign-in's page.goto is interrupted by that navigation on a loaded dev server
     await page.waitForLoadState("networkidle");
 
     // Sign out, sign in again: the enrolled authenticator is challenged and no key is shown.
@@ -101,5 +101,27 @@ test.describe("staff second factor", () => {
     await expect(page).toHaveURL(/\/login\?error=mfa_failed/);
     await expect(page.getByRole("alert")).toContainText("too many times");
     expect((await page.request.get(`${baseURL}/api/v1/auth/me`)).status()).toBe(401);
+  });
+
+  test("Google is refused for a staff address with plain guidance; Microsoft without a second factor continues on the authenticator page; with it, staff are signed in", async ({ page }) => {
+    const staff = { email: `policy-${Date.now().toString(36)}@identifiedtalent.com`, name: "Pat Staff" };
+    await signIn(page, { ...staff, provider: "google" });
+    await expect(page.getByRole("alert").filter({ hasText: /Microsoft 365/ })).toBeVisible();
+    await expectAccessible(page, "sign-in refused for a staff address");
+    // a staff sign-in without a second factor is not refused: it continues on the authenticator page, with no session yet
+    await signInWithoutSecondFactor(page, staff);
+    await expect(page.getByRole("heading", { name: "Set up your authenticator app" })).toBeVisible();
+    expect((await page.request.get("/api/v1/auth/me")).status()).toBe(401);
+    await page.getByRole("button", { name: "Cancel and return to sign-in" }).click();
+    await expect(page).toHaveURL(/\/login/);
+    await signIn(page, { ...staff, provider: "azure", aal2: true });
+    await expect(page).not.toHaveURL(/\/login/);
+    const me = (await (await page.request.get("/api/v1/auth/me")).json()) as { auth: { provider: string; aal: string; mfaVerifiedAt: string | null }; user: { platformRole: string } };
+    expect(me.auth).toMatchObject({ provider: "azure", aal: "aal2" });
+    expect(me.auth.mfaVerifiedAt).toBeTruthy();
+    // a platform role is granted by an administrator, never by the sign-in itself: a new staff account starts without one
+    expect(me.user.platformRole).toBe("none");
+    await page.waitForLoadState("networkidle"); // the first page may still be redirecting
+    await expectAccessible(page, "first page after a staff sign-in");
   });
 });

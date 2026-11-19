@@ -9,11 +9,11 @@ type Cand = typeof candidates.$inferSelect;
 type Company = typeof companies.$inferSelect;
 
 /**
- * The emails that carry a candidate's own status link outside the acknowledgment (Wave 0 item 0.1), and the
- * confirmation of a talent-pool opt-out (item 0.11). Templated, never written by the model, sent to the address the
- * company already has on file (never to an address someone typed into a form), and queued through the outbox like
- * every candidate email. Each one is limited by its idempotency key: repeat submissions send at most one notice a day
- * per application, "lost your link" requests at most one email an hour per person.
+ * The emails that carry a candidate's own status link outside the "application received" email. Templated, never
+ * written by the model, sent to the address the company already has on file (never to an address someone typed into a
+ * form), and queued through the outbox like every candidate email. Each one is limited by its idempotency key: repeat
+ * submissions send at most one notice a day per application, "lost your link" requests at most one email an hour per
+ * person.
  */
 
 /** The status page an application's own link opens. */
@@ -53,7 +53,7 @@ ${input.signature || `The hiring team at ${company.name}`}`;
     applicationId: application.id,
     to: candidate.email,
     from: fromAddress(company, integrations),
-    replyTo: replyToFor(application, integrations),
+    replyTo: replyToFor(integrations, company),
     subject: `Your application for ${input.roleTitle} at ${company.name}`,
     text,
     templateKey: "status_link_repeat",
@@ -90,7 +90,7 @@ The hiring team at ${company.name}`;
     applicationId: latest.id,
     to: candidate.email,
     from: fromAddress(company, integrations),
-    replyTo: replyToFor(latest, integrations),
+    replyTo: replyToFor(integrations, company),
     subject: `Your application link${several ? "s" : ""}: ${company.name}`,
     text,
     templateKey: "status_link_request",
@@ -99,39 +99,4 @@ The hiring team at ${company.name}`;
     actor: input.actor,
     disclosureIncluded: false,
   }, input.now);
-}
-
-/**
- * The person asked not to be kept for future roles (a "no thanks" reply, or the button on the status page): done, and
- * said so once. The way back is real: the status page has a button to be kept for future roles again.
- */
-export async function sendTalentPoolOptOutConfirmation(q: Queryable, integrations: Integrations, input: { application: App; candidate: Cand; company: Company; appBaseUrl: string; actor: Actor }): Promise<QueueResult | null> {
-  const { application, candidate, company } = input;
-  if (!candidate.email) return null;
-  const text = `Hi ${candidate.firstName},
-
-Done. ${company.name} will not keep your details for future roles, and nobody will contact you about other openings.
-
-This does not change an application you have open right now: it carries on as before, and your status link still works.
-
-If you change your mind, your status page has a button to be kept for future roles again:
-${statusUrlFor(input.appBaseUrl, application)}#future-roles
-
-The hiring team at ${company.name}`;
-  return queueCommunication(q, integrations, {
-    channel: "email",
-    companyId: company.id,
-    candidateId: candidate.id,
-    applicationId: application.id,
-    to: candidate.email,
-    from: fromAddress(company, integrations),
-    replyTo: replyToFor(application, integrations),
-    subject: `You will not be contacted about future roles: ${company.name}`,
-    text,
-    templateKey: "talent_pool_opt_out",
-    idempotencyKey: `talent_pool_opt_out:${candidate.id}`,
-    tags: { template: "talent_pool_opt_out", applicationId: application.id },
-    actor: input.actor,
-    disclosureIncluded: false,
-  });
 }

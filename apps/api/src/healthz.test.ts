@@ -14,7 +14,7 @@ describe("the app's /healthz checks once every five seconds per process", () => 
   const BASE = Date.UTC(2026, 9, 29, 12, 0, 0);
   let offset = 0;
   const now = () => new Date(BASE + offset);
-  const testEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", WORKER_INLINE: "false" };
+  const testEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", STORAGE_PROVIDER: "memory", WORKER_INLINE: "false" };
   type Health = { ok: boolean; error?: string; worker?: { lastSeenAt: string | null; queueDepth: number | null; healthy: boolean }; workerHealthy?: boolean };
   const get = async (app: ReturnType<typeof createApp>, path = "/healthz") => {
     const r = await app.request(path);

@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import type { Actor } from "@ros/contracts";
+import { appPaths, type Actor } from "@ros/contracts";
 import { CLOSING_DATE_REASON, closingDayWords, closingMoment, emit, notify } from "@ros/core";
 import { companies, roles, workflowRuns, type Queryable } from "@ros/db";
 import type { WorkflowEngine } from "../engine";
@@ -10,12 +10,11 @@ type State = { roleId: string; closesOn: string };
 export const ROLE_CLOSING_DATE_KEY = "role_closing_date";
 
 /**
- * A role's closing date (founder decision Q12, plan D7): a timer per role, due at the end of the closing day in the
- * company's own time zone, kept in the jobs table so it survives restarts. When it is due, new applications stop the
- * same way the accepting switch stops them (`role.applications_closed`, emails held, the job page saying so), with the
- * reason "closing date". Nobody already in the process is touched, people part-way through the form may still finish
- * (apps/api services/closing-date.ts), and closing the role stays a person's decision: the team is told, and Today
- * offers to extend the date or close the role.
+ * A job's closing date: a timer per job, due at the end of the closing day in the company's own time zone, kept in the
+ * jobs table so it survives restarts. When it is due, new applications stop (`role.applications_closed`, the job page
+ * saying so), with the reason "closing date". Nobody already in the process is touched, people part-way through the
+ * form may still finish (apps/api services/closing-date.ts), and closing the job stays a person's decision: the team
+ * is told.
  *
  * Every change of the date starts a fresh run (`armClosingDate`); a run whose date is no longer the role's ends
  * without doing anything, so an earlier timer never closes applications on a date that was changed.
@@ -25,7 +24,6 @@ export const roleClosingDate: WorkflowDefinition<State> = {
   version: 1,
   initialStep: "wait",
   maxAttempts: 5,
-  escalationKind: "stuck_role",
   steps: {
     async wait(ctx) {
       const [role] = await ctx.q.select().from(roles).where(eq(roles.id, ctx.state.roleId)).limit(1);
@@ -37,7 +35,7 @@ export const roleClosingDate: WorkflowDefinition<State> = {
         return { kind: "wait", wait: { kind: "timer", until: due.toISOString(), reason: `applications close at the end of ${ctx.state.closesOn}` }, resumeStep: "wait" };
       }
       if (!["open", "paused"].includes(role.status) || !role.acceptingApplications) return { kind: "complete" };
-      // Checked again in the write itself, so a person switching applications off at the same moment is not overwritten.
+      // Checked again in the write itself, so two runs due at the same moment stop applications once.
       const [stopped] = await ctx.q.update(roles).set({ acceptingApplications: false, applicationsClosedAt: due.toISOString(), applicationsClosedReason: CLOSING_DATE_REASON }).where(and(eq(roles.id, role.id), eq(roles.acceptingApplications, true))).returning({ id: roles.id });
       if (!stopped) return { kind: "complete" };
       await emit(ctx.q, { type: "role.applications_closed", companyId: ctx.companyId, actor: ctx.actor, subject: { type: "role", id: role.id }, payload: { reason: CLOSING_DATE_REASON, closesOn: ctx.state.closesOn, automatic: true }, correlationId: ctx.run.id });
@@ -46,7 +44,7 @@ export const roleClosingDate: WorkflowDefinition<State> = {
         kind: "applications.closed",
         title: `${role.title} stopped taking new applications`,
         body: `Its closing date, ${closingDayWords(ctx.state.closesOn)}, has passed. The job page stays up and says applications are closed. Anyone who had already started applying can still finish, and nobody was turned away. Extend the date to take applications again, or close the job when you are ready.`,
-        action: { label: "Extend or close", href: `/roles/${role.id}?tab=posting` },
+        action: { label: "Extend or close", href: appPaths.job(role.id) },
       });
       return { kind: "complete" };
     },

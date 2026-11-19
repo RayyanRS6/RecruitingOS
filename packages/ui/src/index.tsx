@@ -1,6 +1,6 @@
 import { Children, type ReactNode } from "react";
 import { cn } from "./cn";
-import { cx, initials, type StepState, STEP_STATE_TEXT, scoreBand, scoreLabel, type TableHead, type Tone } from "./helpers";
+import { cx, initials, type StepState, STEP_STATE_TEXT, type TableHead, type Tone } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
 /**
@@ -20,24 +20,24 @@ function withClass(kit: string, className: string | undefined): string {
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "destructive";
 
-/** The tints an IconChip or a StatCell's icon can sit on. */
+/** The tints an IconChip can sit on. */
 export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neutral";
 
 /**
  * A button, a pill in every size. Primary is plum, secondary is outlined, ghost has no box, danger is for the few
- * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger). `kbd` shows a
- * keyboard hint and announces it as the shortcut; `keyshortcuts` only announces one (aria-keyshortcuts, "Control+Enter"),
- * with nothing drawn, for a shortcut the fewer-words rule took off the screen (put it in `title` too). `ariaPressed`
- * makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its fill (left out, the button is
- * a plain button). `block` fills the width (its class is `wide`: Tailwind's `block` utility would turn the button into a
- * plain block). `className` adds classes after the kit's (spacing, a placement), never a second look. `ariaDisabled`
- * greys it as `disabled` does, but it can still be focused and pressed, so a press can show what is missing (`onClick`
- * decides what it does); `describedBy` is the id of the words that say why. Left out, neither attribute is written.
+ * actions that cannot be taken back ("quiet" and "destructive" are the earlier names for ghost and danger).
+ * `keyshortcuts` announces a keyboard shortcut (aria-keyshortcuts, "Control+Enter") with nothing drawn (put it in
+ * `title` too). `ariaPressed` makes it a toggle a screen reader hears as pressed or not, for a choice shown only by its
+ * fill (left out, the button is a plain button). `block` fills the width (its class is `wide`: Tailwind's `block`
+ * utility would turn the button into a plain block). `className` adds classes after the kit's (spacing, a placement),
+ * never a second look. `ariaDisabled` greys it as `disabled` does, but it can still be focused and pressed, so a press
+ * can show what is missing (`onClick` decides what it does); `describedBy` is the id of the words that say why. Left
+ * out, neither attribute is written.
  */
-export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; kbd?: string; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; ariaDisabled?: boolean; describedBy?: string; block?: boolean; className?: string }) {
+export function Button(props: { children: ReactNode; variant?: ButtonVariant; size?: "sm" | "md"; onClick?: () => void; type?: "button" | "submit"; disabled?: boolean; loading?: boolean; title?: string; icon?: IconName; iconEnd?: IconName; keyshortcuts?: string; ariaLabel?: string; ariaPressed?: boolean; ariaDisabled?: boolean; describedBy?: string; block?: boolean; className?: string }) {
   const { variant = "secondary", size = "md" } = props;
   return (
-    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts ?? props.kbd} {...(props.ariaDisabled ? { "aria-disabled": true, "aria-describedby": props.describedBy } : {})}>
+    <button type={props.type ?? "button"} className={withClass(cx("btn", variant, size === "sm" && "sm", props.block && "wide"), props.className)} onClick={props.onClick} disabled={props.disabled || props.loading} title={props.title} aria-label={props.ariaLabel} aria-pressed={props.ariaPressed} aria-busy={props.loading} aria-keyshortcuts={props.keyshortcuts} {...(props.ariaDisabled ? { "aria-disabled": true, "aria-describedby": props.describedBy } : {})}>
       {props.loading ? (
         <>
           <span className="spinner" aria-hidden="true" />
@@ -48,7 +48,6 @@ export function Button(props: { children: ReactNode; variant?: ButtonVariant; si
           {props.icon ? <Icon name={props.icon} /> : null}
           {props.children}
           {props.iconEnd ? <Icon name={props.iconEnd} /> : null}
-          {props.kbd ? <Kbd decorative>{props.kbd}</Kbd> : null}
         </>
       )}
     </button>
@@ -64,18 +63,13 @@ export function IconButton(props: { icon: IconName; label: string; onClick?: () 
   );
 }
 
-/** A keyboard hint ("N"). Inside a button it is hidden from screen readers, which hear the shortcut from the button. */
-export function Kbd(props: { children: ReactNode; decorative?: boolean }) {
-  return <kbd className="kbd" aria-hidden={props.decorative || undefined}>{props.children}</kbd>;
-}
-
 /**
  * A card with an optional H2 title and an aside beside it. `needsYou` is the "Your next step" wash (something waits on
  * the reader); `hero` draws the title at the hero size (26px, 30px from 768px) for a page's one next step, so screens
  * never size it themselves; every other card's title, a needs-you one in a panel included, stays 19px. `lift` answers
  * the mouse. `flush` is a list card: no padding of its own, the title keeps the card's sides over a hairline, and the
- * rows (`list-row`, `list-item`) run edge to edge, their words in line with the title. Nothing is clipped, so a row's
- * menu still opens over what lies below. On a phone every other card has 16px sides and 20px above and below.
+ * rows (`list-row`) run edge to edge, their words in line with the title. Nothing is clipped, so a row's menu still
+ * opens over what lies below. On a phone every other card has 16px sides and 20px above and below.
  */
 export function Card(props: { children: ReactNode; needsYou?: boolean; hero?: boolean; lift?: boolean; flush?: boolean; title?: ReactNode; aside?: ReactNode; className?: string }) {
   return (
@@ -119,43 +113,31 @@ export function Pill(props: { children: ReactNode; tone?: Tone | "info" | "warm"
   );
 }
 
-/** Plain-language application status. Owner Mode never shows raw stage names. */
-export function StatusChip(props: { stage: string; label: string; group?: string }) {
-  const tone: Tone = props.group === "waiting_on_you" ? "caution" : props.group === "hired" ? "good" : props.group === "not_moving_forward" ? "neutral" : "accent";
-  return <Pill tone={tone}>{props.label}</Pill>;
-}
-
-/** Sources whose own name would mislead: a recruiter's call notes are never the candidate's words (plan E3). */
-const EVIDENCE_SOURCE_LABEL: Record<string, string> = { recruiter_note: "recruiter's call notes" };
-
-export function EvidenceChip(props: { source: string }) {
-  return <Chip tone="source">{EVIDENCE_SOURCE_LABEL[props.source] ?? props.source.replace("_", " ")}</Chip>;
-}
-
 /**
- * The match score as "91/100", green from 70, amber from 55, grey below (helpers.ts SCORE_BANDS). A screen reader hears
- * "Match score 91 out of 100". With no score it says so in words instead of showing a number: `none`, else "No score yet"
- * (a screen that knows none will come says "No score": someone decided before any AI review).
+ * A score as "91/100", with its band word beside it when one is given. The page hands it the number, the band's word and
+ * the colour that goes with the band (green, amber or grey; never red, which belongs to a missing must-have): the kit
+ * keeps no band table of its own. `label` says what the number is to a screen reader ("Resume match 91 out of 100").
+ * With no score it says why in words (`none`) instead of showing a number.
  */
-export function ScoreBadge(props: { score: number | null | undefined; size?: "sm" | "md" | "lg"; showBand?: boolean; none?: string }) {
-  const s = scoreBand(props.score);
+export function ScoreBadge(props: { score: number | null | undefined; label?: string; tone?: "good" | "caution" | "neutral"; band?: string | null; size?: "sm" | "md" | "lg"; none?: string }) {
   const size = props.size === "sm" || props.size === "lg" ? props.size : undefined;
-  if (!s) return <span className={cx("score", "none", size)}>{props.none ?? "No score yet"}</span>;
-  const label = scoreLabel(s.score);
+  if (props.score === null || props.score === undefined || !Number.isFinite(props.score)) return <span className={cx("score", "none", size)}>{props.none ?? "No score yet"}</span>;
+  const score = Math.min(100, Math.max(0, Math.round(props.score)));
+  const label = `${props.label ?? "Score"} ${score} out of 100`;
   const badge = (
-    <span className={cx("score", size !== "lg" && s.tone, size)} title={label}>
+    <span className={cx("score", size !== "lg" && (props.tone ?? "neutral"), size)} title={label}>
       <span className="sr-only">{label}</span>
       <span aria-hidden="true">
-        {s.score}
+        {score}
         <span className="of">/100</span>
       </span>
     </span>
   );
-  if (!props.showBand) return badge;
+  if (!props.band) return badge;
   return (
     <span className="score-wrap">
       {badge}
-      <span className="score-band">{s.label}</span>
+      <span className="score-band">{props.band}</span>
     </span>
   );
 }
@@ -324,46 +306,15 @@ export function Segmented<T extends string>(props: { value: T; options: Array<{ 
   );
 }
 
-export function Timeline(props: { items: Array<{ when: string; what: string; who?: string }> }) {
-  return (
-    <ul className="timeline">
-      {props.items.map((it, i) => (
-        <li key={i}>
-          <span className="when">{new Date(it.when).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-          <span>{it.what}{it.who ? <span className="muted"> · {it.who}</span> : null}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function PipelineBar(props: { counts: Record<string, number>; total: number }) {
-  // `waiting_on_candidate`: an offer made outside the app, waiting on the candidate's answer (plan H2)
-  const parts: Array<[string, string]> = [["in_process", "var(--ink-2)"], ["waiting_on_you", "var(--caution-dot)"], ["waiting_on_candidate", "var(--ink-3)"], ["hired", "var(--good-dot)"], ["not_moving_forward", "var(--line-2)"]];
-  return (
-    <div className="pipeline" role="img" aria-label={`Pipeline: ${parts.map(([k]) => `${k.replace(/_/g, " ")} ${props.counts[k] ?? 0}`).join(", ")}`}>
-      {parts.map(([k, color]) => {
-        const n = props.counts[k] ?? 0;
-        return n ? <span key={k} style={{ width: `${(n / Math.max(1, props.total)) * 100}%`, background: color }} title={`${k.replace(/_/g, " ")}: ${n}`} /> : null;
-      })}
-    </div>
-  );
-}
-
-/** One message in a conversation; `from` says who wrote it (the name avoids the `role` ARIA attribute). */
-export function Bubble(props: { from: "assistant" | "user" | "system"; children: ReactNode }) {
-  return <div className={`bubble ${props.from}`}>{props.children}</div>;
-}
-
 /**
  * A table in a box that scrolls sideways when it must (docs/07). `head` takes words, or a TableHead: `num` for a column
  * of figures (right-aligned, heading included; give the cells className="num"), or `sort` and `onSort` for a heading
- * that sorts (from useTableSort). aria-sort is set on the sorted column only, and `announce` says a new order once,
- * politely. `scroll` keeps the headings in view in a long list on a wide screen; `pinFirst` keeps the first column in
- * view while a wide table scrolls sideways. `loading` shows that many quiet rows under the headings while the rows are
- * on their way; `empty` is the one row shown when there are none (a filter that found nothing), the headings kept.
- * `wrapHeads` lets long column headings wrap onto more lines (figure columns' included) instead of widening the table.
- * Hook-free: server components import it.
+ * that sorts (the page keeps the order, with nextSort and sortRows). aria-sort is set on the sorted column only, and
+ * `announce` says a new order once, politely. `scroll` keeps the headings in view in a long list on a wide screen;
+ * `pinFirst` keeps the first column in view while a wide table scrolls sideways. `loading` shows that many quiet rows
+ * under the headings while the rows are on their way; `empty` is the one row shown when there are none (a filter that
+ * found nothing), the headings kept. `wrapHeads` lets long column headings wrap onto more lines (figure columns'
+ * included) instead of widening the table. Hook-free: server components import it.
  */
 export function Table(props: { head: Array<string | TableHead>; children?: ReactNode; label?: string; scroll?: boolean; pinFirst?: boolean; wrapHeads?: boolean; loading?: number; empty?: ReactNode; announce?: string }) {
   const cols: TableHead[] = props.head.map((h) => (typeof h === "string" ? { label: h } : h));
@@ -407,16 +358,6 @@ export function Table(props: { head: Array<string | TableHead>; children?: React
   );
 }
 
-/** A figure and what it counts, for a report ("12" over "applicants in total"): the number large and tabular, the words under it. Not on Today (founder decision Q4). */
-export function Stat(props: { n: number | string; label: string }) {
-  return (
-    <div className="stat">
-      <span className="stat-n">{props.n}</span>
-      <span className="stat-label">{props.label}</span>
-    </div>
-  );
-}
-
 /**
  * An icon on a soft rounded square (the briefcase beside a job, the sparkle in a message cell): lavender by default,
  * peach, plum or a signal tint; 28 (`xs`, beside a line of text or a message), 32, 40 or 48 pixels. Decorative: the
@@ -432,59 +373,8 @@ export function IconChip(props: { icon: IconName; tone?: ChipTone; size?: "xs" |
 }
 
 /**
- * One card split into cells of figures (screenshots 1 and 4): put StatCells inside. `label` names the group for screen
- * readers. Only for numbers the page already shows; Today has none (founder decision Q4).
- */
-export function StatStrip(props: { children: ReactNode; label?: string }) {
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: a group of figures, not of form controls, so a fieldset would be the wrong element
-    <div className="stat-strip" role="group" aria-label={props.label}>
-      {props.children}
-    </div>
-  );
-}
-
-/**
- * Draws a link with the app's own router Link instead of a plain <a>, so following it is no full page load (the page's
- * data stays): `(cell) => <Link to={cell.href} className={cell.className}>{cell.children}</Link>`.
- */
-export type LinkRender = (cell: { href: string; className: string; children: ReactNode }) => ReactNode;
-
-/**
- * One cell of a StatStrip: what it counts (small) over the figure (large, tabular), an optional icon chip on the left
- * and a line under the figure (`note`). `highlight` is the tinted cell for a message at the end of the strip. With
- * `href` the cell is a link with an arrow on the right: a plain <a>, or, for an address inside the app, the app's own
- * Link drawn by `link` (a LinkRender), so following it does not load the whole app again.
- */
-export function StatCell(props: { label: ReactNode; value: ReactNode; icon?: IconName; tone?: "lavender" | "peach" | "plum"; note?: ReactNode; highlight?: boolean; href?: string; link?: LinkRender }) {
-  const body = (
-    <>
-      {props.icon ? <IconChip icon={props.icon} tone={props.tone} /> : null}
-      <span className="stat-cell-text">
-        <span className="stat-cell-label">{props.label}</span>
-        {props.value !== undefined && props.value !== null ? <span className="stat-cell-value">{props.value}</span> : null}
-        {props.note ? <span className="stat-cell-note">{props.note}</span> : null}
-      </span>
-      {props.href ? (
-        <span className="stat-cell-go" aria-hidden="true">
-          <Icon name="arrow-right" size={16} />
-        </span>
-      ) : null}
-    </>
-  );
-  const className = cx("stat-cell", props.highlight && "highlight");
-  if (!props.href) return <div className={className}>{body}</div>;
-  if (props.link) return props.link({ href: props.href, className, children: body });
-  return (
-    <a className={className} href={props.href}>
-      {body}
-    </a>
-  );
-}
-
-/**
  * The head of a section on a page: an optional eyebrow, the heading (an H2 by default, display 24px; an H3 at 19px)
- * with a line under it, and an action on the right (a TextLink such as "All applicants"). `id` goes on the heading, for
+ * with a line under it, and an action on the right (a `text-link` such as "All jobs"). `id` goes on the heading, for
  * aria-labelledby or a link to it.
  */
 export function SectionHeader(props: { title: ReactNode; sub?: ReactNode; eyebrow?: ReactNode; action?: ReactNode; id?: string; level?: 2 | 3 }) {
@@ -503,18 +393,15 @@ export function SectionHeader(props: { title: ReactNode; sub?: ReactNode; eyebro
 
 export { cn } from "./cn";
 export { Icon, ICON_NAMES, type IconName } from "./icons";
-// The match score's breakdown (Wave F): bars per requirement, no hooks.
-export { barFigures, barTone, ScoreBar, type ScoreBarItem, ScoreBars } from "./score-bars";
-export { compareValues, cx, initials, nextSort, normalizeToast, numHead, OWNER_STAGES, type OwnerStage, ownerStage, SCORE_BANDS, type ScoreBand, scoreBand, scoreLabel, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StageChoice, stageMenuItems, type StepState, type TableHead, type TabOrientation, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
+export { compareValues, cx, initials, nextSort, normalizeToast, numHead, type SortDir, type SortKind, type SortValue, sortAnnouncement, sortRows, type StepState, type TableHead, type TabOrientation, TOAST_ACTION_MAX_MS, TOAST_EVENT, type ToastAction, type ToastMessage, type ToastTone, type Tone, toastArrives, toastDuration, toastPayload } from "./helpers";
 
 // The pieces below listen to the keyboard or keep state, which needs React hooks, so each lives in its own client
 // module: the rest of this file stays usable from server components.
-export { Dialog, Drawer, Sheet } from "./sheet";
+export { Dialog, Drawer } from "./sheet";
 export { type TabItem, TabPanel, Tabs } from "./tabs";
-export { useTableSort } from "./table-sort";
 export { SplitView } from "./split-view";
 export { AutoTextarea } from "./auto-textarea";
-export { Menu, type MenuItem, StageButton } from "./menu";
+export { Menu, type MenuItem } from "./menu";
 export { Toast, Toaster } from "./toast";
 // Motion's provider (LazyMotion with domMax, strict, and MotionConfig reducedMotion="user"), mounted once by the shell.
 export { MotionProvider } from "./motion-provider";

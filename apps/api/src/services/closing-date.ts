@@ -1,4 +1,11 @@
-import { CLOSING_DATE_REASON, CLOSING_GRACE_HOURS, openPayload, sealPayload } from "@ros/core";
+import type { ClosingDateView, RolePacket } from "@ros/contracts";
+import { CLOSING_DATE_REASON, CLOSING_GRACE_HOURS, closingDateRequired, closingDateView, openPayload, sealPayload } from "@ros/core";
+
+/** A job's closing date as every page reads it; "required by law" is worked out from the places of the version given. */
+export function closingDateFor(role: Parameters<typeof closingDateView>[0]["role"], company: { timezone: string | null } | null, packet: Pick<RolePacket, "identity"> | null, now: Date): ClosingDateView {
+  const requiredByLaw = !!packet && closingDateRequired({ jobLocations: packet.identity.locations, remotePolicy: packet.identity.remotePolicy });
+  return closingDateView({ role, timeZone: company?.timezone, requiredByLaw, now });
+}
 
 /**
  * People part-way through applying when a role's closing date passes may still finish (founder decision Q12, plan

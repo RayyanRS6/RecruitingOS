@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GLYPHS, ICON_ALIASES, ICON_NAMES, resolveIcon } from "./glyphs";
-import { compareValues, cx, domId, holdPageScroll, initials, nextIndex, nextSort, normalizeToast, numHead, OWNER_STAGES, SCORE_BANDS, scoreBand, scoreLabel, sortAnnouncement, sortRows, stageMenuItems, tabIds, tabKeyMove, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
+import { compareValues, cx, domId, holdPageScroll, initials, nextIndex, nextSort, normalizeToast, numHead, sortAnnouncement, sortRows, tabIds, tabKeyMove, toastDuration, toastPayload, typeaheadIndex } from "./helpers";
 
 describe("avatar initials", () => {
   it("takes the first letters of the first and last names", () => {
@@ -23,76 +23,6 @@ describe("avatar initials", () => {
     expect(initials("")).toBe("?");
     expect(initials(null)).toBe("?");
     expect(initials(" - ")).toBe("?");
-  });
-});
-
-describe("match score badge", () => {
-  it("uses the founder-approved cut-offs: 85+, 70+, 55+ and below", () => {
-    expect(scoreBand(100)?.band).toBe("very_high");
-    expect(scoreBand(85)?.band).toBe("very_high");
-    expect(scoreBand(84)?.band).toBe("high");
-    expect(scoreBand(70)?.band).toBe("high");
-    expect(scoreBand(69)?.band).toBe("medium");
-    expect(scoreBand(55)?.band).toBe("medium");
-    expect(scoreBand(54)?.band).toBe("low");
-    expect(scoreBand(0)?.band).toBe("low");
-    expect(SCORE_BANDS.map((b) => b.label)).toEqual(["Very high", "High", "Medium", "Low"]);
-  });
-  it("never borrows the AI reading's words, so the score worked out by code cannot be mistaken for the reading", () => {
-    // the reading's labels in apps/web/src/pages/People.tsx and docs/07
-    const reading = ["Strong match", "Potential match", "Weak match", "Insufficient evidence"];
-    for (const b of SCORE_BANDS) {
-      expect(b.label).not.toMatch(/match|evidence|fit/i);
-      for (const word of reading) expect(word.toLowerCase()).not.toContain(b.label.toLowerCase());
-    }
-  });
-  it("is green from 70, amber from 55 and grey below; never red, which belongs to a missing must-have", () => {
-    expect(scoreBand(91)?.tone).toBe("good");
-    expect(scoreBand(70)?.tone).toBe("good");
-    expect(scoreBand(69)?.tone).toBe("caution");
-    expect(scoreBand(58)?.tone).toBe("caution");
-    expect(scoreBand(44)?.tone).toBe("neutral");
-    expect(SCORE_BANDS.map((b) => b.tone)).not.toContain("critical");
-  });
-  it("rounds and keeps the number inside 0-100", () => {
-    expect(scoreBand(69.6)).toMatchObject({ score: 70, tone: "good" });
-    expect(scoreBand(130)?.score).toBe(100);
-    expect(scoreBand(-4)?.score).toBe(0);
-  });
-  it("has no band without a score", () => {
-    expect(scoreBand(null)).toBeNull();
-    expect(scoreBand(undefined)).toBeNull();
-    expect(scoreBand(Number.NaN)).toBeNull();
-  });
-  it("tells a screen reader the score in words", () => {
-    expect(scoreLabel(91)).toBe("Match score 91 out of 100");
-    expect(scoreLabel(null)).toBe("No match score yet");
-  });
-});
-
-describe("the stage button's choices", () => {
-  it("lists the owner's ten stages in order, in plain words, and never in red", () => {
-    // "No AI interview yet" first (20 Oct 2026, R20-7): everyone starts there, grey like New
-    expect(OWNER_STAGES.map((s) => s.label)).toEqual(["No AI interview yet", "New", "Longlist", "Shortlist", "Interviewing", "Cancelled", "On hold", "Offer", "Hired", "Not moving forward"]);
-    expect(OWNER_STAGES.map((s) => s.tone)).not.toContain("critical");
-    expect(OWNER_STAGES.find((s) => s.id === "no_ai_interview")?.tone).toBe("neutral");
-    expect(OWNER_STAGES.find((s) => s.id === "on_hold")?.tone).toBe("caution");
-    // Cancelled sits right after Interviewing, amber like a hold, never red: a cancelled interview is not an error
-    expect(OWNER_STAGES.find((s) => s.id === "cancelled")?.tone).toBe("caution");
-    expect(stageMenuItems("cancelled")).toHaveLength(10);
-    expect(stageMenuItems("cancelled").find((i) => i.current)?.label).toBe("Cancelled");
-  });
-  it("marks where the candidate is now and keeps a move that is not allowed in the list, greyed, with its reason", () => {
-    const items = stageMenuItems("shortlist", { offer: "Record an interview first.", shortlist: "ignored for the current stage" });
-    expect(items).toHaveLength(OWNER_STAGES.length);
-    expect(items.filter((i) => i.current).map((i) => i.id)).toEqual(["shortlist"]);
-    expect(items.find((i) => i.id === "shortlist")).toMatchObject({ current: true });
-    expect(items.find((i) => i.id === "shortlist")?.disabled).toBeUndefined();
-    expect(items.find((i) => i.id === "offer")).toMatchObject({ disabled: true, reason: "Record an interview first.", current: false });
-    expect(items.find((i) => i.id === "hired")).toEqual({ id: "hired", label: "Hired", tone: "good", current: false });
-  });
-  it("reads an unknown stage as New rather than showing a raw name", () => {
-    expect(stageMenuItems("something_else").find((i) => i.current)?.id).toBe("new");
   });
 });
 
@@ -193,7 +123,7 @@ describe("toasts", () => {
 describe("the page behind an open drawer", () => {
   it("stays still while any drawer is open and scrolls again once the last one closes, in whatever order they close", () => {
     const body = { style: { overflow: "auto" } };
-    // a candidate drawer, then "Bring in a recruiter" opened from inside it
+    // a candidate drawer, then a second drawer opened from inside it
     const releaseDrawer = holdPageScroll(body);
     const releaseSheet = holdPageScroll(body);
     expect(body.style.overflow).toBe("hidden");
@@ -228,10 +158,12 @@ describe("class names", () => {
 
 describe("icon set", () => {
   it("has every icon the pages ask for", () => {
-    const wanted = ["home", "today", "briefcase", "roles", "people", "talent", "calendar", "interviews", "settings", "plus", "search", "chevron-right", "chevron-down", "check", "x", "sparkle", "assistant", "mail", "send", "upload", "paperclip", "mic", "eye", "edit", "pencil", "clock", "alert", "lock", "link", "share", "filter", "sort", "more", "arrow-left", "arrow-right", "user", "building", "star", "flag", "refresh", "external"];
-    // the October 2026 redesign's shapes: the logo's bars, the rail's and the screens' new icons
-    wanted.push("bars", "shield", "life-buoy", "activity", "user-plus", "sliders", "arrow-up-right", "message-circle", "file-text", "sparkles", "inbox", "chart");
+    const wanted = ["home", "briefcase", "roles", "people", "talent", "settings", "plus", "search", "chevron-right", "chevron-left", "chevron-down", "chevron-up", "check", "check-circle", "x", "sparkle", "send", "paperclip", "eye", "edit", "alert", "lock", "sort", "more", "arrow-right", "user", "building", "star", "flag", "refresh", "copy", "log-out", "menu", "sun", "moon"];
+    // the logo's bars, the rail's and the screens' other shapes
+    wanted.push("bars", "shield", "activity", "user-plus", "arrow-up-right", "message-circle", "file-text", "inbox");
     for (const name of wanted) expect(ICON_NAMES).toContain(name);
+    // and nothing the pages do not ask for: a drawing nobody uses is deleted, not kept
+    expect([...ICON_NAMES].sort()).toEqual([...wanted].sort());
   });
   it("draws every name, aliases included, with at least one path on the 24-pixel grid", () => {
     for (const name of ICON_NAMES) {

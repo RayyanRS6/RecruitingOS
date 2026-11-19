@@ -1,16 +1,13 @@
-import { randomBytes } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, notLike, or, sql, type SQL } from "drizzle-orm";
-import { RejectReason, type Actor } from "@ros/contracts";
-import { aiRuns, applicationMarks, applicationNotes, applications, approvalRequests, assessments, candidates, communications, dataRequests, documents, escalationMessages, events, hiringOutcomes, inboundEmails, interviewFollowups, interviewParticipants, interviews, jobs, notifications, recruiterEscalations, screens, unconfirmedScreens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
+import { SCREEN_ACTIVE_STATUSES, type Actor } from "@ros/contracts";
+import { aiRuns, applications, assessments, candidates, communications, dataRequests, documents, events, hiringOutcomes, jobs, notifications, screens, workflowRuns, workflowSteps, rowsOf, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { SYSTEM_ACTOR, emit } from "./events";
 import { raiseAlert, resolveAlertsFor } from "./alerts";
-import { createEscalation } from "./escalations";
 import { normalizeEmail } from "./auth";
 import { dedupeKey } from "./dedupe";
-import { notify } from "./notifications";
-import { openingQuestionsOf, screenAnswersOf, withoutCandidateWords } from "./screen-answers";
-import { DECISION_STAGES, canTransition, transition } from "./stages";
+import { storedScreenWords, withoutCandidateWords } from "./screen-answers";
+import { canTransition, transition } from "./stages";
 
 /**
  * Candidate privacy requests (correction 7, docs/runbooks/privacy-requests.md). Everything here is the recorded,
@@ -71,33 +68,32 @@ export async function recordCounselDecision(q: Queryable, row: DataRequestRow, i
   return u;
 }
 
-/** Message statuses that mean it left us (handed to the email or text provider; `unknown` and `sending` may have gone). */
+/** Message statuses that mean it left us (handed to the email provider; `unknown` and `sending` may have gone). */
 const LEFT_US = new Set(["sent", "delivered", "bounced", "complained", "unknown", "sending"]);
 /** A message that left us but may not have reached them, in the words the export uses. */
 const DID_NOT_ARRIVE: Record<string, string> = { bounced: "sent, but it did not arrive", complained: "sent; marked as unwanted", unknown: "sent, but we could not confirm it arrived", sending: "being sent" };
 /** What became of a message that never left us. */
-const NOT_SENT: Record<string, string> = { cancelled: "not sent: withdrawn before it was sent", held: "not sent: waiting for the company to be confirmed", queued: "not sent yet", failed: "not sent: it could not be sent" };
+const NOT_SENT: Record<string, string> = { cancelled: "not sent: withdrawn before it was sent", queued: "not sent yet", failed: "not sent: it could not be sent" };
 
 /**
  * Everything the person gave us or we sent them; never the assessment's internal rationale, never anyone else's data.
- * Messages that never left us (taken back, withdrawn, held, failed) are listed apart from those sent, each with what
- * happened to it. The team's private notes (application_notes, plan H3) are left out: the counsel default until register
- * item 25 is answered.
+ * Messages that never left us (taken back, withdrawn, failed) are listed apart from those sent, each with what
+ * happened to it.
  */
 export async function exportCandidateData(q: Queryable, companyId: string, candidateId: string): Promise<Record<string, unknown>> {
   const [cand] = await q.select().from(candidates).where(and(eq(candidates.id, candidateId), eq(candidates.companyId, companyId))).limit(1);
   if (!cand) throw new Error("candidate not found");
   const apps = await q.select().from(applications).where(eq(applications.candidateId, cand.id));
   const docs = await q.select({ id: documents.id, kind: documents.kind, filename: documents.filename, mime: documents.mime, sizeBytes: documents.sizeBytes, textExtracted: documents.textExtracted, createdAt: documents.createdAt }).from(documents).where(eq(documents.candidateId, cand.id));
-  // A screen's answers live in two places (screen-answers.ts): the export carries every one of them, with the opening questions in the words they were asked.
-  const scrRows = await q.select({ applicationId: screens.applicationId, channel: screens.channel, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
-  // The written-up answers of Review & send (Wave S7) are their words condensed: in the export when there are any.
-  const scr = scrRows.map((s) => ({ applicationId: s.applicationId, channel: s.channel, status: s.status, transcript: s.transcript, answers: screenAnswersOf(s), openingQuestions: openingQuestionsOf(s.progress), ...(s.progress?.writeup ? { writtenUp: s.progress.writeup.answers } : {}), createdAt: s.createdAt }));
+  // Everything they said in each AI interview: the transcript, the recorded answers, and what an older row keeps beside them (`storedScreenWords`).
+  const scrRows = await q.select({ applicationId: screens.applicationId, status: screens.status, transcript: screens.transcript, answers: screens.answers, progress: screens.progress, createdAt: screens.createdAt }).from(screens).where(inArray(screens.applicationId, apps.map((a) => a.id).concat(["00000000-0000-0000-0000-000000000000"])));
+  const scr = scrRows.map((s) => {
+    const words = storedScreenWords(s);
+    return { applicationId: s.applicationId, status: s.status, transcript: s.transcript, answers: words.answers, openingQuestions: words.openingQuestions, ...(words.writtenUp.length ? { writtenUp: words.writtenUp } : {}), createdAt: s.createdAt };
+  });
   const comms = await q.select({ direction: communications.direction, channel: communications.channel, subject: communications.subject, bodyText: communications.bodyText, status: communications.status, deliveredAt: communications.deliveredAt, createdAt: communications.createdAt }).from(communications).where(eq(communications.candidateId, cand.id)).orderBy(desc(communications.createdAt));
   const outbound = comms.filter((c) => c.direction === "outbound");
   const history = await q.select({ type: events.type, occurredAt: events.occurredAt, subjectId: events.subjectId }).from(events).where(and(eq(events.companyId, companyId), inArray(events.subjectId, apps.map((a) => a.id).concat([cand.id]))));
-  // The choice they made when they cancelled an interview (founder decision 2A). A no-show is the team's record, not theirs.
-  const cancellations = apps.length ? await q.select({ applicationId: interviewFollowups.applicationId, at: interviewFollowups.createdAt, choice: interviewFollowups.choice }).from(interviewFollowups).where(and(inArray(interviewFollowups.applicationId, apps.map((a) => a.id)), eq(interviewFollowups.kind, "candidate_cancelled"))).orderBy(asc(interviewFollowups.createdAt)) : [];
   return {
     exportedAt: new Date().toISOString(),
     person: { firstName: cand.firstName, lastName: cand.lastName, email: cand.email, phone: cand.phone, location: cand.locationText, consent: cand.consent, preferences: cand.preferences, createdAt: cand.createdAt },
@@ -106,17 +102,16 @@ export async function exportCandidateData(q: Queryable, companyId: string, candi
     // Rule 2), and since when: one plain field, with no word about a plan.
     applications: apps.map((a) => {
       const openedAt = history.find((e) => e.type === "application.unlocked" && e.subjectId === a.id)?.occurredAt;
-      return { id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, eligibility: a.eligibility ? { passed: a.eligibility.passed, failedRules: a.eligibility.failedRules } : null, appliedAt: a.createdAt, rejectReason: a.rejectReason ?? null, ...(DECISION_STAGES.includes(a.stage) ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}), ...(a.lockedAt ? { hiringTeamCanSeeThis: false } : openedAt ? { hiringTeamCanSeeThis: true, hiringTeamCanSeeThisSince: openedAt } : {}) };
+      return { id: a.id, roleId: a.roleId, stage: a.stage, source: a.source, answers: a.answers, appliedAt: a.createdAt, ...(a.stage === "rejected" ? { decisionTold: a.toldState, decisionToldAt: a.candidateToldAt ?? null } : {}), ...(a.lockedAt ? { hiringTeamCanSeeThis: false } : openedAt ? { hiringTeamCanSeeThis: true, hiringTeamCanSeeThisSince: openedAt } : {}) };
     }),
     documents: docs,
     screens: scr,
     // Only what actually left us is "sent"; one that may not have arrived says so.
     messagesWeSent: outbound.filter((c) => LEFT_US.has(c.status)).map(({ status, direction: _d, ...c }) => ({ ...c, ...(DID_NOT_ARRIVE[status] ? { delivery: DID_NOT_ARRIVE[status] } : {}) })),
-    // Written but never sent (taken back with Undo, withdrawn when the decision changed, held, failed): listed apart, with
+    // Written but never sent (taken back with Undo, withdrawn when the decision changed, failed): listed apart, with
     // what happened to each, since they still hold the person's data.
     messagesWeDidNotSend: outbound.filter((c) => !LEFT_US.has(c.status)).map(({ status, direction: _d, deliveredAt: _a, ...c }) => ({ ...c, whatHappened: NOT_SENT[status] ?? "not sent" })),
     messagesYouSent: comms.filter((c) => c.direction === "inbound").map(({ status: _s, deliveredAt: _a, ...c }) => c),
-    interviewCancellations: cancellations.map((c) => ({ applicationId: c.applicationId, at: new Date(c.at).toISOString(), choice: c.choice })),
     stageHistory: history.filter((e) => e.type === "application.stage_changed" || e.type.startsWith("interview.")).map((e) => ({ type: e.type, at: e.occurredAt })),
   };
 }
@@ -162,82 +157,32 @@ const DELETION_REASON = "the candidate asked for their information to be deleted
 const REMOVED = "[removed at the candidate's request]";
 
 /** Reasons a stage move records that are fixed codes, never anyone's words: a deletion keeps them in the history. */
-const CODED_REASONS: string[] = [...RejectReason.options, "hired_externally", "candidate_withdrew", "employer_declined", "offer_declined_externally", "no_hire", DELETION_REASON];
+const CODED_REASONS: string[] = ["hired_externally", "candidate_withdrew", "employer_declined", "offer_declined_externally", "no_hire", DELETION_REASON];
 
 /**
- * A deletion ends the person's part in every process (plan A9): their interviews still to come are cancelled (the
- * interviewers are told, the calendar events are queued for removal; nobody writes to the candidate, whose address goes
- * in the same transaction), their open screens close, the assistant's waiting suggestions and any message to them
- * waiting for approval are withdrawn (and a closed role's closing message no longer names them), and an application
- * still in the process is withdrawn. Private marks lose their notes, and so do outcomes and the history (a move's own
- * reason, when it was a person's words rather than a fixed one). A decision nobody told them stays untold: nothing
- * is ever sent to them, and nobody is reminded or asked to (decision-messages.ts). The workflow runs about them that are
- * still going (scheduling, screening, new times) are cancelled afterwards by `scrubCandidateWorkflowData`, before their
- * records are scrubbed.
+ * A deletion ends the person's part in every process: their open AI interviews close and an application still in the
+ * process is withdrawn. The team's words about them go from wherever any are kept: the words recorded with an outcome,
+ * and in the history a note and a move's own reason, when it was a person's words rather than a fixed one. A decision
+ * nobody told them stays untold: nothing is ever sent to them. The workflow runs about them that are still going are
+ * cancelled afterwards by `scrubCandidateWorkflowData`, before their records are scrubbed.
  */
-async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor; now: Date }): Promise<void> {
-  const { companyId, appIds, actor, now } = input;
+async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; appIds: string[]; actor: Actor }): Promise<void> {
+  const { companyId, appIds, actor } = input;
   if (!appIds.length) return;
-  // The applications first, in one order, then their interviews: the order every path that changes both takes (a
-  // booking, a cancel, a send of new times), so a deletion and one of those at the same moment take turns.
+  // The applications are locked first, in one order, so a deletion and a team member's action at the same moment take turns.
   await q.select({ id: applications.id }).from(applications).where(inArray(applications.id, appIds)).orderBy(asc(applications.id)).for("update");
-  const open = await q.select().from(interviews).where(and(inArray(interviews.applicationId, appIds), inArray(interviews.status, ["proposed", "scheduling", "scheduled"])));
-  for (const iv of open) {
-    if (iv.status === "scheduled" && iv.startsAt && Date.parse(iv.startsAt) <= now.getTime()) continue; // it took place, or is taking place
-    const hadEvents = Object.keys((iv.calendarRefs ?? {}) as Record<string, unknown>).length > 0;
-    await q.update(interviews).set({ status: "cancelled", cancelReason: DELETION_REASON, attempt: iv.attempt + 1 }).where(eq(interviews.id, iv.id));
-    await emit(q, { type: "interview.cancelled", companyId, actor, subject: { type: "interview", id: iv.id }, payload: { reason: "deletion_request", byCandidate: false, hadEvents, candidateTold: false, cause: "deletion_request" } });
-    const parts = await q.select({ userId: interviewParticipants.userId }).from(interviewParticipants).where(eq(interviewParticipants.interviewId, iv.id));
-    if (parts.length) await notify(q, { companyId, kind: "interview.cancelled", title: `Interview cancelled: ${iv.title}`, body: "The candidate asked for their information to be deleted, so this interview is off.", action: { label: "Open interviews", href: "/interviews" }, userIds: parts.map((p) => p.userId) });
-    if (hadEvents) await q.insert(jobs).values({ kind: "interview.cancel_events", payload: { interviewId: iv.id, companyId, actor }, runAt: now.toISOString(), maxAttempts: 5 });
-  }
-  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, ["invited", "reminded", "in_progress", "paused"])));
+  const scr = await q.select({ id: screens.id }).from(screens).where(and(inArray(screens.applicationId, appIds), inArray(screens.status, [...SCREEN_ACTIVE_STATUSES])));
   for (const s of scr) {
     await q.update(screens).set({ status: "cancelled" }).where(eq(screens.id, s.id));
     await emit(q, { type: "screen.cancelled", companyId, actor, subject: { type: "screen", id: s.id }, payload: { reason: "deletion_request" } });
   }
-  const waiting = await q.select({ id: approvalRequests.id, actionType: approvalRequests.actionType, applicationId: approvalRequests.applicationId }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["application.invite_screen", "application.recommend_interview", "disposition.send", "message.send_freeform"]), eq(approvalRequests.status, "pending")));
-  for (const p of waiting) {
-    await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: DELETION_REASON }).where(eq(approvalRequests.id, p.id));
-    await emit(q, { type: "approval.cancelled", companyId, actor, subject: { type: "approval_request", id: p.id }, payload: { actionType: p.actionType, applicationId: p.applicationId, by: "deletion_request" } });
-  }
-  // A message kept on an approval request, waiting or decided, carries the team's words about them (a decision
-  // message's personal line, Q28; a message someone wrote them, F11): the words and their name go. Who asked, and what
-  // was decided, stay.
-  const worded = await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(inArray(approvalRequests.applicationId, appIds), inArray(approvalRequests.actionType, ["disposition.send", "message.send_freeform"])));
-  for (const r of worded) {
-    const p = (r.proposal ?? {}) as Record<string, unknown>;
-    const scrubbed = { ...p, ...("personalLine" in p ? { personalLine: null } : {}), ...("text" in p ? { text: "[removed at the candidate's request]" } : {}), ...("subject" in p ? { subject: null } : {}), ...("candidateName" in p ? { candidateName: "a candidate" } : {}) };
-    await q.update(approvalRequests).set({ proposal: scrubbed, rationale: null }).where(eq(approvalRequests.id, r.id));
-  }
-  // A closed role's one closing message (Q30) names everyone it is for: they come off it, and a request left with
-  // nobody on it is cancelled.
-  const batches = await q.select({ id: approvalRequests.id, proposal: approvalRequests.proposal }).from(approvalRequests).where(and(eq(approvalRequests.companyId, companyId), isNull(approvalRequests.applicationId), eq(approvalRequests.actionType, "disposition.send"), eq(approvalRequests.status, "pending")));
-  for (const b of batches) {
-    const p = (b.proposal ?? {}) as { kind?: unknown; applicationIds?: unknown };
-    if (p.kind !== "role_closed" || !Array.isArray(p.applicationIds)) continue;
-    const left = p.applicationIds.filter((id) => !appIds.includes(String(id)));
-    if (left.length === p.applicationIds.length) continue;
-    if (left.length) {
-      await q.update(approvalRequests).set({ proposal: { ...p, applicationIds: left, count: left.length } }).where(eq(approvalRequests.id, b.id));
-      continue;
-    }
-    await q.update(approvalRequests).set({ status: "cancelled", decidedAt: now.toISOString(), decisionNote: DELETION_REASON }).where(eq(approvalRequests.id, b.id));
-    await emit(q, { type: "approval.cancelled", companyId, actor, subject: { type: "approval_request", id: b.id }, payload: { actionType: "disposition.send", applicationId: null, by: "deletion_request" } });
-  }
   const apps = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(inArray(applications.id, appIds));
   for (const a of apps) if (canTransition(a.stage, "withdrawn", "system")) await transition(q, { applicationId: a.id, companyId, to: "withdrawn", by: "system", actor, reason: DELETION_REASON });
-  await q.update(applicationMarks).set({ note: null }).where(inArray(applicationMarks.applicationId, appIds));
-  // The team's private notes (plan H3) lose their words, earlier versions included (the counsel default, register item
-  // 25), and so does the note recorded with each decision after an interview. Who wrote a note, and when, stays.
-  await q.update(applicationNotes).set({ body: "", previousVersions: [], deletedAt: sql`coalesce(${applicationNotes.deletedAt}, ${now.toISOString()}::timestamptz)` }).where(inArray(applicationNotes.applicationId, appIds));
-  // What they told us about a time goes too: what suits them, and an accommodation they asked for.
-  await q.update(interviews).set({ decisionNote: null, candidateAvailability: null }).where(inArray(interviews.applicationId, appIds));
-  // The team's free-text notes were copied into the history as it happened (a mark, a decline, "I told them myself", a
-  // decision after an interview): they are blanked there too. What happened, who did it and when stay.
+  // A free-text note a person wrote with a move was copied into the history as it happened: it is blanked there. What
+  // happened, who did it and when stay.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{note}', 'null'::jsonb)` }).where(and(eq(events.subjectType, "application"), inArray(events.subjectId, appIds), sql`${events.payload}->>'note' is not null`));
-  // A move's reason can be a person's own words too ("Keep them in" with why, a move to the talent pool with a note): any
-  // reason that is not one of the fixed ones is blanked. The fixed reasons stay, so the history and the reports still read.
+  // A move's reason can be a person's own words too: any reason that is not one of the fixed ones is blanked. The fixed
+  // reasons stay, so the history still reads.
   await q.update(events).set({ payload: sql`jsonb_set(${events.payload}, '{reason}', 'null'::jsonb)` }).where(and(
     eq(events.type, "application.stage_changed"),
     eq(events.subjectType, "application"),
@@ -254,8 +199,8 @@ async function closeProcessOnDeletion(q: Queryable, input: { companyId: string; 
 
 /**
  * Anonymization in place of deletion (runbook step 5): identity fields become tokens; resumes and their text, screening
- * transcripts and answers (the answers to a screen's opening questions included), message bodies and the team's private
- * notes are removed, and so is everything about them in a recruiter's copy and in requests and notices that name them;
+ * transcripts and answers (the answers to a screen's opening questions included) and message bodies are removed, and so
+ * is what names them in the team's notices and emails;
  * the AI's readings of them and the AI run log about them keep only their bookkeeping (`scrubCandidateAiData`), and so do
  * the workflow engine's copies (`scrubCandidateWorkflowData`: run state and step records; a run still going is cancelled
  * first, through `cancelRun` when the caller has the engine); stage history, audit records and aggregate counts stay. The
@@ -281,62 +226,27 @@ export async function anonymizeCandidate(
   }
   const apps = await q.select({ id: applications.id }).from(applications).where(eq(applications.candidateId, cand.id));
   const appIds = apps.map((a) => a.id);
-  await closeProcessOnDeletion(q, { companyId: input.companyId, appIds, actor: input.actor, now });
+  await closeProcessOnDeletion(q, { companyId: input.companyId, appIds, actor: input.actor });
   let scrCount = 0;
   if (appIds.length) {
     const scr = await q.select({ id: screens.id, progress: screens.progress }).from(screens).where(inArray(screens.applicationId, appIds));
     scrCount = scr.length;
     for (const s of scr) await q.update(screens).set({ transcript: [], answers: {}, progress: withoutCandidateWords(s.progress) }).where(eq(screens.id, s.id));
-    // A repeat submission's conversation waiting for the address owner to confirm it (plan E1) goes too, confirmed or not,
-    // with everything of theirs in its progress (`withoutCandidateWords`): the written-up answers (Wave S7), the open
-    // questions' answers, and what that visit typed for the chat (`typedFacts`: their CV lines and form answers).
-    const unconfirmed = await q.select({ id: unconfirmedScreens.id, progress: unconfirmedScreens.progress }).from(unconfirmedScreens).where(inArray(unconfirmedScreens.applicationId, appIds));
-    for (const u of unconfirmed) await q.update(unconfirmedScreens).set({ transcript: [], answers: {}, progress: withoutCandidateWords(u.progress), firstName: "", confirmTokenHash: null, discardedAt: now.toISOString(), confirmation: "discarded" }).where(eq(unconfirmedScreens.id, u.id));
-    // The reply address of every old email is retired with a fresh random token: a reply to one of them no longer names
-    // this application, so it cannot write an address or a message back onto the removed record (the webhook also refuses
-    // a reply to an anonymized candidate). The status link keeps its token: its page already says the record is gone.
-    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null, rejectNote: null, replyToken: randomBytes(8).toString("hex") }).where(eq(applications.id, a));
+    // The form's answers and the resume's facts go. The status link keeps its token: its page already says the record is gone.
+    for (const a of appIds) await q.update(applications).set({ answers: { noticeVersionsShown: [] }, extraction: null }).where(eq(applications.id, a));
   }
   const comms = await q.select({ id: communications.id }).from(communications).where(eq(communications.candidateId, cand.id));
   for (const c of comms) await q.update(communications).set({ bodyText: "[removed at the candidate's request]", bodyHtml: null, subject: "[removed]", toAddress: null }).where(eq(communications.id, c.id));
-  // Applications they emailed in that were never admitted (a failed or held email, Wave S5 review): no candidate row
-  // links to them, so they are found by the application they became or by the address in them, and lose the file too.
-  await purgeInboundEmailsOf(q, { companyId: input.companyId, email: cand.email, appIds, deleteFile: input.deleteFile });
-  const scrubbed = await scrubRecruiterCopies(q, { companyId: input.companyId, appIds, candidate: cand, now });
-  // The workflow engine's copies (run state, step records) lose every word too (Wave S3 G1); a run still going is
-  // cancelled first, so nothing it does next can write them back or break on a scrubbed state.
+  const scrubbed = await scrubTeamCopies(q, { companyId: input.companyId, candidate: cand });
+  // The workflow engine's copies (run state, step records) lose every word too; a run still going is cancelled first, so
+  // nothing it does next can write them back or break on a scrubbed state.
   const wf = await scrubCandidateWorkflowData(q, { companyId: input.companyId, candidateId: cand.id, actor: input.actor, cancelRun: input.cancelRun });
-  // The AI's readings of them and the AI run log about them lose every word (founder brief S2, F3): only the bookkeeping stays.
+  // The AI's readings of them and the AI run log about them lose every word: only the bookkeeping stays.
   const ai = await scrubCandidateAiData(q, { companyId: input.companyId, candidateId: cand.id });
-  await q.update(candidates).set({ firstName: "Removed", lastName: token, email: null, phone: null, location: null, locationText: null, dedupeKey: `removed:${cand.id}`, tags: [], embedding: null, anonymizedAt: now.toISOString(), consent: {}, preferences: { smsOptOut: true } }).where(eq(candidates.id, cand.id));
-  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, escalations: scrubbed.escalations, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
+  await q.update(candidates).set({ firstName: "Removed", lastName: token, email: null, phone: null, locationText: null, dedupeKey: `removed:${cand.id}`, anonymizedAt: now.toISOString(), consent: {}, preferences: {} }).where(eq(candidates.id, cand.id));
+  await audit(q, { companyId: input.companyId, actor: input.actor, action: "data.anonymized", target: { type: "candidate", id: cand.id }, reason: "deletion request fulfilled by anonymization after a counsel decision", details: { documents: docs.length, screens: scrCount, communications: comms.length, notifications: scrubbed.notifications, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRunsCancelled: wf.cancelledRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps, workflowEvents: wf.workflowEvents } });
   await emit(q, { type: "candidate.anonymized", companyId: input.companyId, actor: input.actor, subject: { type: "candidate", id: cand.id }, payload: { documents: docs.length } });
   return { documents: docs.length, screens: scrCount, communications: comms.length, assessments: ai.assessments, aiRuns: ai.aiRuns, workflowRuns: wf.workflowRuns, workflowSteps: wf.workflowSteps };
-}
-
-/** What an emailed-in application keeps once its contents are removed: nothing that names or reaches the person. */
-export const REMOVED_INBOUND_EMAIL = { rawStorageKey: null, parsed: {}, subject: "[removed]", fromAddress: "[removed]" } as const;
-
-/**
- * Emailed-in applications of one person in one company (inbound_emails): the ones that became one of their applications
- * (`appIds`), and the ones whose sender or contents name their address as a whole address. The stored file is removed
- * (`deleteFile`) and the email's words, sender and subject go. Returns how many were cleared.
- */
-export async function purgeInboundEmailsOf(q: Queryable, input: { companyId: string; email: string | null; appIds: readonly string[]; deleteFile: (storageKey: string) => Promise<void> }): Promise<number> {
-  const address = input.email?.trim().toLowerCase() ?? "";
-  const escaped = address.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
-  const whole = address ? `(^|[^a-z0-9._%+-])${escaped}($|[^a-z0-9._-])` : null;
-  const matches = [
-    ...(input.appIds.length ? [inArray(inboundEmails.applicationId, [...input.appIds])] : []),
-    ...(whole ? [sql`lower(${inboundEmails.fromAddress}) ~ ${whole}`, sql`lower(${inboundEmails.parsed}::text) ~ ${whole}`] : []),
-  ];
-  if (!matches.length) return 0;
-  const rows = await q.select({ id: inboundEmails.id, rawStorageKey: inboundEmails.rawStorageKey }).from(inboundEmails).where(and(eq(inboundEmails.companyId, input.companyId), or(...matches), notLike(inboundEmails.fromAddress, "[removed]")));
-  for (const r of rows) {
-    if (r.rawStorageKey) await input.deleteFile(r.rawStorageKey);
-    await q.update(inboundEmails).set({ ...REMOVED_INBOUND_EMAIL }).where(eq(inboundEmails.id, r.id));
-  }
-  return rows.length;
 }
 
 /** What an AI run about a deleted candidate shows in place of what the model read and wrote. */
@@ -386,13 +296,11 @@ function scrubInputRef(ref: Record<string, unknown>): Record<string, unknown> {
 type AiRunRow = typeof aiRuns.$inferSelect;
 
 /** An AI run with only its bookkeeping (ids, task, model, prompt, tokens, cost, timings, status): what it read and wrote goes. */
-export function scrubAiRun(run: Pick<AiRunRow, "inputRef" | "toolCalls" | "structuredOutput" | "policyDecision" | "humanOverride" | "finalOutcome" | "error">): Pick<AiRunRow, "inputRef" | "toolCalls" | "structuredOutput" | "policyDecision" | "humanOverride" | "finalOutcome" | "error"> {
+export function scrubAiRun(run: Pick<AiRunRow, "inputRef" | "structuredOutput" | "humanOverride" | "finalOutcome" | "error">): Pick<AiRunRow, "inputRef" | "structuredOutput" | "humanOverride" | "finalOutcome" | "error"> {
   const override = run.humanOverride ? { ...run.humanOverride, ...("note" in run.humanOverride ? { note: null } : {}) } : null;
   return {
     inputRef: scrubInputRef(run.inputRef ?? {}),
-    toolCalls: [],
     structuredOutput: { ...REMOVED_RUN_OUTPUT },
-    policyDecision: run.policyDecision ? (scrubReading(run.policyDecision) as Record<string, unknown>) : null,
     humanOverride: override,
     finalOutcome: run.finalOutcome ? (scrubReading(run.finalOutcome) as Record<string, unknown>) : null,
     error: run.error === null ? null : REMOVED,
@@ -412,11 +320,11 @@ const anyOf = (ids: string[]) => (ids.length ? ids : [NO_ID]);
 export async function scrubCandidateAiData(q: Queryable, input: { companyId: string; candidateId: string }): Promise<{ assessments: number; aiRuns: number }> {
   const { companyId, candidateId } = input;
   const refs = await candidateRefs(q, companyId, candidateId);
-  const { appIds, docIds, screenIds, unconfirmedIds } = refs;
+  const { appIds, docIds, screenIds } = refs;
   const wfRuns = await workflowRunsAbout(q, companyId, candidateId, refs);
   const wfIds = wfRuns.map((w) => w.id);
-  // The apply form's reading of the upload they sent (20 Oct, R20-1), also one never tied to the application: it carries
-  // only the upload, which their intake run names.
+  // A reading an earlier form made of an upload before the application was sent carries only the upload, which their
+  // intake run names.
   const uploadIds = wfRuns.map((w) => w.formUploadId).filter((u): u is string => !!u);
 
   let assessmentCount = 0;
@@ -435,15 +343,13 @@ export async function scrubCandidateAiData(q: Queryable, input: { companyId: str
   const about: SQL[] = [
     inArray(aiRuns.id, anyOf(runIds)),
     inArray(sql`${aiRuns.inputRef}->>'applicationId'`, anyOf(appIds)),
-    inArray(sql`${aiRuns.inputRef}->>'screenId'`, anyOf([...screenIds, ...unconfirmedIds])),
-    // the one-visit apply chat records its turns against the unconfirmed screen, with no workflow run (apply-conversation.ts)
-    inArray(sql`${aiRuns.inputRef}->>'unconfirmedScreenId'`, anyOf(unconfirmedIds)),
+    inArray(sql`${aiRuns.inputRef}->>'screenId'`, anyOf(screenIds)),
     inArray(sql`${aiRuns.inputRef}->>'documentId'`, anyOf(docIds)),
     inArray(sql`${aiRuns.inputRef}->>'candidateId'`, [candidateId]),
     inArray(aiRuns.workflowRunId, anyOf(wfIds)),
     inArray(sql`${aiRuns.inputRef}->>'uploadId'`, anyOf(uploadIds)),
   ];
-  const runs = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, toolCalls: aiRuns.toolCalls, structuredOutput: aiRuns.structuredOutput, policyDecision: aiRuns.policyDecision, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(and(eq(aiRuns.companyId, companyId), or(...about)));
+  const runs = await q.select({ id: aiRuns.id, inputRef: aiRuns.inputRef, structuredOutput: aiRuns.structuredOutput, humanOverride: aiRuns.humanOverride, finalOutcome: aiRuns.finalOutcome, error: aiRuns.error }).from(aiRuns).where(and(eq(aiRuns.companyId, companyId), or(...about)));
   let runCount = 0;
   for (const r of runs) {
     const { id, ...before } = r;
@@ -483,28 +389,25 @@ export async function scrubAnonymizedCandidatesAiData(q: Queryable, opts: { sinc
 }
 
 /** What a candidate's records are found by: their applications in the company and what hangs off them. */
-type CandidateRefs = { appIds: string[]; docIds: string[]; screenIds: string[]; unconfirmedIds: string[]; interviewIds: string[] };
+type CandidateRefs = { appIds: string[]; docIds: string[]; screenIds: string[] };
 
 async function candidateRefs(q: Queryable, companyId: string, candidateId: string): Promise<CandidateRefs> {
   const appIds = (await q.select({ id: applications.id }).from(applications).where(and(eq(applications.companyId, companyId), eq(applications.candidateId, candidateId)))).map((a) => a.id);
   const docIds = (await q.select({ id: documents.id }).from(documents).where(eq(documents.candidateId, candidateId))).map((d) => d.id);
   const screenIds = appIds.length ? (await q.select({ id: screens.id }).from(screens).where(inArray(screens.applicationId, appIds))).map((s) => s.id) : [];
-  const unconfirmedIds = appIds.length ? (await q.select({ id: unconfirmedScreens.id }).from(unconfirmedScreens).where(inArray(unconfirmedScreens.applicationId, appIds))).map((s) => s.id) : [];
-  const interviewIds = appIds.length ? (await q.select({ id: interviews.id }).from(interviews).where(inArray(interviews.applicationId, appIds))).map((i) => i.id) : [];
-  return { appIds, docIds, screenIds, unconfirmedIds, interviewIds };
+  return { appIds, docIds, screenIds };
 }
 
 /**
- * The workflow runs about a candidate: those whose subject is one of their applications, screens or interviews (or the
- * candidate), and those whose state names one of them (a scheduling run is about an interview, and carries the
- * application; a new-times run carries both).
+ * The workflow runs about a candidate: those whose subject is one of their applications or AI interviews (or the
+ * candidate), and those whose state names one of them (a run of an earlier build about an in-person interview carries
+ * the application in its state).
  */
 async function workflowRunsAbout(q: Queryable, companyId: string, candidateId: string, refs: CandidateRefs): Promise<Array<{ id: string; status: string; formUploadId: string | null }>> {
-  const subjects = [...refs.appIds, ...refs.screenIds, ...refs.unconfirmedIds, ...refs.interviewIds, candidateId];
+  const subjects = [...refs.appIds, ...refs.screenIds, candidateId];
   return q.select({ id: workflowRuns.id, status: workflowRuns.status, formUploadId: sql<string | null>`${workflowRuns.state}->>'formUploadId'` }).from(workflowRuns).where(and(eq(workflowRuns.companyId, companyId), or(
     inArray(sql`${workflowRuns.subject}->>'id'`, subjects),
     inArray(sql`${workflowRuns.state}->>'applicationId'`, anyOf(refs.appIds)),
-    inArray(sql`${workflowRuns.state}->>'interviewId'`, anyOf(refs.interviewIds)),
     inArray(sql`${workflowRuns.state}->>'screenId'`, anyOf(refs.screenIds)),
   )));
 }
@@ -682,70 +585,12 @@ export function redactPerson(text: string, patterns: IdentifyingPatterns, nameWo
   return patterns.contact.reduce((t, p) => t.replace(p, "[removed]"), named);
 }
 
-type SnapshotRef = { applicationId?: unknown; name?: unknown };
-type SnapshotBoard = { people?: SnapshotRef[]; summary?: { longestWaiting?: SnapshotRef | null; nextSteps?: SnapshotRef[]; sentences?: unknown[] } & Record<string, unknown> } & Record<string, unknown>;
-
 /**
- * The pool board kept on a role review (`contextSnapshot.board`, plan F9) without the person: their row (name, score,
- * reason, what needed an eye) and their next step go, "longest waiting" no longer points at them, and the summary's
- * sentences lose their name. Counts stay, as numbers. `changed` is false when the snapshot never held them.
+ * A deletion reaches what the team was told too: any in-app notice or team email that names them has the name, email and
+ * phone replaced.
  */
-export function scrubBoardSnapshot(board: unknown, appIds: readonly string[], patterns: IdentifyingPatterns): { changed: boolean; value: unknown } {
-  if (!board || typeof board !== "object") return { changed: false, value: board };
-  const b = board as SnapshotBoard;
-  const theirs = (x: SnapshotRef | null | undefined) => typeof x?.applicationId === "string" && appIds.includes(x.applicationId);
-  const longest = b.summary?.longestWaiting ?? null;
-  const longestName = theirs(longest) && typeof longest?.name === "string" ? longest.name : null;
-  const people = Array.isArray(b.people) ? b.people.filter((p) => !theirs(p)) : b.people;
-  const summary = b.summary
-    ? {
-        ...b.summary,
-        longestWaiting: theirs(longest) ? null : longest,
-        nextSteps: Array.isArray(b.summary.nextSteps) ? b.summary.nextSteps.filter((s) => !theirs(s)) : b.summary.nextSteps,
-        sentences: Array.isArray(b.summary.sentences) ? b.summary.sentences.filter((s) => !(longestName && typeof s === "string" && s.startsWith(`${longestName} has waited longest`))).map((s) => (typeof s === "string" ? redactPerson(s, patterns, "a candidate") : s)) : b.summary.sentences,
-      }
-    : b.summary;
-  const value = { ...b, people, summary };
-  return { changed: JSON.stringify(value) !== JSON.stringify(board), value };
-}
-
-/**
- * A deletion reaches the recruiter's copy too (Q31 family, step 13): a request about one of the person's applications
- * keeps the company and role context but loses everything about the candidate, and its question is removed; any other
- * request, recruiter answer, in-app notice or team email that names them has the name, email and phone replaced, and a
- * role review's board snapshot loses them too (`scrubBoardSnapshot`).
- */
-async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; appIds: string[]; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null }; now: Date }): Promise<{ escalations: number; notifications: number }> {
+async function scrubTeamCopies(q: Queryable, input: { companyId: string; candidate: { firstName: string; lastName: string; email: string | null; phone: string | null } }): Promise<{ notifications: number }> {
   const patterns = identifyingPatterns(input.candidate);
-  const removed = "[removed at the candidate's request]";
-  let escalationCount = 0;
-  const escs = await q.select({ id: recruiterEscalations.id, applicationId: recruiterEscalations.applicationId, question: recruiterEscalations.question, resolution: recruiterEscalations.resolution, contextSnapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.companyId, input.companyId));
-  for (const e of escs) {
-    if (e.applicationId && input.appIds.includes(e.applicationId)) {
-      const { company, role, packet } = e.contextSnapshot as { company?: unknown; role?: unknown; packet?: unknown };
-      await q.update(recruiterEscalations).set({ question: removed, resolution: e.resolution === null ? null : redactPerson(e.resolution, patterns, "the candidate"), contextSnapshot: { capturedAt: (e.contextSnapshot as { capturedAt?: string }).capturedAt ?? null, company: company ?? null, role: role ?? null, packet: packet ?? null, candidateRemovedAt: input.now.toISOString() } }).where(eq(recruiterEscalations.id, e.id));
-      escalationCount++;
-      continue;
-    }
-    // A review of a whole role carries the pool board as it stood (plan F9): the person's own row goes, and the summary
-    // loses their name wherever it named them.
-    const board = scrubBoardSnapshot((e.contextSnapshot as { board?: unknown } | null)?.board, input.appIds, patterns);
-    if (!board.changed && !patterns.name.length && !patterns.contact.length) continue;
-    const question = redactPerson(e.question, patterns, "a candidate");
-    const resolution = e.resolution === null ? null : redactPerson(e.resolution, patterns, "a candidate");
-    if (question !== e.question || resolution !== e.resolution || board.changed) {
-      await q.update(recruiterEscalations).set({ question, resolution, ...(board.changed ? { contextSnapshot: { ...e.contextSnapshot, board: board.value } } : {}) }).where(eq(recruiterEscalations.id, e.id));
-      escalationCount++;
-    }
-  }
-  // The threads on those requests (migration 0029): on a request about one of the person's applications the team's own
-  // notes go, like its question, and the recruiter's words lose what names them; elsewhere every message loses it.
-  const aboutThem = new Set(escs.filter((e) => e.applicationId && input.appIds.includes(e.applicationId)).map((e) => e.id));
-  for (const m of await q.select({ id: escalationMessages.id, escalationId: escalationMessages.escalationId, side: escalationMessages.side, body: escalationMessages.body }).from(escalationMessages).where(eq(escalationMessages.companyId, input.companyId))) {
-    const about = aboutThem.has(m.escalationId);
-    const body = about && m.side === "customer" ? removed : redactPerson(m.body, patterns, about ? "the candidate" : "a candidate");
-    if (body !== m.body) await q.update(escalationMessages).set({ body }).where(eq(escalationMessages.id, m.id));
-  }
   let notificationCount = 0;
   if (patterns.name.length || patterns.contact.length) {
     const notes = await q.select({ id: notifications.id, title: notifications.title, body: notifications.body }).from(notifications).where(eq(notifications.companyId, input.companyId));
@@ -756,7 +601,7 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       await q.update(notifications).set({ title, body }).where(eq(notifications.id, n.id));
       notificationCount++;
     }
-    // Mail kept with no candidate on it (the team's alerts and summaries, the ITS queue's notices) should never name
+    // Mail kept with no candidate on it (the team's alerts and summaries) should never name
     // anyone; any that did loses the name, email and phone here too. A copy already sent stays with the email provider.
     const teamMail = await q.select({ id: communications.id, subject: communications.subject, bodyText: communications.bodyText, bodyHtml: communications.bodyHtml }).from(communications).where(and(eq(communications.companyId, input.companyId), isNull(communications.candidateId)));
     for (const m of teamMail) {
@@ -767,7 +612,7 @@ async function scrubRecruiterCopies(q: Queryable, input: { companyId: string; ap
       await q.update(communications).set({ subject, bodyText, bodyHtml }).where(eq(communications.id, m.id));
     }
   }
-  return { escalations: escalationCount, notifications: notificationCount };
+  return { notifications: notificationCount };
 }
 
 export class CounselDecisionRequired extends Error {
@@ -784,39 +629,14 @@ export async function fulfilDeletionRequest(q: Queryable, row: DataRequestRow, i
 }
 
 /**
- * Text-message opt-out: applied at once; the record exists so the deadline and the confirmation are tracked like any
- * other request. Any text to them still waiting (queued for a later hour, or held for the ITS company check) is withdrawn
- * now; the outbox checks again before every send.
+ * "Ask a person to review my application": the request stays with ITS administrators, who arrange the review with the
+ * company: an admin alert, and a note on the request, which the privacy console lists with its deadline. Privacy requests
+ * are platform records, so this always runs in a platform transaction, where alerts can be written.
  */
-export async function fulfilSmsOptOut(q: Queryable, row: DataRequestRow, actor: Actor, now: Date = new Date()): Promise<DataRequestRow> {
-  if (row.candidateId) {
-    const [cand] = await q.select().from(candidates).where(eq(candidates.id, row.candidateId)).limit(1);
-    if (cand) {
-      await q.update(candidates).set({ preferences: { ...cand.preferences, smsOptOut: true }, consent: { ...cand.consent, sms: { ...(cand.consent.sms ?? { at: now.toISOString(), source: "status_page" }), granted: false, at: now.toISOString() } } }).where(eq(candidates.id, cand.id));
-      await emit(q, { type: "candidate.opted_out", companyId: row.companyId, actor, subject: { type: "candidate", id: cand.id }, payload: { channel: "sms", requestId: row.id } });
-      const reason = "the candidate stopped text messages";
-      const waiting = await q.update(communications).set({ status: "cancelled", error: reason }).where(and(eq(communications.candidateId, cand.id), eq(communications.channel, "sms"), inArray(communications.status, ["queued", "held"]))).returning({ id: communications.id, templateKey: communications.templateKey, applicationId: communications.applicationId });
-      for (const c of waiting) await emit(q, { type: "message.cancelled", companyId: row.companyId, actor, subject: { type: "communication", id: c.id }, payload: { template: c.templateKey, channel: "sms", applicationId: c.applicationId, reason } });
-    }
-  }
-  return resolve(q, row, "Text messages stopped.", actor, "fulfilled", now);
-}
-
-/**
- * "Ask a person to review my application": a recruiter escalation carries it; the request closes when the escalation
- * resolves. A request that names no application and no role would give the recruiter the whole company, so it goes to
- * ITS administrators instead (Q31): an admin alert, and a note on the request, which the privacy console lists with its
- * deadline. Privacy requests are platform records, so this always runs in a platform transaction, where alerts can be
- * written.
- */
-export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { roleId: string | null; actor: Actor; now?: Date }): Promise<DataRequestRow> {
-  if (!input.roleId && !row.applicationId) {
-    await raiseAlert(q, { kind: "privacy_request.human_review", severity: "high", title: "A candidate asked for a person to review their application", body: "The request names no role or application, so no recruiter was brought in. Find the application from the privacy request and arrange the review.", companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id } });
-    const note = { at: (input.now ?? new Date()).toISOString(), by: "system", text: "Human review requested with no application attached: no recruiter was brought in; ITS administrators arrange it." };
-    return touch(q, row, { status: "in_progress", notes: [...row.notes, note] }, input.actor, "human review sent to ITS administrators");
-  }
-  const esc = await createEscalation(q, { companyId: row.companyId, roleId: input.roleId, applicationId: row.applicationId ?? null, kind: "candidate_issue", question: "A candidate asked for a person to review their application. Their words are on the privacy request in the ITS console, not here.", requestedBy: input.actor, summaryOrigin: "candidate" });
-  return touch(q, row, { escalationId: esc.id, status: "in_progress" }, input.actor, "human review escalated", { escalationId: esc.id });
+export async function openHumanReview(q: Queryable, row: DataRequestRow, input: { actor: Actor; now?: Date }): Promise<DataRequestRow> {
+  await raiseAlert(q, { kind: "privacy_request.human_review", severity: "high", title: "A candidate asked for a person to review their application", body: "Open the privacy request, find the application and arrange the review with the company.", companyId: row.companyId, target: { type: "candidate", id: row.candidateId ?? row.id }, details: { requestId: row.id } });
+  const note = { at: (input.now ?? new Date()).toISOString(), by: "system", text: "Human review requested: ITS administrators arrange it with the company." };
+  return touch(q, row, { status: "in_progress", notes: [...row.notes, note] }, input.actor, "human review sent to ITS administrators");
 }
 
 /** A withdrawal from the status page is applied at once and closed like any other request: resolution audit, event, confirmation. */
@@ -857,5 +677,5 @@ export async function checkPrivacyRequestDeadlines(q: Queryable, now: Date = new
 }
 
 export function publicDataRequest(row: DataRequestRow) {
-  return { id: row.id, companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, kind: row.kind, details: row.details, requesterEmail: row.requesterEmail, channel: row.channel, verificationStatus: row.verificationStatus, verificationNote: row.verificationNote, verifiedAt: row.verifiedAt, status: row.status, slaDueAt: row.slaDueAt, assignedTo: row.assignedTo, notes: row.notes, counselEscalatedAt: row.counselEscalatedAt, counselDecision: row.counselDecision, counselNote: row.counselNote, resolution: row.resolution, resolvedAt: row.resolvedAt, confirmationSentAt: row.confirmationSentAt, escalationId: row.escalationId, createdAt: row.createdAt };
+  return { id: row.id, companyId: row.companyId, candidateId: row.candidateId, applicationId: row.applicationId, kind: row.kind, details: row.details, requesterEmail: row.requesterEmail, channel: row.channel, verificationStatus: row.verificationStatus, verificationNote: row.verificationNote, verifiedAt: row.verifiedAt, status: row.status, slaDueAt: row.slaDueAt, assignedTo: row.assignedTo, notes: row.notes, counselEscalatedAt: row.counselEscalatedAt, counselDecision: row.counselDecision, counselNote: row.counselNote, resolution: row.resolution, resolvedAt: row.resolvedAt, confirmationSentAt: row.confirmationSentAt, createdAt: row.createdAt };
 }

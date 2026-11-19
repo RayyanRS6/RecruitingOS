@@ -120,13 +120,13 @@ describe("quotes are shown in the candidate's own words", () => {
   });
 
   it("leave no placeholder in the model's own words that owners read; quotes are left to the quote check", () => {
-    const reading = { summary: "[name] has six years of perio; their [link] portfolio shows cases.", strengths: [{ claim: "[name] trains staff", evidence: { source: "resume", quote: "[name] trained six" } }], unknowns: ["Is the [street address] near the office?"], confidence: "high", score: 3 };
+    const reading = { summary: "[name] has six years of perio; their [link] portfolio shows cases.", strengths: [{ claim: "[name] trains staff", evidence: { source: "resume", quote: "[name] trained six" } }], unknowns: ["Is the [street address] near the office?"], met: "yes", asked: 3 };
     const out = withoutPlaceholders(reading);
     expect(out.summary).toBe("the candidate has six years of perio; their a detail that was hidden portfolio shows cases.");
     expect(out.strengths[0]!.claim).toBe("the candidate trains staff");
     expect(out.strengths[0]!.evidence.quote).toBe("[name] trained six");
     expect(out.unknowns[0]).toBe("Is the a detail that was hidden near the office?");
-    expect({ confidence: out.confidence, score: out.score }).toEqual({ confidence: "high", score: 3 });
+    expect({ met: out.met, asked: out.asked }).toEqual({ met: "yes", asked: 3 });
     const owners = JSON.stringify({ ...out, strengths: out.strengths.map((s) => ({ claim: s.claim })) });
     expect(hasPlaceholder(owners)).toBe(false);
   });

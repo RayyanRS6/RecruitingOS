@@ -16,7 +16,7 @@ describe("Postmark subscription changes", () => {
   const change = (over: Record<string, unknown> = {}) => ({ RecordType: "SubscriptionChange", MessageID: "883953f4-6105-42a2-a16a-77a8eac79483", ServerID: 123456, MessageStream: "outbound", ChangedAt: "2026-09-30T12:00:00Z", Recipient: "Unsub.Person@example.com", Origin: "Recipient", SuppressSending: true, SuppressionReason: "ManualSuppression", Tag: "acknowledgment", Metadata: {}, ...over });
 
   beforeAll(async () => {
-    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", POSTMARK_WEBHOOK_SECRET: SECRET } });
     app = createApp(container);
   });
   afterAll(async () => {

@@ -3,8 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import { createDb, inspectConnectionRole, problemsWithConnectionRole, rowsOf, withPlatform, withTenant, type DbHandle } from "./client";
 import { migrate } from "./migrate";
 import {
-  aiRuns, applications, approvalRequests, auditRecords, candidates, communications, companies, documents, entitlements, events,
-  interventions, memberships, notifications, policies, recruiterEscalations, roles, screens, usageEvents, users, workflowRuns,
+  aiRuns, applications, auditRecords, candidates, communications, companies, documents, entitlements, events,
+  memberships, notifications, roles, screens, usageEvents, users, workflowRuns,
 } from "./schema";
 
 /**
@@ -17,8 +17,8 @@ import {
 
 /**
  * The application roles cannot run this file: they may not read the migration ledger, and the rows seeded here are
- * read back outside tenant transactions, which relies on the connection seeing every company (docs/readiness/03
- * section 2). Through the Supabase pooler the user is written `<role>.<project ref>`.
+ * read back outside tenant transactions, which relies on the connection seeing every company. Through the Supabase
+ * pooler the user is written `<role>.<project ref>`.
  */
 function refuseApplicationRole(url: string): void {
   let user = "";
@@ -27,7 +27,7 @@ function refuseApplicationRole(url: string): void {
   } catch {
     return; // a malformed string is reported by createDb in its own words
   }
-  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker (docs/readiness/03 section 2)`);
+  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker`);
 }
 
 describe("row-level security", () => {
@@ -40,11 +40,11 @@ describe("row-level security", () => {
   let roleB: string;
 
   const actor = { kind: "system" as const, id: "test" };
-  /** Whether the connection may switch to each application role: a superuser (PGlite) always may; a Postgres owner only after the grant docs/readiness/03 section 2 names. */
+  /** Whether the connection may switch to each application role: a superuser (PGlite) always may; a Postgres owner only once ros_app and ros_worker are granted to it. */
   const canBecome = { app: true, worker: true };
 
   beforeAll(async () => {
-    // In-memory PGlite by default; with TEST_DATABASE_URL the same proof runs on a real Postgres test database, connected as that database's owner role (docs/readiness/03 section 2).
+    // In-memory PGlite by default; with TEST_DATABASE_URL the same proof runs on a real Postgres test database, connected as that database's owner role.
     const testUrl = process.env.TEST_DATABASE_URL?.trim();
     if (testUrl) refuseApplicationRole(testUrl);
     handle = await createDb(testUrl ? { databaseUrl: testUrl } : { pgliteDir: "memory://" });
@@ -66,20 +66,16 @@ describe("row-level security", () => {
         const [role] = await tx.insert(roles).values({ companyId, title: `Hygienist ${label}`, createdBy: actor }).returning();
         if (label === "A") roleA = role.id; else roleB = role.id;
         await tx.insert(memberships).values({ companyId, userId, role: "owner", status: "active" });
-        const [cand] = await tx.insert(candidates).values({ companyId, firstName: label, lastName: "Candidate", email: `${label.toLowerCase()}c@example.test`, firstSource: "careers_page", dedupeKey: `email:${label.toLowerCase()}c@example.test` }).returning();
+        const [cand] = await tx.insert(candidates).values({ companyId, firstName: label, lastName: "Candidate", email: `${label.toLowerCase()}c@example.test`, dedupeKey: `email:${label.toLowerCase()}c@example.test` }).returning();
         const [app] = await tx.insert(applications).values({ companyId, roleId: role.id, candidateId: cand.id, packetVersion: 1, source: "careers_page", statusToken: `tok-${label}` }).returning();
         await tx.insert(documents).values({ companyId, candidateId: cand.id, applicationId: app.id, kind: "resume", filename: "r.txt", mime: "text/plain", sizeBytes: 1, storageKey: `${label}/r`, sha256: label });
         await tx.insert(communications).values({ companyId, candidateId: cand.id, applicationId: app.id, direction: "outbound", channel: "email", bodyText: `hello ${label}`, sentBy: actor });
-        await tx.insert(screens).values({ companyId, applicationId: app.id, channel: "web", token: `screen-${label}` });
+        await tx.insert(screens).values({ companyId, applicationId: app.id, token: `screen-${label}` });
         await tx.insert(notifications).values({ companyId, userId, kind: "test", title: label, body: label });
         await tx.insert(events).values({ companyId, type: "role.created", actor, subjectType: "role", subjectId: role.id });
         await tx.insert(auditRecords).values({ companyId, actor, action: "candidate.viewed" });
         await tx.insert(workflowRuns).values({ companyId, workflowKey: "test", subject: { type: "role", id: role.id }, currentStep: "x" });
         await tx.insert(aiRuns).values({ companyId, agent: "t", task: "triage.assess", provider: "fake", model: "fake", promptKey: "k", promptVersion: 1, promptHash: "h" });
-        await tx.insert(recruiterEscalations).values({ companyId, kind: "ask", question: label, requestedBy: actor });
-        await tx.insert(policies).values({ companyId, actionType: "application.invite_screen", level: "approval", createdBy: actor });
-        await tx.insert(approvalRequests).values({ companyId, actionType: "application.invite_screen", subject: { type: "application", id: app.id }, requestedBy: actor });
-        await tx.insert(interventions).values({ companyId, roleId: role.id, detector: "candidates_waiting", ladderLevel: "brief" });
         await tx.insert(entitlements).values({ companyId, key: "text_screens", limit: 10 });
         await tx.insert(usageEvents).values({ companyId, key: "text_screens", quantity: 1, unit: "screen" });
       }
@@ -101,7 +97,7 @@ describe("row-level security", () => {
         WHERE c.table_schema = 'public' AND c.column_name = 'company_id' AND t.table_type = 'BASE TABLE'
       `),
     );
-    expect(tables.length).toBeGreaterThan(25);
+    expect(tables.length).toBeGreaterThan(20);
     const unprotected = tables.filter((t) => !t.relrowsecurity || Number(t.policies) !== 1).map((t) => t.table_name);
     expect(unprotected).toEqual([]);
   });
@@ -109,7 +105,7 @@ describe("row-level security", () => {
   it("a tenant sees only its own rows in every seeded table", async () => {
     const tablesToCheck = [
       roles, memberships, candidates, applications, documents, communications, screens, notifications, events, auditRecords,
-      workflowRuns, aiRuns, recruiterEscalations, policies, approvalRequests, interventions, entitlements, usageEvents,
+      workflowRuns, aiRuns, entitlements, usageEvents,
     ];
     for (const table of tablesToCheck) {
       const seenByA = await withTenant(handle.db, a, (tx) => tx.select().from(table));
@@ -169,7 +165,7 @@ describe("row-level security", () => {
   });
 
   it("the application role sees nothing outside platform mode and everything inside it", async ({ skip }) => {
-    skip(!canBecome.app, "this connection cannot become ros_app; grant it to the owner role of the test database (docs/readiness/03 section 2)");
+    skip(!canBecome.app, "this connection cannot become ros_app; grant it to the owner role of the test database");
     const outside = await handle.db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL ROLE ros_app`);
       return tx.select().from(roles);
@@ -192,7 +188,7 @@ describe("row-level security", () => {
   });
 
   it("the API role cannot claim jobs; the worker role can", async ({ skip }) => {
-    skip(!canBecome.app || !canBecome.worker, "this connection cannot become ros_app and ros_worker; grant them to the owner role of the test database (docs/readiness/03 section 2)");
+    skip(!canBecome.app || !canBecome.worker, "this connection cannot become ros_app and ros_worker; grant them to the owner role of the test database");
     await withPlatform(handle.db, (tx) => tx.execute(sql`INSERT INTO jobs (kind, payload) VALUES ('workflow.tick', '{}'::jsonb)`));
     const denied = await handle.db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL ROLE ros_app`);
@@ -217,7 +213,7 @@ describe("row-level security", () => {
       expect(info.superuser).toBe(true); // PGlite runs as a superuser; production refuses this
       expect(problemsWithConnectionRole(info, "postgres").some((p) => /superuser/.test(p))).toBe(true);
     } else {
-      // A real Postgres run connects as the owner of the test database (docs/readiness/03 section 2): never an application role, able to enter tenant transactions (the cases above just did), and in platform mode from the start. The role is printed so the run's record carries it.
+      // A real Postgres run connects as the owner of the test database: never an application role, able to enter tenant transactions (the cases above just did), and in platform mode from the start. The role is printed so the run's record carries it.
       console.log(`[rls] connected as ${info.role} on postgres`);
       expect(info.role).not.toMatch(/^(ros_app|ros_worker|app_tenant)$/);
       expect(info.canBecomeTenant).toBe(true);

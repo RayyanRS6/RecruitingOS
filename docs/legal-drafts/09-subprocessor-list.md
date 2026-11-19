@@ -1,4 +1,4 @@
-# DRAFT FOR ATTORNEY REVIEW. Not legally approved. Operational register: `docs/readiness/07-subprocessor-register.md`. No provider below is contracted yet.
+# DRAFT FOR ATTORNEY REVIEW. Not legally approved. No provider below is contracted yet.
 
 # Subprocessors (customer-facing list)
 

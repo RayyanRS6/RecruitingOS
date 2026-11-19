@@ -1,11 +1,11 @@
 "use client";
 
 import { type CSSProperties, type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { cx, domId, type Move, nextIndex, type OwnerStage, ownerStage, stageMenuItems, type Tone, typeaheadIndex } from "./helpers";
+import { cx, domId, type Move, nextIndex, type Tone, typeaheadIndex } from "./helpers";
 import { Icon, type IconName } from "./icons";
 
 /**
- * One choice in a menu. `current` marks where things stand now (the stage a candidate is in). A `disabled` item stays
+ * One choice in a menu. `current` marks where things stand now (the company a person is working in). A `disabled` item stays
  * visible and reachable with the arrow keys, with its `reason` underneath, so a person can see why it cannot be chosen.
  */
 export type MenuItem = { id: string; label: string; tone?: Tone; icon?: IconName; hint?: string; current?: boolean; disabled?: boolean; reason?: string; danger?: boolean };
@@ -50,7 +50,7 @@ export function menuFixedAt(side: "start" | "end", button: { top: number; bottom
 
 /**
  * How tall a menu's list may be inside a dialog, where nothing scrolls the page to a menu that runs past the bottom of the
- * window (the stage menu on the candidate panel, on a laptop: its last choices sat out of reach). `menu` is the whole
+ * window (a long menu on a side panel, on a laptop: its last choices would sit out of reach). `menu` is the whole
  * menu's height and `list` its choices' (both unscrolled), under a button whose bottom is at `buttonBottom` in a window
  * whose bottom is at `bottom`. Null when the whole menu fits; else the list's height that keeps the menu inside the
  * window, never under 120px (three choices), so the list scrolls inside itself under its heading.
@@ -63,7 +63,7 @@ export function menuCap(input: { menu: number; list: number; buttonBottom: numbe
 
 /**
  * The small mark before an item's words: a tick on the current choice of a one-of-many menu (so the current sort or
- * job can be seen, not only heard as "checked"), else the item's coloured dot or its icon, else an empty slot.
+ * company can be seen, not only heard as "checked"), else the item's coloured dot or its icon, else an empty slot.
  */
 export function MenuLead(props: { item: MenuItem }) {
   const { item } = props;
@@ -74,7 +74,7 @@ export function MenuLead(props: { item: MenuItem }) {
 }
 
 /**
- * A button that opens a list of choices (docs/07), such as "Move to stage". Keyboard: Enter, Space or the down arrow
+ * A button that opens a list of choices (docs/07), such as a job's "More". Keyboard: Enter, Space or the down arrow
  * opens it on the current choice; the arrows, Home and End move; a letter jumps to the next choice starting with it;
  * Enter chooses; Escape closes and returns to the button; Tab closes and moves on. A click outside closes it too.
  * When any item has `current` set, the items act as a one-of-many choice and the current one is announced as checked
@@ -240,34 +240,5 @@ export function Menu(props: { label: ReactNode; items: MenuItem[]; onSelect: (id
         </div>
       ) : null}
     </div>
-  );
-}
-
-/**
- * The stage button on a candidate's row and panel (plan adjustments §2): a pill with the stage's dot and word that opens
- * "Move to stage". Every stage is listed; one that cannot be chosen now stays visible, greyed, with its reason from
- * `blocked`. The page decides what a choice does (set a mark, open the interview card, the private decline) in `onMove`.
- * `label` replaces the stage's own word on the button when the page knows a closer one ("Not a fit for now").
- */
-export function StageButton(props: { stage: string; onMove: (stage: OwnerStage) => void; blocked?: Partial<Record<OwnerStage, string>>; disabled?: boolean; align?: "start" | "end"; label?: string }) {
-  const current = ownerStage(props.stage);
-  const word = props.label ?? current.label;
-  return (
-    <Menu
-      label={
-        <>
-          <span className="dot" aria-hidden="true" />
-          {word}
-        </>
-      }
-      items={stageMenuItems(current.id, props.blocked)}
-      onSelect={(id) => props.onMove(id as OwnerStage)}
-      heading="Move to stage"
-      ariaLabel={`Stage: ${word}. Move to another stage`}
-      buttonClassName={cx("pill-button", current.tone)}
-      currentLabel="Now"
-      align={props.align}
-      disabled={props.disabled}
-    />
   );
 }

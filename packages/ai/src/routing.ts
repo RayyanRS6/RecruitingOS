@@ -13,39 +13,24 @@ export function isAllowedModel(model: string): model is AllowedModel {
 }
 
 /**
- * Which tier each task needs. "judgment" runs on Sonnet 5.5 and holds only the whole job draft (intake.compile): one
- * long reply of about 180 fields across five levels that must agree with each other, written without a grammar because
- * the schema is too large for one. Everything else is short or checked in code afterwards, and runs on Haiku 5.5.
- * The tasks with no prompt yet (brief, owner reply, interview brief, scorecard, debrief, offer) start on Haiku too.
+ * Which tier each task needs. "judgment" runs on Sonnet 5.5 and holds only the writing of the whole job
+ * (intake.compile): one long reply, the job description and about a hundred values across four levels that must agree
+ * with each other. Everything else is short or checked in code afterwards, and runs on Haiku 5.5.
  */
 export const TASK_TIER: Record<TaskKey, Tier> = {
   // The owner's job-building chat: a short reply and up to three cards; fairness is re-checked in code.
   "intake.turn": "standard",
   "intake.compile": "judgment",
-  // The cheap first read of a pasted job ad (C5): title, place, basis and pay before the market check.
+  // The cheap first read of a pasted job ad: the title, the place, the type, the schedule and the pay it states.
   "intake.extract": "fast",
-  // Must-haves and yes/no questions to tick in the quick start (Wave S3, G3), for a job our hiring guides do not know:
-  // a few short lines from the job's own facts, each re-checked for fairness in code before anyone sees it.
-  "intake.suggest": "fast",
-  // Changing a packet by chat (C10): usually one or two sections; merged, guarded and confirmed by a person.
-  "packet.revise": "standard",
   // A few sentences about the company for its job pages (D10); a person edits and approves them in Setup.
   "company.about": "standard",
+  // The LinkedIn post and the Indeed listing of a published job: two short texts from the job's public facts.
+  "job.posts": "standard",
   "resume.extract": "fast",
   "triage.assess": "standard",
   "screen.turn": "standard",
   "screen.assess": "standard",
-  // Wave S7: one answer per written question, in the candidate's own words, from a chat they are about to send; its
-  // quotes are checked in code against the transcript (the prompt is packages/ai/src/prompts/writeup.ts, the checks
-  // `settleWriteup` in packages/agents). Haiku 5.5 at its default effort: a short, checked rewrite the candidate edits.
-  "screen.writeup": "standard",
-  "brief.compose": "standard",
-  "owner.reply": "standard",
-  "interview.brief": "standard",
-  "scorecard.draft": "standard",
-  "debrief.compose": "standard",
-  "offer.propose": "standard",
-  "message.freeform": "standard",
 };
 
 /**
@@ -97,9 +82,8 @@ export function modelForTask(task: TaskKey, table: ModelTable): string {
  * Tasks that think harder than their tier. Anthropic's guidance for Haiku 5.5 is high for strict instruction following,
  * and the fairness runs (14 Oct 2026) bore it out: at high, twin résumés read and scored the same, where medium and
  * Sonnet 5.5 at either level moved by 5 to 6 points. Both readings of a candidate run there; it costs a fraction of a cent.
- * The quick start's suggestions (intake.suggest) think less: a short list the person ticks, shown while they wait.
  */
-export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high", "intake.suggest": "low" };
+export const TASK_EFFORT: Partial<Record<TaskKey, Effort>> = { "triage.assess": "high", "screen.assess": "high" };
 
 export function effortForTask(task: TaskKey): Effort {
   return TASK_EFFORT[task] ?? TIER_EFFORT[TASK_TIER[task]];

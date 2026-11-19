@@ -161,12 +161,3 @@ export function Dialog(props: { open: boolean; onClose: () => void; title: strin
     </div>
   );
 }
-
-/** The plain side panel: a drawer with a title and nothing else in its header. */
-export function Sheet(props: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
-  return (
-    <Drawer open={props.open} onClose={props.onClose} title={props.title}>
-      {props.children}
-    </Drawer>
-  );
-}

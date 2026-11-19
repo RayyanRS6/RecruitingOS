@@ -1,107 +1,47 @@
 # Release day with a pending migration
 
-Status: written 30 September 2026 (audit remediation H4 and H5). Read this before merging a release that adds a file
-under `packages/db/migrations`. Nothing here touches candidate data; every step is repeatable.
+Read this before merging a release that adds a file under `packages/db/migrations`. The whole order of a release is in [production-setup.md](production-setup.md), "Every later release".
 
 ## The rule
 
-Production and staging never migrate on boot. A process that starts against a database with a migration pending
-refuses to start, on purpose, with this line in its log:
+A hosted process never migrates by itself. One that starts against a database with a migration pending refuses to start, on purpose, with this line in its log:
 
 ```
-refusing to start: 1 migration is not applied (0021_worker_heartbeats.sql). Run pnpm db:migrate (or the migrate workflow) before deploying.
+refusing to start: 1 migration is not applied (0038_role_posts.sql). Run pnpm db:migrate (or the migrate workflow) before deploying.
 ```
 
-So the order on a release day is: **migrate first, deploy second.** Every migration is written to work with the
-release before it (additive columns, tables with defaults, no drops without an `allow-destructive` reason), so the
-old code keeps running on the new schema while Vercel and Railway roll forward. The deploy itself is unchanged:
-Railway's staging worker follows `main` and the production worker `production`; Vercel deploys `main` to the staging
-Preview and `production` to production.
+So the order is: **migrate first, deploy second.** A migration normally works with the build already live (a new column, a new table), so the old code keeps running on the new schema while Vercel and Railway roll forward. When one does not (it drops or changes something the live build reads or writes), its own comment says so, the validator asks for an `-- allow-destructive: <reason>` line on each such statement, and the release stops the old worker and the old app before it runs.
 
-## Two ways to apply it, and one way never to
+The owner's connection string is the only credential that may run a migration: the app's roles cannot change the schema. It lives in the GitHub environment's secrets and in the password vault, never on Vercel or Railway.
 
-| Way | When | What it needs |
-|---|---|---|
-| The `migrate` GitHub workflow (Actions, **migrate**, **Run workflow**, pick the environment) | the normal way, and the only way for production and from Windows; leaves a run log anyone can read | the environment's secrets `MIGRATE_DATABASE_URL` (the owner string) and `DATABASE_SSL_CA` (the Supabase certificate text), entered once by the founder; `production-database` also has the variable `ROS_DB_PROJECT_REF` |
-| `pnpm db:migrate` on the founder's machine | staging only, from a Mac, when Actions is down or the workflow's secrets are not entered yet | `ROS_DB_ENV=staging`, `MIGRATE_DATABASE_URL` read at a prompt that shows nothing, and `DATABASE_SSL_CA_FILE` (below); never saved in a file |
-| `bash scripts/staging-db-setup.sh` or `scripts\db-setup.ps1` | **never for a release**: they are the first-time setup and every full run rotates the `ros_app` and `ros_worker` passwords, which breaks the strings entered in Vercel and Railway until they are replaced | |
-
-The owner string is the only credential that may run a migration; the application roles cannot create tables. It
-lives in the GitHub environment's secrets and in 1Password, and nowhere else (never Vercel, never Railway).
+**Never use `scripts\db-setup.ps1` for a release.** It is the first-time setup, and every full run sets new passwords for `ros_app` and `ros_worker`, which breaks the strings entered in Vercel and Railway until they are replaced.
 
 ## Running the workflow
 
-1. GitHub, **Actions**, **migrate**, **Run workflow**, choose the environment, **Run workflow**: `staging`, or
-   `production-database` for production, run with **Use workflow from** `main` before the release pull request into
-   `production` is merged (`docs/runbooks/production-setup.md`, step 6). The tools name the database from it
-   (`ROS_DB_ENV`) and refuse an owner string from any other Supabase project; the status step's first line says which:
-   `status: environment: staging (Supabase project vjuaiyjmtrenbrmujvtc)`.
-2. The run has five steps. Read them in order:
-   - **Migration validation**: the static and structural checks (`pnpm db:validate`). A failure here means the
-     migration file itself is wrong; fix it on the branch and run again. Nothing was sent to the database.
-   - **What is pending**: the status report before anything is applied. A pending migration is the *expected*
-     state here, so this step never fails on it (`--report-only`). It prints, among other lines:
-     ```
-     status: migrations applied: 21 (last: 0020_job_distribution.sql)
-     status: migrations pending: 1 (next: 0021_worker_heartbeats.sql)
-     ```
-     If it says a file `was interrupted halfway`, that is fine too: the apply step completes it safely.
-   - **Apply**: `pnpm db:migrate`. Success prints `applied: 0021_worker_heartbeats.sql`; an already-migrated
-     database prints `up to date`. Each file is applied in one transaction together with its ledger row, so a
-     failure rolls the whole file back and the log names the statement and the Postgres code:
-     `migration 0021_worker_heartbeats.sql failed at statement 2 of 5 (42501): ...`. Paste that line back; it holds
-     no secret.
-   - **Confirm no migration is pending**: the status report again, now failing only if a migration is still
-     pending (`--fail-on-pending-migrations`). Other to-do lines in the report (Vault grants, Data API roles) are
-     informational here; they belong to the setup runbook, not to a release.
-3. Deploy: merge or push as usual. Watch the worker's deploy log for `[worker] started` and the app's `/healthz`
-   for `"ok":true`; neither may say `refusing to start`.
-
-## Running it from the founder's machine instead
-
-Staging only, from a Mac's Terminal at the repository root. Production migrates only through the workflow, and on
-Windows (no bash, and `pnpm.exe` may be blocked) the workflow is the release path for staging too. The owner string from
-1Password is pasted at a prompt that shows nothing, so it never reaches the screen or the shell's history:
-
-```bash
-printf 'Owner connection string: '; read -rs MIGRATE_DATABASE_URL; echo
-export MIGRATE_DATABASE_URL ROS_DB_ENV=staging DATABASE_SSL_CA_FILE=~/Downloads/prod-ca-2021.crt
-pnpm db:status --report-only
-pnpm db:migrate
-pnpm db:status --fail-on-pending-migrations
-unset MIGRATE_DATABASE_URL
-```
-
-Without `ROS_DB_ENV` the status reports refuse to start (exit 2); with it, every one of the three refuses a string from
-any other Supabase project before anything connects. `bash scripts/staging-db-status.sh` gives the same report interactively (it asks for
-the string and the password separately and never echoes the password) and exits 3 while anything is still to do, which
-is only a reminder, not a failure.
+1. GitHub, **Actions**, **migrate**, **Run workflow**: **Use workflow from** `main`, environment **production-database**. The tools refuse an owner string from any other Supabase project; the status step's first line names the database.
+2. The run has four steps after the install. Read them in order:
+   - **Migration validation**: the checks of the files themselves (`pnpm db:validate`). A failure here means a migration file is wrong; fix it on the branch and run again. Nothing was sent to the database.
+   - **What is pending**: the status report before anything is applied. A pending migration is the expected state here, so this step never fails on it. It prints, among other lines, `status: migrations applied: N (last: …)` and `status: migrations pending: N (next: …)`. If it says a file `was interrupted halfway`, the apply step completes it.
+   - **Apply**: `pnpm db:migrate`. Success prints `applied: …` with each file; a database already up to date prints `up to date`. Each file is applied in one transaction together with its ledger row, so a failure rolls the whole file back, and the log names the statement and the Postgres code: `migration … failed at statement 2 of 5 (42501): …`. Paste that line back; it holds no secret.
+   - **Confirm no migration is pending**: the status report again, failing only if a migration is still pending.
+3. Deploy. Watch the worker's log for `[worker] started` and the app's `/healthz` for `"ok":true`; neither may say `refusing to start`.
 
 ## Reading the status output
 
 | Line | Meaning |
 |---|---|
-| `status: tls: trusting Supabase Root 2021 CA (...)` | the certificate was found and TLS is verified; without this line the connection is refused, never downgraded |
-| `status: migrations applied: N (last: ...)` | how many files the ledger records |
-| `status: migrations pending: N (next: ...)` | what the apply step will do; `0` after a successful release |
-| `status: 00XX was interrupted halfway: ...` | an earlier non-transactional run left objects behind; the apply step skips what exists and records the file |
+| `status: tls: trusting …` | the certificate was found and TLS is verified; without this line the connection is refused, never downgraded |
+| `status: migrations applied: N (last: …)` | how many files the ledger records |
+| `status: migrations pending: N (next: …)` | what the apply step will do; `0` after a release |
+| `status: … was interrupted halfway: …` | an earlier run left objects behind; the apply step skips what exists and records the file |
 | `status: still to do:` | a list; on a release day only the migrations line matters |
 
-Exit codes: 0 when nothing is to do (or with `--report-only`), 3 while something is to do (only pending migrations
-count with `--fail-on-pending-migrations`), 2 when the database could not be reached (wrong string, paused project,
-missing certificate).
+Exit codes of `pnpm db:status`: 0 when nothing is to do (or with `--report-only`), 3 while something is to do (only pending migrations count with `--fail-on-pending-migrations`), 2 when the database could not be reached (a wrong string, a paused project, a missing certificate).
 
-## Rolling forward, never back
+## Forward, never back
 
-A migration is never rolled back. If a release must be undone, redeploy the previous deployment on Vercel and
-Railway: the previous code runs on the new schema because every migration keeps the previous release working. If a
-migration itself is wrong, write the next numbered file that corrects it and release again; never edit an applied
-file (the ledger records it by name and the validator refuses gaps and renumbering).
+A migration is never rolled back. If a migration is wrong, write the next numbered file that corrects it and release again; never edit an applied file (the ledger records it by name, and the validator refuses gaps and renumbering). Whether a release can be undone by redeploying the build before it depends on its migrations: [production-setup.md](production-setup.md), "Rollback".
 
-## What the founder sees when the order is wrong
+## When the order is wrong
 
-If a deploy lands before the migration: the new worker deployment logs `refusing to start: 1 migration is not
-applied`, never passes Railway's health check and fails, while the one before it keeps running; Vercel's deployment
-builds but `/healthz` and every request answer 503 with `database unavailable` in the log line above it. Nothing is
-damaged. Run the migration (either way above), then **Redeploy** the worker; the app comes up on its own once the
-ledger is complete.
+If a deploy lands before the migration: the new worker logs `refusing to start: 1 migration is not applied`, never passes Railway's health check and fails, while the worker before it keeps running; the app's new deployment builds, but `/healthz` and every request answer 503. Nothing is damaged. Run the migration, then **Redeploy** the worker; the app comes up on its next request.

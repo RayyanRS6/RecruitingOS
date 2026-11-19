@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { AdminCreateDataRequest, DataRequestAssign, DataRequestCounsel, DataRequestDecline, DataRequestFulfil, DataRequestNote, DataRequestVerify } from "@ros/contracts";
-import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, checkPrivacyRequestDeadlines, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, fulfilSmsOptOut, publicDataRequest, raiseAlert, recordCounselDecision, verifyDataRequest, type DataRequestRow } from "@ros/core";
+import { CounselDecisionRequired, addDataRequestNote, assignDataRequest, createDataRequest, declineDataRequest, escalateDataRequestToCounsel, exportCandidateData, fulfilAccessRequest, fulfilCorrectionRequest, fulfilDeletionRequest, publicDataRequest, raiseAlert, recordCounselDecision, verifyDataRequest, type DataRequestRow } from "@ros/core";
 import { sendDeletionConfirmation, sendPrivacyAcknowledgment, sendPrivacyCompletion } from "@ros/agents";
 import { applications, candidates, companies, dataRequests, withPlatform } from "@ros/db";
 import { requirePlatformAdmin, type Vars } from "../middleware/session";
@@ -10,8 +10,8 @@ import type { Container } from "../container";
 import { describeFailure } from "../failure-reports";
 
 /**
- * Administrator side of privacy requests (docs/runbooks/privacy-requests.md). Platform administrators only; every read is
- * audited by the admin middleware with a reason. Customers never reach these routes and never see request content.
+ * Administrator side of privacy requests (docs/runbooks/privacy-requests.md). Platform administrators only; every call is
+ * audited by the admin middleware with a reason. A company never reaches these routes and never sees a request's content.
  */
 export const privacyRequestRoutes = new Hono<Vars>();
 privacyRequestRoutes.use("*", requirePlatformAdmin);
@@ -64,9 +64,6 @@ privacyRequestRoutes.post("/", async (c) => {
   await container.kick();
   return c.json(publicDataRequest(row), 201);
 });
-
-/** The daily deadline check on demand (the worker runs it every day). A POST: it raises alerts and records them, so a link from another site cannot set it off (middleware/same-site.ts). */
-privacyRequestRoutes.post("/deadlines/check", async (c) => c.json(await checkPrivacyRequestDeadlines(c.get("container").db, c.get("container").engine.clock())));
 
 privacyRequestRoutes.get("/:id", async (c) => {
   const row = await load(c);
@@ -141,12 +138,7 @@ privacyRequestRoutes.post("/:id/fulfil", async (c) => {
         const u = await fulfilDeletionRequest(tx, row, { resolution: body.resolution, confirm: !!body.confirmAnonymize, actor, deleteFile: async (key) => { filesToRemove.push(key); }, now: container.engine.clock(), cancelRun: (q, runId, reason) => container.engine.cancel(q, runId, actor, reason) });
         return u;
       }
-      if (row.kind === "sms_opt_out") {
-        const u = await fulfilSmsOptOut(tx, row, actor, container.engine.clock());
-        await sendPrivacyCompletion(tx, container.integrations, { row: u, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
-        return u;
-      }
-      // human_review and withdrawal close once the person confirms the outcome in the resolution text
+      // every other kind closes once the person confirms the outcome in the resolution text
       const [u] = await tx.update(dataRequests).set({ status: "fulfilled", resolution: body.resolution, resolvedAt: container.engine.clock().toISOString(), resolvedBy: actor.id }).where(eq(dataRequests.id, row.id)).returning();
       await sendPrivacyCompletion(tx, container.integrations, { row: u, companyName: name, privacyEmail: container.env.PRIVACY_EMAIL, actor });
       return u;
@@ -228,13 +220,4 @@ privacyRequestRoutes.post("/:id/confirm-again", async (c) => {
   const fresh = await reload(container, row);
   if (!fresh.confirmationSentAt) throw new HttpError(502, "not_sent", "The confirmation could not be sent. Try again later.");
   return c.json(publicDataRequest(fresh));
-});
-
-/** For tests and operators: the candidate an email address maps to inside a company. */
-privacyRequestRoutes.get("/lookup/candidate", async (c) => {
-  const email = (c.req.query("email") ?? "").toLowerCase();
-  const companyId = c.req.query("companyId") ?? "";
-  const [cand] = await c.get("container").db.select({ id: candidates.id, firstName: candidates.firstName, lastName: candidates.lastName }).from(candidates).where(and(eq(candidates.companyId, companyId), eq(candidates.email, email))).limit(1);
-  const apps = cand ? await c.get("container").db.select({ id: applications.id, roleId: applications.roleId, stage: applications.stage }).from(applications).where(eq(applications.candidateId, cand.id)) : [];
-  return c.json({ candidate: cand ?? null, applications: apps });
 });

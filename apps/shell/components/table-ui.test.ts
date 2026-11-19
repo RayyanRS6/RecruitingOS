@@ -2,14 +2,12 @@ import * as React from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { SortDir } from "@ros/ui";
 
 /**
- * The design system's Table, its sorting, Stat and tab labels as the server draws them (docs/07; the Obsidian-look
- * decisions of 10 October 2026).
+ * The design system's Table, its sorting headings and tab labels as the server draws them (docs/07).
  */
 (globalThis as { React?: typeof React }).React = React;
-const { Stat, Table, Tabs, numHead, useTableSort } = await import("@ros/ui");
+const { Table, Tabs, numHead } = await import("@ros/ui");
 // cells passed as separate children, so React needs no keys
 const row = (...cells: Array<[string, string?]>) => createElement("tr", null, ...cells.map(([text, className]) => createElement("td", { className }, text)));
 const noop = () => undefined;
@@ -81,90 +79,7 @@ describe("Table", () => {
   });
 });
 
-type Key = "name" | "cost" | "due";
-const KEYS: Key[] = ["name", "cost", "due"];
-const ROWS = [
-  { name: "Role 10", cost: 3, due: "2026-10-14T18:00:00.000Z" },
-  { name: "role 2", cost: null, due: null },
-  { name: "Bright Dental", cost: 12, due: "2026-10-09T10:00:00.000Z" },
-];
-
-/**
- * A page that lets people sort its table, pressed `presses` times in a row. Each press happens while the page draws
- * (a render-phase update, which React allows for a component's own state), so React draws it again with the new
- * order before anything is written out: the markup is the table after the last press.
- */
-function SortedTable(props: { presses: Key[]; done: { n: number }; initial?: { key: Key; dir: SortDir } | null }) {
-  const t = useTableSort<Key>(props.initial ?? null);
-  const head = [t.col("name", "Name", "text"), t.col("cost", "Cost", "number", { num: true }), t.col("due", "Due", "date", { first: "ascending" })];
-  const at = props.done.n;
-  if (at < props.presses.length) {
-    props.done.n = at + 1;
-    head[KEYS.indexOf(props.presses[at])].onSort?.();
-  }
-  const rows = t.apply(ROWS, { name: (r) => r.name, cost: (r) => r.cost, due: (r) => (r.due ? Date.parse(r.due) : null) });
-  return createElement(Table, { head, announce: t.announce }, ...rows.map((r) => createElement("tr", { key: r.name }, createElement("td", null, r.name))));
-}
-const sorted = (presses: Key[], initial: { key: Key; dir: SortDir } | null = null) => renderToStaticMarkup(createElement(SortedTable, { presses, done: { n: 0 }, initial }));
-const names = (html: string) => [...html.matchAll(/<tr><td>([^<]*)<\/td><\/tr>/g)].map((m) => m[1]);
-const sortedOn = (html: string) => [...html.matchAll(/aria-sort="(\w+)"><button type="button" class="th-sort">(\w+)/g)].map((m) => `${m[2]} ${m[1]}`);
-
-describe("useTableSort", () => {
-  it("opens in the order the rows came, every heading a button, nothing sorted and nothing said", () => {
-    const html = sorted([]);
-    expect(names(html)).toEqual(["Role 10", "role 2", "Bright Dental"]);
-    expect(html).not.toContain("aria-sort");
-    expect(html.match(/class="th-sort"/g)).toHaveLength(3);
-    expect(html).toContain('<th scope="col" class="num"><button type="button" class="th-sort">Cost');
-    expect(html).toContain('<span class="sr-only" role="status"></span>');
-  });
-
-  it("opens in the order the page asks for", () => {
-    const html = sorted([], { key: "cost", dir: "ascending" });
-    expect(names(html)).toEqual(["Role 10", "Bright Dental", "role 2"]);
-    expect(sortedOn(html)).toEqual(["Cost ascending"]);
-    // nobody has sorted yet, so nothing is said
-    expect(html).toContain('<span class="sr-only" role="status"></span>');
-    // a press on the column it opened on flips it
-    expect(names(sorted(["cost"], { key: "cost", dir: "ascending" }))).toEqual(["Bright Dental", "Role 10", "role 2"]);
-  });
-
-  it("sorts words A to Z on the first press, then Z to A, and says so each time", () => {
-    const first = sorted(["name"]);
-    expect(names(first)).toEqual(["Bright Dental", "role 2", "Role 10"]);
-    expect(sortedOn(first)).toEqual(["Name ascending"]);
-    expect(first).toContain('<span class="sr-only" role="status">Sorted by Name, A to Z.</span>');
-    const again = sorted(["name", "name"]);
-    expect(names(again)).toEqual(["Role 10", "role 2", "Bright Dental"]);
-    expect(sortedOn(again)).toEqual(["Name descending"]);
-    expect(again).toContain('<span class="sr-only" role="status">Sorted by Name, Z to A.</span>');
-    // a third press flips back: there is no hidden "unsorted" state
-    expect(sortedOn(sorted(["name", "name", "name"]))).toEqual(["Name ascending"]);
-  });
-
-  it("sorts figures highest first, with an empty one last whichever way round", () => {
-    const html = sorted(["cost"]);
-    expect(names(html)).toEqual(["Bright Dental", "Role 10", "role 2"]);
-    expect(html).toContain('<th scope="col" class="num" aria-sort="descending"><button type="button" class="th-sort">Cost');
-    expect(html).toContain("Sorted by Cost, highest first.");
-    expect(names(sorted(["cost", "cost"]))).toEqual(["Role 10", "Bright Dental", "role 2"]);
-  });
-
-  it("starts a deadline earliest first when the page says so, moving the sort from another column", () => {
-    const html = sorted(["name", "due"]);
-    expect(names(html)).toEqual(["Bright Dental", "Role 10", "role 2"]);
-    expect(sortedOn(html)).toEqual(["Due ascending"]);
-    expect(html).toContain("Sorted by Due, earliest first.");
-    expect(names(sorted(["due", "due"]))).toEqual(["Role 10", "Bright Dental", "role 2"]);
-  });
-});
-
-describe("Stat and tab labels", () => {
-  it("draws a figure with what it counts", () => {
-    expect(renderToStaticMarkup(createElement(Stat, { n: 12, label: "applicants in total" }))).toBe('<div class="stat"><span class="stat-n">12</span><span class="stat-label">applicants in total</span></div>');
-    expect(renderToStaticMarkup(createElement(Stat, { n: "$1.20", label: "spent on AI this month" }))).toBe('<div class="stat"><span class="stat-n">$1.20</span><span class="stat-label">spent on AI this month</span></div>');
-  });
-
+describe("tab labels", () => {
   it("gives each tab label its own words for the width of its bold self", () => {
     const html = renderToStaticMarkup(createElement(Tabs, { label: "Stages", items: [{ id: "new", label: "New", count: 3 }, { id: "hired", label: "Hired", count: 0 }] }));
     expect(html).toContain('<span class="tab-label" data-label="New">New</span> <span class="count">3</span>');

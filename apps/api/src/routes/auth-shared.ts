@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import { eq } from "drizzle-orm";
+import { appPaths } from "@ros/contracts";
 import { INVITE_COOKIE_TTL_MS, InvitationRefused, audit, holdsOtherThanStaffProvider, identityForSignIn, isStaffAccount, linkedToAnotherSubject, normalizeEmail, openPayload, openSessionFromIdentity, sealPayload, SignInRefused, type SignInPolicy } from "@ros/core";
 import { users, withPlatform } from "@ros/db";
 import type { VerifiedIdentity } from "@ros/integrations";
@@ -8,7 +9,15 @@ import { PKCE_COOKIE } from "../cookie-names";
 import { clearAppCookie, readAppCookie, setAppCookie, type CookiePlace } from "../cookies";
 import { SESSION_COOKIE, SESSION_PLACE, clientIp, type Vars } from "../middleware/session";
 
-/** Shared by the sign-in routes and the staff second-factor step (22 September 2026). */
+/** Shared by the sign-in routes and the staff second-factor step. */
+
+/**
+ * Where a person lands once signed in: a platform administrator on the admin dashboard, someone with a company on
+ * Home, anyone else on the company details form.
+ */
+export function landingFor(who: { platformAdmin: boolean; activeCompanyId: string | null }): string {
+  return who.platformAdmin ? appPaths.admin : who.activeCompanyId ? appPaths.home : appPaths.companyDetails;
+}
 
 /** The session cookie, for thirty days; cookies.ts names, flags and scopes it. */
 export function setSessionCookie(c: Context<Vars>, sessionToken: string): void {

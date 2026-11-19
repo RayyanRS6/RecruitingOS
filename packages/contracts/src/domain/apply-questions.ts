@@ -1,123 +1,144 @@
 import { z } from "zod";
-import type { MatchBand } from "./match";
-
-/**
- * Wave S7, the Kanvis-style application (scratchpad kanvis-2/spec-s7-apply-flow.md; the contracts in s7-contracts.md).
- * The shapes the seven slices build to. Everything here is additive: a packet, a screen, an application or a company
- * without these fields reads and behaves exactly as before.
- */
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* (a) The company's questions, on the role packet (`RolePacket.companyQuestions`)                              */
+/* (a) The application form's questions, on the job record (`RolePacket.formQuestions`)                          */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** A quick question's key: "cq_" and snake_case, so it never meets an eligibility, screening or must-have key. Its form field is `q_<key>`. */
-export const QuickQuestionKey = z.string().regex(/^cq_[a-z0-9_]{1,56}$/, "A quick question's key starts with cq_ and uses lowercase letters, digits and _.");
-/** A written question's key: "wq_" and snake_case. Its answers are keyed by it in `screens.answers` and in the write-up. */
-export const WrittenQuestionKey = z.string().regex(/^wq_[a-z0-9_]{1,56}$/, "A written question's key starts with wq_ and uses lowercase letters, digits and _.");
-
 /**
- * A quick question the company asks on the form, answered with one tap or a number ("Questions from <Company>"). The
- * yes/no kind is the packet's eligibility questions (`requirements.eligibility`), read through `quickQuestionsOf` in
- * @ros/core; these are the other two kinds. A quick question never holds or declines anyone: only an eligibility rule
- * may hold an application, and a person decides. Every question passes the packet's fairness check before it is saved.
+ * The questions the application form asks, called "Screening questions" on the company's screens: basic questions about
+ * the job, like LinkedIn Easy Apply, answered with one tap or a number. One list, three kinds. They are never the AI
+ * interview's questions (`RolePacket.screening.questions`), and nothing about them is asked or written by AI while a
+ * person applies.
+ *
+ * No answer ever holds or declines anyone. A "No" to a yes/no question is a flag on the person's row and panel
+ * ("Answered No: <question>"), and every answer is given to the CV reading as evidence. Every question passes the
+ * fairness check before it is saved: one that asks about a protected characteristic is refused.
  */
-export const QuickChoiceQuestion = z.object({
-  kind: z.literal("choice"),
-  key: QuickQuestionKey,
-  question: z.string().trim().min(3).max(200),
+export const FormQuestionKey = z.string().trim().min(1).max(100);
+
+const FormQuestionBase = {
+  key: FormQuestionKey,
+  question: z.string().trim().min(1).max(500),
   /** One plain line under the question; shown to candidates. */
-  help: z.string().trim().max(200).optional(),
+  help: z.string().trim().max(300).optional(),
   required: z.boolean().default(true),
-  options: z.array(z.string().trim().min(1).max(80)).min(2).max(8),
-});
-export const QuickNumberQuestion = z.object({
+};
+
+export const YesNoQuestion = z.object({ kind: z.literal("yes_no"), ...FormQuestionBase });
+export const ChoiceQuestion = z.object({ kind: z.literal("choice"), ...FormQuestionBase, options: z.array(z.string().trim().min(1).max(80)).min(2).max(8) });
+export const NumberQuestion = z.object({
   kind: z.literal("number"),
-  key: QuickQuestionKey,
-  question: z.string().trim().min(3).max(200),
-  help: z.string().trim().max(200).optional(),
-  required: z.boolean().default(true),
+  ...FormQuestionBase,
   /** The unit said beside the box ("an hour", "years"). */
   unit: z.string().trim().max(30).optional(),
   min: z.number().optional(),
   max: z.number().optional(),
 });
-export const QuickQuestion = z.discriminatedUnion("kind", [QuickChoiceQuestion, QuickNumberQuestion]);
-export type QuickQuestion = z.infer<typeof QuickQuestion>;
+export const FormQuestion = z.discriminatedUnion("kind", [YesNoQuestion, ChoiceQuestion, NumberQuestion]);
+export type FormQuestion = z.infer<typeof FormQuestion>;
+export type FormQuestionKind = FormQuestion["kind"];
+export const FORM_QUESTION_KIND_LABEL: Record<FormQuestionKind, string> = { yes_no: "Yes or no", choice: "Choice", number: "Number" };
+
+/** The most questions a person may put on a job's form, and the choices one may offer. An older job version may hold more. */
+export const FORM_QUESTIONS_MAX = 10;
+export const CHOICE_OPTIONS_MIN = 2;
+export const CHOICE_OPTIONS_MAX = 8;
 
 /**
- * A written question the company wants answered, asked in the chat (its "Required questions" section) and written up
- * from the candidate's own replies on Review & send. `lookFor` is private: what a good answer shows, for the chat model
- * and the team; it never reaches a candidate page (packet visibility "reviewed").
+ * The answers a candidate sent with the form, by question key: "yes" or "no", the chosen option's words, or the number
+ * as typed.
  */
-export const WrittenQuestion = z.object({
-  key: WrittenQuestionKey,
-  question: z.string().trim().min(5).max(400),
-  required: z.boolean().default(true),
-  lookFor: z.string().trim().max(400).optional(),
-});
-export type WrittenQuestion = z.infer<typeof WrittenQuestion>;
+export const FormAnswers = z.record(z.string().max(100), z.string().max(200));
+export type FormAnswers = z.infer<typeof FormAnswers>;
 
-/** "Questions every applicant answers" (the job's Scoring tab): optional on the packet; absent means none of either kind. */
-export const CompanyQuestions = z.object({
-  quick: z.array(QuickQuestion).max(8).default([]),
-  written: z.array(WrittenQuestion).max(5).default([]),
-});
-export type CompanyQuestions = z.infer<typeof CompanyQuestions>;
+/** One screening answer as the team reads it. `flag`: "Answered No: <question>", set only for a "No" to a yes/no question. */
+export type FormAnswerView = { key: string; question: string; kind: FormQuestionKind; answer: string | null; flagged: boolean; flag: string | null };
 
-/**
- * One question of "Questions from <Company>" as the form shows it, whichever kind it is (`quickQuestionsOf`):
- * `source` "eligibility" is a packet eligibility rule (field `elig_<key>`, kind yes_no or days, answers stored as today
- * in `applications.answers.eligibility`), "company" a quick question (field `q_<key>`, kind choice or number, answers in
- * `applications.answers.quick`). `options` are the choices offered ("Yes"/"No", the days, or the company's options).
- */
-export type QuickQuestionView = {
-  source: "eligibility" | "company";
-  key: string;
-  field: string;
-  kind: "yes_no" | "days" | "choice" | "number";
-  question: string;
-  help: string | null;
-  required: boolean;
-  options: string[];
-  unit: string | null;
-  min: number | null;
-  max: number | null;
+const yesNoOf = (raw: unknown): boolean | null => {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw !== "string") return null;
+  const s = raw.trim().toLowerCase();
+  if (["yes", "y", "true", "1"].includes(s)) return true;
+  if (["no", "n", "false", "0"].includes(s)) return false;
+  return null;
+};
+
+const wordsOf = (raw: unknown): string | null => {
+  if (Array.isArray(raw)) return raw.map((x) => String(x).trim()).filter(Boolean).join(", ") || null;
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 };
 
 /**
- * One written question as the chat and Review & send use it (`writtenQuestionsOf`): the company's own written questions
- * when it set any; otherwise the packet's screening questions, so a job saved before Wave S7 runs the new chat with the
- * questions it already has, under the same keys. Never carries `lookFor`.
+ * One question with the answer the candidate gave, in words. A "No" to a yes/no question is flagged and nothing else is:
+ * the flag is for a person to read, and it never moves, holds or declines anyone. An answer stored by an older form (a
+ * list of days) is shown as its words.
  */
-export type WrittenQuestionView = { key: string; question: string; required: boolean; source: "company" | "screening" };
+export function formAnswerView(question: FormQuestion, raw: unknown): FormAnswerView {
+  const base = { key: question.key, question: question.question, kind: question.kind };
+  if (question.kind === "yes_no") {
+    const said = yesNoOf(raw);
+    if (said === null) return { ...base, answer: wordsOf(raw), flagged: false, flag: null };
+    return { ...base, answer: said ? "Yes" : "No", flagged: !said, flag: said ? null : `Answered No: ${question.question}` };
+  }
+  const words = wordsOf(raw);
+  const answer = words !== null && question.kind === "number" && question.unit ? `${words} ${question.unit}` : words;
+  return { ...base, answer, flagged: false, flag: null };
+}
+
+/** Every question of the form with its answer, in the form's order. */
+export function formAnswerViews(questions: readonly FormQuestion[], answers: Readonly<Record<string, unknown>> | null | undefined): FormAnswerView[] {
+  return questions.map((q) => formAnswerView(q, answers?.[q.key]));
+}
+
+/**
+ * The form's questions of a job version stored before there was one list: its yes/no questions
+ * (`requirements.eligibility`: key, question, and the reason shown as the help line) followed by the choice and number
+ * questions the company added (`companyQuestions.quick`). A question that asked for days of the week becomes a yes/no
+ * question that need not be answered. The parser of the job record calls this, so an older version keeps its form.
+ */
+export function formQuestionsOfStored(packet: Record<string, unknown>): unknown[] {
+  const list = (value: unknown): Array<Record<string, unknown>> => (Array.isArray(value) ? value.filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x)) : []);
+  const rules = list((packet.requirements as { eligibility?: unknown } | null | undefined)?.eligibility);
+  const quick = list((packet.companyQuestions as { quick?: unknown } | null | undefined)?.quick);
+  const yesNo = rules.flatMap((rule) => {
+    if (typeof rule.key !== "string" || !rule.key.trim() || typeof rule.question !== "string" || !rule.question.trim()) return [];
+    const days = (rule.expectation as { days?: unknown } | null | undefined)?.days;
+    const asksDays = rule.type === "schedule_availability" && Array.isArray(days) && days.length > 0;
+    const help = typeof rule.rationale === "string" && rule.rationale.trim() ? rule.rationale.trim().slice(0, 300) : undefined;
+    return [{ kind: "yes_no", key: rule.key, question: rule.question, ...(help ? { help } : {}), required: !asksDays }];
+  });
+  return [...yesNo, ...quick];
+}
 
 /* ------------------------------------------------------------------------------------------------------------ */
-/* (b) The chat's plan and its counter (`ScreenProgress.chat`)                                                   */
+/* (b) The AI interview's plan and its counter (`ScreenProgress.chat`)                                           */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** The chat's sections, in order: the must-haves the CV does not show, the company's written questions, the close. */
+/**
+ * The AI interview's sections: the job's own interview questions ("required"), the must-haves the CV reading did not
+ * find shown ("experience"), the close. The order they are asked in is the plan's, built in code when the chat starts.
+ */
 export const ChatSection = z.enum(["experience", "required", "wrapping_up"]);
 export type ChatSection = z.infer<typeof ChatSection>;
 export const CHAT_SECTION_LABEL: Readonly<Record<ChatSection, string>> = { experience: "About your experience", required: "Required questions", wrapping_up: "Wrapping up" };
 
 /**
  * Where one item of the plan stands. `open`: not asked yet; `asking`: being asked now; `covered`: a concrete answer or
- * example arrived; `unknown`: settled as not known ("No", "I haven't": never a "no" for a skill, and the licence rule of
- * spec-s5 stands); `skipped`: the candidate pressed Skip.
+ * example arrived; `unknown`: settled as not known ("No", "I haven't": never a "no" for a skill); `skipped`: the
+ * candidate pressed Skip.
  */
 export const ChatItemState = z.enum(["open", "asking", "covered", "unknown", "skipped"]);
 export type ChatItemState = z.infer<typeof ChatItemState>;
 
 /**
- * One thing the chat must close. `gap`: a must-have the CV does not show (key = the must-have's key), asked in
- * "About your experience" along the ladder `direct` → `analog` ("something similar from your own work") → `smaller`
- * ("even a small moment?"), with at most one push for specifics. `written`: a written question (key =
- * `WrittenQuestionView.key`); only these count toward "N of M required", and only when `required`.
+ * One thing the chat must close. `question`: one of the job's interview questions (key = the question's key). `gap`: a
+ * must-have the CV reading did not find shown (key = the must-have's key), asked along the ladder `direct` → `analog`
+ * ("something similar from your own work") → `smaller` ("even a small moment?"), with at most one push for specifics.
  */
 export const ChatItem = z.object({
   key: z.string().min(1).max(100),
-  kind: z.enum(["gap", "written"]),
+  kind: z.enum(["question", "gap"]),
   required: z.boolean().default(false),
   state: ChatItemState.default("open"),
   step: z.enum(["direct", "analog", "smaller"]).default("direct"),
@@ -136,179 +157,32 @@ export const ChatPlan = z.object({
 });
 export type ChatPlan = z.infer<typeof ChatPlan>;
 
-/** What the chat's header shows (founder decision S7-3): "2 of 4 required · Required questions"; never the questions in advance. */
-export type ChatCounter = { done: number; required: number; section: ChatSection; label: string };
+/**
+ * The one line above the chat: "Question 2 of 6" while a question is asked, "All 6 questions done" at the closing
+ * question; never the questions in advance. `done`: the questions closed so far, of the `total` the chat asks.
+ */
+export type ChatCounter = { done: number; total: number; label: string };
 
 /**
  * The chat's closing question ("Wrapping up"): asked after every item, in code's words, and never an item of the plan
- * (it is not counted). Its answer is the candidate's own words like any other, kept under this key.
+ * (it is not counted, and it is never scored). Its answer is the candidate's own words like any other, kept under this key.
  */
 export const CHAT_WRAP_KEY = "wrap_up";
 /** The closing question, in code's words (the model may say it its own way, with the first name). */
 export const CHAT_WRAP_QUESTION = "Is there anything else you would like the hiring team to know before we finish?";
 
-/** A key's machine prefix: a must-have's (`mh_1_`), a company's written question's (`wq_`), an older question's (`q_`, `sq_`). */
+/** A key's machine prefix: a must-have's (`mh_1_`), an older question's (`wq_`, `q_`, `sq_`). */
 const KEY_PREFIX = /^(?:mh_\d+_|wq_|q_|sq_)/;
 
 /**
- * The keys of the résumé reading's open questions a screen starts with ("Ask about this in a screen":
- * `progress.focusQuestions`, keyed `unknown_1`, `unknown_2`, …). Each screen's are its own candidate's, so the same key
- * is another question on another screen, and the key says nothing of the words.
- */
-export const FOCUS_KEY_PREFIX = "unknown_";
-/**
- * The plain name of such an open question where its own words are not at hand: in the role's figures, where everyone's
- * open questions are one row (`screeningFunnel`), and wherever a reader no longer holds the question.
- */
-export const FOCUS_QUESTION_WORDS = "An open question from the AI review of the résumé";
-
-/**
- * What an AI interview answer is named by where the reader's own questions do not name its key (the interviewer's brief
- * and its email, the AI review on the candidate panel, the role's figures, Review & send): the closing answer by the
- * closing question; a must-have's gap answer, kept under the must-have's key, by the must-have's own words; an open
- * question from the résumé reading by its plain name (`FOCUS_QUESTION_WORDS`); any other key in plain words without its
- * machine prefix ("wq_shift_swaps": "Shift swaps"). Never a key, never an underscore (the last round of the live-test
- * fixes, 17 November 2026).
+ * What an AI interview answer is named by where the reader's own questions do not name its key: the closing answer by
+ * the closing question; a must-have's gap answer, kept under the must-have's key, by the must-have's own words; any other
+ * key in plain words without its machine prefix ("sq_shift_swaps": "Shift swaps"). Never a key, never an underscore.
  */
 export function answerKeyWords(key: string, mustHaves: ReadonlyArray<{ key: string; text: string }> = []): string {
   if (key === CHAT_WRAP_KEY) return CHAT_WRAP_QUESTION;
   const must = mustHaves.find((m) => m.key === key)?.text.trim();
   if (must) return must;
-  if (key.startsWith(FOCUS_KEY_PREFIX)) return FOCUS_QUESTION_WORDS;
   const words = (key.replace(KEY_PREFIX, "") || key).replace(/_+/g, " ").trim();
   return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "";
 }
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* (c) The write-up per written question (`ScreenProgress.writeup`)                                              */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/**
- * One written question's answer on Review & send. `answer` is the candidate's own voice: their words, lightly condensed,
- * first person; empty when they gave none. `quotes` are the pieces of their own sent messages it rests on, each checked
- * in code against the transcript (one not found is dropped). `note` is the separate, labelled "Note from the
- * assistant", only when something is missing ("No example was given for …"), and is never inside `answer`. `by`
- * "candidate": the candidate changed it on Review & send, and `answer` is exactly what they typed.
- */
-export const WriteupAnswer = z.object({
-  questionKey: z.string().min(1).max(100),
-  answer: z.string().max(2000),
-  status: z.enum(["answered", "partly", "not_given", "skipped"]),
-  quotes: z.array(z.string().min(1).max(500)).max(6).default([]),
-  note: z.string().max(300).nullable().default(null),
-  by: z.enum(["writeup", "candidate"]).default("writeup"),
-  editedAt: z.string().optional(),
-});
-export type WriteupAnswer = z.infer<typeof WriteupAnswer>;
-
-/**
- * The write-up of a chat (task `screen.writeup`, Haiku 5.5): one answer per written question, in `writtenQuestionsOf`
- * order. Stored on the conversation's own progress (a screen, or a repeat submission's detached copy, which carries it
- * over when confirmed), so it is hidden from the team until Send like every other part of an unsent chat
- * (`teamScreenView`), erased with the candidate's words (`withoutCandidateWords`) and included in an access export.
- */
-export const ScreenWriteup = z.object({
-  v: z.literal(1),
-  writtenAt: z.string(),
-  aiRunId: z.string().nullable(),
-  promptVersion: z.number().int().nullable(),
-  answers: z.array(WriteupAnswer).max(20),
-});
-export type ScreenWriteup = z.infer<typeof ScreenWriteup>;
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* (d) What the profile learns from a sent chat (`applications.answers.learned`)                                 */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-export const LearnedFactKind = z.enum(["skill", "project", "experience", "logistics", "other"]);
-export type LearnedFactKind = z.infer<typeof LearnedFactKind>;
-
-/**
- * A fact the candidate said themselves in a chat they sent ("Arduino", "Has own transport"), kept on the application
- * whose chat it came from, in `applications.answers.learned`. The candidate's company-scoped profile is every such fact
- * on their applications at that company, newest first, without the removed ones: shown and editable on their
- * application record ("From your chat on <job>, <date>"), and filled in on their next application to the same company.
- * Never the assistant's notes or inferences, never across companies; erased with the application's answers on a
- * deletion request, and part of an access export with them.
- */
-export const LearnedFact = z.object({
-  id: z.string().min(1).max(40),
-  kind: LearnedFactKind,
-  text: z.string().trim().min(1).max(200),
-  /** The candidate's own words it rests on, checked against their sent messages. */
-  quote: z.string().max(500),
-  from: z.object({ applicationId: z.string(), screenId: z.string().nullable(), roleTitle: z.string(), at: z.string() }),
-  editedAt: z.string().optional(),
-  removedAt: z.string().optional(),
-});
-export type LearnedFact = z.infer<typeof LearnedFact>;
-
-/**
- * Wave S8: a fact from the candidate's earlier chats at the company that they kept on their next application, ticked
- * on a form opened from the emailed reuse link ("From your earlier chats at <Company>"), stored on that new application
- * in `applications.answers.kept`. Their own words for this application, confirmed when they sent it, like a form answer;
- * the chat reads them as their own words and never asks again what they settle. `from` is the chat that taught it, for
- * their record and the team; it never reaches the résumé reading's input (D-04 C: no earlier application, job title or
- * outcome there). Erased with the application's answers on a deletion request and part of an access export with them;
- * changing or removing the fact on the candidate's record changes or removes it here too.
- */
-export const KeptFact = z.object({
-  id: z.string().min(1).max(40),
-  kind: LearnedFactKind,
-  text: z.string().trim().min(1).max(200),
-  from: LearnedFact.shape.from,
-  keptAt: z.string(),
-  editedAt: z.string().optional(),
-});
-export type KeptFact = z.infer<typeof KeptFact>;
-
-/* ------------------------------------------------------------------------------------------------------------ */
-/* (e) The score a candidate sees, and the ITS switch                                                            */
-/* ------------------------------------------------------------------------------------------------------------ */
-
-/** The one line every requirement not on the job page folds into (founder decision S7-1). */
-export const CANDIDATE_SCORE_OTHER_LABEL = "Other things the team looks for";
-/** What the candidate's score rests on (R20-9), in their words: the team's label (`SCORE_BASIS_WORDS`) said to them. */
-export const CANDIDATE_SCORE_BASIS = { both: "From your résumé and your AI interview", resumeOnly: "From your résumé only" } as const;
-
-/**
- * One bar of the breakdown: the requirement's public name (or the folded line), how much of it was met, its colour band. The
- * folded line's bar says how much was shown, never how much was met, so it is `shown`, one neutral colour at any share: never the
- * red of a must-have not met for what nothing showed (the release review's second reading, 11 November 2026).
- */
-export type CandidateScoreRow = { key: string; label: string; pctMet: number; tone: "strong" | "partial" | "short" | "shown"; words: string };
-
-/**
- * The match score as the candidate sees it after sending (founder decision S7-1): the existing match score
- * (core/match-score.ts) and its breakdown, never a new scoring. Only the job page's own must-haves are named; every
- * other requirement the score counts (the skills the team looks for, which are not on the job page) is folded into
- * one line, `other`. A must-have nothing showed either way is listed as not shown yet: it earns no points yet and is never
- * read as a no. `basis` (R20-9): whether their AI interview is in the number (`CANDIDATE_SCORE_BASIS`).
- */
-export type CandidateScoreView = {
-  score: number;
-  band: MatchBand;
-  bandLabel: string;
-  rows: CandidateScoreRow[];
-  other: CandidateScoreRow | null;
-  notYetShown: string[];
-  coverage: string;
-  basis: string;
-  capped: boolean;
-};
-
-/**
- * Whether the company's candidates see their match score after sending: on unless ITS turned it off for the company
- * (`companies.settings.candidateScoreShown` = false). Set from the ITS admin console only. Reads any settings object.
- */
-export function candidateScoreShown(settings: unknown): boolean {
-  const v = settings && typeof settings === "object" ? (settings as { candidateScoreShown?: unknown }).candidateScoreShown : undefined;
-  return v !== false;
-}
-
-/** POST /api/v1/admin/customers/:id/candidate-score (ITS only): show candidates their score after sending, or not, with a reason. */
-export const CandidateScoreSwitchChange = z.object({
-  shown: z.boolean(),
-  reason: z.string().trim().min(5, "Say why (at least five characters).").max(500),
-}).strict();
-export type CandidateScoreSwitchChange = z.infer<typeof CandidateScoreSwitchChange>;

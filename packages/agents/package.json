@@ -17,7 +17,6 @@
     "@ros/core": "workspace:*",
     "@ros/db": "workspace:*",
     "@ros/integrations": "workspace:*",
-    "@ros/playbooks": "workspace:*",
     "drizzle-orm": "^0.45.0",
     "mammoth": "^1.9.0",
     "pdf-parse": "^1.1.1"

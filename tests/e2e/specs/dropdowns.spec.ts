@@ -2,11 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { createCompanyThroughTheForm, signIn, skipWithoutFakeSignIn } from "./helpers";
 
 /**
- * Dropdowns you can read (Wave S6, 15 October 2026). In dark mode on Windows the open list of a native select showed the
- * near-white words on a light list. Both stylesheets (packages/ui/src/tokens.css and the candidate pages' sheet in
- * apps/api/src/pages/layout.tsx) now colour the options themselves with the theme's surface and ink, so the list reads
- * whichever colour the system paints it. Checked here by the computed style of every option on the page, in dark mode,
- * on the application's pages and on the candidate pages; the native arrow is left as it is.
+ * Dropdowns you can read. In dark mode on Windows the open list of a native select showed near-white words on a light
+ * list unless the options themselves are coloured. Both stylesheets (the kit's, packages/ui/src/styles.css, and the
+ * candidate pages' own sheet) colour the options with the theme's surface and ink, so the list reads whichever colour
+ * the system paints it. Checked here by the computed style of every option on the page, in dark mode, on the
+ * application's pages and on a candidate page; the native arrow is left as it is.
  */
 test.use({ colorScheme: "dark" });
 
@@ -58,39 +58,21 @@ test.describe("the application's dropdowns in dark mode", () => {
   skipWithoutFakeSignIn();
   const run = Date.now().toString(36);
 
-  test("company form, Jobs and a job page preview: every option reads, the native arrow stays", async ({ page, baseURL }) => {
+  test("the company form and Settings: every option reads, the native arrow stays", async ({ page }) => {
     test.setTimeout(180_000);
     await signIn(page, { email: `dropdowns+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
 
-    // the company form: what kind of business, how many employees, the time zone (all three are .select)
+    // the company form: what kind of business, how many employees, the time zone
     await page.waitForURL("**/setup/company");
     await expect(page.getByLabel("Time zone")).toBeVisible({ timeout: 30_000 });
     expectReadable(await readSelects(page), "the company form", 3);
     await createCompanyThroughTheForm(page, `Brightline Dropdowns ${run}`);
 
-    // a job waiting for approval, drafted through the API with the browser's own session
-    const s = (await (await page.request.post(`${baseURL}/api/v1/intake/sessions`, { data: { initialMessage: "I need a registered dental hygienist in Tustin, $45 to $55 an hour, full time. It's a replacement. Ceiling $58. I decide. Must-haves: active CA RDH license. Just draft it." } })).json()) as { session: { id: string } };
-    const { roleId } = (await (await page.request.post(`${baseURL}/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string };
-
-    // Jobs: the sort (a select today; once it is a menu, its current choice shows a tick)
-    await page.goto("/roles");
-    await expect(page.getByRole("heading", { level: 1 })).toContainText("Jobs", { timeout: 30_000 });
-    await page.waitForLoadState("networkidle");
-    expectReadable(await readSelects(page), "Jobs", 0);
-    if (!(await page.getByRole("combobox", { name: "Sort jobs" }).count())) {
-      const sort = page.getByRole("button", { name: /^Sort/ }).first();
-      if (await sort.count()) {
-        await sort.click();
-        const current = page.locator('[role="menuitemradio"][aria-checked="true"]');
-        await expect(current).toHaveCount(1);
-        await expect(current.locator("svg")).toHaveCount(1);
-        await page.keyboard.press("Escape");
-      }
-    }
-
-    // the job page preview: the candidate pages' sheet, the apply form's yes/no questions
-    await page.goto(`/api/v1/roles/${roleId}/preview?version=1`);
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
-    expectReadable(await readSelects(page), "the job page preview", 0);
+    // Settings: the role of an invitation, and the company's time zone and size once its details are being changed
+    await page.goto("/setup");
+    await expect(page.locator("#setup-team").getByLabel("Role", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await page.locator("#setup-company").getByRole("button", { name: "Edit", exact: true }).first().click();
+    await expect(page.locator("#setup-company").getByLabel("Time zone")).toBeVisible();
+    expectReadable(await readSelects(page), "Settings", 3);
   });
 });

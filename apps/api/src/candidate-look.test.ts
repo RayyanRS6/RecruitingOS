@@ -2,24 +2,22 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { buildCandidateCsp, entitlements } from "@ros/core";
-import { applications, interviews, roles, screens } from "@ros/db";
+import { buildCandidateCsp } from "@ros/core";
+import { applications, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
 import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
-import { zoneLabel } from "./pages/schedule";
-import { statusTokenFor, useOneVisitApplyFlow } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, statusTokenFor, usePlan } from "./test-helpers";
 
 /**
- * Wave DS, candidate pages: the server-rendered pages wear the application's look (docs/07; the October 2026 redesign).
- * Every colour and shadow token they declare carries the value packages/ui/src/styles.css gives it, in both themes (the
- * pages copy the subset they use; only their corner radii and font stacks are their own), the fonts come from this
- * deployment's own origin so the policy keeps `font-src 'self'`, secondary buttons are styled on every page (not only
- * the screening page), and the job page shows its facts with their icons and one Apply button that stays reachable on
- * a phone.
+ * The candidate pages' look: the server-rendered pages wear the application's look (docs/07). Every colour and shadow
+ * token they declare carries the value packages/ui/src/styles.css gives it, in both themes (the pages copy the subset
+ * they use; only their corner radii and font stacks are their own), the fonts come from this deployment's own origin so
+ * the policy keeps `font-src 'self'`, secondary buttons are styled on every page, and the job page shows its facts with
+ * their icons and one Apply button that stays reachable on a phone.
  */
 const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const uiCss = stripComments(readFileSync(new URL("../../../packages/ui/src/styles.css", import.meta.url), "utf8"));
@@ -60,16 +58,20 @@ describe("candidate pages: design tokens and fonts", () => {
     for (const name of used) expect(pageLight.has(name), `${name} is used but not declared`).toBe(true);
     const outside = `${pageCss.slice(0, pageCss.indexOf(":root {"))}${pageCss.slice(pageCss.indexOf("* {"))}${stripComments(SCREEN_CSS)}${stripComments(STATUS_CSS)}`;
     expect(outside).not.toMatch(/#[0-9a-f]{3,8}\b/i);
-    // the plum primary button and the outlined secondary one, on every page (the screening page used to be the only one with a secondary look)
+    // the plum primary button and the outlined secondary one, on every page
     expect(pageCss).toMatch(/\.btn \{[^}]*background: var\(--primary\); color: var\(--on-primary\);/);
     expect(pageCss).toMatch(/\.btn\.secondary \{ background: var\(--surface\); border-color: var\(--line-2\); color: var\(--ink\); \}/);
     expect(SCREEN_CSS).not.toContain(".btn");
     expect(STATUS_CSS).not.toContain(".btn");
-    // the status page's messages and the screening conversation are one look: the candidate's own on the right in peach,
-    // the assistant's and the team's on the left in white (plan G7; October 2026 redesign, the guided chat)
-    for (const css of [SCREEN_CSS, STATUS_CSS]) expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
-    expect(STATUS_CSS).toContain(".msg.assistant, .msg.team { align-self: flex-start; background: var(--surface);");
-    // the progress line (Wave S2, K4): down the page on a phone, across it from 600 pixels; the tick on the plum fill; no motion
+    // the chat read back on the status page and the AI interview's chat are one look: the candidate's own on the right
+    // in peach, the assistant's on the left in white
+    for (const css of [SCREEN_CSS, STATUS_CSS]) {
+      expect(css).toContain(".msg.candidate { align-self: flex-end; background: var(--peach); color: var(--ink);");
+      expect(css).toMatch(/\.msg\.assistant \{ align-self: flex-start;[^}]*background: var\(--surface\);/);
+    }
+    // the status page styles nothing it no longer draws: no score, no bars, no list of other applications, no thread of the team's
+    expect(STATUS_CSS).not.toMatch(/\.score|\.bars|\.apps|\.msg\.team/);
+    // the status page's steps: down the page on a phone, across it from 600 pixels; the tick on the plum fill; no motion
     expect(STATUS_CSS).toContain(".track li.done .dot { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }");
     expect(STATUS_CSS).toMatch(/@media \(min-width: 600px\) \{[^@]*\.track \{ grid-auto-flow: column;/);
     expect(stripComments(STATUS_CSS)).not.toMatch(/transition|animation/);
@@ -143,7 +145,7 @@ describe("candidate pages: the look, page by page", () => {
   let roleId = "";
   let statusToken = "";
   let screenToken = "";
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory", SMS_ENABLED: "false" };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   const page = async (path: string) => {
     const r = await app.request(path);
@@ -154,28 +156,16 @@ describe("candidate pages: the look, page by page", () => {
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: baseEnv });
     app = createApp(container);
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "owner@look.test" }) });
-    const token = new URL(((await r1.json()) as { devLink: string }).devLink).searchParams.get("token")!;
-    owner = (await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) })).headers.get("set-cookie")!.split(";")[0];
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "Look Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    slug = co.slug;
-    await entitlements.applyPlan(container.db, co.id, "growth");
-    // A pilot company: the screening conversation follows the form in the same visit (plan E1).
-    await useOneVisitApplyFlow(container, co.id);
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Ivy"); fd.set("lastName", "Chen"); fd.set("email", "ivy.chen@example.com"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Ivy Chen, RDH"], "ivy.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("acknowledged", "yes");
-    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd })).status).toBe(302);
+    const company = await seedCompany(app, { email: "owner@look.test", name: "Look Dental" });
+    ({ owner, slug } = company);
+    await usePlan(container, company.companyId);
+    roleId = await plantJob(container, { companyId: company.companyId, title: "Dental Hygienist", packet: (p) => { p.compensation = { ...p.compensation, min: 45, max: 55 }; } });
+    // Someone applies, and the team shortlists them: their status page then has the AI interview's step and its button.
+    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: "Ivy", lastName: "Chen", email: "ivy.chen@example.com" }) })).status).toBe(302);
     statusToken = await statusTokenFor(container, { roleId, email: "ivy.chen@example.com" });
     await container.drain();
     const [appRow] = await container.db.select().from(applications).where(eq(applications.statusToken, statusToken));
-    await json(owner, "POST", `/api/v1/applications/${appRow.id}/actions`, { action: "invite_screen", channel: "web" });
+    expect((await json(owner, "POST", `/api/v1/applications/${appRow.id}/actions`, { action: "shortlist" })).status).toBe(200);
     await container.drain();
     screenToken = (await container.db.select().from(screens).where(eq(screens.applicationId, appRow.id)))[0]?.token ?? "";
   });
@@ -192,7 +182,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(html, path).toContain('@font-face { font-family: "IBM Plex Sans"');
     expect(html, path).not.toContain("btn-quiet");
     expect(html, path).not.toMatch(/style="[^"]*width:auto/);
-    // the only script is the structured data on the job page and the résumé upload on the form: everything works without it
+    // the only script is the structured data on the job page, the resume upload on the form and the AI interview's one-press guard: everything works without it
     for (const m of html.matchAll(/<script\b([^>]*)>/g)) expect(m[1], path).toMatch(/type="application\/ld\+json"|nonce=/);
     return html;
   };
@@ -213,71 +203,17 @@ describe("candidate pages: the look, page by page", () => {
     expect(form).toContain('<p class="meta">We email that address a link to confirm it is you; nothing happens until you open it and press the button.</p>');
   });
 
-  it("the scheduling pages too: picking a time, the confirmed page with its cancel choice, and the page after cancelling", async () => {
-    expect((await json(owner, "PUT", "/api/v1/me/availability", { timezone: "America/Los_Angeles", windows: [1, 2, 3, 4, 5].map((day) => ({ day, start: "09:00", end: "17:00" })), bufferMinutes: 15, maxPerDay: 3 })).status).toBe(200);
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> }; interviews: { plan: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Leo"); fd.set("lastName", "Park"); fd.set("email", "leo.park@example.com"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Leo Park, RDH"], "leo.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("acknowledged", "yes");
-    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: fd })).status).toBe(302);
-    await container.drain();
-    const [leo] = await container.db.select().from(applications).where(eq(applications.statusToken, await statusTokenFor(container, { roleId, email: "leo.park@example.com" })));
-    const me = (await (await json(owner, "GET", "/api/v1/auth/me")).json()) as { user: { id: string } };
-    const approved = await json(owner, "POST", `/api/v1/applications/${leo.id}/interviews`, { roundKey: role.currentPacket.packet.interviews.plan[0].key, interviewerUserIds: [me.user.id], linkSource: "calendar" });
-    expect(approved.status, await approved.clone().text()).toBe(201);
-    const [iv] = await container.db.select().from(interviews).where(eq(interviews.applicationId, leo.id));
-    expect(iv.scheduleToken).toBeTruthy();
-    const pick = await looksRight(`/c/schedule/${iv.scheduleToken}`);
-    const slotId = pick.match(/name="slotId" value="([^"]+)"/)![1];
-    // an emailed link opens it and nothing else on it names the employer or the job, so the "Company · Job" eyebrow stays
-    expect(pick).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>Pick a time for your /);
-    // picking a time is the page's one job; asking for other times is one click away (founder brief, 14 October 2026)
-    expect(pick).toMatch(/<details class="more"><summary>None of these work\?<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/none-work" class="card">/);
-    // the zone shown is named in the line under the heading; another zone is one click away, still a plain GET form
-    expect(pick).toMatch(/Times are shown in <strong>[^<]+<\/strong>\.<\/p><details class="more"><summary>Change the time zone<\/summary>/);
-    expect(pick).toMatch(/<details class="more"><summary>Change the time zone<\/summary><form method="get" action="\/c\/schedule\/[^"]+" class="card"><label for="tz" class="flush">Show times in<\/label><select id="tz" name="tz">/);
-    expect(pick.indexOf("<summary>Change the time zone</summary>")).toBeLessThan(pick.indexOf("<legend>Available times</legend>"));
-    // in the times email's words, never the id (LT-15): the line names the zone shown, and the picker names each zone the
-    // same way, its value still the id
-    expect(pick).toContain("Times are shown in <strong>Pacific time</strong>.");
-    expect(pick).toContain('<select id="tz" name="tz"><option value="America/Los_Angeles" selected="">Pacific time</option><option value="America/Denver">Mountain time</option><option value="America/Phoenix">Arizona time</option><option value="America/Chicago">Central time</option><option value="America/New_York">Eastern time</option><option value="America/Anchorage">Alaska time</option><option value="Pacific/Honolulu">Hawaii time</option></select>');
-    expect(pick).not.toMatch(/>(America|Pacific)\//);
-    // a zone outside the list reads as it is named, first and chosen; one nothing can name keeps its city words
-    const detroit = await looksRight(`/c/schedule/${iv.scheduleToken}?tz=America/Detroit`);
-    expect(detroit).toContain("Times are shown in <strong>Eastern Time</strong>.");
-    expect(detroit).toContain('<select id="tz" name="tz"><option value="America/Detroit" selected="">Eastern Time</option><option value="America/Los_Angeles">Pacific time</option>');
-    expect(detroit).not.toMatch(/>(America|Pacific)\//);
-    expect(zoneLabel("Nowhere/Lost_City")).toBe("Nowhere/Lost City");
-    const form =(fields: Record<string, string>) => ({ method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
-    expect((await app.request(`/c/schedule/${iv.scheduleToken}`, form({ slotId, timezone: "America/Los_Angeles" }))).status).toBe(302);
-    await container.drain();
-    const confirmed = await looksRight(`/c/schedule/${iv.scheduleToken}/confirmed`);
-    // the employer and the job are said nowhere else on it either, so its eyebrow stays too
-    expect(confirmed).toMatch(/<main><p class="eyebrow">Look Dental · [^<]+<\/p><h1>You&#39;re confirmed<\/h1>/);
-    // the choice is a group of real radio buttons with a legend, in the page's own styles, one click away under "I need to cancel"
-    expect(confirmed).toMatch(/<details class="more"><summary>I need to cancel<\/summary><form method="post" action="\/c\/schedule\/[^"]+\/cancel" class="card" id="cancel">/);
-    expect(confirmed).toContain('<legend class="question-legend">If you cancel, what would you like next?</legend>');
-    expect(confirmed.match(/<label class="check slot" for="next-[a-z-]+"><input type="radio"/g)).toHaveLength(2);
-    expect(confirmed).not.toMatch(/ style="/);
-    expect((await app.request(`/c/schedule/${iv.scheduleToken}/cancel`, form({ confirm: "yes", next: "new_times" }))).status).toBe(302);
-    await container.drain();
-    const after = await looksRight(`/c/schedule/${iv.scheduleToken}/cancelled`);
-    expect(after).toContain('<p class="notice">Reply to any of our emails with HUMAN to reach a person.</p>');
-    expect(after).not.toContain("<script");
-  });
-
   it("the careers page lists each role as a card with an outlined button that names the role for a screen reader", async () => {
     const html = await page(`/careers/${slug}`);
     expect(html).toContain('<ul class="roles"><li class="card role">');
     expect(html).toMatch(/<a class="btn secondary" href="\/careers\/[^"]+\/jobs\/[^"]+">View and apply<span class="sr-only">: [^<]+<\/span><svg class="icon"/);
-    // fewer words (23 October 2026): the logo alone above the heading, no "Careers" eyebrow, and no default slogan as the
-    // lead when the company wrote no introduction of its own (the link preview's text may still carry it)
+    // the logo alone above the heading, no "Careers" eyebrow, and no slogan anywhere when the company wrote no
+    // introduction of its own, the link preview's text included
     const main = html.slice(html.indexOf("<main"));
     expect(main).toContain('<div class="careers-head"><div class="company"><span class="logo" aria-hidden="true">LD</span></div><h1>Work with <span>Look Dental</span></h1></div>');
     expect(main).not.toContain('<p class="eyebrow">');
-    expect(main).not.toContain("We respond to every applicant and keep the process short.");
+    expect(html).not.toContain("We respond to every applicant");
+    expect(html).toContain('<meta name="description" content="1 open job at Look Dental."/>');
     // the privacy page leads with its title, no eyebrow above it
     const privacy = await page("/privacy");
     expect(privacy.slice(privacy.indexOf("<main")).startsWith("<main><h1>How we handle your information</h1>")).toBe(true);
@@ -304,7 +240,7 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.head-apply \{ display: none; \}/);
     const panel = html.indexOf('<div class="apply-panel">');
     expect(panel).toBeGreaterThan(0);
-    // Apply now (founder decision Q2 = A): the circle and arrow, the fill hidden from screen readers, the words its only name; in the panel too
+    // Apply now: the circle and arrow, the fill hidden from screen readers, the words its only name; in the panel too
     expect(html.slice(panel)).toMatch(/<a class="btn go" href="\/careers\/[^"]+\/apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
     // each one's accessible name is exactly "Apply now": take away what screen readers skip and only the words are left
     const goLinks = [...html.matchAll(/<a class="btn go[^"]*" href="[^"]+">(.*?)<\/a>/g)].map((m) => m[1]);
@@ -320,8 +256,8 @@ describe("candidate pages: the look, page by page", () => {
     expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }");
     expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);
-    // the panel opens on its button (fewer words, 23 October 2026): no second job title, and no "We confirm by email."
-    // (the steps say it); a closing date, when there is one, comes first
+    // the panel opens on its button: no second job title, and no "We confirm by email." (the steps say it); a closing
+    // date, when there is one, comes first
     expect(html.slice(panel)).toMatch(/^<div class="apply-panel"><div class="card apply-card"><a class="btn go" /);
     expect(html).not.toContain('class="apply-title"');
     expect(CSS).not.toContain(".apply-title");
@@ -339,12 +275,11 @@ describe("candidate pages: the look, page by page", () => {
     const notices = [...html.matchAll(/<(p|div) class="notice">/g)].map((m) => m.index ?? 0);
     expect(notices.length).toBeGreaterThanOrEqual(2);
     for (const at of notices) expect(at).toBeLessThan(panel);
-    // the AI notice is one plain line on the first view, with its full text, word for word, under "How AI is used" (founder brief, 14 October 2026)
+    // the AI notice is one plain line on the first view, with its full text, word for word, under "How AI is used"
     expect(html).toContain(`<div class="notice"><p>${AI_NOTICE_LINE}</p><details class="more"><summary>How AI is used</summary><p>This employer uses software that includes artificial intelligence`);
-    // "What to expect" at a glance: at most four lines, every step in full one click away
-    const glance = html.slice(html.indexOf("<h2>What to expect</h2>"), html.indexOf('<details class="more"><summary>More about each step</summary>'));
-    expect(glance.match(/<li>/g)?.length).toBeLessThanOrEqual(4);
-    expect(html).toMatch(/<details class="more"><summary>More about each step<\/summary><ol class="steps"><li>Send a short form, about \d+ minutes/);
+    // "What to expect": four short steps, shown once, with nothing folded away
+    expect(html).toMatch(/<h2>What to expect<\/h2><ol class="steps"><li>Send a short form, about \d+ minutes\. We confirm by email\.<\/li>(?:<li>[^<]+<\/li>){3}<\/ol><div class="notice">/);
+    expect(html).not.toContain("More about each step");
     // the stylesheet holds the panel beside the description on a wide screen and at the bottom of a phone's screen
     expect(CSS).toMatch(/\.apply-panel \{ position: sticky; top: 24px;/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.apply-panel \{ top: auto; bottom: 12px; \}/);
@@ -374,41 +309,43 @@ describe("candidate pages: the look, page by page", () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}/apply`);
     const head = html.slice(0, html.indexOf("<form"));
     expect(head).toMatch(/<p class="back"><a href="\/careers\/[^"]+\/jobs\/[^"]+"><svg class="icon"[^>]*>.*?<\/svg>Back to the job<\/a><\/p>/);
-    // no eyebrow above the title (fewer words, 23 October 2026): the title follows the back link, and the lead names the employer
+    // no eyebrow above the title: the title follows the back link, and the lead names the employer
     expect(head).not.toContain('<p class="eyebrow">');
     expect(head).toMatch(/Back to the job<\/a><\/p><h1>Apply: /);
-    expect(head).toMatch(/<p class="lead">About \d+ minutes, including a short AI interview with Look Dental&#39;s AI assistant\./);
+    expect(head).toContain('<p class="lead">A short form for Look Dental, about 3 minutes. No cover letter needed.</p>');
     expect(head).toContain('<ul class="facts">');
     expect(html).toContain('<button class="btn" type="submit">Send my application</button>');
+    // no steps header over the form, and nothing styled for one
+    expect(html).not.toMatch(/class="journey|\.journey/);
   });
 
   it("the receipt keeps the link back to the job above its title, without the company's name after it", async () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}/applied`);
-    // a trail with a parent link stays; the company is named in the page's own lines (fewer words, 23 October 2026)
-    expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+\/jobs\/[^"]+">[^<]+<\/a><\/p><h1>Thanks for applying<\/h1>/);
+    // a trail with a parent link stays; the company is named in the page's own lines
+    expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+\/jobs\/[^"]+">[^<]+<\/a><\/p><h1>Thanks, we have your application<\/h1>/);
     expect(html).not.toContain("</a> · Look Dental");
-    expect(html).toContain("The hiring team at Look Dental reviews your application. People make every decision.");
+    expect(html).toContain("<li>The hiring team at Look Dental reviews your application.</li>");
   });
 
-  it("the status page: withdrawing and the future-roles choice are outlined secondary buttons; the screening link is the one plum button", async () => {
+  it("the status page: withdrawing is an outlined secondary button; the AI interview's link is the one plum button", async () => {
     const html = await page(`/c/status/${statusToken}`);
     // the employer's name sits above the job's title: on a phone the next mention of the employer is far below the first
-    // screen (fewer words, 23 October 2026: an eyebrow only where nothing else near the top names them), with no "Your application"
+    // screen (an eyebrow only where nothing else near the top names them), with no "Your application"
     expect(html.slice(html.indexOf("<main>")).startsWith('<main><p class="eyebrow">Look Dental</p><h1>')).toBe(true);
     expect(html).toContain('<p class="meta">People on the hiring team at Look Dental make every decision about your application.</p>');
     expect(html).not.toContain("· Your application");
     expect(html).toContain('<button class="btn secondary" type="submit">Withdraw my application</button>');
-    expect(html).toContain('<button class="btn secondary" type="submit">Don&#39;t keep me for future roles</button>');
     expect(html).toContain('<button class="btn secondary" type="submit">Send request</button>');
-    // one name for the chat on this page: the button says what the progress line says
+    // one name for the chat on this page: the button says what the steps say
     expect(html).toMatch(/<a class="btn" href="\/c\/screen\/[^"]+">(Start|Continue) your AI interview<\/a>/);
     expect(html).toMatch(/<span>Status<\/span><strong>AI interview<\/strong>/);
-    // the page leads with the progress line (Wave S2, K4), then the line and the one thing to do now; withdrawing and the
-    // privacy requests are one click away, closed until opened (founder brief, 14 October 2026)
+    // the page leads with the steps, then the line and the one thing to do now; withdrawing and the privacy requests are
+    // one click away, closed until opened
     const main = html.slice(html.indexOf("<main>"));
     expect(main.slice(main.indexOf("</h1>") + "</h1>".length).startsWith('<ol class="track" aria-label="Where your application is">')).toBe(true);
-    // a circle per step joined by a line: Applied is behind her, ticked and said to be done; the AI interview is where she is
-    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Applied<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>AI interview<\/span><\/li><li><span class="dot" aria-hidden="true"><\/span><span>Review<\/span><\/li>/);
+    // a circle per step joined by a line: Received and Under review are behind her, ticked and said to be done; the AI
+    // interview is where she is, and it is the last step: no decision is hinted at before she is told one
+    expect(main).toMatch(/<ol class="track" aria-label="Where your application is"><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Received<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="done"><span class="dot" aria-hidden="true"><svg class="icon"[^>]*>.*?<\/svg><\/span><span>Under review<\/span><span class="sr-only"> \(done\)<\/span><\/li><li class="current" aria-current="step"><span class="dot" aria-hidden="true"><\/span><span>AI interview<\/span><\/li><\/ol>/);
     expect(main.indexOf('<ol class="track"')).toBeLessThan(main.indexOf("<h2>What happens next</h2>"));
     expect(main.indexOf("<h2>What happens next</h2>")).toBeLessThan(main.indexOf('<a class="btn" href="/c/screen/'));
     expect(main.indexOf('<a class="btn" href="/c/screen/')).toBeLessThan(main.indexOf('<div class="card status">'));
@@ -416,16 +353,17 @@ describe("candidate pages: the look, page by page", () => {
     expect(html).toMatch(/<details class="more"><summary>Ask for a copy, a fix, deletion, or a person&#39;s review<\/summary>/);
     expect(html).toContain('<option value="human_review">Have a person review my application</option>');
     expect(html).toContain('<details class="more"><summary>How AI is used</summary><p class="meta">An AI assistant reads applications');
+    // a person is reached by the address the job page prints, never by a reply keyword; and no score is ever on this page
+    expect(html).toMatch(/<p>To reach a person, email <a href="mailto:([^"]+)">\1<\/a>, or make a request below\.<\/p>/);
+    expect(html).not.toMatch(/HUMAN|\d{1,3}\s?\/\s?100|match score|<progress/);
     // a send without the confirmation box comes back with the withdraw choice open
     expect(await page(`/c/status/${statusToken}?confirm=withdraw`)).toContain('<details class="more" open=""><summary>No longer interested?</summary>');
-    // the messages read as a conversation in the page's own styles, with no style attribute and no script (plan G7)
-    expect(html).toContain('<h2 id="messages">Messages about your application</h2>');
-    expect(html).toMatch(/<li class="msg team"><p class="msg-head">Look Dental<span aria-hidden="true"> · <\/span>/);
+    // the page's own styles, with no style attribute and no script
     expect(html).not.toMatch(/ style="/);
     expect(html).not.toContain("<script");
   });
 
-  it("the screening page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one plum button and the other two outlined", async () => {
+  it("the AI interview's page carries its own styles in the head with the request's nonce; its introduction says first that it is the company's AI assistant, with Start as the one plum button and a person as the outlined one", async () => {
     const r = await app.request(`/c/screen/${screenToken}`);
     const nonce = (r.headers.get("content-security-policy-report-only") ?? "").match(/'nonce-([^']+)'/)![1];
     const html = await r.text();
@@ -438,28 +376,31 @@ describe("candidate pages: the look, page by page", () => {
     expect(main.indexOf('<p class="ai-line"><span class="ai-tag">AI assistant</span>')).toBe("<main>".length);
     expect(main).toContain("This conversation is with Look Dental&#39;s AI assistant, a software program, not a person.");
     expect(html).toContain(`<form method="post" action="/c/screen/${screenToken}/start"><button class="btn" type="submit">Start</button></form>`);
-    expect(html).toContain(`<form method="post" action="/c/screen/${screenToken}/later"><button class="btn secondary" type="submit">Do this later</button></form>`);
     expect(html).toContain(`<a class="btn secondary" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
+    // two ways on from this page, and no third
+    expect(main.slice(main.indexOf('<div class="actions">'), main.indexOf("</div>", main.indexOf('<div class="actions">'))).match(/class="btn/g)).toHaveLength(2);
+    expect(html).not.toMatch(/Do this later|\/later"/);
   });
 
-  it("a question page: the chat in one thread with the question to answer as its latest message, the steps with the counter, the quiet skip and the person always there, and no inline style", async () => {
+  it("a question page: the chat in one thread with the question to answer as its latest message, how far along it is in one line, the quiet skip and the person always there, and no inline style", async () => {
     expect((await app.request(`/c/screen/${screenToken}/start`, { method: "POST" })).status).toBe(302);
     const html = await page(`/c/screen/${screenToken}`);
     expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
-    // the chat offered with the application (Wave S7): the chat's title, the thread, the latest message the one to answer
-    expect(html).toMatch(/<h1 class="chat-title">Your chat about the [^<]+ role<\/h1>/);
+    // the chat's title, how far along it is, the thread, the latest message the one to answer
+    expect(html).toMatch(/<h1 class="chat-title">Your chat about the [^<]+ role<\/h1><p class="meta">Question 1 of \d+<\/p>/);
+    expect(html).not.toMatch(/\brequired ·|Required questions|Wrapping up/);
     expect(html).toMatch(/<li class="msg assistant now" id="question">[\s\S]+?<\/li>/);
-    expect(html).toMatch(/>\d+ of \d+ required · [^<]+</);
     expect(html).toContain('<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>');
     expect(html).toContain(`<a class="link-action" href="/c/screen/${screenToken}/person">I&#39;d rather talk to a person</a>`);
     expect(html).not.toMatch(/ style="/);
-    // the bar's colours come from the tokens (plum running into coral), in both themes, without a style attribute
-    expect(SCREEN_CSS).toContain(".progress progress::-webkit-progress-value { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
-    expect(SCREEN_CSS).toContain(".progress progress::-moz-progress-bar { border-radius: 9999px; background: linear-gradient(90deg, var(--primary), var(--accent)); }");
-    // the choice page: one heading, two equal outlined buttons
+    // no steps header and no progress bar: neither is drawn, and neither is styled
+    expect(html).not.toMatch(/class="journey|\.journey|<progress/);
+    expect(SCREEN_CSS).not.toMatch(/\.progress|\.journey/);
+    // the choice page: one heading, and one outlined button that tells the hiring team
     const choice = await page(`/c/screen/${screenToken}/person`);
     expect(choice.match(/<h1[\s>]/g)).toHaveLength(1);
-    expect(choice.match(/<button class="btn secondary" type="submit">/g)).toHaveLength(2);
+    expect(choice.match(/<button class="btn secondary" type="submit">/g)).toHaveLength(1);
+    expect(choice).toContain('<button class="btn secondary" type="submit">Tell the hiring team</button>');
     expect(choice).not.toMatch(/<button class="btn" type="submit">/);
   });
 });

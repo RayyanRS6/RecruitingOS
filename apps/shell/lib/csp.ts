@@ -2,7 +2,7 @@
  * Content-security policy for the authenticated application (21 Sep, item 6). Dependency-free so the Next.js middleware
  * can use it. A per-request nonce covers the scripts Next.js emits and any script the shell adds. No outside origin at
  * all: the fonts are served from this deployment's own /fonts/ folder (app/fonts.css). Report-only until the staging
- * reports have been reviewed (docs/readiness/18).
+ * reports have been reviewed (docs/14-deployment-and-environment.md).
  */
 export type AppCspMode = "report-only" | "enforce";
 
@@ -20,7 +20,7 @@ export function buildAppCsp(input: { nonce: string; dev: boolean; reportPath?: s
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
-    // The résumé inside the candidate panel (plan H5) is a frame of this origin's own API route; nothing else is framed.
+    // The resume inside the candidate panel is a frame of this origin's own API route; nothing else is framed.
     "frame-src 'self'",
     "object-src 'none'",
     "img-src 'self' data: blob:",

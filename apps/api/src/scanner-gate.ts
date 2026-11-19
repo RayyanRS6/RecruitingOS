@@ -2,7 +2,7 @@ import { errorForLog, raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
 import type { Db } from "@ros/db";
 
 /**
- * The real-data gate for résumé scanning (docs/readiness/20 blocker 8, OPS item 4): the fake scanner calls everything
+ * The real-data gate for résumé scanning (docs/runbooks/resume-storage.md): the fake scanner calls everything
  * but the test string clean, so a production worker running it warns and raises one `scanner.fake` alert, standing
  * until a person resolves it. Raised by the worker only, the one process that scans (the app never opens a quarantined
  * file), and never outside production. A failure to raise is logged, never fatal to the boot.

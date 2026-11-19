@@ -6,6 +6,6 @@ import { getMe, isAdmin } from "../../../lib/session";
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const me = await getMe();
   if (!me) redirect("/login");
-  if (!isAdmin(me)) redirect(me.activeCompanyId ? "/" : "/recruiter/queue");
+  if (!isAdmin(me)) redirect(me.activeCompanyId ? "/" : "/setup/company");
   return <>{children}</>;
 }

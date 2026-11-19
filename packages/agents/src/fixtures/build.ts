@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { crc32, deflateRawSync } from "node:zlib";
 
 /**
- * Builders for the résumé fixtures next to this file (docs/spec/21 section 7, P0 row "PDF and DOCX fixtures"). The
+ * Builders for the résumé fixtures next to this file. The
  * files are written once by `tsx packages/agents/src/fixtures/build.ts` and checked in; the tests read the files and
  * also run the builders, so both the fixtures and the way they were made are proven. No library is involved: the PDF is
  * hand-written PDF 1.4 with a correct cross-reference table, and the Word document is the smallest OOXML package that

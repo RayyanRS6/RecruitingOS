@@ -2,19 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { SignupConfig, SignupRequest } from "@ros/contracts";
+import type { CompanyCreated, SignupConfig, SignupRequest } from "@ros/contracts";
 import { useNavigate } from "../nav";
 import { Alert, Button, Field } from "@ros/ui";
-import { api, ApiError } from "../api/client";
-import { ACCESS_LOOK_MS, VERTICALS, ZONE_CHOICES, browserTimeZone, lookAtAccess, snapTimeZone, verticalHint } from "../company-setup";
+import { api, ApiError, errorWords } from "../api/client";
+import { ACCESS_LOOK_MS, VERTICALS, ZONE_CHOICES, browserTimeZone, lookAtAccess, snapTimeZone } from "../company-setup";
 import { focusLost } from "../focus-after";
-import { browserStorage } from "../start-hire";
-import { clearAllQuickStarts } from "./new-role/quick-start";
 
 const SIZE_BANDS = ["1-19", "20-49", "50-99", "100-199", "200-499", "500+"];
 
 /**
- * Who may create a company (GATE-V2) and this person's own request if they sent one: the `signup` part of
+ * Whether this person may send the company form, and their own request if they sent one: the `signup` part of
  * GET /api/v1/auth/config, as the page's server asked it.
  */
 export type SignupAnswer = Pick<SignupConfig, "allowed" | "door" | "request"> & { contact: string | null };
@@ -23,24 +21,25 @@ const WAITING_TITLE = "Your request has been sent";
 const DECLINED_TITLE = "We can't offer access right now";
 
 /**
- * Sign-up's one short form. Nothing is guessed for the owner: the state and the size start empty, and the time zone
- * starts from their own computer (it sets interview times and the hours candidates may be texted, so a wrong one is a
- * compliance problem). Someone who signed in with the wrong account can sign out from here.
+ * The company's details: one short form after the first sign-in. Nothing is guessed for the owner: the state and the
+ * size start empty, and the time zone starts from their own computer (the company's days, its closing dates among them,
+ * are counted in it). Someone who signed in with the wrong account can sign out from here.
  *
- * By invitation (SIGNUP_MODE=invite, GATE-V2), someone the API will not let open a company (`signup.allowed` false) gets
- * one line where the form was: ask ITS for an invitation, at the inbox job pages already print. Without an answer the form
- * shows as before, and the API still refuses whoever it should.
+ * The form sends a request (`signup.door` "request"), and the API's answer, not the door, decides what follows: nothing
+ * opens until an administrator accepts the company, so the page stays and says so. A person with a request always
+ * lands here whatever address they open (the shell's layouts send anyone with no active company here), and reads the
+ * same screen: waiting or declined, in the same card, with Sign out. While they read it the page looks again every 30
+ * seconds, and goes Home by itself once there is an active company. A look that fails changes nothing
+ * (`lookAtAccess`). Where the company is live as soon as it is made (local work, tests, a platform administrator), the
+ * same form opens Home at once.
  *
- * By approval (SIGNUP_MODE=approval), the same form sends a request (`signup.door` "request"), and the API's answer, not
- * the door, decides what follows: nothing opens until ITS accepts, so the page stays and says so. A person with a request
- * always lands here whatever address they open (the shell's layouts send anyone with no active company here), and reads
- * the same screen: waiting or declined, in the same card, with Sign out. While they read it the page looks again every 30
- * seconds, and goes Home by itself once there is an active company. A look that fails changes nothing (`lookAtAccess`).
+ * Someone who may not send the form and has no request (`signup.allowed` false) reads one line in its place, with the
+ * inbox to ask. Without an answer about that the form shows, and the API still refuses whoever it should.
  */
-export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
+export function CompanySetup({ signup, person }: { signup?: SignupAnswer | null; /** The signed-in person: their name and address start two of the fields. */ person?: { email: string; name: string | null } | null }) {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: "", ownerName: "", vertical: "consumer", sizeBand: "", city: "", region: "", timezone: "", website: "" });
+  const [form, setForm] = useState({ name: "", ownerName: person?.name ?? "", contactEmail: person?.email ?? "", vertical: "consumer", sizeBand: "", city: "", region: "", timezone: "", website: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -80,7 +79,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
   const standingDrawn = useRef(request?.status);
   const [said, setSaid] = useState("");
-  const title = request ? (request.status === "declined" ? DECLINED_TITLE : WAITING_TITLE) : signup && !signup.allowed ? "Recruiting OS is by invitation for now" : "Tell us about your company";
+  const title = request ? (request.status === "declined" ? DECLINED_TITLE : WAITING_TITLE) : "Tell us about your company";
   useEffect(() => {
     if (request?.status === standingDrawn.current) return;
     standingDrawn.current = request?.status;
@@ -92,17 +91,17 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
     setBusy(true);
     setError(null);
     try {
-      const answer = await api.post<{ accessRequest?: SignupRequest } | null>("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
-      if (answer?.accessRequest) {
+      const answer = await api.post<CompanyCreated>("/api/v1/companies", { name: form.name, ownerName: form.ownerName || undefined, contactEmail: form.contactEmail.trim() || undefined, vertical: form.vertical, sizeBand: form.sizeBand, timezone: form.timezone, website: form.website || undefined, locations: [{ city: form.city, region: form.region.toUpperCase(), country: "US" }] });
+      if (answer.accessRequest) {
         setRequest(answer.accessRequest);
         return;
       }
       await qc.invalidateQueries({ queryKey: ["me"] });
       nav("/", { replace: true });
     } catch (err) {
-      // Sent already (from another tab, say): where that request stands is the answer, not an error.
-      if (err instanceof ApiError && err.code === "another_company_needs_its" && (await look())) return;
-      setError(err instanceof ApiError ? err.message : signup?.door === "request" ? "Could not send your request." : "Could not create the company.");
+      // Refused because a request was sent already (from another tab, say): where it stands is the answer, not an error.
+      if (err instanceof ApiError && (await look())) return;
+      setError(errorWords(err, signup?.door === "request" ? "Could not send your request." : "Could not create the company."));
     } finally {
       setBusy(false);
     }
@@ -114,11 +113,10 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
     } catch {
       // signed out already, or the session had ended: the sign-in page is where they are going either way
     }
-    clearAllQuickStarts(browserStorage());
     qc.clear();
     nav("/login", { replace: true });
   };
-  const byInvitation = signup && !signup.allowed && !request ? signup : null;
+  const mayNotSend = !!signup && !signup.allowed && !request;
   return (
     // The application card of screenshot 5, alone on the page's glow: the title with Sign out beside it, then the form.
     <main className="mx-auto w-full max-w-[620px] px-4 py-10 sm:py-16">
@@ -140,16 +138,18 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
           <p className="mt-7 border-t border-line pt-7 wrap-anywhere">
             Questions?{" "}{contact ? <a href={`mailto:${contact}`}>{contact}</a> : "Ask ITS."}
           </p>
-        ) : byInvitation ? (
+        ) : mayNotSend ? (
           // a long address breaks anywhere rather than pushing the card wider than a phone
           <p className="mt-7 border-t border-line pt-7 wrap-anywhere">
-            Ask ITS for an invitation{byInvitation.contact ? <>: <a href={`mailto:${byInvitation.contact}`}>{byInvitation.contact}</a></> : null}.
+            This account cannot set up a company right now. Questions?{" "}{contact ? <a href={`mailto:${contact}`}>{contact}</a> : "Ask ITS."}
           </p>
         ) : (
           <form onSubmit={submit} className="stack mt-7 gap-5 border-t border-line pt-7">
             <Field label="Company name" htmlFor="name"><input id="name" className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Your name" htmlFor="owner"><input id="owner" className="input" value={form.ownerName} onChange={(e) => setForm({ ...form, ownerName: e.target.value })} /></Field>
-            <Field label="What kind of business" htmlFor="vertical" hint={verticalHint(form.vertical)}>
+            {/* shown on the job pages and where candidates' replies go: the company's own address from its first job, not the ITS inbox */}
+            <Field label="Email candidates can write to" htmlFor="contact"><input id="contact" type="email" className="input" required maxLength={254} autoComplete="email" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} /></Field>
+            <Field label="What kind of business" htmlFor="vertical">
               <select id="vertical" className="select" value={form.vertical} onChange={(e) => setForm({ ...form, vertical: e.target.value })}>
                 {VERTICALS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
@@ -165,7 +165,7 @@ export function CompanySetup({ signup }: { signup?: SignupAnswer | null }) {
               {/* two letters: the box takes no more, and its example shows the form */}
               <Field label="State" htmlFor="region"><input id="region" className="input" required minLength={2} maxLength={2} placeholder="TX" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
             </div>
-            {/* the zone sets the hours candidates may be texted, so a pre-filled guess says so until the owner changes it */}
+            {/* closing dates are counted in the zone, so a pre-filled guess says so until the owner changes it */}
             <Field label="Time zone" htmlFor="timezone" hint={guessedZone && form.timezone === guessedZone ? "We started from your computer's setting." : undefined}>
               <select id="timezone" className="select" required value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })}>
                 <option value="" disabled>Choose a time zone</option>

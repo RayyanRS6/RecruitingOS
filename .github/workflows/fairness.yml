@@ -1,37 +1,35 @@
-# Fairness tests on the real AI (the owner's request, 13 October 2026): CV reading and CV screening, run against the
-# models the app uses (Claude Haiku 5.5; Claude Sonnet 5.5 writes the test job), with synthetic CVs only. Twin CVs that
-# differ only in a name, a graduation year or a zip code must read and score the same; the same CV read three times
-# must read and score the same; quotes must be real; a gap, a career change or no degree is never marked down alone.
-# Since Wave S3 (14 October 2026) also: the same CV with an earlier rejection at the company sends the very same input,
-# and the scoring never sees a name, email, phone, street, zip code or link (triage.redaction).
-# Since Wave S7 (15 October 2026) the "Which tests" choice can also run the screening chat, its scorecard and the
-# answers written up from it (the screen and chat suites), which until then ran only on the stand-in model.
-# Since the live test of 12 November 2026 it can also run the job builder: the draft from what an owner types (the
-# intake suites) and changes asked for by chat (packet.revise). Claude Sonnet 5.5 writes each draft, so that choice
-# costs more than the CV tests.
+# Fairness tests on the real AI (the owner's request, 13 October 2026), run against the models the app uses (Claude
+# Haiku 5.5; Claude Sonnet 5.5 writes the job), with made-up resumes only. The "Which tests" choice runs:
+# - the resume reading and its scoring: twin resumes that differ only in a name, a graduation year or a zip code must
+#   read and score the same; the same resume read three times must read and score the same; quotes must be real; a
+#   gap, a career change or no degree is never marked down alone; an earlier rejection at the company changes nothing
+#   that is sent; and the scoring never sees a name, email, phone, street, zip code or link;
+# - the AI interview's chat and its scorecard (the screen and chat suites);
+# - the job builder: the job written from what an owner types (the intake suites). Claude Sonnet 5.5 writes each job,
+#   so that choice costs more than the resume tests.
 # Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
-# to a fork's code. About ten cents a run for the CV tests; the chat tests make more calls and cost more. How to use
-# it: docs/runbooks/fairness-tests.md.
+# to a fork's code. About ten cents a run for the resume tests; the chat tests make more calls and cost more. How to
+# use it: docs/runbooks/fairness-tests.md.
 name: fairness
 
 on:
   workflow_dispatch:
     inputs:
       tests:
-        description: "Which tests (the first is the original CV reading and scoring set)"
+        description: "Which tests (the first is the resume reading and scoring set)"
         type: choice
-        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat", "intake,packet.revise"]
+        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat", "intake"]
         default: "resume,triage"
       # The ids stay: the concurrency group and the env below use them. The model and effort set the standard tier
-      # (packages/ai/src/routing.ts): screening, and also the job builder's conversation and changes by chat, so the
-      # runbook says to keep both as they are for the job-builder choice.
+      # (packages/ai/src/routing.ts): screening, and also the job builder's conversation, so the runbook says to keep
+      # both as they are for the job-builder choice.
       screening_model:
-        description: "Model for screening, the job builder's conversation and changes by chat (the app uses claude-haiku-5-5)"
+        description: "Model for screening and the job builder's conversation (the app uses claude-haiku-5-5)"
         type: choice
         options: [claude-haiku-5-5, claude-sonnet-5-5]
         default: claude-haiku-5-5
       screening_effort:
-        description: "How hard it thinks for screening, the job builder's conversation and changes by chat (app setting = what the app uses)"
+        description: "How hard it thinks for screening and the job builder's conversation (app setting = what the app uses)"
         type: choice
         options: [app setting, low, medium, high]
         default: app setting
@@ -71,7 +69,7 @@ jobs:
             exit 1
           fi
 
-      - name: The chosen tests on the real models (synthetic CVs and conversations only)
+      - name: The chosen tests on the real models (made-up resumes and conversations only)
         id: evals
         env:
           AI_PROVIDER: anthropic

@@ -1,13 +1,13 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
-import { createElement, type ReactElement, type ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, Icon, IconButton, IconChip, IconLabel, Kbd, PageHeader, Pill, ScoreBadge, SectionHeader, Segmented, Skeleton, StatCell, StatStrip, Table } from "./index";
+import { Alert, Button, Card, Chip, cn, EmptyState, ErrorState, Eyebrow, Field, Icon, IconButton, IconChip, IconLabel, PageHeader, Pill, ScoreBadge, SectionHeader, Segmented, Skeleton, Table } from "./index";
 
 /**
  * The kit's markup for the October 2026 redesign (docs/07): the layout helpers screens rely on (spec 5b) render the
- * classes styles.css draws, and the kit keeps no inline style of its own except a value that is data (a bar's width, a
- * menu placed against the window, a text box's measured height). The components are hook-free, so they are called
+ * classes styles.css draws, and the kit keeps no inline style of its own except a value that is data (a menu placed
+ * against the window, a menu's list height inside a dialog). The components are hook-free, so they are called
  * directly here (packages/ui has no DOM renderer); the shell's tests render the rest to markup.
  */
 type El = ReactElement<{ children?: ReactNode; className?: string; style?: unknown; [key: string]: unknown }>;
@@ -17,60 +17,12 @@ const tree = (el: El): El[] => [el, ...kids(el).flatMap(tree)];
 const byClass = (el: El, className: string) => tree(el).find((e) => e.props.className === className);
 
 describe("the layout helpers (spec 5b)", () => {
-  it("StatStrip is one labelled group of cells", () => {
-    const strip = StatStrip({ label: "Your jobs at a glance", children: "cells" }) as El;
-    expect(strip.type).toBe("div");
-    expect(strip.props).toMatchObject({ className: "stat-strip", role: "group", "aria-label": "Your jobs at a glance" });
-  });
-
-  it("StatCell shows what it counts over the figure, and is a link with an arrow when given an address", () => {
-    const plain = StatCell({ label: "Open roles", value: 3 }) as El;
-    expect(plain.type).toBe("div");
-    expect(plain.props.className).toBe("stat-cell");
-    expect(byClass(plain, "stat-cell-label")?.props.children).toBe("Open roles");
-    expect(byClass(plain, "stat-cell-value")?.props.children).toBe(3);
-    expect(byClass(plain, "stat-cell-go")).toBeUndefined();
-
-    const link = StatCell({ label: "Applicants", value: 24, href: "/people", icon: "people", tone: "peach", note: "across your jobs" }) as El;
-    expect(link.type).toBe("a");
-    expect(link.props).toMatchObject({ className: "stat-cell", href: "/people" });
-    expect(byClass(link, "stat-cell-go")?.props["aria-hidden"]).toBe("true");
-    expect(byClass(link, "stat-cell-note")?.props.children).toBe("across your jobs");
-    const chip = tree(link).find((e) => e.type === IconChip);
-    expect(chip?.props).toMatchObject({ icon: "people", tone: "peach" });
-
-    const message = StatCell({ label: "Every packet is reviewed before it is shared.", value: null, highlight: true }) as El;
-    expect(message.props.className).toBe("stat-cell highlight");
-    expect(byClass(message, "stat-cell-value")).toBeUndefined();
-  });
-
-  it("StatCell draws the app's own Link when given one (no full page load), with the same classes and arrow", () => {
-    const seen: Array<{ href: string; className: string }> = [];
-    const routed = StatCell({
-      label: "Applicants",
-      value: 24,
-      href: "/talent",
-      highlight: true,
-      link: (cell) => {
-        seen.push({ href: cell.href, className: cell.className });
-        return createElement("span", { "data-router-link": cell.href, className: cell.className }, cell.children);
-      },
-    }) as El;
-    expect(seen).toEqual([{ href: "/talent", className: "stat-cell highlight" }]);
-    expect(routed.type).toBe("span");
-    expect(routed.props).toMatchObject({ "data-router-link": "/talent", className: "stat-cell highlight" });
-    expect(byClass(routed, "stat-cell-go")?.props["aria-hidden"]).toBe("true");
-    expect(byClass(routed, "stat-cell-value")?.props.children).toBe(24);
-    // without an address there is nothing to follow: the render is not called
-    StatCell({ label: "Open roles", value: 3, link: () => { throw new Error("no link without an address"); } });
-  });
-
   it("IconChip is a decorative tinted square around one icon, lavender and 40px unless asked", () => {
     const chip = IconChip({ icon: "briefcase" }) as El;
     expect(chip.type).toBe("span");
     expect(chip.props).toMatchObject({ className: "icon-chip lavender md", "aria-hidden": "true" });
     expect(kids(chip)[0].props).toMatchObject({ name: "briefcase", size: 18 });
-    expect((IconChip({ icon: "sparkles", tone: "peach", size: "sm" }) as El).props.className).toBe("icon-chip peach sm");
+    expect((IconChip({ icon: "sparkle", tone: "peach", size: "sm" }) as El).props.className).toBe("icon-chip peach sm");
     expect(kids(IconChip({ icon: "shield", size: "lg" }) as El)[0].props.size).toBe(22);
   });
 
@@ -196,15 +148,12 @@ describe("the kit's round-3 options", () => {
     expect(kids(placed).map((b) => [b.props.className, b.props["aria-pressed"]])).toEqual([["on", true], ["", false]]);
   });
 
-  it("Button `keyshortcuts` announces a shortcut without drawing a key cap; `kbd` still draws and announces one", () => {
+  it("Button `keyshortcuts` announces a shortcut and draws no key cap", () => {
     const send = Button({ children: "Send", variant: "primary", keyshortcuts: "Control+Enter", title: "Send (Ctrl+Enter)" }) as El;
     expect(send.props["aria-keyshortcuts"]).toBe("Control+Enter");
     expect(send.props.className).toBe("btn primary");
-    expect(tree(send).some((e) => e.type === Kbd)).toBe(false);
+    expect(tree(send).some((e) => e.type === "kbd")).toBe(false);
     expect(Object.keys(send.props)).toEqual(Object.keys((Button({ children: "Save" }) as El).props));
-    const hinted = Button({ children: "Start a hire", kbd: "N" }) as El;
-    expect(hinted.props["aria-keyshortcuts"]).toBe("N");
-    expect(tree(hinted).find((e) => e.type === Kbd)?.props).toMatchObject({ decorative: true, children: "N" });
     expect((Button({ children: "Save" }) as El).props["aria-keyshortcuts"]).toBeUndefined();
   });
 
@@ -221,9 +170,9 @@ describe("the kit's round-3 options", () => {
   });
 
   it("IconChip comes in 28px (`xs`) with a 14px icon; Eyebrow can be a section's H2 or H3", () => {
-    const xs = IconChip({ icon: "sparkles", tone: "peach", size: "xs" }) as El;
+    const xs = IconChip({ icon: "sparkle", tone: "peach", size: "xs" }) as El;
     expect(xs.props).toMatchObject({ className: "icon-chip peach xs", "aria-hidden": "true" });
-    expect(kids(xs)[0].props).toMatchObject({ name: "sparkles", size: 14 });
+    expect(kids(xs)[0].props).toMatchObject({ name: "sparkle", size: 14 });
     for (const as of ["h2", "h3"] as const) {
       const heading = Eyebrow({ children: "AI interview", as }) as El;
       expect(heading.type).toBe(as);
@@ -283,14 +232,29 @@ describe("the kit's round-3 options", () => {
     expect(Object.keys(wrapped.props)).toEqual(Object.keys(plain.props));
   });
 
-  // Review of the live-test fixes, 12 November 2026: someone decided before any AI review was still shown "No score yet"
-  it("ScoreBadge `none` gives the words with no number; left out, it says 'No score yet' as before", () => {
+  it("ScoreBadge `none` gives the words with no number; left out, it says 'No score yet'", () => {
     expect((ScoreBadge({ score: null }) as El).props).toEqual({ className: "score none", children: "No score yet" });
     expect((ScoreBadge({ score: null, size: "sm", none: "No score" }) as El).props).toEqual({ className: "score none sm", children: "No score" });
     // a number is still the number, whatever the words for none
-    const scored = ScoreBadge({ score: 91, size: "sm", none: "No score" }) as El;
+    const scored = ScoreBadge({ score: 91, size: "sm", none: "No score", tone: "good", label: "Resume match" }) as El;
     expect(scored.props.className).toBe("score good sm");
-    expect(scored.props.title).toBe("Match score 91 out of 100");
+    expect(scored.props.title).toBe("Resume match 91 out of 100");
+  });
+
+  it("ScoreBadge takes its colour and its band word from the page: the kit keeps no band table", () => {
+    // no colour given is grey, whatever the number; the number is rounded and kept inside 0-100
+    const plain = ScoreBadge({ score: 99.6 }) as El;
+    expect(plain.props.className).toBe("score neutral");
+    expect(plain.props.title).toBe("Score 100 out of 100");
+    expect((ScoreBadge({ score: -4, tone: "caution" }) as El).props.title).toBe("Score 0 out of 100");
+    // a band word sits beside the number, in words, so the colour never says it alone
+    const banded = ScoreBadge({ score: 72, tone: "good", band: "High", label: "AI interview" }) as El;
+    expect(banded.props.className).toBe("score-wrap");
+    const [badge, word] = kids(banded);
+    expect(badge.props).toMatchObject({ className: "score good", title: "AI interview 72 out of 100" });
+    expect(word.props).toEqual({ className: "score-band", children: "High" });
+    // the large number at the head of a section carries no colour of its own
+    expect((ScoreBadge({ score: 72, tone: "good", size: "lg" }) as El).props.className).toBe("score lg");
   });
 });
 
@@ -327,8 +291,7 @@ describe("the kit without inline styles", () => {
 
   it("keeps an inline style only for a value that is data", () => {
     const styles = (file: string) => (readFileSync(new URL(file, import.meta.url), "utf8").match(/style=\{/g) ?? []).length;
-    expect(styles("./index.tsx")).toBe(1); // the pipeline's widths and colours per stage
-    expect(styles("./score-bars.tsx")).toBe(1); // a bar's width
+    expect(styles("./index.tsx")).toBe(0);
     // a menu placed against the window inside a table's scrolling box; a menu's list height inside a dialog (--menu-max)
     expect(styles("./menu.tsx")).toBe(2);
     for (const file of ["./sheet.tsx", "./tabs.tsx", "./toast.tsx", "./split-view.tsx", "./auto-textarea.tsx", "./motion-provider.tsx"]) expect(styles(file), file).toBe(0);

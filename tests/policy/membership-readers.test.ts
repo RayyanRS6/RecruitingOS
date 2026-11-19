@@ -20,12 +20,8 @@ const READS_A_MEMBERSHIP = /\b(?:from|leftJoin|innerJoin|rightJoin|fullJoin)\(me
  * status is not taken for someone on a team.
  */
 const READS_ANY_STATUS: Record<string, number> = {
-  // Hands the status back, and both callers keep only `active` (services/team.ts `listTeam`, routes/role-packets.ts `interviewerViews`).
-  "packages/core/src/calendar-connections.ts": 1,
   // The one reader that does act on any status. A request for access is skipped first, so no invitation opens it; a `removed` person rejoins, as ever.
   "packages/core/src/invitations.ts": 2,
-  // The team role of people already on an interview, to leave pay out of their brief. Only an active member is put on an interview (services/interview-create.ts).
-  "packages/workflows/src/definitions/schedule-interview.ts": 1,
   // What a test does for itself.
   "apps/api/src/test-helpers.ts": 1,
 };

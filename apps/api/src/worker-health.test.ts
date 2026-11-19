@@ -17,7 +17,7 @@ describe("worker health", () => {
   const BASE = Date.UTC(2026, 8, 30, 12, 0, 0);
   let offset = 0;
   const now = () => new Date(BASE + offset);
-  const testEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory" };
+  const testEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", STORAGE_PROVIDER: "memory" };
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, now, env: { ...testEnv, WORKER_INLINE: "true" } });
@@ -167,7 +167,7 @@ describe("the worker's watchdog", () => {
   const PERSON = /Nia Brooks|nia\.brooks@example\.com/;
 
   beforeAll(async () => {
-    inline = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true" } });
+    inline = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", STORAGE_PROVIDER: "memory", WORKER_INLINE: "true" } });
   });
   afterAll(async () => {
     inline.engine.onProgress(null);

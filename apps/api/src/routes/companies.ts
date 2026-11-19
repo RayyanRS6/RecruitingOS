@@ -1,109 +1,67 @@
 import { Hono, type Context } from "hono";
-import { desc, eq } from "drizzle-orm";
-import { CreateCompany, InviteMember, UpdateMember, limitsForCustomers, trialStanding } from "@ros/contracts";
-import { aiCreditView, assertCan, audit, entitlements, hiddenAmong, planIncludesItsPosting, raiseAlert, setActiveCompany, revokeStaffGrant, whoPostsBoards } from "@ros/core";
-import { companies, plans, recruiterEscalations, roles, staffAccessGrants, users, withPlatform, withTenant } from "@ros/db";
-import { mailbox } from "@ros/integrations";
+import { CreateCompany, InviteMember, LeaveCompany, UpdateMember, type CompanyCreated } from "@ros/contracts";
+import { assertCan, setActiveCompany } from "@ros/core";
 import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
 import { actorOf, requireTenant, requireUser, type Vars } from "../middleware/session";
 import { sendAccessRequest } from "../services/access-requests";
-import { INVITE_ONLY_MESSAGE, createCompany, signupDoor } from "../services/companies";
-import { candidateEmailHealth } from "../services/email-health";
-import { tellItsAboutNewCompany } from "../services/company-trust";
-import { sendToIts } from "../services/escalation-queue";
-import { inviteMember, leaveCompany, listInvitations, listTeam, resendMemberInvitation, revokeMemberInvitation, updateMember } from "../services/team";
+import { createCompany, signupDoor } from "../services/companies";
+import { companyView } from "../services/company-settings-profile";
+import { inviteMember, leaveCompany, resendMemberInvitation, revokeMemberInvitation, teamView, updateMember } from "../services/team";
 import { HttpError } from "../middleware/errors";
 
+/**
+ * The company itself and its team: the company details form, the company as Settings reads it, and the people.
+ * routes/company-settings.ts, mounted on the same address, changes the company's details.
+ */
 export const companyRoutes = new Hono<Vars>();
 
 /**
- * Open sign-up (founder decision B7): anyone signed in who has no company yet may create one and draft and approve roles
- * at once. Its public side waits for the one-time ITS check, so the ITS queue is told here (COMPANY_CHECK=auto confirms
- * it instead). A second company of one's own goes through ITS (founder decision L-17 A, known bug 65): a person who
- * already belongs to a company, or already created one, is refused with 409 `another_company_needs_its` ("To open
- * another company, contact ITS."). A platform admin sets companies up as before; someone invited to several companies
- * keeps the company switcher. The body is checked before that rule, so a bad one still answers 400.
+ * The company details form. By approval (SIGNUP_MODE=approval, production) anyone signed in sends a request
+ * (services/access-requests.ts): no company to work in, no workflow and nothing public until a platform administrator
+ * accepts it, and the answer carries `accessRequest`. One address sends five requests an hour at most (429
+ * `rate_limited`), whichever accounts it signs in with. Where sign-up is open (a person's machine and the tests), and for
+ * a platform administrator setting a company up, the company is live the moment it is created.
  *
- * By invitation (GATE-V2, SIGNUP_MODE=invite) only a platform admin or an address on SIGNUP_ALLOWED_EMAILS may create a
- * company: anyone else is refused with 403 `signup_invite_only` before the body is read. Signing in and joining a
- * company by invitation are untouched.
- *
- * By approval (SIGNUP_MODE=approval) those two still go in directly; anyone else signed in sends a request
- * (services/access-requests.ts): no active company, no workflow and no public side until a platform administrator
- * accepts. The answer is the company with `accessRequest`, and a body that is bad, or a second request, answers as above.
- * One address sends five requests an hour at most (429 `rate_limited`), whichever accounts it signs in with.
+ * A second company of one's own goes through ITS: a person who already belongs to a company, has a request waiting or
+ * declined, or already created one, is refused with 409 `another_company_needs_its`. Someone invited to several
+ * companies keeps the company switcher. The body is checked before that rule, so a bad one still answers 400.
  */
 companyRoutes.post("/", requireUser, async (c) => {
   const s = c.get("session")!;
   const container = c.get("container");
-  const door = signupDoor(container.env, s.user);
-  if (door === "none") throw new HttpError(403, "signup_invite_only", INVITE_ONLY_MESSAGE);
   const body = CreateCompany.parse(await c.req.json());
-  if (door === "request") {
+  if (signupDoor(container.env, s.user) === "request") {
     // five requests an hour from one address, whoever is signed in: the door's own limit (POLICIES.accessRequest)
     const refused = await checkRateLimits(c, [POLICIES.accessRequest]);
     if (refused) return refused;
     return c.json(await sendAccessRequest(container, { body, user: s.user, actor: actorOf(c) }), 201);
   }
-  const autoVerify = container.env.COMPANY_CHECK === "auto";
-  const company = await createCompany(container.db, body, s.user.id, actorOf(c), { autoVerify, now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
+  const company = await createCompany(container.db, body, s.user.id, actorOf(c), { now: container.engine.clock(), mayOpenAnother: s.user.platformRole === "platform_admin" });
   await setActiveCompany(container.db, s.sessionId, company.id);
-  await withTenant(container.db, company.id, (tx) => container.engine.start(tx, { workflowKey: "stuck_role_detector", companyId: company.id, subject: { type: "company", id: company.id }, state: { companyId: company.id }, idempotencyKey: `stuck_role_detector:${company.id}`, actor: actorOf(c) }));
-  if (!autoVerify) await tellItsAboutNewCompany(container, { company: { id: company.id, name: company.name, vertical: company.vertical, sizeBand: company.sizeBand, website: body.website ?? null }, owner: { name: body.ownerName ?? s.user.name ?? null, email: s.user.email } });
-  await container.kick();
-  return c.json(company, 201);
+  const created: CompanyCreated = { id: company.id, name: company.name, accessRequest: null };
+  return c.json(created, 201);
 });
 
+/** The company as its own people read it in Settings: its details, what candidates see about it, and its plan. */
 companyRoutes.get("/current", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
-  const container = c.get("container");
-  const now = container.engine.clock();
-  const row = await withTenant(container.db, t.companyId, async (tx) => {
-    const [co] = await tx.select().from(companies).where(eq(companies.id, t.companyId)).limit(1);
-    const [plan] = await tx.select().from(plans).where(eq(plans.key, co.planKey)).limit(1);
-    // Roles are counted from the roles using a place now, so closing one shows its place free again (polish list); people
-    // from the members and the invitations not yet answered (known bug 128). The AI credit is money: a percentage in the
-    // usage and nothing in the limits, because customers never read it in dollars.
-    const usage = await entitlements.usageOf(tx, t.companyId, { now });
-    // Home's row about the AI credit: its level, its percentage and its words; null when the plan puts no limit on it.
-    const aiCredit = await aiCreditView(tx, t.companyId, { now, timeZone: co.timezone, planKey: co.planKey });
-    // Who really posts on the boards (Rule 6), and whether the plan leaves that choice to the company at all.
-    const itsPosting = await planIncludesItsPosting(tx, t.companyId);
-    const whoPosts = await whoPostsBoards(tx, t.companyId, co.settings);
-    // Whether email to candidates is really arriving, from the last week's sends (6 November 2026): what Settings says beside
-    // the email service, instead of "connected" because a key exists. Counts only, never anyone the team may not read.
-    const candidateEmail = await candidateEmailHealth(tx, { companyId: t.companyId, now });
-    // Where the Trial plan's 30 days stand (founder decision L-02 B); null on any other plan.
-    return { ...co, plan: plan ? { key: plan.key, name: plan.name, limits: limitsForCustomers(plan.limits) } : null, usage, aiCredit, itsPosting, whoPosts, trial: trialStanding(co, now), candidateEmail };
-  });
-  // `production`: NODE_ENV is production (staging too), where a service running without a provider ("fake") is a
-  // deliberate default rather than a development stand-in, and Settings says what it does instead (audit MAIL-18).
-  return c.json({ ...row, integrations: container.integrations.statuses(), ai: { provider: container.ai.provider.id }, production: container.env.NODE_ENV === "production" });
+  return c.json(await companyView(c.get("container"), t));
 });
 
-// PATCH /current (the typed company preferences), GET /current/audit and /current/audit.csv (the customer's own history)
-// and POST /current/members/:userId/sign-out live in routes/company-settings.ts, mounted after this router.
-
-/** The team (docs/spec/21, area A): active members with their scheduling readiness; never a credential or its reference. */
+/** The team: its people, the invitations still open, the plan's people, and what the person looking may do. */
 companyRoutes.get("/current/members", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
-  return c.json(await listTeam({ tenant: t, container: c.get("container") }));
+  return c.json(await teamView({ tenant: t, container: c.get("container") }));
 });
 
-/**
- * Open invitations: who was asked, as what, by whom, and until when. Only those who manage the team (members.manage:
- * owners, admins and HR) see them (audit 01-platform B11): an interviewer or a hiring manager has no use for invitees'
- * addresses and intended roles, and gets the same 403 as for any other team change.
- */
-companyRoutes.get("/current/invitations", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "members.manage");
-  return c.json(await listInvitations({ tenant: t, container: c.get("container") }));
-});
-
-const teamOf = (c: Context<Vars>) => ({ tenant: c.get("tenant")!, actor: actorOf(c), container: c.get("container"), session: c.get("session") });
+/** The team's managers (owners and admins), with what the team rules need of the request. */
+function managing(c: Context<Vars>) {
+  const tenant = c.get("tenant")!;
+  assertCan(tenant.role, "members.manage");
+  return { tenant, actor: actorOf(c), container: c.get("container"), session: c.get("session") };
+}
 const inviterNameOf = (c: Context<Vars>) => c.get("session")!.user.name ?? c.get("session")!.user.email;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A path id that is not even a uuid names nothing: a 404 in the route's own words, never a database error. */
@@ -114,126 +72,41 @@ function idParam(c: Context<Vars>, name: string, message: string): string {
 }
 
 /**
- * Invites someone by email: one message through the outbox with a link to the invitation page, where they sign in with
- * Google or Microsoft using the invited address. Mounted on both spellings of the path.
+ * Invites someone by email, as an Admin or a Member (an owner may also invite an Owner): one message through the outbox
+ * with a link to the invitation page, where they sign in with Google or Microsoft using the invited address. The answer
+ * carries the same link, for the person to copy when the email does not arrive.
  */
-async function invite(c: Context<Vars>) {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "members.manage");
+companyRoutes.post("/current/members/invite", requireTenant, async (c) => {
+  const team = managing(c);
   const body = InviteMember.parse(await c.req.json());
-  return c.json(await inviteMember(teamOf(c), { body, inviterName: inviterNameOf(c) }), 201);
-}
-companyRoutes.post("/current/members/invite", requireTenant, invite);
-companyRoutes.post("/current/invites", requireTenant, invite);
+  return c.json(await inviteMember(team, { body, inviterName: inviterNameOf(c) }), 201);
+});
 
-/**
- * A fresh link and the email again; with `{ email: false }` the fresh link alone (6 November 2026), answered for the person
- * to copy and send themselves, because the email did not arrive. Either way the old link stops working.
- */
+/** A fresh link and the email again; the old link stops working. */
 companyRoutes.post("/current/invitations/:id/resend", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "members.manage");
-  const body = (await c.req.json().catch(() => ({}))) as { email?: unknown };
-  return c.json(await resendMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c), email: body.email !== false }));
+  const team = managing(c);
+  return c.json(await resendMemberInvitation(team, { invitationId: idParam(c, "id", "No open invitation with that id."), inviterName: inviterNameOf(c) }));
 });
 
 companyRoutes.post("/current/invitations/:id/revoke", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "members.manage");
-  return c.json(await revokeMemberInvitation(teamOf(c), { invitationId: idParam(c, "id", "No open invitation with that id.") }));
+  const team = managing(c);
+  return c.json(await revokeMemberInvitation(team, { invitationId: idParam(c, "id", "No open invitation with that id.") }));
 });
 
-/** A role change or a removal; the rules live in services/team.ts. Either ends the person's sessions so it applies at once. */
+/** A role change or a removal; the rules live in services/team.ts. Either ends the person's sessions here so it applies at once. */
 companyRoutes.patch("/current/members/:userId", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "members.manage");
+  const team = managing(c);
   const body = UpdateMember.parse(await c.req.json());
-  return c.json(await updateMember(teamOf(c), { userId: idParam(c, "userId", "That person is not an active member of your team."), body }));
+  return c.json(await updateMember(team, { userId: idParam(c, "userId", "That person is not an active member of your team."), body }));
 });
 
 /**
- * "Leave this company" (founder decision L-10): any member, for themselves, with `{ confirm: true }`; an owner only while
- * another owner remains (409 `last_owner`). Answers `{ ok, left, movedTo, signedOut, ... }`: this session moves to the
- * person's other company (`movedTo`), or, with none, they are signed out. The rules live in services/team.ts.
+ * "Leave this company": any member, for themselves, with `{ confirm: true }`; an owner only while another owner remains
+ * (409 `last_owner`). This session moves to the person's other company (`movedTo`), or, with none, they are signed out.
  */
 companyRoutes.post("/current/leave", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "company.read");
-  const body = (await c.req.json().catch(() => ({}))) as { confirm?: unknown };
-  if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm that you want to leave this company.");
-  return c.json(await leaveCompany(teamOf(c), { sessionId: c.get("session")!.sessionId }));
-});
-
-/** ITS recruiter access to this company: who, why, what it covers, when it ends. Everyone on the team can see it. */
-companyRoutes.get("/current/staff-access", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "company.read");
-  const container = c.get("container");
-  const grants = await withTenant(container.db, t.companyId, async (tx) => {
-    const list = await tx.select({ id: staffAccessGrants.id, userId: staffAccessGrants.userId, kind: staffAccessGrants.kind, purpose: staffAccessGrants.purpose, escalationId: staffAccessGrants.escalationId, roleId: staffAccessGrants.roleId, applicationId: staffAccessGrants.applicationId, startsAt: staffAccessGrants.startsAt, expiresAt: staffAccessGrants.expiresAt, endedAt: staffAccessGrants.endedAt, revokedAt: staffAccessGrants.revokedAt, revokeReason: staffAccessGrants.revokeReason })
-      .from(staffAccessGrants).where(eq(staffAccessGrants.companyId, t.companyId)).orderBy(desc(staffAccessGrants.createdAt)).limit(100);
-    // A grant about someone the reader cannot read (Rule 3 of the plans) still says it covers one candidate, and not which one.
-    const hidden = await hiddenAmong(tx, t, list.flatMap((g) => (g.applicationId ? [g.applicationId] : [])));
-    const out = [];
-    for (const g of list) {
-      const role = g.roleId ? (await tx.select({ title: roles.title }).from(roles).where(eq(roles.id, g.roleId)).limit(1))[0] : null;
-      out.push({ ...g, applicationId: g.applicationId && hidden.has(g.applicationId) ? null : g.applicationId, oneCandidate: !!g.applicationId, roleTitle: role?.title ?? null, active: !g.endedAt && Date.parse(g.expiresAt) > Date.now() });
-    }
-    return out;
-  });
-  // Recruiters are not members, so the tenant role cannot see their user rows; name them from the platform side (name and email only).
-  const rows = [];
-  for (const g of grants) {
-    const [u] = await container.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, g.userId)).limit(1);
-    const { userId: _omit, ...rest } = g;
-    rows.push({ ...rest, recruiterName: u?.name ?? null, recruiterEmail: u?.email ?? "" });
-  }
-  return c.json(rows);
-});
-
-/**
- * Ends a recruiter's access now (item 1 of the 21 Sep instruction): owner or admin only, confirmation and a reason
- * required, the recruiter told, the request returned to the queue, everything recorded in the customer's own history.
- */
-companyRoutes.post("/current/staff-access/:grantId/revoke", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "staff_access.revoke");
-  const body = (await c.req.json().catch(() => ({}))) as { reason?: string; confirm?: boolean };
-  if (body.confirm !== true) throw new HttpError(400, "confirmation_required", "Confirm that you want to end this recruiter's access now.");
-  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-  if (reason.length < 5) throw new HttpError(400, "reason_required", "Say why you are ending the access; the recruiter and your activity log will show it.");
-  const container = c.get("container");
-  const now = container.engine.clock();
-  const actor = actorOf(c);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.req.param("grantId") ?? "")) throw new HttpError(404, "not_found", "No active recruiter access with that id.");
-  // The tenant role may read grants but never write them (migration 0004); the revocation runs on the platform side,
-  // scoped to the signed-in customer's own company (the company id comes from the session, never from the request).
-  const result = await withPlatform(container.db, async (tx) => {
-    const r = await revokeStaffGrant(tx, { grantId: c.req.param("grantId") ?? "", companyId: t.companyId, actor, reason, now });
-    if (!r) throw new HttpError(404, "not_found", "No active recruiter access with that id.");
-    if (r.escalationId) {
-      const [esc] = await tx.select().from(recruiterEscalations).where(eq(recruiterEscalations.id, r.escalationId)).limit(1);
-      if (esc && esc.assignedToUserId === r.recruiterUserId && !["resolved", "cancelled"].includes(esc.status)) {
-        await tx.update(recruiterEscalations).set({ assignedToUserId: null, status: "open", accessExpiresAt: null }).where(eq(recruiterEscalations.id, esc.id));
-      }
-    }
-    const [recruiter] = await tx.select({ email: users.email, name: users.name }).from(users).where(eq(users.id, r.recruiterUserId)).limit(1);
-    const [company] = await tx.select({ name: companies.name }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
-    return { ...r, recruiter, companyName: company?.name ?? "the customer" };
-  });
-  // Tell the recruiter and the queue. Neither message carries candidate data.
-  const from = mailbox(container.env.PRODUCT_NAME, container.integrations.env.fromAddress);
-  let recruiterNotified = false;
-  if (result.recruiter?.email) {
-    const sent = await container.integrations.email.send({ to: result.recruiter.email, from, subject: `Your access to ${result.companyName} was ended by the customer`, text: `${actor.name ?? "The customer"} at ${result.companyName} ended your access just now.\nReason: ${reason}\n\n${result.escalationId ? "The request is back in the queue, unassigned. " : ""}Do not keep or use any copies of the customer's information.`, idempotencyKey: `grant_revoked:${result.grant.id}`, tags: { template: "staff_access_revoked" } });
-    recruiterNotified = sent.status !== "failed";
-    if (sent.status === "failed") {
-      // Never tell the customer the recruiter was told when they were not: record it and put it in front of ITS.
-      await raiseAlert(container.db, { kind: "recruiter.notify_failed", severity: "high", title: "A recruiter was not told their access ended", body: `The customer ended a recruiter's access but the email to the recruiter failed (${sent.error}). Tell them another way.`, companyId: t.companyId, target: { type: "user", id: result.recruiterUserId }, details: { grantId: result.grant.id, error: sent.error } });
-      await audit(container.db, { companyId: t.companyId, actor: { kind: "system", id: "email" }, action: "staff.access_revoked", target: { type: "user", id: result.recruiterUserId }, reason: "recruiter notification failed", details: { grantId: result.grant.id, error: sent.error } });
-    }
-  }
-  // Through the outbox, so a failure is recorded, retried and alerted (audit row 125).
-  await sendToIts(container, { companyId: t.companyId, subject: `[access ended] ${result.companyName} ended a recruiter's access`, text: `Recruiter: ${result.recruiter?.name ?? result.recruiter?.email ?? result.recruiterUserId}\nReason given by the customer: ${reason}\n${result.escalationId ? `The request is open again in the queue: ${container.env.APP_BASE_URL}/recruiter/queue/${result.escalationId}` : ""}`, idempotencyKey: `grant_revoked_queue:${result.grant.id}`, template: "staff_access_revoked_queue" });
-  return c.json({ ok: true, grantId: result.grant.id, endedAt: now.toISOString(), escalationId: result.escalationId, recruiterNotified });
+  LeaveCompany.parse(await c.req.json().catch(() => ({})));
+  return c.json(await leaveCompany({ tenant: t, actor: actorOf(c), container: c.get("container"), session: c.get("session") }, { sessionId: c.get("session")!.sessionId }));
 });

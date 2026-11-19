@@ -21,7 +21,7 @@ import { notify } from "./notifications";
  * takes the real numbers afterwards (packages/ai/src/runner.ts). The sum and the rows are one source of truth with nothing
  * to drift; `entitlements.used` stays 0.
  *
- * Customers read words or a percentage, never dollars (docs/FOUNDER-CONTEXT.md, "AI credit math"); nothing here writes an
+ * Customers read words or a percentage, never dollars (docs/DECISIONS.md, PL-10); nothing here writes an
  * amount to an event, a notification or the company's settings. Only ITS's alerts and console line carry dollars.
  */
 
@@ -272,7 +272,7 @@ export async function settleAiCreditAlerts(q: Queryable, opts: { companyId?: str
   const gone = alerts.filter((a) => !!a.companyId && !CREDIT_ALERTS[a.kind]?.(standings.get(a.companyId) ?? null));
   if (!gone.length) return 0;
   const done = await q.update(adminAlerts).set({ status: "resolved", resolvedAt: now.toISOString() }).where(and(inArray(adminAlerts.id, gone.map((a) => a.id)), inArray(adminAlerts.status, ["open", "acknowledged"]))).returning({ id: adminAlerts.id, companyId: adminAlerts.companyId });
-  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", target: { type: "integration", id: a.id }, reason: "the AI credit has room again: a new month or a new plan", details: { resolved: true, automatic: true } });
+  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "allowance" }, action: "alert.resolved", reason: "the AI credit has room again: a new month or a new plan", details: { alertId: a.id, resolved: true, automatic: true } });
   return done.length;
 }
 

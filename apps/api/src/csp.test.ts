@@ -1,15 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { entitlements, normalizeCspReports } from "@ros/core";
+import { normalizeCspReports } from "@ros/core";
 import { applications, cspReports, screens } from "@ros/db";
 import { safeJsonLd } from "./pages/layout";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
-import { signInAdmin, statusTokenFor } from "./test-helpers";
+import { applicationForm, plantJob, seedCompany, signInAdmin, statusTokenFor, usePlan } from "./test-helpers";
 
 /**
- * Founder instruction of 21 September 2026, item 6: candidate pages and the application carry a strict content-security
- * policy with per-request nonces, no inline handlers, the fewest external origins, report-only until reviewed.
+ * Candidate pages and the application carry a strict content-security policy with per-request nonces, no inline
+ * handlers, the fewest external origins, report-only until reviewed.
  */
 describe("content-security policy on candidate pages", () => {
   let container: Container;
@@ -20,45 +20,27 @@ describe("content-security policy on candidate pages", () => {
   let roleId = "";
   let statusToken = "";
   let screenToken = "";
-  let applicationId = "";
-  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", COMP_BLS_ENABLED: "false", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" };
-  const signIn = async (email: string) => {
-    const r1 = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
-    const { devLink } = (await r1.json()) as { devLink: string };
-    const token = new URL(devLink).searchParams.get("token")!;
-    const r2 = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
-    return r2.headers.get("set-cookie")!.split(";")[0];
-  };
+  const baseEnv = { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" };
   const json = (cookie: string, method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie, "x-admin-reason": "csp test" }, body: body ? JSON.stringify(body) : undefined });
   const nonceOf = (csp: string) => csp.match(/script-src 'nonce-([^']+)'/)![1];
 
   beforeAll(async () => {
     container = await createContainer({ memory: true, env: baseEnv });
     app = createApp(container);
-    owner = await signIn("owner@csp.test");
+    const company = await seedCompany(app, { email: "owner@csp.test", name: "CSP Dental" });
+    ({ owner, slug: companySlug } = company);
     admin = await signInAdmin(app, container, "admin@its.test", "admin");
-    const co = (await (await json(owner, "POST", "/api/v1/companies", { name: "CSP Dental", vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }] })).json()) as { id: string; slug: string };
-    companySlug = co.slug;
-    await entitlements.applyPlan(container.db, co.id, "growth");
-    const s = (await (await json(owner, "POST", "/api/v1/intake/sessions", { initialMessage: "I need a dental hygienist in Irvine, $45 to $55 an hour, full time. It's growth. Ceiling $58. I decide. Must-haves: RDH license. Just draft it." })).json()) as { session: { id: string } };
-    roleId = ((await (await json(owner, "POST", `/api/v1/intake/sessions/${s.session.id}/compile`)).json()) as { roleId: string }).roleId;
-    await json(owner, "POST", `/api/v1/roles/${roleId}/approve`, { version: 1, note: "ok" });
-    const role = (await (await json(owner, "GET", `/api/v1/roles/${roleId}`)).json()) as { currentPacket: { packet: { requirements: { eligibility: Array<{ key: string }> } } } };
-    const fd = new FormData();
-    fd.set("firstName", "Ivy"); fd.set("lastName", "Chen"); fd.set("email", "ivy.chen@example.com"); fd.set("phone", "(949) 555-0100"); fd.set("smsConsent", "no"); fd.set("locationText", "Tustin, CA");
-    fd.set("resume", new File(["Ivy Chen, RDH"], "ivy.txt", { type: "text/plain" }));
-    for (const rule of role.currentPacket.packet.requirements.eligibility) fd.set(`elig_${rule.key}`, "yes");
-    fd.set("noticeVersionsShown", "ai_use@2026-09-01,privacy@2026-09-01");
-    fd.set("acknowledged", "yes");
-    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: fd });
+    await usePlan(container, company.companyId);
+    roleId = await plantJob(container, { companyId: company.companyId, title: "Dental Hygienist" });
+    // one person applies and is shortlisted, so every candidate page exists: the status page, and the AI interview
+    const r = await app.request(`/careers/${companySlug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: "Ivy", lastName: "Chen", email: "ivy.chen@example.com", phone: "(949) 555-0100" }) });
     expect(r.status).toBe(302);
     statusToken = await statusTokenFor(container, { roleId, email: "ivy.chen@example.com" });
     await container.drain();
     const [appRow] = await container.db.select().from(applications).where(eq(applications.statusToken, statusToken));
-    applicationId = appRow.id;
-    await json(owner, "POST", `/api/v1/applications/${applicationId}/actions`, { action: "invite_screen", channel: "web" });
+    expect((await json(owner, "POST", `/api/v1/applications/${appRow.id}/actions`, { action: "shortlist" })).status).toBe(200);
     await container.drain();
-    const [screen] = await container.db.select().from(screens).where(eq(screens.applicationId, applicationId));
+    const [screen] = await container.db.select().from(screens).where(eq(screens.applicationId, appRow.id));
     screenToken = screen?.token ?? "";
   });
 
@@ -101,12 +83,14 @@ describe("content-security policy on candidate pages", () => {
     expect((await app.request("/api/v1/auth/config")).headers.get("content-security-policy-report-only")).toBeNull();
   });
 
-  it("the job-page preview (plan D1) carries the same strict policy and nonce; the logo (plan D10) loads from our own address under a policy that runs nothing", async () => {
+  it("the job-page preview carries the same strict policy and nonce; the logo loads from our own address under a policy that runs nothing", async () => {
     const bytes = new Uint8Array(40);
     bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
     new DataView(bytes.buffer).setUint32(16, 120);
     new DataView(bytes.buffer).setUint32(20, 60);
-    expect((await app.request("/api/v1/companies/current/logo", { method: "PUT", headers: { cookie: owner, "content-type": "image/png" }, body: bytes.slice().buffer as ArrayBuffer })).status).toBe(201);
+    const logoForm = new FormData();
+    logoForm.set("file", new File([bytes.slice().buffer as ArrayBuffer], "logo.png", { type: "image/png" }));
+    expect((await app.request("/api/v1/companies/current/logo", { method: "POST", headers: { cookie: owner }, body: logoForm })).status).toBe(201);
     for (const path of [`/api/v1/roles/${roleId}/preview/page`, `/api/v1/roles/${roleId}/preview/page?view=apply`, `/careers/${companySlug}`, `/careers/${companySlug}/jobs/${roleId}`]) {
       const r = await app.request(path, { headers: { cookie: owner } });
       expect(r.status, path).toBe(200);
@@ -121,8 +105,8 @@ describe("content-security policy on candidate pages", () => {
       expect(images.length, path).toBe(path.includes("view=apply") ? 0 : 1);
       for (const src of images) expect(src, path).toMatch(/^\/(careers|api\/v1\/companies\/current)\/[^/]/);
     }
-    // the preview's data stays data, without the candidate policy
-    expect((await app.request(`/api/v1/roles/${roleId}/preview`, { headers: { cookie: owner } })).headers.get("content-security-policy-report-only")).toBeNull();
+    // the job's own data stays data, without the candidate policy
+    expect((await app.request(`/api/v1/roles/${roleId}`, { headers: { cookie: owner } })).headers.get("content-security-policy-report-only")).toBeNull();
     // the image itself can only ever be an image
     const src = (await (await app.request(`/careers/${companySlug}`)).text()).match(/<img\b[^>]*\bsrc="([^"]+)"/)![1];
     const logo = await app.request(src);

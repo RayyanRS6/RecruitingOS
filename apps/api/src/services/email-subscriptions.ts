@@ -1,13 +1,13 @@
 import { desc, eq } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { emit, stopAlertEmailsFor, suppressAddress } from "@ros/core";
+import { emit, stopEmailUpdatesFor, suppressAddress } from "@ros/core";
 import { candidates, communications, type Queryable } from "@ros/db";
 import type { EmailEvent } from "@ros/integrations";
 
 export type SubscriptionOutcome = { handled: boolean; communicationId: string | null; action: "suppressed" | "recorded" | "unmatched"; suppressionReason?: string };
 
 /**
- * Postmark's SubscriptionChange webhook (audit remediation H10). A suppression at Postmark (the recipient
+ * Postmark's SubscriptionChange webhook. A suppression at Postmark (the recipient
  * unsubscribed, or an address was suppressed by hand or after a bounce or complaint) goes on our do-not-send list
  * with reason `subscription_change`: nothing is re-sent, no retry is scheduled, and a candidate who unsubscribed is
  * marked as not wanting email. A reactivation at Postmark is acknowledged and nothing more: an address leaves our
@@ -27,8 +27,8 @@ export async function handleSubscriptionChange(q: Queryable, input: { event: Ema
     // The person said no to email: every candidate record with the address, in every company, remembers it.
     const cands = await q.select().from(candidates).where(eq(candidates.email, address));
     for (const each of cands) await q.update(candidates).set({ preferences: { ...each.preferences, emailOptOut: true } }).where(eq(candidates.id, each.id));
-    // A team member who unsubscribed has their email alerts turned off (plan B3), so Setup shows what they asked for.
-    await stopAlertEmailsFor(q, { address, actor });
+    // A team member who unsubscribed has "Email me updates" turned off, so Settings shows what they asked for.
+    await stopEmailUpdatesFor(q, { address, actor });
   }
   return { handled: true, communicationId: comm?.id ?? null, action: "suppressed", suppressionReason: "subscription_change" };
 }

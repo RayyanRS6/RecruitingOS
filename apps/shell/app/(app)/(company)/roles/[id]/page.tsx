@@ -1,5 +1,6 @@
-import { RoleDetail } from "@ros/web/src/pages/RoleDetail";
+import { Job } from "@ros/web/src/pages/Job";
 
-export default function RolePage() {
-  return <RoleDetail />;
+/** A job's page: the Job tab, and the Share tab at ?tab=share. */
+export default function JobPage() {
+  return <Job />;
 }

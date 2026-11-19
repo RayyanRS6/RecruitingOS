@@ -9,7 +9,7 @@ import { ErrorState } from "@ros/ui";
 export default function AppError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
     <div className="py-2">
-      <ErrorState message="Something went wrong loading this page. If it keeps happening, tell us with 'Bring in a recruiter'." onRetry={reset} />
+      <ErrorState message="Something went wrong loading this page." onRetry={reset} />
     </div>
   );
 }

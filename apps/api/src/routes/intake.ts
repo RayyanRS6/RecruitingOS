@@ -1,60 +1,39 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, isNotNull, or, sql } from "drizzle-orm";
-import { AI_HELP_BUSY_LINE, ConversationMessage, INTAKE_MESSAGE_MAX, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, MORE_JOBS_UPGRADE_QUESTION, StartIntake, TRIAL_ENDED_LINE, aiHelpLine, jobsTotalLine, mayOfferUpgrade, type Actor, type IntakeSessionSummary, type PlanRoom } from "@ros/contracts";
-import { IntakeSessionError, applyIntakeEdit, draftIntake, keepDraftFlag, requestIntakeApproval, runIntakeTurn, sessionView, startIntakeSession, type IntakeDeps, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
-import { IntakeEditError, aiCreditRoomForJob, aiCreditStanding, assertCan, can, emit, entitlements, looksLikePastedAd, normalizeFacts, notify, packetToFacts } from "@ros/core";
-import { entitlements as entitlementRows, events, intakeSessions, recruiterEscalations, rolePackets, roles, withTenant, type Tx } from "@ros/db";
-import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
-import { HttpError, messageTooLong } from "../middleware/errors";
-import { POLICIES, checkRateLimits } from "../middleware/rate-limit";
-import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, askForMoreAiHelp, refusedForNow, talkToItsAboutAiHelp, type AiHelpWords } from "../services/ai-credit";
-import { briefViewerOf, composeBrief } from "../services/brief";
-import { IntakeSuggestRequest, suggestForQuickStart } from "../services/intake-suggest";
-import { TRIAL_PLAN_QUESTION, companyTrialStanding } from "../services/trial";
+import { and, desc, eq, or, sql } from "drizzle-orm";
+import {
+  AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine,
+  type Actor, type DraftSaved, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
+} from "@ros/contracts";
+import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
+import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
+import { companies, entitlements as entitlementRows, events, intakeSessions, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
+import { HttpError } from "../middleware/errors";
+import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
+import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, refusedForNow, type AiHelpWords } from "../services/ai-credit";
+import { applyFieldEdit } from "../services/packet-fields";
+import { limitReached, planRoom } from "../services/plan-room";
+import { draftChecks, draftClosingDate, publishResultOf, publishRole } from "../services/publish";
 
 /**
- * The job builder's API (plan Wave C). Every model call runs between two short transactions (packages/agents/src/
- * intake.ts), so a request never holds a database connection while the model thinks.
+ * The job builder's API. One way in: a draft starts with the owner's idea or a pasted ad; the assistant asks for what is
+ * missing on cards; "Write the job" writes it; the one editor changes it; "Publish job" makes it a job, open. Every
+ * model call runs between two short transactions (packages/agents/src/intake.ts), so a request never holds a database
+ * connection while the model thinks.
  *
- * A draft belongs to the person who started it (founder decision Q6, option A): it carries pay and the reasons for the
- * hire, so only people who may start a hire and see pay reach these routes at all; each person lists and opens their
- * own drafts; owners and admins see every draft and may take one over. An ITS recruiter under a grant for one role or
- * one candidate never starts or opens a draft (C12); one brought in for the company opens their own drafts and the one
- * draft the request they accepted is about.
+ * A draft belongs to the person who started it: each person lists and opens their own drafts; owners and admins see
+ * every draft of the company and may take one over.
  */
 export const intakeRoutes = new Hono<Vars>();
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Whether this person may start and open drafts: starting a hire, seeing pay, and no grant narrower than the company. */
-function mayDraft(t: Tenant): boolean {
-  if (t.staff && (t.staff.scope.roleId || t.staff.scope.applicationId)) return false;
-  return can(t.role, "role.create") && can(t.role, "compensation.read");
-}
+const NOT_FOUND = () => new HttpError(404, "not_found", "Draft not found.");
+const NOT_ACTIVE = () => new HttpError(409, "not_active", "This draft has already become a job, or it was set aside. Start a new one for another hire.");
+const NO_DRAFT = () => new HttpError(409, "no_draft", "Write the job first; then you can change it.");
 
-function assertMayDraft(t: Tenant): void {
-  assertCan(t.role, "role.create");
-  assertCan(t.role, "compensation.read");
-  if (t.staff && (t.staff.scope.roleId || t.staff.scope.applicationId)) throw new HttpError(403, "staff_scope", "Your access is limited to the role or candidate of the request you accepted, so you cannot start or open drafts.");
-}
-
-const ownerOf = (row: Pick<IntakeSessionRow, "createdByUserId" | "createdBy">): string | null => row.createdByUserId ?? (row.createdBy.kind === "user" || row.createdBy.kind === "recruiter" ? row.createdBy.id : null);
-
-/** The draft an ITS recruiter's accepted request is about, if any (C12): the one draft beyond their own they may open. */
-async function escalatedDraftOf(tx: Tx, t: Tenant): Promise<string | null> {
-  const escalationId = t.staff?.scope.escalationId;
-  if (!escalationId) return null;
-  const [e] = await tx.select({ snapshot: recruiterEscalations.contextSnapshot }).from(recruiterEscalations).where(eq(recruiterEscalations.id, escalationId)).limit(1);
-  const id = (e?.snapshot as { intakeSession?: { id?: unknown } | null } | undefined)?.intakeSession?.id;
-  return typeof id === "string" ? id : null;
-}
-
-function mayActOnDraft(t: Tenant, row: IntakeSessionRow, escalated: string | null): boolean {
-  if (ownerOf(row) === t.userId) return true;
-  if (t.staff) return escalated === row.id;
-  return t.role === "owner" || t.role === "admin";
-}
+const ownerOf = (row: Pick<IntakeSessionRow, "createdByUserId" | "createdBy">): string | null => row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
+const managesDrafts = (t: Tenant): boolean => t.role === "owner" || t.role === "admin";
 
 /** Whether this person started the draft before an owner or admin took it over (the take-over event names them). */
 async function startedBeforeTakeOver(tx: Tx, sessionId: string, userId: string): Promise<boolean> {
@@ -62,183 +41,92 @@ async function startedBeforeTakeOver(tx: Tx, sessionId: string, userId: string):
   return !!hit;
 }
 
-/** The draft the caller may open, refused plainly before any model call is made for it. Shared with the draft tools in role-packets.ts. */
+/** The draft the caller may open, refused plainly before any model call is made for it. */
 export async function loadDraft(c: Context<Vars>, sessionId: string): Promise<IntakeSessionRow> {
   const t = c.get("tenant")!;
-  assertMayDraft(t);
-  if (!UUID.test(sessionId)) throw new HttpError(404, "not_found", "Intake session not found.");
+  assertCan(t.role, "role.create");
+  if (!UUID.test(sessionId)) throw NOT_FOUND();
   const found = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [row] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
     if (!row) return null;
-    const escalated = await escalatedDraftOf(tx, t);
-    const allowed = mayActOnDraft(t, row, escalated);
+    const allowed = ownerOf(row) === t.userId || managesDrafts(t);
     return { row, allowed, takenFromMe: !allowed && (await startedBeforeTakeOver(tx, row.id, t.userId)) };
   });
-  if (!found) throw new HttpError(404, "not_found", "Intake session not found.");
+  if (!found) throw NOT_FOUND();
   if (found.takenFromMe) throw new HttpError(403, "taken_over", "An owner or admin took over this draft, so it is theirs to continue now. Ask them if you need it back.");
   if (!found.allowed) throw new HttpError(403, "not_your_draft", "Someone else on your team started this draft. They can continue it, or an owner or admin can.");
   return found.row;
 }
 
-/** For an ITS recruiter or a member checking a request about a draft: may this person open it? (POST /escalations, C12.) */
-export async function assertMayShareDraft(tx: Tx, t: Tenant, sessionId: string): Promise<void> {
-  if (!mayDraft(t)) throw new HttpError(403, "forbidden", "Only people who can start a hire can ask about a draft.");
-  const [row] = UUID.test(sessionId) ? await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1) : [];
-  if (!row) throw new HttpError(404, "not_found", "That draft is not in your company.");
-  if (!mayActOnDraft(t, row, await escalatedDraftOf(tx, t))) throw new HttpError(403, "not_your_draft", "Someone else on your team started this draft. They can ask for help with it, or an owner or admin can.");
+/**
+ * The draft as the builder reads it, read afresh: with the legal check of the written job, the plan's room and the
+ * closing date chosen for it, so `readiness.publish` lists every reason it cannot be published yet.
+ */
+async function viewOf(container: Container, t: Tenant, sessionId: string): Promise<IntakeSessionView> {
+  return withTenant(container.db, t.companyId, async (tx) => {
+    const [row] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
+    if (!row) throw NOT_FOUND();
+    return sessionView(row, t.userId, await draftChecks(tx, { companyId: t.companyId, sessionId: row.id, active: row.status === "active", draft: row.draftPacket ?? null, now: container.engine.clock() }));
+  });
 }
 
-async function reload(container: Container, companyId: string, sessionId: string): Promise<IntakeSessionRow> {
-  const [row] = await withTenant(container.db, companyId, (tx) => tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1));
-  if (!row) throw new HttpError(404, "not_found", "Intake session not found.");
-  return row;
-}
-
-function deps(container: Container): IntakeDeps {
-  return { ai: container.ai, comp: container.integrations.comp };
-}
-
-/** Maps the agent's session errors onto the API's answers. */
+/** Maps the agent's and the rules' errors onto the API's answers. */
 function sessionErrors(err: unknown): never {
-  if (err instanceof IntakeSessionError && err.code === "not_found") throw new HttpError(404, "not_found", "Intake session not found.");
-  if (err instanceof IntakeSessionError && err.code === "stale_draft") throw new HttpError(409, "stale_draft", "The draft changed a moment ago. Look at it again, then make your change.");
-  if (err instanceof IntakeSessionError) throw new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside. Start a new one for another hire.");
+  if (err instanceof IntakeSessionError) throw err.code === "not_found" ? NOT_FOUND() : err.code === "no_draft" ? NO_DRAFT() : NOT_ACTIVE();
   if (err instanceof IntakeEditError) throw new HttpError(400, err.code, err.message);
   throw err;
 }
 
-/**
- * A turn as the routes read it. `busy`: refused only for money held by work still running, so nothing is used up. `words`:
- * otherwise, the company's plan and the day its credit starts again, for the line and its button (`aiHelpLine`).
- */
-type TurnOutcome = Exclude<IntakeTurnOutcome, { error: string }> | (Extract<IntakeTurnOutcome, { error: string }> & { busy?: boolean; words?: AiHelpWords });
+/** A turn as the routes read it. `busy`: refused only for money held by work still running. `words`: the company's plan and the day its credit starts again. */
+type TurnOutcome = IntakeTurnOutcome & { busy?: boolean; words?: AiHelpWords };
 
 async function turn(container: Container, input: Parameters<typeof runIntakeTurn>[2]): Promise<TurnOutcome> {
   try {
-    const r = await runIntakeTurn(container.db, deps(container), input);
+    const r = await runIntakeTurn(container.db, { ai: container.ai }, input);
     if (!("error" in r) || !r.noCredit) return r;
-    const busy = await refusedForNow(container, input.companyId, r.refusedHoldUsd ?? 0);
-    return busy ? { ...r, busy } : { ...r, busy, words: await withTenant(container.db, input.companyId, (tx) => aiHelpWordsOf(tx, input.companyId, container.engine.clock())) };
+    if (await refusedForNow(container, input.companyId, r.refusedHoldUsd ?? 0)) return { ...r, busy: true };
+    return { ...r, words: await withTenant(container.db, input.companyId, (tx) => aiHelpWordsOf(tx, input.companyId, container.engine.clock())) };
   } catch (err) {
     return sessionErrors(err);
   }
 }
 
-/** "Bring in a recruiter" on a draft (C12): a request about the company's hiring that carries this draft's conversation. */
-const DRAFT_HELP_QUESTION = "Please help me finish drafting this role. The assistant could not finish it with me.";
-const askRecruiterAction = (sessionId: string) => ({ kind: "ask_recruiter", label: "Bring in a recruiter", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", intakeSessionId: sessionId, question: DRAFT_HELP_QUESTION } });
-
 /**
- * The turn as the page reads it; a failed turn says what to do next and offers a recruiter. A turn with no AI credit left
- * failed at nothing: the owner's words are saved, and the way on is to upgrade (`upgrade`), with no "try again" and no recruiter;
- * on the last plan, with nothing above it, to talk with ITS or wait for the day it starts again, and the button says so.
- * Refused only for money held by work still running, nothing is used up: the way on is to try again in a few minutes.
+ * The turn as the page reads it; a failed turn says what to do next. With no AI credit left nothing failed: the owner's
+ * words are saved, and the way on is to upgrade (`upgrade`, with the request this person may send), never "try again".
+ * Refused only for money held by work still running, the way on is to try again in a few minutes.
  */
-function turnReply(r: TurnOutcome, sessionId: string) {
-  if ("error" in r) {
-    if (r.busy) return { error: r.error, recovery: AI_HELP_BUSY_LINE.turn, proposedActions: [] };
-    if (r.noCredit) return { error: r.error, recovery: aiHelpLine("turn", r.words), proposedActions: [askForAiHelpOn(r.words?.planKey)], upgrade: true };
-    return { error: r.error, recovery: "Try again, or bring in a recruiter to finish it with you.", proposedActions: [askRecruiterAction(sessionId)] };
-  }
-  return { ...r.turn, benchmark: r.benchmark, benchmarkGap: r.benchmarkGap };
+function turnReply(r: TurnOutcome, t: Pick<Tenant, "role">): IntakeTurnReply {
+  if (!("error" in r)) return { assistantMessage: r.turn.assistantMessage, readyToCompile: r.turn.readyToCompile, takenFromAd: r.turn.takenFromAd, notARole: r.notARole };
+  if (r.busy) return { error: "The assistant did not answer.", recovery: AI_HELP_BUSY_LINE.turn, upgrade: false, ask: null };
+  if (r.noCredit) return { error: "The assistant did not answer.", recovery: aiHelpLine("turn", r.words), upgrade: true, ask: can(t.role, "plan.request") ? askForAiHelpOn(r.words?.planKey) : null };
+  return { error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false, ask: null };
 }
 
-const MORE_ROLES_QUESTION = "We would like to open more roles than our plan includes. Can we talk about adding more?";
-const askAboutPlan = { label: "Talk to ITS about more roles", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_ROLES_QUESTION } };
-/** The same request when the trial has ended (founder decision L-02 B): choosing a plan is done by ITS. */
-const askToChoosePlan = { label: "Ask ITS to choose a plan", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: TRIAL_PLAN_QUESTION } };
-/** The same request when the plan's jobs are all used for good: closing a role would not help. */
-const askToUpgrade = { label: "Upgrade", method: "POST", path: "/api/v1/escalations", body: { kind: "ask", scope: "company", topic: "plan", question: MORE_JOBS_UPGRADE_QUESTION } };
-
-/** A role's state as the room message names it; an open role needs no word. */
-const PLACE_STATUS_WORD: Record<string, string> = { pending_approval: "waiting for approval", draft: "sent back for changes", paused: "paused" };
-
-/**
- * Room on the plan for another role (C13), with the roles using the places, so the owner learns it before answering any
- * question. A role uses a place while it is open, paused, waiting for approval or sent back for changes; closing it gives
- * the place back (polish list: the count once only went up), so a full plan says so and names the roles using the
- * places. There is nowhere in the product to change plans, so a full plan also offers asking ITS about more roles (a talk
- * about the plan, which never uses one of the plan's recruiter requests). `newRoleId` is a role created in this very
- * transaction, which is not counted against itself. A trial that has ended comes first (founder decision L-02 B): no
- * new job starts until a plan is chosen, whatever room the plan has, and the message is the owner's one line. No roles are
- * listed then: closing one would not help. The same goes for a plan whose jobs ever are all used (`jobs_total`, Free's one
- * job): nothing closed gives that place back, so no roles are listed, and the way on is to upgrade (`upgrade`).
- * `newDraft`: the question is whether to start a new one, so the AI credit counts too: with too little left to write the
- * job, the owner hears it before anyone types. A draft already written does not ask this: writing it was the dear part, and
- * sending it for approval uses no model.
- */
-async function planRoom(tx: Tx, companyId: string, opts: { newRoleId?: string; now?: Date; newDraft?: boolean } = {}): Promise<PlanRoom> {
-  const room = await entitlements.roleRoom(tx, companyId, { except: opts.newRoleId });
-  if ((await companyTrialStanding(tx, companyId, opts.now ?? new Date()))?.ended) return { ok: false, limit: room.limit, used: room.used, holding: [], message: TRIAL_ENDED_LINE, trialEnded: true };
-  if (room.lifetime?.full) return { ok: false, limit: room.lifetime.limit, used: room.lifetime.used, holding: [], message: jobsTotalLine((await entitlements.planOf(tx, companyId))?.name, room.lifetime.limit), upgrade: true };
-  const names = room.holding.map((r) => (PLACE_STATUS_WORD[r.status] ? `${r.title} (${PLACE_STATUS_WORD[r.status]})` : r.title));
-  const message = room.ok
-    ? null
-    : `Your plan includes ${room.limit} role${room.limit === 1 ? "" : "s"} at a time, and ${room.limit === 1 ? "it is" : "all are"} in use${names.length ? `: ${names.join(", ")}` : ""}. A role uses a place while it is open, paused or waiting for approval, and closing a role gives its place back. Close a role you no longer need, or talk to ITS about adding more.`;
-  if (room.ok && opts.newDraft) {
-    const credit = await aiCreditRoomForJob(tx, companyId, { now: opts.now });
-    if (credit !== "ok") {
-      // On the last plan nothing is above theirs: the line names ITS and the day it starts again, and so does its button.
-      const words = await aiHelpWordsOf(tx, companyId, opts.now ?? new Date());
-      const nothingAbove = words.planKey !== undefined && !mayOfferUpgrade(words.planKey);
-      return { ok: false, limit: room.limit, used: room.used, holding: [], message: aiHelpLine(credit === "used_up" ? "newJob" : "newJobTooBig", words), upgrade: true, aiHelp: true, ...(nothingAbove ? { nothingAbove } : {}) };
-    }
-  }
-  return { ok: room.ok, limit: room.limit, used: room.used, holding: room.holding, message };
-}
-
-function limitReached(t: Tenant, room: PlanRoom): HttpError {
-  const ask = room.trialEnded ? askToChoosePlan : room.aiHelp ? (room.nothingAbove ? talkToItsAboutAiHelp : askForMoreAiHelp) : room.upgrade ? askToUpgrade : askAboutPlan;
-  return new HttpError(402, "limit_reached", room.message ?? "Your plan has no room for another role.", { actions: can(t.role, "escalation.create") ? [ask] : [], room, ...(room.upgrade ? { upgrade: true } : {}) });
-}
-
-/**
- * A company with no room stops spending on a job it could not post: the AI routes on a draft that has no role yet (writing
- * it, changing it by chat) answer as the start of a draft does, before any model call. A draft that already made its role
- * holds its place, and so does everything done on that role afterwards. Shared with the draft tools in role-packets.ts.
- */
-export async function assertRoomForDraft(c: Context<Vars>, row: IntakeSessionRow): Promise<void> {
-  if (row.roleId) return;
+/** A company with no room for another job is refused before any model is called for a draft that is not a job yet. */
+async function assertRoom(c: Context<Vars>, opts: { newDraft?: boolean } = {}): Promise<void> {
   const t = c.get("tenant")!;
   const container = c.get("container");
-  const room = await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
+  const room = await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock(), ...opts }));
   if (!room.ok) throw limitReached(t, room);
 }
 
-/** "Hire again" (C14): the facts of the role's latest approved version; pay is carried over to be confirmed again, never as confirmed. */
-async function hireAgainSeed(tx: Tx, roleId: string) {
-  const [role] = UUID.test(roleId) ? await tx.select({ id: roles.id, title: roles.title }).from(roles).where(eq(roles.id, roleId)).limit(1) : [];
-  if (!role) throw new HttpError(404, "not_found", "That role is not in your company.");
-  const [pv] = await tx.select().from(rolePackets).where(and(eq(rolePackets.roleId, role.id), isNotNull(rolePackets.approvedAt))).orderBy(desc(rolePackets.version)).limit(1);
-  if (!pv) throw new HttpError(409, "never_approved", "That role was never approved, so there is nothing to start from yet.");
-  return { title: role.title, facts: packetToFacts(pv.packet), fromRole: { roleId: role.id, version: pv.version, title: role.title } };
-}
-
 /**
- * Starts a draft together with its first message (C3, C5, C14): the owner's words (a pasted job ad fits), or "hire again"
- * from an earlier role, or both. The plan's room is checked first, so no draft and no assistant run happen on a full
- * plan (C13). The answer carries the draft and the assistant's first turn; a first message that is not about a role
- * leaves no draft behind (`session: null`, `notARole: true`).
+ * Starts a draft together with its first message: the owner's idea in a sentence, or a pasted job ad. The plan's room
+ * is checked first, so no draft and no assistant run happen on a full plan. The answer carries the draft and the
+ * assistant's first turn; a first message that is not about hiring leaves no draft behind (`session: null`).
  */
 intakeRoutes.post("/sessions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertMayDraft(t);
+  assertCan(t.role, "role.create");
   const body = StartIntake.parse(await c.req.json().catch(() => ({})));
-  if (!body.initialMessage && !body.fromRoleId) throw new HttpError(400, "message_required", "Describe the role first: a sentence or two, or paste a job ad you already have.");
+  await assertRoom(c, { newDraft: true });
   const container = c.get("container");
   const actor = actorOf(c);
-  const started = await withTenant(container.db, t.companyId, async (tx) => {
-    const room = await planRoom(tx, t.companyId, { now: container.engine.clock(), newDraft: true });
-    if (!room.ok) throw limitReached(t, room);
-    const seed = body.fromRoleId ? await hireAgainSeed(tx, body.fromRoleId) : null;
-    const message = body.initialMessage
-      ? { content: body.initialMessage, kind: looksLikePastedAd(body.initialMessage) ? ("pasted_ad" as const) : ("text" as const) }
-      : { content: `Hire again: ${seed!.title}.`, kind: "hire_again" as const };
-    return startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message, facts: seed?.facts, fromRole: seed?.fromRole, via: seed ? "hire_again" : "start" });
-  });
+  const started = await withTenant(container.db, t.companyId, (tx) => startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message: { content: body.initialMessage, kind: looksLikePastedAd(body.initialMessage) ? "pasted_ad" : "text" } }));
   const r = await turn(container, { companyId: t.companyId, sessionId: started.id, actor });
-  if (!("error" in r) && r.notARole) return c.json({ session: null, notARole: true, reply: turnReply(r, started.id) }, 200);
-  return c.json({ session: sessionView(await reload(container, t.companyId, started.id), t.userId), reply: turnReply(r, started.id) }, 201);
+  if (!("error" in r) && r.notARole) return c.json({ session: null, notARole: true, reply: turnReply(r, t) } satisfies IntakeStartResponse, 200);
+  return c.json({ session: await viewOf(container, t, started.id), notARole: false, reply: turnReply(r, t) } satisfies IntakeStartResponse, 201);
 });
 
 function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSummary {
@@ -249,8 +137,8 @@ function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSu
     title: view.facts.title ?? view.draft?.identity.title ?? null,
     startedBy: { userId: view.startedBy.userId, name: view.startedBy.name },
     mine: view.startedBy.mine,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+    createdAt: new Date(row.createdAt).toISOString(),
+    updatedAt: new Date(row.updatedAt).toISOString(),
     ownerMessages: row.messages.filter((m) => m.role === "owner").length,
     hasDraft: !!row.draftPacket,
     missing: view.readiness.missing,
@@ -258,129 +146,89 @@ function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSu
 }
 
 /**
- * Drafts in progress (C3): `?mine=1` lists the caller's own; without it, owners and admins see every draft in the
- * company (so they can pick one up), and everyone else still sees only their own. The plan's room comes along (C13).
+ * Drafts in progress, newest first: `?mine=1` lists the caller's own; without it, owners and admins see every draft of
+ * the company (so they can pick one up), and everyone else still sees only their own. The plan's room comes along.
  */
 intakeRoutes.get("/sessions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertMayDraft(t);
-  const mine = ["1", "true"].includes(c.req.query("mine") ?? "");
-  const everyone = !mine && !t.staff && (t.role === "owner" || t.role === "admin");
-  const out = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const escalated = mine ? null : await escalatedDraftOf(tx, t);
-    const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`, ...(escalated ? [eq(intakeSessions.id, escalated)] : []));
+  assertCan(t.role, "role.create");
+  const everyone = !["1", "true"].includes(c.req.query("mine") ?? "") && managesDrafts(t);
+  const container = c.get("container");
+  const out = await withTenant(container.db, t.companyId, async (tx): Promise<IntakeSessionList> => {
+    const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`);
     const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), ...(everyone ? [] : [own]))).orderBy(desc(intakeSessions.updatedAt));
-    return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId, { now: c.get("container").engine.clock(), newDraft: true }) };
+    return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId, { now: container.engine.clock(), newDraft: true }) };
   });
   return c.json(out);
 });
 
-/**
- * Suggestions for the quick start (Wave S3, G3): must-have skills and yes/no questions from the answers so far, for a
- * job our hiring guides do not know. Only the job's facts go in, never anything about a candidate; every line passed the
- * fairness word check, and refused ones are left out. Same people as starting a draft; no draft is made and the plan's
- * room is not used. A failed or slow run answers with no suggestions (`unavailable: true`), never an error the page must show;
- * so does a person or a company over the hourly allowance of model calls for this (POLICIES.intakeSuggest), and a company
- * with no room for another job, which spends nothing here (the page already shows it the room's own alert).
- */
-intakeRoutes.post("/suggestions", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertMayDraft(t);
-  const body = IntakeSuggestRequest.parse(await c.req.json().catch(() => ({})));
-  const container = c.get("container");
-  const room = await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
-  if (!room.ok || (await checkRateLimits(c, [POLICIES.intakeSuggest]))) return c.json({ mustHaves: [], questions: [], unavailable: true as const });
-  return c.json(await suggestForQuickStart(container, { companyId: t.companyId, userId: t.userId, body }));
-});
-
-/** Room on the plan for another role, when the new-role page opens (C13). */
-intakeRoutes.get("/room", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertMayDraft(t);
-  return c.json(await withTenant(c.get("container").db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: c.get("container").engine.clock(), newDraft: true })));
-});
-
-/** The conversation the caller was in the middle of, so a page reload resumes it instead of starting over. Never someone else's. */
-intakeRoutes.get("/sessions/current", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertMayDraft(t);
-  const [row] = await withTenant(c.get("container").db, t.companyId, (tx) =>
-    tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`))).orderBy(desc(intakeSessions.updatedAt)).limit(1),
-  );
-  return c.json({ session: row ? sessionView(row, t.userId) : null });
-});
-
 intakeRoutes.get("/sessions/:id", requireTenant, async (c) => {
   const row = await loadDraft(c, c.req.param("id"));
-  return c.json({ session: sessionView(row, c.get("tenant")!.userId) });
+  return c.json({ session: await viewOf(c.get("container"), c.get("tenant")!, row.id) } satisfies IntakeSessionResponse);
 });
 
 intakeRoutes.post("/sessions/:id/messages", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  await loadDraft(c, c.req.param("id"));
+  const row = await loadDraft(c, c.req.param("id"));
   const body = IntakeMessageRequest.parse(await c.req.json());
   const container = c.get("container");
-  const r = await turn(container, { companyId: t.companyId, sessionId: c.req.param("id"), message: { content: body.message, kind: "text" }, actor: actorOf(c) });
-  return c.json({ session: sessionView(await reload(container, t.companyId, c.req.param("id")), t.userId), reply: turnReply(r, c.req.param("id")) });
+  const r = await turn(container, { companyId: t.companyId, sessionId: row.id, message: { content: body.message, kind: "text" }, actor: actorOf(c) });
+  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: [], summary: [] } satisfies IntakeTurnResponse);
 });
 
 /**
- * Tapped answers, panel edits and "draft it" (C6, C7). The answers set the facts (set / add / remove), one short summary
- * goes into the conversation, and the assistant takes its next turn unless `reply` is false. `refused` lists anything
- * typed that failed the fairness check: it was not used, and the reason says why. `dealBreakersOffered` (the quick start):
- * the edit's deal-breakers were already offered as must-haves, so the builder's card never offers them again.
+ * Tapped answers to the open cards, and any words typed beside them. The answers set the facts, one short summary goes
+ * into the conversation, and the assistant takes its next turn. `refused` lists anything that failed the fairness
+ * check: it was not used, and the reason says why.
  */
 intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  await loadDraft(c, c.req.param("id"));
+  const row = await loadDraft(c, c.req.param("id"));
   const body = IntakeAnswersRequest.parse(await c.req.json());
   const container = c.get("container");
-  const sessionId = c.req.param("id");
   const actor = actorOf(c);
-  let edit: Awaited<ReturnType<typeof applyIntakeEdit>>;
+  let edit: Awaited<ReturnType<typeof applyIntakeAnswers>>;
   try {
-    edit = await applyIntakeEdit(container.db, { companyId: t.companyId, sessionId, actor, answers: body.answers, patch: body.patch, draftIt: body.draftIt, note: body.note, dealBreakersOffered: body.dealBreakersOffered });
+    edit = await applyIntakeAnswers(container.db, { companyId: t.companyId, sessionId: row.id, actor, answers: body.answers, note: body.note });
   } catch (err) {
     return sessionErrors(err);
   }
-  const r = body.reply ? await turn(container, { companyId: t.companyId, sessionId, actor }) : null;
-  return c.json({ session: sessionView(await reload(container, t.companyId, sessionId), t.userId), reply: r ? turnReply(r, sessionId) : null, refused: edit.refused, summary: edit.summary });
+  const r = await turn(container, { companyId: t.companyId, sessionId: row.id, actor });
+  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: edit.refused, summary: edit.summary } satisfies IntakeTurnResponse);
 });
 
 /**
- * Writes the draft beside the conversation (C7, founder decision Q8): allowed once the essentials are in, or after one
- * round of questions, or when the owner said "draft it". No role is created and nobody is asked to approve anything.
- * While it runs, GET /sessions/:id shows `progress.stage` moving through benchmark, writing and checking (the checks and
- * the save), then done. Writing it again replaces what was saved on the draft since and the answers do not hold
- * (`readiness.draftEdits` counts those changes), so the page asks first. A company with no room for another job is
- * refused first (`assertRoomForDraft`): this is the dearest
- * call the job builder makes, and so the first the AI credit stops, with everything confirmed kept (`creditRefusedDraft`).
+ * "Write the job": needs every essential and pay a person set or confirmed (409 `not_ready`, with the readiness). While
+ * it runs, GET /sessions/:id shows `progress.stage` moving through writing and checking to done. Writing it again
+ * replaces what a person edited on it since (`readiness.draftEdits` counts those), so the page asks first. This is the
+ * dearest call the job builder makes: a company with no room for another job is refused first, and with too little AI
+ * credit left everything confirmed is kept.
  */
 intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const row = await loadDraft(c, c.req.param("id"));
-  if (row.status !== "active") throw new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside.");
-  await assertRoomForDraft(c, row);
-  const view = sessionView(row, t.userId);
-  if (!view.readiness.mayDraft) throw new HttpError(409, "not_ready", view.readiness.draftBlocker ?? "Not ready to draft yet.", { readiness: view.readiness });
+  if (row.status !== "active") throw NOT_ACTIVE();
+  await assertRoom(c);
   const container = c.get("container");
+  const view = await viewOf(container, t, row.id);
+  if (!view.readiness.mayDraft) throw new HttpError(409, "not_ready", view.readiness.draftBlocker ?? "The job cannot be written yet.", { readiness: view.readiness });
   let out: Awaited<ReturnType<typeof draftIntake>>;
   try {
-    out = await draftIntake(container.db, deps(container), { companyId: t.companyId, sessionId: row.id, actor: actorOf(c) });
+    out = await draftIntake(container.db, { ai: container.ai }, { companyId: t.companyId, sessionId: row.id, actor: actorOf(c) });
   } catch (err) {
     return sessionErrors(err);
   }
   if ("error" in out) {
     if (out.noCredit) throw await creditRefusedDraft(c, out.refusedHoldUsd ?? 0);
-    throw new HttpError(502, "ai_failed", "The assistant could not write the draft. Everything you confirmed is kept. Try again, or bring in a recruiter.", { aiRunId: out.aiRunId, actions: [askRecruiterAction(row.id)] });
+    throw new HttpError(502, "ai_failed", "The assistant could not write the job. Everything you confirmed is kept. Try again.", { aiRunId: out.aiRunId });
   }
-  return c.json({ session: sessionView(await reload(container, t.companyId, row.id), t.userId), draft: out.draft });
+  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
 });
 
 /**
- * The draft refused for want of AI credit. It holds more than any other call, so it stops while a little is left: then
- * saying "used up" would be false beside the percentage in Settings, and the line says what is true. Read from money actually
- * spent, and refused only for the holds of work still running, it says to try again in a few minutes.
+ * The writing refused for want of AI credit. It holds more than any other call, so it stops while a little is left:
+ * then saying "used up" would be false beside the percentage in Settings, and the line says what is true. Refused only
+ * for the holds of work still running, it says to try again in a few minutes.
  */
 async function creditRefusedDraft(c: Context<Vars>, holdUsd: number): Promise<HttpError> {
   const t = c.get("tenant")!;
@@ -391,7 +239,33 @@ async function creditRefusedDraft(c: Context<Vars>, holdUsd: number): Promise<Ht
   return aiCreditRefusal(t, aiHelpLine(standing && !standing.usedUp ? "draftTooBig" : "draft", words), words.planKey);
 }
 
-/** Keeps a flagged phrase in the draft, with the person's reason (C1); approval no longer waits on it. */
+/**
+ * The one editor on a written job that is not published yet. The edit is always saved; wording the fairness guard flags
+ * is listed on the draft and holds publishing until it is changed or kept with a reason. A form question about a
+ * protected characteristic is refused (422 `question_not_allowed`).
+ */
+intakeRoutes.patch("/sessions/:id/draft", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  const row = await loadDraft(c, c.req.param("id"));
+  const body = DraftFieldEdit.parse(await c.req.json());
+  const container = c.get("container");
+  let saved: { guardChanges: string[] };
+  try {
+    saved = await saveDraftEdit(container.db, {
+      companyId: t.companyId, sessionId: row.id, actor: actorOf(c),
+      edit: (draft) => {
+        const edit = applyFieldEdit(draft, body);
+        if (!edit.fields.length) throw new HttpError(400, "nothing_changed", "Nothing was changed.");
+        return edit.packet;
+      },
+    });
+  } catch (err) {
+    return sessionErrors(err);
+  }
+  return c.json({ session: await viewOf(container, t, row.id), guardChanges: saved.guardChanges } satisfies DraftSaved);
+});
+
+/** Keeps a flagged phrase in the written job, with the person's reason; publishing no longer waits on it. */
 intakeRoutes.post("/sessions/:id/flags/keep", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   const row = await loadDraft(c, c.req.param("id"));
@@ -403,71 +277,78 @@ intakeRoutes.post("/sessions/:id/flags/keep", requireTenant, async (c) => {
   } catch (err) {
     return sessionErrors(err);
   }
-  if (!kept.found) throw new HttpError(404, "flag_not_found", "That check is no longer on the draft.");
-  return c.json({ session: sessionView(await reload(container, t.companyId, row.id), t.userId) });
+  if (!kept.found) throw new HttpError(404, "flag_not_found", "That flagged wording is no longer on the job.");
+  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
 });
 
 /**
- * "Ask for approval" (C7): creates the role and its packet version 1 from the draft the person checked, and starts the
- * approval workflow, only once that draft is up to date with the answers, the six essentials are in, a person set or
- * confirmed the pay, and no wording check is open (409 `not_ready` lists what is left, in plain words). The plan's room
- * is checked before anything runs and again in the transaction that creates the role, where the approval starts and the
- * place is recorded; all of that commits together or not at all. `draftFirst` is the older one-step POST /compile.
+ * The closing date chosen in the job builder, kept with the draft on the server as a `role.closing_date_set` event on
+ * it, and set on the job when it is published. An owner or an admin sets it, like a job's own closing date; null takes
+ * it off.
  */
-async function askForApproval(c: Context<Vars>, draftFirst: boolean) {
+intakeRoutes.put("/sessions/:id/closing-date", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  const row = await loadDraft(c, c.req.param("id") ?? "");
+  assertCan(t.role, "role.manage");
+  const body = SetClosingDate.parse(await c.req.json());
+  const row = await loadDraft(c, c.req.param("id"));
+  if (row.status !== "active") throw NOT_ACTIVE();
   const container = c.get("container");
-  const first = row.roleId ? null : await withTenant(container.db, t.companyId, (tx) => planRoom(tx, t.companyId, { now: container.engine.clock() }));
-  if (first && !first.ok) throw limitReached(t, first);
-  let workflowRunId: string | null = null;
-  let result: Awaited<ReturnType<typeof requestIntakeApproval>>;
+  await withTenant(container.db, t.companyId, async (tx) => {
+    if (body.closesOn) {
+      const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, t.companyId)).limit(1);
+      const problem = closingDateProblem(body.closesOn, container.engine.clock(), company?.timezone);
+      if (problem) throw new HttpError(400, "bad_closing_date", problem);
+    }
+    const previous = await draftClosingDate(tx, row.id);
+    if (previous !== body.closesOn) await emit(tx, { type: "role.closing_date_set", companyId: t.companyId, actor: actorOf(c), subject: { type: "intake_session", id: row.id }, payload: { closesOn: body.closesOn, previous, draft: true } });
+  });
+  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+});
+
+/**
+ * "Publish job" on a draft: makes the job and its version 1 from the job the person checked and opens it, in one
+ * transaction. Refused for the plan first (402), then with every other reason at once (409 `not_ready`,
+ * `details.blockers`): an essential missing, pay nobody confirmed, the job not written or out of date with the answers,
+ * flagged wording, the legal check. Two drafts published at once take turns on the plan's count, so together they never
+ * go past it. A second press answers with the job the first one made. Answers 201 `PublishResult`.
+ */
+intakeRoutes.post("/sessions/:id/publish", requireTenant, async (c) => {
+  const t = c.get("tenant")!;
+  const row = await loadDraft(c, c.req.param("id"));
+  const container = c.get("container");
+  const actor = actorOf(c);
+  if (!row.roleId) {
+    if (row.status !== "active") throw NOT_ACTIVE();
+    await assertRoom(c);
+    const { blockers } = (await viewOf(container, t, row.id)).readiness.publish;
+    if (blockers.length) throw new HttpError(409, "not_ready", `This job cannot be published yet. ${blockers.map((b) => b.message).join(" ")}`, { blockers });
+  }
+  let result: Awaited<ReturnType<typeof publishRole>>;
   try {
-    result = await requestIntakeApproval(container.db, deps(container), { companyId: t.companyId, sessionId: row.id, actor: actorOf(c), hiringManagerUserId: t.userId }, {
-      draftFirst,
-      finalize: async (tx, compiled) => {
-        // Two drafts asked for at once take turns on the plan's count, so together they never go past it.
-        await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
-        // The new role is already in this transaction: it is the one asking for a place, not one holding it.
-        const again = await planRoom(tx, t.companyId, { newRoleId: compiled.roleId, now: container.engine.clock() });
-        if (!again.ok) throw limitReached(t, again);
-        const { runId } = await container.engine.start(tx, {
-          workflowKey: "role_approval",
-          companyId: t.companyId,
-          subject: { type: "role", id: compiled.roleId },
-          state: { roleId: compiled.roleId, packetVersion: compiled.version },
-          idempotencyKey: `role_approval:${compiled.roleId}:${compiled.version}`,
-          actor: actorOf(c),
-        });
-        workflowRunId = runId;
-        await entitlements.record(tx, t.companyId, "active_roles", 1, "role", { roleId: compiled.roleId });
-      },
+    result = await withTenant(container.db, t.companyId, async (tx) => {
+      await tx.select({ id: entitlementRows.id }).from(entitlementRows).where(and(eq(entitlementRows.companyId, t.companyId), eq(entitlementRows.key, "active_roles"))).for("update");
+      const made = await jobFromDraft(tx, { companyId: t.companyId, sessionId: row.id, actor });
+      if ("blockers" in made) throw new HttpError(409, "not_ready", `This job cannot be published yet. ${made.blockers.map((b) => b.message).join(" ")}`, { blockers: made.blockers });
+      // The job existed already: answered as it stands when it is published, and published now when it is still a draft.
+      if (!made.created) return (await publishResultOf(tx, container, made.roleId)) ?? publishRole(tx, container, { tenant: t, actor, roleId: made.roleId });
+      const published = await publishRole(tx, container, { tenant: t, actor, roleId: made.roleId });
+      await entitlements.record(tx, t.companyId, "active_roles", 1, "role", { roleId: made.roleId });
+      return published;
     });
   } catch (err) {
     return sessionErrors(err);
   }
   await container.kick();
-  if ("notReady" in result) throw new HttpError(409, "not_ready", `Not ready to ask for approval yet. ${result.notReady.join(" ")}`, { blockers: result.notReady });
-  if ("error" in result && result.noCredit) throw await creditRefusedDraft(c, result.refusedHoldUsd ?? 0);
-  if ("error" in result) return c.json({ error: { code: "ai_failed", message: "The assistant could not write the draft. Everything you confirmed is kept. A recruiter can finish it with you.", details: { aiRunId: result.aiRunId, actions: [askRecruiterAction(row.id)] } } }, 502);
-  return c.json({ roleId: result.roleId, version: result.version, packet: result.packet, workflowRunId }, 201);
-}
+  return c.json(result, 201);
+});
 
-intakeRoutes.post("/sessions/:id/request-approval", requireTenant, (c) => askForApproval(c, false));
-/**
- * The older one-step name for the same action, kept for API clients: writes the draft first when there is none (or when
- * the answers moved on and nobody saved a change on it), then asks for approval under the same rules.
- */
-intakeRoutes.post("/sessions/:id/compile", requireTenant, (c) => askForApproval(c, true));
-
-/** An owner or admin takes over someone else's draft (C3, founder decision Q6), for example when that person is away or left. */
+/** An owner or admin takes over someone else's draft, for example when that person is away or left. */
 intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  assertMayDraft(t);
-  if (t.staff || (t.role !== "owner" && t.role !== "admin")) throw new HttpError(403, "forbidden", "Only an owner or an admin can take over someone else's draft.");
+  assertCan(t.role, "role.manage");
   const row = await loadDraft(c, c.req.param("id"));
   if (ownerOf(row) === t.userId) throw new HttpError(409, "already_yours", "This draft is already yours.");
-  if (row.status !== "active") throw new HttpError(409, "not_active", "This draft has already produced a role, or it was set aside.");
+  if (row.status !== "active") throw NOT_ACTIVE();
   const container = c.get("container");
   const actor: Actor = actorOf(c);
   const fromUserId = ownerOf(row);
@@ -478,53 +359,17 @@ intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
     const title = normalizeFacts(row.facts).title ?? row.draftPacket?.identity.title ?? null;
     if (fromUserId) await notify(tx, { companyId: t.companyId, kind: "intake.taken_over", title: `${actor.name ?? "An owner or admin"} took over your draft${title ? `: ${title}` : ""}`, body: "They continue it from here. Nothing was sent to anyone, and the conversation so far is kept with the draft.", userIds: [fromUserId] });
   });
-  return c.json({ session: sessionView(await reload(container, t.companyId, row.id), t.userId) });
+  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
 });
 
-/** "Start over" or "Discard": the conversation stays in the record but no longer resumes. */
+/** "Discard": the draft is set aside; the conversation stays in the record but no longer resumes. */
 intakeRoutes.post("/sessions/:id/abandon", requireTenant, async (c) => {
   const t = c.get("tenant")!;
-  await loadDraft(c, c.req.param("id"));
-  const result = await withTenant(c.get("container").db, t.companyId, async (tx) => {
-    const [session] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, c.req.param("id"))).limit(1);
-    if (!session) throw new HttpError(404, "not_found", "Intake session not found.");
-    if (session.status !== "active") return session;
-    const [updated] = await tx.update(intakeSessions).set({ status: "abandoned" }).where(eq(intakeSessions.id, session.id)).returning();
-    await emit(tx, { type: "intake.abandoned", companyId: t.companyId, actor: actorOf(c), subject: { type: "intake_session", id: session.id }, payload: { turns: session.messages.length } });
-    return updated;
-  });
-  return c.json(sessionView(result, t.userId));
-});
-
-/**
- * The owner conversation (kept as a thin wrapper, C4): there is no keyword guessing any more. For someone who may draft,
- * every message is about a role: it continues their latest draft or starts one (on a plan with room). Someone who may
- * not draft is answered from the brief. A first message that is not about a role leaves no draft behind.
- */
-intakeRoutes.post("/conversation/messages", requireTenant, async (c) => {
-  const t = c.get("tenant")!;
-  assertCan(t.role, "role.read");
-  const body = ConversationMessage.parse(await c.req.json());
+  const row = await loadDraft(c, c.req.param("id"));
   const container = c.get("container");
-  if (!mayDraft(t)) {
-    const brief = await withTenant(container.db, t.companyId, (tx) => composeBrief(tx, t.companyId, briefViewerOf(t)));
-    return c.json({ reply: brief.cards.map((card) => `${card.title}. ${card.body}`).join("\n\n"), proposedActions: brief.cards.flatMap((card) => card.actions.map((a) => ({ kind: "link", label: a.label, path: a.path }))) });
-  }
-  const actor = actorOf(c);
-  const routed = await withTenant(container.db, t.companyId, async (tx): Promise<{ sessionId: string; continuing: boolean }> => {
-    const [active] = await tx.select({ id: intakeSessions.id }).from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`))).orderBy(desc(intakeSessions.updatedAt)).limit(1);
-    if (active) return { sessionId: active.id, continuing: true };
-    const room = await planRoom(tx, t.companyId, { now: container.engine.clock(), newDraft: true });
-    if (!room.ok) throw limitReached(t, room);
-    const kind = looksLikePastedAd(body.message) ? ("pasted_ad" as const) : ("text" as const);
-    return { sessionId: (await startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message: { content: body.message, kind }, via: "conversation" })).id, continuing: false };
+  await withTenant(container.db, t.companyId, async (tx) => {
+    const [updated] = await tx.update(intakeSessions).set({ status: "abandoned" }).where(and(eq(intakeSessions.id, row.id), eq(intakeSessions.status, "active"))).returning({ id: intakeSessions.id });
+    if (updated) await emit(tx, { type: "intake.abandoned", companyId: t.companyId, actor: actorOf(c), subject: { type: "intake_session", id: row.id }, payload: { turns: row.messages.length } });
   });
-  if (routed.continuing && body.message.length > INTAKE_MESSAGE_MAX) throw messageTooLong(INTAKE_MESSAGE_MAX, { afterFirst: true });
-  const r = await turn(container, { companyId: t.companyId, sessionId: routed.sessionId, actor, ...(routed.continuing ? { message: { content: body.message, kind: "text" as const } } : {}) });
-  if ("error" in r && r.busy) return c.json({ reply: AI_HELP_BUSY_LINE.turn, intakeSessionId: routed.sessionId, proposedActions: [] });
-  if ("error" in r && r.noCredit) return c.json({ reply: aiHelpLine("turn", r.words), intakeSessionId: routed.sessionId, proposedActions: [askForAiHelpOn(r.words?.planKey)], upgrade: true });
-  if ("error" in r) return c.json({ reply: "I hit a problem drafting that. Try again, or tap Bring in a recruiter and a person will finish it with you.", intakeSessionId: routed.sessionId, proposedActions: [askRecruiterAction(routed.sessionId)] });
-  if (r.notARole) return c.json({ reply: r.turn.assistantMessage, notARole: true, proposedActions: [] });
-  const view = sessionView(await reload(container, t.companyId, routed.sessionId), t.userId);
-  return c.json({ reply: r.turn.assistantMessage, intakeSessionId: routed.sessionId, readyToCompile: r.turn.readyToCompile, questions: r.turn.questions, readiness: view.readiness, proposedActions: [{ kind: "open_draft", label: "Open the draft", path: `/roles/new?session=${routed.sessionId}` }] });
+  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
 });

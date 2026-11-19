@@ -7,17 +7,12 @@ import type { AdapterStatus } from "../types";
 export const PRODUCT_EVENT_NAMES = [
   "application_started",
   "hire_recorded",
-  "outcome_corrected",
   "outcome_recorded",
   "role_outcome_recorded",
   "application_completed",
   "screening_invited",
   "screening_started",
   "screening_completed",
-  "human_requested",
-  "interview_approved",
-  "scheduling_started",
-  "scheduling_completed",
   "candidate_withdrew",
 ] as const;
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number];
@@ -30,7 +25,7 @@ export type ProductEvent = {
   companyRef: string;
   at: string;
   /** Only enumerated, non-identifying properties. */
-  properties: { channel?: string; source?: string; outcome?: string; previous?: string };
+  properties: { channel?: string; source?: string; outcome?: string };
 };
 
 export interface AnalyticsAdapter {

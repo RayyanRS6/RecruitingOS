@@ -18,7 +18,7 @@ describe("staging stays out of search engines", () => {
     return ((await config.headers?.()) ?? []).filter((r) => r.headers.some((h) => h.key.toLowerCase() === "x-robots-tag"));
   };
   // pages, paths mounted on Hono (pages/preview.tsx sends the same value itself, so Next.js keeping its own changes nothing), files
-  const paths = ["/", "/welcome", "/login", "/roles/123", "/admin/system", "/careers/brightline/jobs/1", "/c/status/x", "/a/abcdefghijkl", "/api/v1/auth/me", "/api/v1/roles/1/preview", "/healthz", "/privacy", "/robots.txt", "/sitemap.xml", "/feeds/jobs.xml", "/webhooks/postmark/inbound", "/fonts/ibm-plex-sans-latin-400-normal.woff2", "/_next/static/chunks/main.js", "/no-such-page"];
+  const paths = ["/", "/welcome", "/login", "/roles/123", "/admin/system", "/careers/brightline/jobs/1", "/c/status/x", "/api/v1/auth/me", "/api/v1/roles/1/preview/page", "/healthz", "/privacy", "/robots.txt", "/sitemap.xml", "/webhooks/postmark/bounces", "/fonts/ibm-plex-sans-latin-400-normal.woff2", "/_next/static/chunks/main.js", "/no-such-page"];
 
   for (const env of [{ VERCEL_ENV: "preview", DEPLOY_ENV: "" }, { VERCEL_ENV: "", DEPLOY_ENV: "staging" }, { VERCEL_ENV: "preview", DEPLOY_ENV: "staging" }]) {
     it(`sends X-Robots-Tag: noindex, nofollow on every path (VERCEL_ENV=${env.VERCEL_ENV || "unset"}, DEPLOY_ENV=${env.DEPLOY_ENV || "unset"})`, async () => {

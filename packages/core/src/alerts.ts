@@ -23,7 +23,7 @@ export function setAlertEmails(clock: (() => Date) | null): void {
 }
 
 /**
- * Something a person at ITS must see (a failed credential deletion, for example). Shown in the admin console until it is
+ * Something a platform administrator must see (a worker that stopped, for example). Shown in the admin dashboard until it is
  * resolved. A critical one is also emailed to the platform administrators: the job is written in the same transaction
  * as the alert, so an alert that rolls back sends nothing, and the email provider decides whether it really leaves.
  */
@@ -74,7 +74,7 @@ export async function openAlerts(q: Queryable, limit = 200) {
 export async function acknowledgeAlert(q: Queryable, input: { id: string; actor: Actor; now?: Date }): Promise<boolean> {
   const now = (input.now ?? new Date()).toISOString();
   const rows = await q.update(adminAlerts).set({ status: "acknowledged", acknowledgedAt: now, acknowledgedBy: input.actor.id }).where(and(eq(adminAlerts.id, input.id), eq(adminAlerts.status, "open"))).returning({ id: adminAlerts.id, companyId: adminAlerts.companyId });
-  if (rows[0]) await audit(q, { companyId: rows[0].companyId, actor: input.actor, action: "alert.acknowledged", target: { type: "integration", id: input.id }, reason: "acknowledged in the admin console" });
+  if (rows[0]) await audit(q, { companyId: rows[0].companyId, actor: input.actor, action: "alert.acknowledged", reason: "acknowledged in the admin console", details: { alertId: input.id } });
   return rows.length > 0;
 }
 
@@ -94,11 +94,11 @@ export async function resolveAlert(q: Queryable, input: { id: string; actor: Act
     .returning({ id: adminAlerts.id });
   if (!done[0]) return "already_resolved";
   const note = input.note?.trim();
-  await audit(q, { companyId: row.companyId, actor: input.actor, action: "alert.resolved", target: { type: "integration", id: input.id }, reason: note ? `resolved in the admin console: ${note}` : "resolved in the admin console", details: { resolved: true } });
+  await audit(q, { companyId: row.companyId, actor: input.actor, action: "alert.resolved", reason: note ? `resolved in the admin console: ${note}` : "resolved in the admin console", details: { alertId: input.id, resolved: true } });
   return "resolved";
 }
 
-/** Resolves every open alert about a target (for example once a failed deletion finally succeeds). */
+/** Resolves every open alert of a kind about one target, once its condition is over. */
 export async function resolveAlertsFor(q: Queryable, kind: string, targetId: string, now: Date = new Date()): Promise<number> {
   const open = await q.select({ id: adminAlerts.id, target: adminAlerts.target }).from(adminAlerts).where(and(eq(adminAlerts.kind, kind), inArray(adminAlerts.status, ["open", "acknowledged"])));
   const ids = open.filter((a) => a.target?.id === targetId).map((a) => a.id);
@@ -115,7 +115,7 @@ export async function resolveAlertsFor(q: Queryable, kind: string, targetId: str
 export async function resolveAlertsOfKind(q: Queryable, kind: string, opts: { now?: Date; reason: string }): Promise<number> {
   const now = (opts.now ?? new Date()).toISOString();
   const done = await q.update(adminAlerts).set({ status: "resolved", resolvedAt: now }).where(and(eq(adminAlerts.kind, kind), inArray(adminAlerts.status, ["open", "acknowledged"]))).returning({ id: adminAlerts.id, companyId: adminAlerts.companyId });
-  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "alerts" }, action: "alert.resolved", target: { type: "integration", id: a.id }, reason: opts.reason, details: { resolved: true, automatic: true } });
+  for (const a of done) await audit(q, { companyId: a.companyId, actor: { kind: "system", id: "alerts" }, action: "alert.resolved", reason: opts.reason, details: { alertId: a.id, resolved: true, automatic: true } });
   return done.length;
 }
 

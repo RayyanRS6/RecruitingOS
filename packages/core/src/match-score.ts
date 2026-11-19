@@ -1,298 +1,47 @@
-import { MATCH_WEIGHT, SCORE_BASIS_INTERVIEW_ONLY, SCORE_BASIS_WORDS, fitOf, importanceOf, matchBand, onlyInOwnInterviews, skillsInScore, weighRequirements, type Confidence, type EvidenceAssessment, type Importance, type InterviewInScore, type MatchCriterion, type MatchScore, type MatchUnknown, type MustHaveSummary, type ReadingVersion, type RolePacket } from "@ros/contracts";
+import { CHAT_WRAP_KEY, cvScoreOf, hasCheckedQuote, importanceOf, interviewScoreOf, questionFinding, requirementFinding, skillFinding, skillsInScore, type CvScore, type EvidenceAssessment, type InterviewScore, type RolePacket, type ScoredRequirement, type ScreenAssessment } from "@ros/contracts";
 
 /**
- * The match score (founder decision B2; plan-adjustments section 1; the owner, 6 November 2026: "should it not rank the
- * candidate according to their CV/resume against the Job description?"): a 0-100 number worked out by code from the stored,
- * quote-checked findings, never written by the model. Pure, and imports nothing but the contracts, so the list, the board,
- * the candidate panel and the evals (packages/evals) all read the same function over the same rows.
- *
- * - Each must-have and each skill of the role is a requirement. Must-haves count most; a skill counts by its importance
- *   (Essential, Important, Helpful; plan F3). The number is the points earned over the points of all of them.
- * - Shown counts in full, partly shown counts half. A requirement the evidence says nothing about earns nothing so far, is
- *   never called "not met", is never named on a decline, and shows as coverage ("based on 5 of 7 requirements") and as an
- *   open question: a thin résumé reads low, and the AI interview lifts it.
- * - A must-have counts as not met, and a skill as going against the candidate, only on a verified quote from their own
- *   words; that earns nothing too. Anything else is "not known".
- * - Monotonic: moving any one requirement up the order not met, not known, partly, met never lowers the score
- *   (match-score.test.ts checks it over many random cases).
- * - Met with nothing quoted (no quote at all, or one the evidence rules marked `unquoted`: not found, or too short to
- *   show anything) counts as partly met, never on its own in full, and the breakdown says "no quote" (Wave S5, 15 Oct
- *   2026).
- * - A must-have shown not met holds the score at 54 at most and is named ("Missing must-have: ...").
- * - A skill the role checks only in the team's own interviews (`evaluatedIn: "interview"`; the editor says "Only in your
- *   own interviews", so it is never read as "the AI interview does not count") is not part of the score: the owner was
- *   told it is judged there, so no reading of a résumé or an AI interview moves the number with it. A must-have checked
- *   only there is asked by nobody here, so no reading moves the number with it either, whatever it found: only their own
- *   quoted "no" counts, as for any must-have (it earns nothing and holds the score at 54). Counting it once a reading spoke
- *   to it scored someone who showed part of it below someone who said nothing (the release review, 11 November 2026). Until
- *   a reading shows it in full it is still not known (`checkInInterview`): the verdict word and the board treat it so.
- * - A skill named exactly as a must-have the AI interview confirms (`repeatsMustHave` in the contracts: "Digital
- *   Radiography." beside "Digital radiography", "AI interview" ticked) is not a requirement of its own: the must-have's
- *   finding alone counts, once (the live test, 12 November 2026). Not so beside a must-have the AI interview is not asked
- *   to confirm, whose scorecard has no place for it, so the AI interview's answer about it lands on the skill alone, nor
- *   beside one checked only in the team's own interviews, which counts only on their own quoted no: there the skill stays a
- *   requirement of its own (`skillsInScore`; the second review of the live-test fixes).
- * - Doing the AI interview never costs points. Per requirement its checked "no" wins (their own latest words); otherwise
- *   the better of the two checked findings counts, the AI interview's on a tie; a finding with nothing quoted counts only
- *   when neither reading has a checked one (the AI interview's first).
- * - The score counts both once the AI interview is scored (20 October 2026, R20-9). Before that the number is the
- *   résumé's alone, a floor, and its label says so (`interview`, `basis`: "Résumé only: AI interview not done yet"); the
- *   label never changes the number, and nothing here asks the AI anything.
- * - `fit` is the one verdict word beside the number (`fitOf` in the contracts), from the same numbers.
- * - The sums themselves (`weighRequirements`) live in packages/contracts, so the weights preview on the job's page
- *   (founder decision L-07 A), which cannot import this package, runs the same code over the same findings.
+ * The two scores of one application, each from one stored reading and worked out by the contracts' functions: the CV
+ * score from the newest CV reading, the interview score from the newest scorecard. Pure: the list, the panel and the
+ * evals read the same functions over the same rows. Nothing here reads a verdict a model wrote.
  */
-export const MATCH_SCORE_PROMISE = "A match score worked out from checked evidence, with the breakdown shown. A person always decides.";
 
-type Findings = Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings">;
-/** A stored reading as the score reads it: "triage" (the résumé reading) or "screen" (the scorecard). */
-export type ScoredReading = { kind: string; confidence?: string | null; packetVersion?: number | null; createdAt?: string | null; result: Findings & { confidence?: string } };
-export type ReadingPair<T extends ScoredReading = ScoredReading> = { resume: T | null; screen: T | null };
-
-/** The newest résumé reading and the newest scorecard among an application's assessments, given in any order. */
-export function readingPair<T extends ScoredReading>(rows: readonly T[]): ReadingPair<T> {
-  const newest = (kind: (k: string) => boolean) => {
-    let best: T | null = null;
-    for (const r of rows) {
-      if (!kind(r.kind)) continue;
-      if (!best || (r.createdAt && best.createdAt && Date.parse(r.createdAt) > Date.parse(best.createdAt))) best = r;
-    }
-    return best;
-  };
-  return { resume: newest((k) => k !== "screen"), screen: newest((k) => k === "screen") };
-}
-
-type Status = "yes" | "partly" | "no" | "unknown";
-/** `unquotedNo`: still not known, but a reading said "not met" (or "goes against it") with nothing quoted to back it. */
-type Resolved = { status: Status; source: "resume" | "screen"; quote: string | null; unquoted: boolean; unquotedNo: boolean };
-type Evidence = { quote?: string; unquoted?: boolean } | undefined;
-type Found = { status: Status; e: Evidence; saidNo: boolean };
-
-const verified = (e: Evidence) => !!e?.quote?.trim() && !e.unquoted;
-
-// A "yes" (or "evidenced") with nothing quoted is partly met: an unquoted claim never earns full marks.
-function requirementStatus(met: string, e: Evidence): Status {
-  if (met === "yes") return verified(e) ? "yes" : "partly";
-  if (met === "partially") return "partly";
-  return met === "no" && verified(e) ? "no" : "unknown";
-}
-
-function competencyStatus(finding: string, e: Evidence): Status {
-  if (finding === "evidenced") return verified(e) ? "yes" : "partly";
-  if (finding === "partially_evidenced") return "partly";
-  // "not evidenced" is not known yet, never a no; "goes against it" needs the candidate's own words
-  return finding === "contradicted" && verified(e) ? "no" : "unknown";
-}
-
-const STRENGTH: Record<Status, number> = { unknown: -1, no: 0, partly: 1, yes: 2 };
+type Requirements = Pick<RolePacket, "requirements" | "competencies">;
 
 /**
- * Which checked finding counts when both readings have one, so doing the AI interview never costs points (a short answer
- * read as "partly" never replaces the résumé's "yes"): the AI interview's "no" wins, because those are their own latest words;
- * otherwise the better of the two, the AI interview's on a tie.
+ * The CV score from a CV reading and the job version it was read against: every must-have of that version, then every
+ * skill the score counts, each in the job's own order with the reading's finding and its checked quote. A version stored
+ * as it was written (never parsed again) may carry a skill's older 1-5 weight: it counts as the importance it stands for.
+ * `earlierVersion`: the job's requirements changed since this reading.
  */
-function checkedFinding(screen: Resolved | null, resume: Resolved | null): Resolved | null {
-  if (!screen || !resume || screen.status === "no") return screen ?? resume;
-  return STRENGTH[resume.status] > STRENGTH[screen.status] ? resume : screen;
-}
-
-/**
- * The finding for one requirement, ranked by evidence first: the checked findings (`checkedFinding`), then an unquoted
- * screen finding, then an unquoted résumé finding. So a scorecard "yes" that lost its quote never replaces the résumé's
- * checked "yes" (or checked "no") with "partly".
- */
-function resolve(pair: ReadingPair, find: (r: Findings) => Found | null): Resolved {
-  const pick = (r: ScoredReading | null, source: "resume" | "screen"): Resolved | null => {
-    const f = r ? find(r.result) : null;
-    return f && f.status !== "unknown" ? { status: f.status, source, quote: f.e?.quote?.trim() || null, unquoted: !!f.e?.unquoted || !f.e?.quote?.trim(), unquotedNo: false } : null;
-  };
-  const screen = pick(pair.screen, "screen");
-  const resume = pick(pair.resume, "resume");
-  const checked = (r: Resolved | null) => (r && !r.unquoted ? r : null);
-  const unquotedNo = [pair.screen, pair.resume].some((r) => !!r && !!find(r.result)?.saidNo);
-  return checkedFinding(checked(screen), checked(resume)) ?? screen ?? resume ?? { status: "unknown", source: pair.screen && !pair.resume ? "screen" : "resume", quote: null, unquoted: true, unquotedNo };
-}
-
-const mustHaveFound = (m: { key: string }) => (r: Findings): Found | null => {
-  const f = (r.requirementFindings ?? []).find((x) => x.requirementKey === m.key);
-  return f ? { status: requirementStatus(f.met, f.evidence), e: f.evidence, saidNo: f.met === "no" } : null;
-};
-
-const skillFound = (c: { key: string }) => (r: Findings): Found | null => {
-  const f = (r.competencyFindings ?? []).find((x) => x.competencyKey === c.key);
-  return f ? { status: competencyStatus(f.finding, f.evidence), e: f.evidence, saidNo: f.finding === "contradicted" } : null;
-};
-
-/**
- * The finding the match score counts for one must-have or skill, and which reading it comes from (`resolve`): the brief
- * and Compare show this one (a skill through `shownSkillFinding`), so neither disagrees with the breakdown (the live
- * test, 12 November 2026: the AI interview's "not known yet" hid the résumé's checked "yes"). "partly" is a "yes" with
- * nothing quoted, or a partly shown one; a "no" stands only on a checked quote; "unknown" when no reading says anything
- * either way.
- */
-export function countedFinding(pair: ReadingPair, item: { key: string; mustHave: boolean }): { status: "yes" | "partly" | "no" | "unknown"; source: "resume" | "screen"; quote: string | null; unquoted: boolean } {
-  const { status, source, quote, unquoted } = resolve(pair, item.mustHave ? mustHaveFound(item) : skillFound(item));
-  return { status, source, quote, unquoted };
-}
-
-type SkillFinding = EvidenceAssessment["competencyFindings"][number]["finding"];
-const SKILL_FINDING: Record<Exclude<Status, "unknown">, SkillFinding> = { yes: "evidenced", partly: "partially_evidenced", no: "contradicted" };
-
-/**
- * A skill's finding as the interviewer's brief and Compare show it, in a reading's own words: the one the score counts
- * (`countedFinding`), with the note of the reading it comes from. Where the score counts none, a reading's entry reads
- * "not_evidenced" ("not seen yet"), never "contradicted": with nothing counted an entry is either not evidenced or a "goes
- * against it" with nothing checked quoted, which the score counts as not known (the second review of the live-test fixes,
- * 12 November 2026). Its note then comes only from a "not_evidenced" entry (the AI interview's first), so the words around
- * a claim nothing checked never reach the reader. Null when no reading has an entry.
- */
-export function shownSkillFinding(pair: ReadingPair, key: string): { finding: SkillFinding; note: string | null } | null {
-  const entryOf = (r: ScoredReading | null) => (r?.result.competencyFindings ?? []).find((f) => f.competencyKey === key) ?? null;
-  const counted = countedFinding(pair, { key, mustHave: false });
-  if (counted.status !== "unknown") return { finding: SKILL_FINDING[counted.status], note: entryOf(counted.source === "screen" ? pair.screen : pair.resume)?.note ?? null };
-  const entries = [entryOf(pair.screen), entryOf(pair.resume)].filter((f): f is NonNullable<typeof f> => f !== null);
-  if (!entries.length) return null;
-  return { finding: "not_evidenced", note: entries.find((f) => f.finding === "not_evidenced")?.note ?? null };
-}
-
-const PCT: Record<Exclude<Status, "unknown">, number> = { yes: 100, partly: 50, no: 0 };
-const MUST_HAVE_WORDS: Record<Exclude<Status, "unknown">, string> = { yes: "Shown", partly: "Partly shown", no: "Not met" };
-const SKILL_WORDS: Record<Exclude<Status, "unknown">, string> = { yes: "Shown", partly: "Partly shown", no: "Goes against it" };
-
-type Requirement = { key: string; label: string; mustHave: boolean; importance: Importance | null; weight: number; found: Resolved };
-
-/**
- * Whether a skill is read from a résumé or an AI interview at all: one the role checks only in the team's own interviews
- * is not (the résumé reading and the scorecard are not asked about it, and the match score leaves it out).
- */
-export function scoredSkill(c: { evaluatedIn?: string | null }): boolean {
-  return c.evaluatedIn !== "interview";
-}
-
-function requirementsOf(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">): Requirement[] {
-  // A must-have checked only in the team's own interviews (`onlyInOwnInterviews` in the contracts) joins the sum only on
-  // their own quoted "no": not known, partly shown and shown all leave the number where it is, so showing more of it never
-  // lowers it.
-  const must = packet.requirements.mustHaves.map((m): Requirement => ({ key: m.key, label: m.text, mustHave: true, importance: null, weight: MATCH_WEIGHT.must_have, found: resolve(pair, mustHaveFound(m)) })).filter((r, i) => r.found.status === "no" || !onlyInOwnInterviews(packet.requirements.mustHaves[i]));
-  // The skills read from a résumé or an AI interview, less one named as a must-have both readings read (the AI interview
-  // confirms it): that skill is the must-have, counted once (`skillsInScore` in the contracts; the live test, 12 November
-  // 2026). The same list for every reading of the role, so moving any one finding up still never lowers the number.
-  const skills = skillsInScore(packet).map((c): Requirement => {
-    const importance = importanceOf(c);
-    return { key: c.key, label: c.name, mustHave: false, importance, weight: MATCH_WEIGHT[importance], found: resolve(pair, skillFound(c)) };
+export function cvScoreFromReading(reading: Pick<EvidenceAssessment, "requirementFindings" | "competencyFindings">, packet: Requirements, opts: { earlierVersion?: boolean } = {}): CvScore {
+  const quoteOf = (e: { quote?: string; unquoted?: boolean; source: ScoredRequirement["source"] } | undefined) => (e && hasCheckedQuote(e) ? { quote: e.quote?.trim() ?? null, source: e.source } : { quote: null, source: null });
+  const mustHaves = packet.requirements.mustHaves.map((m): ScoredRequirement => {
+    const found = (reading.requirementFindings ?? []).find((f) => f.requirementKey === m.key);
+    return { key: m.key, label: m.text, mustHave: true, importance: null, finding: requirementFinding(found?.met ?? "unknown", hasCheckedQuote(found?.evidence)), ...quoteOf(found?.evidence) };
   });
-  return [...must, ...skills];
-}
-
-/** The newer of the two readings: its confidence is the one shown beside the score. */
-function latestOf(pair: ReadingPair): ScoredReading | null {
-  const { resume, screen } = pair;
-  if (resume && screen && resume.createdAt && screen.createdAt) return Date.parse(resume.createdAt) > Date.parse(screen.createdAt) ? resume : screen;
-  return screen ?? resume;
-}
-
-const confidenceOf = (r: ScoredReading | null): Confidence | null => {
-  const c = r?.confidence ?? r?.result.confidence;
-  return c === "high" || c === "medium" || c === "low" ? c : null;
-};
-
-/**
- * Where the AI interview stands for the score: `done` whenever its scorecard is among the readings; otherwise the status
- * the caller read from the application's screens (`interviewInScore` in ai-interview.ts), `none` when not given (the
- * evals, and any reader without screens). A caller's `done` without a scorecard reads as `being_scored`.
- */
-function interviewFor(pair: ReadingPair, given: InterviewInScore | null | undefined): InterviewInScore {
-  if (pair.screen) return "done";
-  return given === "done" ? "being_scored" : given ?? "none";
-}
-
-/**
- * The match score of one application from its readings, against the version of the role they were read against.
- * Null when there is no reading at all; `score` null when no requirement could be judged yet. `interview` only labels
- * it (`interview`, `basis`): the number, the breakdown and `basedOn` are the same with or without it.
- */
-export function matchScore(pair: ReadingPair, packet: Pick<RolePacket, "requirements" | "competencies">, opts: { packetVersion?: number | null; interview?: InterviewInScore | null } = {}): MatchScore | null {
-  if (!pair.resume && !pair.screen) return null;
-  const all = requirementsOf(pair, packet);
-  // the sums (shares, the six-place rounding and the hold at 54) live in the contracts
-  const { score, capped, parts } = weighRequirements(all.map((r) => ({ weight: r.weight, status: r.found.status, mustHave: r.mustHave })));
-  const scored = all.map((r, i) => ({ r, part: parts[i] }));
-  const known = scored.filter(({ r }) => r.found.status !== "unknown");
-  const open = scored.filter(({ r }) => r.found.status === "unknown");
-  const breakdown: MatchCriterion[] = known.map(({ r, part }) => {
-    const status = r.found.status as Exclude<Status, "unknown">;
-    return { key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(part.share), pctMet: PCT[status], pointsLost: Math.round(part.lost), finding: (r.mustHave ? MUST_HAVE_WORDS : SKILL_WORDS)[status], source: r.found.source, quote: r.found.quote, unquoted: r.found.unquoted };
+  const skills = skillsInScore(packet).map((c): ScoredRequirement => {
+    const found = (reading.competencyFindings ?? []).find((f) => f.competencyKey === c.key);
+    return { key: c.key, label: c.name, mustHave: false, importance: importanceOf(c), finding: skillFinding(found?.finding ?? "not_evidenced", hasCheckedQuote(found?.evidence)), ...quoteOf(found?.evidence) };
   });
-  // The costliest first; then must-haves, the heavier, and by name, so the order never depends on the input's.
-  breakdown.sort((a, b) => b.pointsLost - a.pointsLost || Number(b.mustHave) - Number(a.mustHave) || b.weightPct - a.weightPct || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
-  const missingMustHave = known.filter(({ r }) => r.mustHave && r.found.status === "no").map(({ r }) => ({ key: r.key, label: r.label, quote: r.found.quote ?? "" }));
-  const band = matchBand(score);
-  const unknown: MatchUnknown[] = open.map(({ r, part }) => ({ key: r.key, label: r.label, mustHave: r.mustHave, importance: r.importance, weightPct: Math.round(part.share), pointsLost: Math.round(part.lost), ...(r.found.unquotedNo ? { unquotedNo: true } : {}) }));
-  const openPoints = Math.round(Number(open.reduce((n, { part }) => n + part.lost, 0).toFixed(6)));
-  // Out of the number, but not known until a reading shows it in full: still to check in the team's own interview.
-  const checkInInterview = packet.requirements.mustHaves.filter(onlyInOwnInterviews).filter((m) => { const s = resolve(pair, mustHaveFound(m)).status; return s === "unknown" || s === "partly"; }).map((m) => ({ key: m.key, label: m.text }));
-  const sources = new Set(known.map(({ r }) => r.found.source));
-  const basedOn = sources.size === 2 || (!sources.size && pair.resume && pair.screen) ? "resume_and_screen" : sources.has("screen") || (!sources.size && pair.screen) ? "screen" : "resume";
-  const latest = latestOf(pair);
-  const interview = interviewFor(pair, opts.interview);
-  const coverage = { known: known.length, total: all.length, words: coverageWords(known.length, all.length) };
-  return {
-    score,
-    band: band?.band ?? null,
-    bandLabel: band?.label ?? null,
-    fit: fitOf({ score, missingMustHave, openPoints, coverage, breakdown, unknown, checkInInterview }),
-    coverage,
-    breakdown,
-    unknown,
-    openPoints,
-    checkInInterview,
-    fullMarks: breakdown.filter((c) => c.pctMet === 100).length,
-    missingMustHave,
-    capped,
-    confidence: confidenceOf(latest),
-    basedOn,
-    interview,
-    basis: interview === "done" && !pair.resume ? SCORE_BASIS_INTERVIEW_ONLY : SCORE_BASIS_WORDS[interview],
-    packetVersion: opts.packetVersion ?? latest?.packetVersion ?? null,
-  };
+  return cvScoreOf([...mustHaves, ...skills], opts);
 }
 
-/** "Based on 5 of 7 requirements", in the words the badge and the panel show beside the score. */
-export function coverageWords(known: number, total: number): string {
-  if (!total) return "The role lists no requirements to score against.";
-  if (!known) return "Nothing to score yet: the application does not speak to any requirement either way.";
-  return known === total ? `Based on all ${total} requirements` : `Based on ${known} of ${total} requirements`;
+/** Whether two versions of a job list the same requirements for the CV score: the same must-haves and skills, worded and weighted the same. */
+export function sameRequirements(a: Requirements, b: Requirements): boolean {
+  const key = (p: Requirements) => JSON.stringify([p.requirements.mustHaves.map((m) => [m.key, m.text.trim()]), skillsInScore(p).map((c) => [c.key, c.name.trim(), importanceOf(c)])]);
+  return key(a) === key(b);
 }
 
 /**
- * The must-have line on a card (plan F1), from the same findings as the score: shown, partly shown, shown not met (a
- * verified quote only) and not yet known. Null without a reading.
+ * The interview score from a sent AI interview's scorecard: one entry per question the interview asked (`asked`, in the
+ * order asked), never the closing question. A question the scorecard says nothing about counts as not shown.
  */
-export function mustHaveSummary(pair: ReadingPair, packet: Pick<RolePacket, "requirements">): MustHaveSummary | null {
-  if (!pair.resume && !pair.screen) return null;
-  const rows = packet.requirements.mustHaves.map((m) => ({ m, found: resolve(pair, mustHaveFound(m)) }));
-  const count = (s: Status) => rows.filter((r) => r.found.status === s).length;
-  const out = { total: rows.length, shown: count("yes"), partly: count("partly"), notShown: count("no"), unknown: count("unknown"), gaps: rows.filter((r) => r.found.status === "no").map((r) => ({ key: r.m.key, text: r.m.text, quote: r.found.quote ?? "" })) };
-  return { ...out, words: mustHaveWords(out) };
+export function interviewScoreFromScorecard(card: Pick<ScreenAssessment, "questionFindings">, asked: ReadonlyArray<{ key: string; question: string }>): InterviewScore {
+  return interviewScoreOf(
+    asked.filter((q) => q.key !== CHAT_WRAP_KEY).map((q) => {
+      const found = (card.questionFindings ?? []).find((f) => f.questionKey === q.key);
+      return { key: q.key, question: q.question, finding: questionFinding(found?.meetsModelAnswer ?? "unknown"), quote: hasCheckedQuote(found?.evidence) ? found?.evidence?.quote?.trim() ?? null : null, note: found?.finding?.trim() || null };
+    }),
+  );
 }
-
-function mustHaveWords(s: { total: number; shown: number; partly: number; notShown: number; unknown: number }): string {
-  if (!s.total) return "This role lists no must-haves.";
-  const parts = [`${s.shown} of ${s.total} shown`];
-  if (s.partly) parts.push(`${s.partly} partly`);
-  if (s.notShown) parts.push(`${s.notShown} not met`);
-  if (s.unknown) parts.push(`${s.unknown} not yet known`);
-  return `Must-haves: ${parts.join(", ")}`;
-}
-
-/**
- * The label when a reading was made against an earlier version of the role (plan F4); null when it is the current one.
- * With both packets, it also says whether the must-haves changed between them (added, removed or reworded).
- */
-export function readingVersion(readAgainst: number | null | undefined, current: number | null | undefined, packets?: { was: Pick<RolePacket, "requirements"> | null | undefined; now: Pick<RolePacket, "requirements"> | null | undefined }): ReadingVersion | null {
-  if (!readAgainst || !current || readAgainst === current) return null;
-  const changed = packets?.was && packets.now ? mustHavesKey(packets.was) !== mustHavesKey(packets.now) : undefined;
-  return { readAgainst, current, label: `Read against version ${readAgainst} of the role; the role is now on version ${current}.${changed ? " Its must-haves have changed since." : ""}`, ...(changed === undefined ? {} : { mustHavesChanged: changed }) };
-}
-
-const mustHavesKey = (p: Pick<RolePacket, "requirements">) => p.requirements.mustHaves.map((m) => `${m.key}=${m.text.trim().toLowerCase()}`).sort().join("|");

@@ -1,16 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
-import { TRIAL_PLAN_KEY, isCompanyVerified, newTrialTerm, type MembershipRole } from "@ros/contracts";
-import { entitlements, grantPlatformRole, type PlatformRole } from "@ros/core";
-import { applications, candidates, companies, interviewParticipants, interviews, memberships, users, withPlatform, withTenant } from "@ros/db";
+import { and, eq } from "drizzle-orm";
+import { RolePacket, TRIAL_PLAN_KEY, newTrialTerm, type ApplicationStage, type MembershipRole } from "@ros/contracts";
+import { entitlements, grantPlatformRole, isCompanyLive } from "@ros/core";
+import { applications, candidates, companies, memberships, rolePackets, roles, users, withPlatform } from "@ros/db";
 import type { FakeIdentityProvider } from "@ros/integrations";
 import type { createApp } from "./app";
 import type { Container } from "./container";
 
 /**
- * Test-only helpers for staff accounts. Since 21 September 2026 (item 2) platform roles come from the
- * platform_role_grants ledger and administrator routes need a session with a second factor, so suites open staff
- * sessions through the fake identity issuer (Microsoft + TOTP) instead of the email link.
+ * Test-only helpers. Platform roles come from the platform_role_grants ledger and administrator routes need a session
+ * with a second factor, so suites open staff sessions through the fake identity issuer (Microsoft + TOTP) instead of
+ * the email link.
  */
 export async function signInWithIdentity(app: ReturnType<typeof createApp>, container: Container, input: { email: string; name?: string; provider?: "azure" | "google"; aal2?: boolean; subject?: string }): Promise<string> {
   const idp = container.integrations.identity as FakeIdentityProvider;
@@ -20,18 +20,16 @@ export async function signInWithIdentity(app: ReturnType<typeof createApp>, cont
   return r.headers.get("set-cookie")!.split(";")[0];
 }
 
-/** Seeds a platform role through the ledger (as the console would), then opens a Microsoft + second-factor session. */
-export async function signInStaff(app: ReturnType<typeof createApp>, container: Container, email: string, role: PlatformRole = "platform_admin", name?: string): Promise<string> {
+/** Seeds the platform administrator role through the ledger (as the console would), then opens a Microsoft + second-factor session. */
+export async function signInAdmin(app: ReturnType<typeof createApp>, container: Container, email: string, name?: string): Promise<string> {
   let [user] = await container.db.select().from(users).where(eq(users.email, email.toLowerCase())).limit(1);
   if (!user) [user] = await container.db.insert(users).values({ email: email.toLowerCase(), name: name ?? email.split("@")[0], authProvider: "azure", authSubject: `seed-${email}` }).returning();
-  if (user.platformRole !== role) await grantPlatformRole(container.db, { userId: user.id, role, actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
+  if (user.platformRole !== "platform_admin") await grantPlatformRole(container.db, { userId: user.id, role: "platform_admin", actor: { kind: "system", id: "test_seed" }, reason: "test seed", source: "test_seed" });
   return signInWithIdentity(app, container, { email, name: name ?? user.name ?? undefined, provider: "azure", aal2: true, subject: user.authProvider === "azure" && user.authSubject ? user.authSubject : undefined });
 }
 
-export const signInAdmin = (app: ReturnType<typeof createApp>, container: Container, email: string, name?: string) => signInStaff(app, container, email, "platform_admin", name);
-
 /**
- * Where a suite's database lives (docs/readiness/03 section 2). By default the in-memory PGlite every suite has always
+ * Where a suite's database lives. By default the in-memory PGlite every suite has always
  * used. With TEST_DATABASE_URL set, the isolation and privacy suites run against that Postgres database instead: an
  * empty test database, connected as its owner role (the one that applied the migrations there, the same kind of
  * string as MIGRATE_DATABASE_URL), never as `ros_app` or `ros_worker`. The application roles cannot read the
@@ -58,66 +56,18 @@ export function refuseApplicationRole(url: string): void {
     return; // a malformed string is reported by createDb in its own words
   }
   // Through the Supabase pooler the user is written `<role>.<project ref>`.
-  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row (docs/readiness/03 section 2)`);
+  if (/^(ros_app|ros_worker|app_tenant)(\.|$)/.test(user)) throw new Error(`TEST_DATABASE_URL connects as ${user}: use the owner role of an empty test database (the one that applied its migrations), never ros_app or ros_worker; the application roles cannot read the migration ledger and the suites' direct reads rely on seeing every row`);
 }
 
 /**
- * The status token of the application an address made for a role. Since Wave 0 item 0.1 the apply form answers every
- * submission with the same receipt and the link travels only by email, so suites read it from the database.
+ * The status token of the application an address made for a role. The apply form answers every submission with the
+ * same receipt and the link travels only by email, so suites read it from the database.
  */
 export async function statusTokenFor(container: Container, input: { roleId: string; email: string }): Promise<string> {
   const [row] = await container.db.select({ token: applications.statusToken }).from(applications).innerJoin(candidates, eq(candidates.id, applications.candidateId)).where(and(eq(applications.roleId, input.roleId), eq(candidates.email, input.email.trim().toLowerCase()))).limit(1);
   if (!row) throw new Error(`no application from ${input.email} for role ${input.roleId}`);
   return row.token;
 }
-
-/**
- * Runs `fn` with the engine's clock moved past the 40 to 90 seconds every waiting room says "preparing" first (Q14,
- * founder 21 Oct: the same timing for a new address and a known one), then puts the clock back.
- */
-export async function pastTheWaitingRoom<T>(container: Container, fn: () => Promise<T>): Promise<T> {
-  const engine = container.engine as unknown as { now: () => Date };
-  const real = engine.now;
-  const past = real().getTime() + 91_000;
-  engine.now = () => new Date(past);
-  try {
-    return await fn();
-  } finally {
-    engine.now = real;
-  }
-}
-
-/**
- * Follows the apply POST as a browser does (20 Oct 2026, R20-12): its 302 to the waiting room `…/applied`, which opens
- * the application's own AI interview once it exists (with the inline worker, by the time the POST answered) and the 40
- * to 90 seconds every waiting room says "preparing" first have passed (Q14, 21 Oct): `container`'s clock is moved past
- * them for that one look. `token`: the interview the waiting room opened, else null; `html`: the page shown instead (the
- * receipt, or the waiting room).
- */
-export async function followApply(app: ReturnType<typeof createApp>, res: Response, container: Container): Promise<{ token: string | null; html: string; status: number; cookie: string }> {
-  const location = res.headers.get("location") ?? "";
-  const cookie = res.headers.get("set-cookie")?.match(/ros_applied=[^;,]+/)?.[0] ?? "";
-  if (!location.endsWith("/applied")) return { token: null, html: await res.text(), status: res.status, cookie };
-  const room = await pastTheWaitingRoom(container, async () => app.request(location, { headers: { cookie } }));
-  const to = room.headers.get("location") ?? "";
-  const token = /^\/c\/screen\/([A-Za-z0-9_-]+)$/.exec(to)?.[1] ?? null;
-  return { token, html: token ? "" : await room.text(), status: room.status, cookie };
-}
-
-/**
- * Sets ITS's old "apply and talk in one visit" switch for a company (plan Wave E), as the console did. Since 20 October
- * 2026 (R20-12) nothing reads it: every applicant takes the same path, so these only write the saved setting.
- */
-async function setApplyFlowDefault(container: Container, companyId: string, flow: "one_visit" | "form_then_screen"): Promise<void> {
-  await withPlatform(container.db, async (tx) => {
-    // One JSON merge, as the console's own write is, so the trial dates and the ITS check written beside it are kept.
-    const [co] = await tx.update(companies).set({ settings: sql`coalesce(${companies.settings}, '{}'::jsonb) || jsonb_build_object('applyFlowDefault', ${flow}::text)` }).where(eq(companies.id, companyId)).returning({ id: companies.id });
-    if (!co) throw new Error(`no company ${companyId}`);
-  });
-}
-
-export const useLaterApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "form_then_screen");
-export const useOneVisitApplyFlow = (container: Container, companyId: string) => setApplyFlowDefault(container, companyId, "one_visit");
 
 /**
  * Puts a company on a plan as the console's Change plan does (entitlements.applyPlan, which takes a retired plan too): for
@@ -130,57 +80,21 @@ export async function usePlan(container: Container, companyId: string, planKey =
 
 /**
  * Puts a company on the Trial plan, as one that signed up before the plans of 5 November 2026 is: a new company starts on
- * Free, so a suite about Trial says so. Its 30 days run from now when the company is already confirmed (COMPANY_CHECK=auto),
- * as they did at sign-up, and otherwise start at the ITS check.
+ * Free, so a suite about Trial says so. Its 30 days run from now when the company is live; a request waiting for an
+ * administrator gets no dates.
  */
 export async function useTrial(container: Container, companyId: string): Promise<void> {
   await withPlatform(container.db, async (tx) => {
     await entitlements.applyPlan(tx, companyId, TRIAL_PLAN_KEY, "trial");
     const [co] = await tx.select({ settings: companies.settings }).from(companies).where(eq(companies.id, companyId)).limit(1);
     if (!co) throw new Error(`no company ${companyId}`);
-    const settings = isCompanyVerified(co.settings) && !co.settings.trial ? { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } : co.settings;
-    await tx.update(companies).set({ status: "trial", settings }).where(eq(companies.id, companyId));
+    if (isCompanyLive(co.settings) && !co.settings.trial) await tx.update(companies).set({ settings: { ...co.settings, trial: newTrialTerm(container.engine.clock(), "its_check") } }).where(eq(companies.id, companyId));
   });
 }
 
 /**
- * Puts the signed-in member (by their cookie) on an interview for a role, straight into the tables: an interviewer
- * opens only the roles they interview for (roleScopeGuard). The interview is a cancelled one on the role's oldest
- * application, or on a new application when the role has none, so no scheduling starts and nobody is told. `remove`
- * takes away everything it added, for suites that count the role's applications or interviews afterwards.
- */
-export async function putOnInterview(container: Container, app: ReturnType<typeof createApp>, input: { cookie: string; roleId: string }): Promise<{ interviewId: string; applicationId: string; remove: () => Promise<void> }> {
-  const me = (await (await app.request("/api/v1/auth/me", { headers: { cookie: input.cookie } })).json()) as { user: { id: string }; activeCompanyId: string | null };
-  const companyId = me.activeCompanyId;
-  if (!companyId) throw new Error("the member has no active company");
-  const made = await withTenant(container.db, companyId, async (tx) => {
-    let [a] = await tx.select({ id: applications.id, candidateId: applications.candidateId }).from(applications).where(eq(applications.roleId, input.roleId)).orderBy(asc(applications.createdAt)).limit(1);
-    let created = false;
-    if (!a) {
-      const [cand] = await tx.insert(candidates).values({ companyId, firstName: "Ines", lastName: "Interviewed", email: `ines-${randomBytes(3).toString("hex")}@example.com`, firstSource: "direct" }).returning();
-      [a] = await tx.insert(applications).values({ companyId, roleId: input.roleId, candidateId: cand.id, packetVersion: 1, source: "direct", stage: "triaged", statusToken: randomBytes(16).toString("hex") }).returning({ id: applications.id, candidateId: applications.candidateId });
-      created = true;
-    }
-    const [iv] = await tx.insert(interviews).values({ companyId, applicationId: a.id, roundKey: "r1", title: "Working interview", format: "onsite", durationMinutes: 45, status: "cancelled", timezone: "America/Los_Angeles" }).returning();
-    await tx.insert(interviewParticipants).values({ companyId, interviewId: iv.id, userId: me.user.id, role: "interviewer", status: "invited" });
-    return { interviewId: iv.id, applicationId: a.id, candidateId: a.candidateId, created };
-  });
-  // straight on the suite's connection, as the suites' own direct reads and writes are (testContainerOptions)
-  const remove = async () => {
-    const db = container.db;
-    await db.delete(interviewParticipants).where(eq(interviewParticipants.interviewId, made.interviewId));
-    await db.delete(interviews).where(eq(interviews.id, made.interviewId));
-    if (made.created) {
-      await db.delete(applications).where(eq(applications.id, made.applicationId));
-      await db.delete(candidates).where(eq(candidates.id, made.candidateId));
-    }
-  };
-  return { interviewId: made.interviewId, applicationId: made.applicationId, remove };
-}
-
-/**
- * A customer with a membership of the given role in the company, signed in through the fake Google issuer (docs/spec/21,
- * area A: per-role coverage). Creates the person and the membership when they do not exist yet, then returns the
+ * A customer with a membership of the given role in the company, signed in through the fake Google issuer (per-role
+ * coverage of docs/PRODUCT.md, D1). Creates the person and the membership when they do not exist yet, then returns the
  * session cookie with that company active. The email defaults to a fresh address so each call is a distinct person.
  */
 export async function signInAs(container: Container, app: ReturnType<typeof createApp>, input: { companyId: string; role: MembershipRole; email?: string; name?: string }): Promise<string> {
@@ -197,4 +111,79 @@ export async function signInAs(container: Container, app: ReturnType<typeof crea
   const sw = await app.request("/api/v1/auth/switch", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ companyId: input.companyId }) });
   if (sw.status !== 200) throw new Error(`could not enter company ${input.companyId} as ${input.role} (${sw.status}): ${await sw.text()}`);
   return cookie;
+}
+
+/** Signs a person in by the emailed link, as a new owner does, and answers their session cookie. */
+export async function signInByEmailLink(app: ReturnType<typeof createApp>, email: string): Promise<string> {
+  const asked = await app.request("/api/v1/auth/magic-link", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+  const { devLink } = (await asked.json()) as { devLink: string };
+  const used = await app.request("/api/v1/auth/magic-link/consume", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: new URL(devLink).searchParams.get("token") }) });
+  return used.headers.get("set-cookie")!.split(";")[0];
+}
+
+/**
+ * A new owner and their company, made as the app makes them (with open sign-up the company is live at once). Answers
+ * the owner's cookie, the company's id and the word in its public addresses (`/careers/<slug>`).
+ */
+export async function seedCompany(app: ReturnType<typeof createApp>, input: { email: string; name: string; timezone?: string }): Promise<{ owner: string; companyId: string; slug: string }> {
+  const owner = await signInByEmailLink(app, input.email);
+  const json = (method: string, path: string, body?: unknown) => app.request(path, { method, headers: { "content-type": "application/json", cookie: owner }, body: body ? JSON.stringify(body) : undefined });
+  const made = await json("POST", "/api/v1/companies", { name: input.name, vertical: "dental", sizeBand: "20-49", locations: [{ city: "Irvine", region: "CA", country: "US" }], ...(input.timezone ? { timezone: input.timezone } : {}) });
+  if (made.status !== 201) throw new Error(`could not create ${input.name} (${made.status}): ${await made.text()}`);
+  const { id } = (await made.json()) as { id: string };
+  const { slug } = (await (await json("GET", "/api/v1/companies/current")).json()) as { slug: string };
+  return { owner, companyId: id, slug };
+}
+
+/**
+ * The application form as a browser without script posts it: who they are, the acknowledgment ticked, and a resume
+ * inside the form (`resume: null` posts none). Any field can be given, overridden, or left out with null.
+ */
+export function applicationForm(fields: Record<string, string | null> = {}, resume: string | null = "Registered Dental Hygienist at Coastal Family Dentistry 2019 - present\nRDH license CA active\nRadiography certificate\nDentrix"): FormData {
+  const fd = new FormData();
+  const filled: Record<string, string | null> = { firstName: "Maria", lastName: "Reyes", email: "maria.reyes@example.com", acknowledged: "yes", ...fields };
+  for (const [name, value] of Object.entries(filled)) if (value !== null) fd.set(name, value);
+  if (resume !== null) fd.set("resume", new File([`${filled.firstName ?? ""} ${filled.lastName ?? ""}\n${filled.email ?? ""}\n${resume}\n`], "resume.txt", { type: "text/plain" }));
+  return fd;
+}
+
+/**
+ * A job written straight into the tables, with its one version live: for suites whose subject is not the job builder
+ * (who may see a company's jobs, what is public, what an administrator reads). Open and taking applications unless
+ * `status` says otherwise; a draft has no opening day. `packet` changes the job record before it is stored (its
+ * questions, its places, its words). Answers the job's id.
+ */
+export async function plantJob(container: Container, input: { companyId: string; title: string; status?: "draft" | "open" | "paused" | "closed"; packet?: (packet: RolePacket) => void }): Promise<string> {
+  const status = input.status ?? "open";
+  const actor = { kind: "system" as const, id: "test_seed" };
+  const written = RolePacket.parse({
+    identity: { title: input.title, locations: [{ city: "Irvine", region: "CA", country: "US" }], employmentType: "full_time", schedule: "Monday to Friday, 8 to 5", remotePolicy: "onsite" },
+    compensation: { basis: "hourly", currency: "USD", min: 24, max: 28, discloseRange: true },
+    description: { publicJobDescription: `We are hiring: ${input.title}. You will seat patients, take digital x-rays and keep the rooms ready.` },
+    requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }], niceToHaves: [] },
+    competencies: [{ key: "chairside", name: "Chairside skill", definition: "Anticipates the next step.", importance: "essential", indicators: [] }],
+    screening: { questions: [{ key: "recent", question: "Tell me about your most recent work." }, { key: "nervous", question: "Tell me about a nervous patient and what you did." }, { key: "available", question: "Which days and hours are you available?" }] },
+    communication: { tone: "warm", companyBlurb: "A family practice.", signature: "The team", disclosureText: "This message was sent with help from an AI assistant.", humanAlternativeText: "Reply to reach a person." },
+    compliance: {},
+    provenance: {},
+  });
+  input.packet?.(written);
+  const packet = RolePacket.parse(written);
+  return withPlatform(container.db, async (tx) => {
+    const [role] = await tx.insert(roles).values({ companyId: input.companyId, title: input.title, status, currentPacketVersion: 1, acceptingApplications: status !== "closed", openedAt: status === "draft" ? null : container.engine.clock().toISOString(), createdBy: actor }).returning({ id: roles.id });
+    await tx.insert(rolePackets).values({ companyId: input.companyId, roleId: role.id, version: 1, packet, status: status === "draft" ? "proposed" : "approved", source: "human_edit", createdBy: actor });
+    return role.id;
+  });
+}
+
+/**
+ * A person with an application to a job, straight into the tables, carrying `mark` as their name and in their address,
+ * so a suite can see whether an answer holds anything of them. `locked`: past the plan's candidates per job.
+ */
+export async function plantApplicant(container: Container, input: { companyId: string; roleId: string; mark: string; stage?: ApplicationStage; locked?: boolean }): Promise<string> {
+  return withPlatform(container.db, async (tx) => {
+    const [person] = await tx.insert(candidates).values({ companyId: input.companyId, firstName: input.mark, lastName: input.mark, email: `${input.mark.toLowerCase()}@people.test` }).returning({ id: candidates.id });
+    const [application] = await tx.insert(applications).values({ companyId: input.companyId, roleId: input.roleId, candidateId: person.id, packetVersion: 1, source: "direct", stage: input.stage ?? "triaged", statusToken: randomBytes(16).toString("hex"), lockedAt: input.locked ? container.engine.clock().toISOString() : null }).returning({ id: applications.id });
+    return application.id;
+  });
 }

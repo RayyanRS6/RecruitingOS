@@ -1,27 +1,25 @@
 import { describe, expect, it } from "vitest";
-import {
-  activityWords, aiStatusTone, aiStatusWords, exactMoney, exactWhen, money, planStatusWords, planWords, plainCode, privacyStatusWords, runStatusWords, severityWords, STEP_STATUS_WORDS, trialWords, verificationWords, whenWords, workflowWords,
-} from "../../apps/web/src/pages/admin/admin-words";
+import { aiStatusWords, codeWords, exactMoney, exactWhen, money, plainCode, privacyStatusWords, reasonReady, severityWords, trialWords, verificationWords, whenWords, workflowWords } from "../../apps/web/src/pages/admin/admin-words";
+import { partOf } from "../../apps/web/src/pages/admin/admin-api";
 
-/** The ITS console's plain words (redesign spec 3.3), one file every console section imports (Wave S6, S6-0). */
-describe("the console's plain words", () => {
-  it("names statuses, severities and verification in plain words", () => {
-    expect(["running", "waiting", "failed", "completed"].map(runStatusWords)).toEqual(["Running", "Waiting", "Failed", "Done"]);
+/** The admin dashboard's plain words, one file every section of it imports. */
+describe("the dashboard's plain words", () => {
+  it("names severities, privacy statuses and verification in plain words", () => {
     expect(["critical", "warning", "info"].map(severityWords)).toEqual(["Urgent", "Check soon", "For your information"]);
     expect(["received", "in_progress", "awaiting_counsel", "fulfilled", "declined"].map(privacyStatusWords)).toEqual(["New", "In progress", "Waiting for counsel", "Done", "Declined"]);
     expect(["pending", "verified_by_link", "verified_manual", "failed"].map(verificationWords)).toEqual(["Not checked yet", "Verified", "Verified", "Could not verify"]);
   });
 
-  it("names plans and workflows, and never shows an unknown code raw", () => {
-    expect(planWords("design_partner")).toBe("Design Partner");
-    expect(planStatusWords("design_partner")).toBe("Design Partner pilot");
-    expect(planStatusWords("trial")).toBe("Trial");
+  it("names the workflows that remain, and never shows an unknown code raw", () => {
     expect(workflowWords("application_intake")).toBe("Reading a new application");
     expect(workflowWords("screen")).toBe("AI interview");
-    // a key nobody mapped yet reads as words, never with underscores
+    expect(workflowWords("role_closing_date")).toBe("Closing date");
+    // a key nobody mapped reads as words, never with underscores
     expect(workflowWords("candidate_follow_up")).toBe("Candidate follow up");
-    expect(runStatusWords("cancelled")).toBe("Cancelled");
     expect(plainCode("in_progress")).toBe("in progress");
+    expect(codeWords("intake.turn")).toBe("Intake turn");
+    expect(codeWords("read_resume")).toBe("Read resume");
+    expect(codeWords(null)).toBe("");
     // a code that happens to name an object property is still just a code
     expect(workflowWords("constructor")).toBe("Constructor");
   });
@@ -44,34 +42,34 @@ describe("the console's plain words", () => {
     expect(whenWords(new Date(2026, 9, 3, 8, 0).toISOString(), now)).toBe("Oct 3");
     expect(whenWords(new Date(2025, 11, 30, 8, 0).toISOString(), now)).toBe("Dec 30, 2025");
     expect(whenWords(null, now)).toBe("");
+    // a plain space before PM, whatever the runtime's own formatting puts there
     expect(exactWhen(new Date(2026, 9, 14, 15, 10).toISOString())).toBe("Oct 14, 2026, 3:10 PM");
   });
 
-  it("keeps the console's churn rule: quiet after 7 days, no activity after 14 or never", () => {
-    const now = Date.parse("2026-10-15T12:00:00Z");
-    const ago = (days: number) => new Date(now - days * 86_400_000).toISOString();
-    expect(activityWords(ago(2), now)).toEqual({ state: "active", label: "active", tone: "good" });
-    expect(activityWords(ago(9), now)).toEqual({ state: "quiet", label: "quiet 9d", tone: "caution" });
-    expect(activityWords(ago(20), now)).toEqual({ state: "none", label: "no activity 20d", tone: "critical" });
-    expect(activityWords(null, now).state).toBe("none");
-    // never active reads in words, never as "no activity 999d"
-    expect(activityWords(null, now)).toEqual({ state: "none", label: "never active", tone: "critical" });
+  it("names how an AI run that was not OK ended", () => {
+    expect(["ok", "running", "refused", "error", "invalid_output"].map(aiStatusWords)).toEqual(["OK", "Running", "Refused", "Provider error", "Answer not usable"]);
   });
 
-  it("names AI-run and step statuses the same on every screen", () => {
-    expect(["ok", "refused", "error", "invalid_output"].map(aiStatusWords)).toEqual(["OK", "Refused", "Provider error", "Answer not usable"]);
-    // a call still running is neither OK nor a failure: its cost is the hold on the customer's AI credit until it ends
-    expect(aiStatusWords("running")).toBe("Running");
-    expect(["ok", "running", "error", "refused", "invalid_output"].map(aiStatusTone)).toEqual(["good", "neutral", "critical", "critical", "critical"]);
-    expect(STEP_STATUS_WORDS).toEqual({ ok: "done", error: "failed" });
-  });
-
-  it("says where a Trial customer's 30 days stand, on the company's calendar (founder decision L-02 B)", () => {
+  it("says where a company's trial stands, on the company's calendar; nothing off the Trial plan or before it started", () => {
     const standing = { started: true, startedAt: "2026-10-01T19:00:00.000Z", endsAt: "2026-10-31T19:00:00.000Z", daysLeft: 20, endingSoon: false, ended: false, extendedDays: 0 };
     expect(trialWords(standing, "America/Los_Angeles")).toBe("ends Oct 31");
     expect(trialWords({ ...standing, endingSoon: true, daysLeft: 3 }, "America/Los_Angeles")).toBe("ends Oct 31");
     expect(trialWords({ ...standing, ended: true, daysLeft: 0 }, "America/Los_Angeles")).toBe("ended Oct 31, paused");
-    expect(trialWords({ ...standing, started: false, startedAt: null, endsAt: null, daysLeft: null })).toBe("starts at the ITS check");
+    expect(trialWords({ ...standing, started: false, startedAt: null, endsAt: null, daysLeft: null })).toBe("");
     expect(trialWords(null)).toBe("");
+  });
+
+  it("needs a reason of five characters or more with a change", () => {
+    expect(reasonReady("why")).toBe(false);
+    expect(reasonReady("  Owner asked  ")).toBe(true);
+  });
+});
+
+describe("a section's parts", () => {
+  it("shows the part the address names, and the first part for one it does not know", () => {
+    const parts = [{ id: "health", label: "Health" }, { id: "costs", label: "Costs" }];
+    expect(partOf(parts, "costs")).toBe("costs");
+    expect(partOf(parts, null)).toBe("health");
+    expect(partOf(parts, "workflows")).toBe("health");
   });
 });
