@@ -44,4 +44,4 @@ A migration is never rolled back. If a migration is wrong, write the next number
 
 ## When the order is wrong
 
-If a deploy lands before the migration: the new worker logs `refusing to start: 1 migration is not applied`, never passes Railway's health check and fails, while the worker before it keeps running; the app's new deployment builds, but `/healthz` and every request answer 503. Nothing is damaged. Run the migration, then **Redeploy** the worker; the app comes up on its next request.
+If a deploy lands before the migration: the new worker logs `refusing to start: 1 migration is not applied`, never passes Railway's health check and fails, while the worker before it keeps running; the app's new deployment builds, but `/healthz` and every request answer 500. Nothing is damaged. Run the migration, then **Redeploy** the worker; the app comes up on its next request.

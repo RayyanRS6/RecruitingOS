@@ -15,8 +15,17 @@ const compile = (more: Partial<IntakeContext> = {}) => text(intakeCompilePrompt.
 const GONE = /playbook|benchmark|market pay|ceiling|why (?:you|they) are hiring|reason for the hire|who interviews|interview plan|scorecard|decision[- ]?maker|final decision|evaluation|red flags|sourcing|approval|eligibility rule|knockout|draft it/i;
 
 describe("intake.turn: the builder's conversation", () => {
-  it("is version 7 on the standard tier's task", () => {
-    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 7, task: "intake.turn", agent: "intake" });
+  it("is version 8 on the standard tier's task", () => {
+    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 8, task: "intake.turn", agent: "intake" });
+  });
+
+  // Version 8, after the real models' first run on the builder (19 November 2026): they wrote "Full time" for the kind
+  // of job, held a job back for the hours when the owner gave the days, and told the owner the job was "ready to compile".
+  it("names the values of the facts kept as codes, takes the days alone as a schedule, and never says compile to the owner", () => {
+    const t = turn();
+    expect(t).toContain("employmentType (full_time, part_time, contract, temporary, per_diem or internship) and compensationBasis (hourly or salary)");
+    expect(t).toContain("The days alone are enough: once the owner gave them the schedule is answered, and you never hold the job back or ask again for the hours");
+    expect(t).toContain('say then that the job can be written; never use the word "compile" with the owner');
   });
 
   it("names the seven essentials and asks the work arrangement instead of assuming it", () => {
