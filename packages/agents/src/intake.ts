@@ -11,6 +11,7 @@ import {
   payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
+import { resumeAsWeWriteIt } from "./assistant-words";
 
 /**
  * The job builder ("intake"). One way in: the owner types an idea or pastes an ad. Each turn the assistant reads the
@@ -368,10 +369,11 @@ export function withoutCardCount(message: string): string {
 
 /**
  * The assistant's reply in the words the page uses. The model is told when a job is ready through a field named
- * readyToCompile and repeats the word to the owner ("the job is ready to compile"), who presses "Write the job".
+ * readyToCompile and repeats the word to the owner ("the job is ready to compile"), who presses "Write the job"; and it
+ * writes "résumé" where every page says "resume".
  */
 export function inThePagesWords(message: string): string {
-  return message
+  return resumeAsWeWriteIt(message)
     .replace(/\bready\s+(?:to\s+(?:be\s+)?compiled?|for\s+compil(?:ing|ation))\b/gi, "ready to be written")
     .replace(/\bcompile\s+(the|this|your)\s+job\b/gi, (_all, the: string) => `write ${the} job`);
 }

@@ -300,6 +300,26 @@ describe("what each turn of the chat is held to", () => {
     expect(flat.turn.messageToCandidate).toBe(`You said you built a pump.\n\n${CHAT_LADDER_QUESTION.push}`);
   });
 
+  // Seen with the real model on 19 November 2026: it recorded two replies joined its own way ("… | …"), which is not
+  // what the candidate sent, and it wrote "résumé" where every page says "resume". The stand-in does neither.
+  it("records the candidate's replies as they sent them when the model's record is not their own words, and says resume as the pages do", () => {
+    const p = askingNow(start([]), "wq_explain", ["wq_explain"], { pushes: 1 });
+    const first = "I show them a light sensor.";
+    const second = "Last week a class covered it with a hand and saw the lamp go on.";
+    const transcript = said("Q", first, second);
+    const settle = (answer: string) => enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer, complete: true }, messageToCandidate: "You showed them a light sensor. Several kits fail at once in a class of twenty. How do you handle the room?" }), chatPacket(role, p), p, {}, { transcript, latest: second }).turn.answerRecorded;
+    // joined the model's own way, or reworded in their name: their two replies stand, joined as the code joins them
+    expect(settle(`${first} | ${second}`)).toMatchObject({ questionKey: "wq_explain", answer: `${first} ${second}` });
+    expect(settle("The candidate demonstrates a light sensor to the class.")?.answer).toBe(`${first} ${second}`);
+    // their own words stand as the model recorded them, whole or with a sentence left out
+    expect(settle(`${first} ${second}`)?.answer).toBe(`${first} ${second}`);
+    expect(settle(second)?.answer).toBe(second);
+    // and the assistant's own message says "resume" (a first push, on a question not pushed yet)
+    const fresh = askingNow(start([]), "wq_explain", ["wq_explain"]);
+    const spelt = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "Your résumé lists a robotics club. What did you build there?" }), chatPacket(role, fresh), fresh, {}, { transcript: said("Q", "A few things"), latest: "A few things" });
+    expect(spelt.turn.messageToCandidate).toBe("Your resume lists a robotics club.\n\nWhat did you build there?");
+  });
+
   /**
    * The live smoke test of 4 Nov 2026: two questions lost their first sentence, because "Tell us…" and "Give an
    * example…" did not read as asking, so a candidate was shown only "What did you do, and how did it turn out?" after a
