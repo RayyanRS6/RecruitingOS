@@ -10,7 +10,7 @@ A hosted process never migrates by itself. One that starts against a database wi
 refusing to start: 1 migration is not applied (0038_role_posts.sql). Run pnpm db:migrate (or the migrate workflow) before deploying.
 ```
 
-So the order is: **migrate first, deploy second.** A migration normally works with the build already live (a new column, a new table), so the old code keeps running on the new schema while Vercel and Railway roll forward. When one does not (it drops or changes something the live build reads or writes), its own comment says so, the validator asks for an `-- allow-destructive: <reason>` line on each such statement, and the release stops the old worker and the old app before it runs.
+So the order is: **migrate first, deploy second.** A migration normally works with the build already live (a new column, a new table), so the old code keeps running on the new schema while Vercel and Railway roll forward. When one does not (it drops or changes something the live build reads or writes), its own comment says so, the validator asks for an `-- allow-destructive: <reason>` line on each such statement, and the release stops the old worker and the old app before it runs ([production-setup.md](production-setup.md), "A release that removes what the live build uses").
 
 The owner's connection string is the only credential that may run a migration: the app's roles cannot change the schema. It lives in the GitHub environment's secrets and in the password vault, never on Vercel or Railway.
 

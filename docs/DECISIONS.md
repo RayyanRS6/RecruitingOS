@@ -77,6 +77,7 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 - (22 Sep and 16 Oct 2026.) A release to production is a pull request from `main` into the `production` branch, and the full `verify` check is always waited for before a merge.
 - (14 Sep 2026.) Migrations are a release step. They never run when a hosted app starts.
 - **RR-6** (11 Nov 2026). A release that changes how the worker treats work it already knows stops the old worker before it migrates; work waits in the database, and the new worker runs it. No repair at start-up. The order of a release: [production-setup.md](runbooks/production-setup.md), "Every later release".
+- (19 Nov 2026.) The simple product is live. Its release dropped what the builds before it read and wrote, so nothing rolls back past it: [production-setup.md](runbooks/production-setup.md), "Rollback".
 - **RR-19** (11 Nov 2026). `verify` always runs, so a cancelled run fails the check instead of being skipped, which GitHub would count as passed.
 - **F1** (14 Sep 2026). No superuser or row-level-security-bypassing database role: a hosted process refuses to start on one. A company's data is reached only through the signed-in person's verified membership.
 - **J9** (18 Sep 2026). The app never holds Supabase's service-role key; a policy test guards it.
