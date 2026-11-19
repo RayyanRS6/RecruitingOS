@@ -27,6 +27,8 @@ export type Persona = {
   reply: (at: { asking: ScreeningQuestion; kind: "question" | "gap" | "closing"; followUp: boolean; replied: ScreeningQuestion[] }) => string | null;
   /** What went wrong, in plain words. */
   expect: (c: Conversation) => string[];
+  /** The job this persona's chat is about, when it needs more than the job as written (`withPayQuestion`). */
+  job?: (job: RolePacket) => RolePacket;
 };
 
 /** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules, and the message they were shown. */
@@ -99,6 +101,17 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
     if (turn.done) return { conversation: conversation(true), failed: null };
   }
   return { conversation: conversation(false), failed: null };
+}
+
+/**
+ * The job with a pay question in its AI interview. A job as the model writes it asks about the work only (intake.compile),
+ * so a pay question is an owner's own, and an owner's own questions come first. The stand-in's job has one already and
+ * comes back as it is; on the real models the job has none, and the pay persona had nothing to answer.
+ */
+export function withPayQuestion(job: RolePacket): RolePacket {
+  if (job.screening.questions.some((q) => q.kind === "compensation")) return job;
+  const pay: ScreeningQuestion = { key: "owner_pay", question: `What ${job.compensation.basis === "salary" ? "salary" : "hourly"} range are you looking for?`, kind: "compensation" };
+  return { ...job, screening: { ...job.screening, questions: [pay, ...job.screening.questions] } };
 }
 
 const questionMarks = (message: string): number => (message.match(/\?/g) ?? []).length;
@@ -219,6 +232,7 @@ export const personas: Persona[] = [
   {
     id: "pay_answer_recorded",
     provenance: "synthetic",
+    job: withPayQuestion,
     // the cooperative candidate, up to the pay question and the turn after it
     reply: (at) => (at.replied.some((q) => q.kind === "compensation") ? null : cooperative(at)),
     expect: (c) => {
@@ -273,7 +287,7 @@ export function conversationDiagnostics(c: Conversation): CaseDiagnostics {
 export async function runConversationSuite(job: RolePacket, run: (ctx: ScreenContext, persona: Persona) => Promise<ScreenTurn | string>): Promise<{ cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }> {
   const cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }> = [];
   for (const persona of personas) {
-    const { conversation, failed } = await runConversation(persona, job, (ctx) => run(ctx, persona));
+    const { conversation, failed } = await runConversation(persona, persona.job ? persona.job(job) : job, (ctx) => run(ctx, persona));
     const failures = failed ? [`the model call failed: ${failed}`] : persona.expect(conversation);
     cases.push({ id: persona.id, pass: failures.length === 0, failures, ...(failures.length ? { notes: conversationNotes(conversation), diagnostics: conversationDiagnostics(conversation) } : {}) });
   }
