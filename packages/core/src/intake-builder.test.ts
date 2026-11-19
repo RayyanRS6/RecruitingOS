@@ -227,6 +227,35 @@ describe("facts as stored", () => {
   });
 });
 
+describe("facts the assistant wrote in plain words", () => {
+  // Found on the live site on 19 November 2026: the real model wrote "Full time", the cards took it as answered, the job
+  // took it as missing, nothing asked for it, and "Write the job" stayed shut whatever the owner typed.
+  it("reads the kind of job and the pay basis from the words they came in", () => {
+    for (const words of ["full_time", "Full time", "full-time", "Full-time, permanent", " FULL TIME "]) expect(normalizeFacts({ employmentType: words }).employmentType, words).toBe("full_time");
+    expect(normalizeFacts({ employmentType: "Part time" }).employmentType).toBe("part_time");
+    expect(normalizeFacts({ employmentType: "Per diem" }).employmentType).toBe("per_diem");
+    for (const words of ["hourly", "per hour", "an hour", "Hourly rate"]) expect(normalizeFacts({ compensationBasis: words }).compensationBasis, words).toBe("hourly");
+    for (const words of ["salary", "Salary", "annual salary", "per year"]) expect(normalizeFacts({ compensationBasis: words }).compensationBasis, words).toBe("salary");
+  });
+
+  it("drops words that name no kind or basis, or more than one, so the essential is asked and never half-known", () => {
+    expect(normalizeFacts({ employmentType: "gig" })).toEqual(facts());
+    expect(normalizeFacts({ employmentType: "Full time or part time" })).toEqual(facts());
+    expect(normalizeFacts({ compensationBasis: "weekly", compensationMin: 900, compensationMax: 1100 })).toEqual(facts({ compensationMin: 900, compensationMax: 1100 }));
+    expect(normalizeFacts({ compensationBasis: "hourly, with a yearly bonus" }).compensationBasis).toBeUndefined();
+  });
+
+  it("writes the job once the owner's sentence gave every essential, whichever words the assistant kept them in", () => {
+    const asWritten = normalizeFacts({ ...complete(), employmentType: "Full time", compensationBasis: "per hour" });
+    const r = intakeReadiness({ facts: asWritten, state: state(paid), draft: null });
+    expect(r.missing).toEqual([]);
+    expect(r.essentials.find((e) => e.key === "employment_type")).toMatchObject({ done: true, value: "Full time" });
+    expect(r).toMatchObject({ payConfirmed: true, mayDraft: true, draftBlocker: null });
+    // and pay the owner typed counts as typed, so the pay card is not shown again
+    expect(payTyped([said("$45 to $55 an hour")], asWritten)).toBe(true);
+  });
+});
+
 describe("the same requirement in other words", () => {
   it("reads the same words, most key words shared, or a credential's short form", () => {
     expect(sameRequirement("Active RDH license", "active rdh license!")).toBe(true);

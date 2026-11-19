@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, lt, sql } from "drizzle-orm";
 import {
-  DraftRolePacket as DraftRolePacketSchema, INTAKE_ESSENTIALS, IntakeServerState, RemotePolicy, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
+  DraftRolePacket as DraftRolePacketSchema, EmploymentType, INTAKE_ESSENTIALS, IntakeServerState, RemotePolicy, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
   type Actor, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal,
   type IntakeSessionView, type IntakeTurn, type LegalCheck, type PublishBlocker, type RolePacket,
 } from "@ros/contracts";
@@ -128,13 +128,17 @@ function cardFields(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): Intak
   return cardField(q) === "compensation" ? ["compensation", "compensation_basis"] : [q.field];
 }
 
-/** Card fields the facts already answer, so a card would ask it again. */
+/**
+ * Card fields the facts already answer, so a card would ask it again. The work arrangement and the kind of job count
+ * only as a value the job can keep, the same test the essentials use (`intakeReadiness`): words that are neither
+ * answered nor asked would block the job with nothing to tap.
+ */
 export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean): IntakeQuestionField[] {
   const out: IntakeQuestionField[] = [];
   if (f.title) out.push("title");
   if (f.locationText) out.push("location");
-  if (f.remotePolicy) out.push("remote_policy");
-  if (f.employmentType) out.push("employment_type");
+  if (RemotePolicy.safeParse(f.remotePolicy).success) out.push("remote_policy");
+  if (EmploymentType.safeParse(f.employmentType).success) out.push("employment_type");
   if (f.schedule) out.push("schedule");
   if (payIsConfirmed) out.push("compensation", "compensation_basis");
   if (f.mustHaves.length) out.push("must_haves");
@@ -362,6 +366,16 @@ export function withoutCardCount(message: string): string {
   return message.replace(CARD_COUNT, (_all, det: string | undefined, num: string) => (det ? `${det} ` : /^[A-Z]/.test(num) ? "Some " : "some "));
 }
 
+/**
+ * The assistant's reply in the words the page uses. The model is told when a job is ready through a field named
+ * readyToCompile and repeats the word to the owner ("the job is ready to compile"), who presses "Write the job".
+ */
+export function inThePagesWords(message: string): string {
+  return message
+    .replace(/\bready\s+(?:to\s+(?:be\s+)?compiled?|for\s+compil(?:ing|ation))\b/gi, "ready to be written")
+    .replace(/\bcompile\s+(the|this|your)\s+job\b/gi, (_all, the: string) => `write ${the} job`);
+}
+
 const ARRANGEMENT_WORDS = /\bhybrid\b|\bremote\b|\bon[\s-]?site\b|\bin[\s-]?(?:office|person)\b/i;
 
 /**
@@ -467,7 +481,7 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
     state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
     if (state.ad && out.output.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: out.output.takenFromAd };
-    const message = withoutCardCount(out.output.assistantMessage);
+    const message = inThePagesWords(withoutCardCount(out.output.assistantMessage));
     const messages = [...session.messages, { role: "assistant" as const, content: message, at: new Date().toISOString(), aiRunId: out.runId }];
     const draftPacket = !notARole && session.draftPacket ? draftByRule({ ...loaded, session, state }, facts, input.actor) : null;
     await q.update(intakeSessions).set({ messages, facts, missingFacts: missing, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
