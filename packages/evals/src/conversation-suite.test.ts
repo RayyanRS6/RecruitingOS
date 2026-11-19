@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_WRAP_KEY, type ScreenTurn } from "@ros/contracts";
+import { CHAT_WRAP_KEY, type RolePacket, type ScreenTurn } from "@ros/contracts";
 import { FakeProvider, callPrompt, intakeCompilePrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import { PERSON_OFFER, chatNextLine, finalizePacket, registerFakeHandlers } from "@ros/agents";
-import { personas, runConversation, runConversationSuite } from "./conversation-suite";
+import { personas, runConversation, runConversationSuite, withPayQuestion } from "./conversation-suite";
 import { intakeContextOf } from "./intake-run";
 import { COOPERATIVE_PAY, RDH_FACTS } from "./suites";
 
@@ -34,6 +34,22 @@ describe("screen.conversation", () => {
     expect(passRate).toBe(1);
     // a passing persona keeps no record
     expect(cases.every((c) => !c.notes && !c.diagnostics)).toBe(true);
+  });
+
+  // A job as the real models write it asks about the work only. The stand-in's job always has a pay question, so only
+  // a job without one can tell: the pay persona is given an owner's pay question, first, and its answer is recorded.
+  it("gives the pay persona a job that asks about pay when the job as written does not", async () => {
+    const job = await goldenJob();
+    expect(withPayQuestion(job)).toBe(job);
+    const workOnly: RolePacket = { ...job, screening: { ...job.screening, questions: job.screening.questions.filter((q) => q.kind !== "compensation") } };
+    const asked = withPayQuestion(workOnly);
+    expect(asked.screening.questions[0]).toEqual({ key: "owner_pay", question: "What hourly range are you looking for?", kind: "compensation" });
+    expect(asked.screening.questions.slice(1)).toEqual(workOnly.screening.questions);
+    const { conversation, failed } = await runConversation(persona("pay_answer_recorded"), asked, run);
+    expect(failed).toBeNull();
+    expect(conversation.answers.owner_pay).toBe(COOPERATIVE_PAY);
+    const { cases } = await runConversationSuite(workOnly, run);
+    expect(cases.find((c) => c.id === "pay_answer_recorded")).toMatchObject({ pass: true, failures: [] });
   });
 
   it("drives a chat as the app does: the first question in code, the job's questions, the must-have the CV did not show, the closing question, the close", async () => {

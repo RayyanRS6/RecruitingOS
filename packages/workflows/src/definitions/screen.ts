@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, appPaths, type Actor, type ScreenAssessment } from "@ros/contracts";
+import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, appPaths, readStoredPacket, type Actor, type ScreenAssessment } from "@ros/contracts";
 import { outOfCredit, type RunOutcome } from "@ros/ai";
 import { emit, notify, remindedRecently } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
@@ -179,7 +179,7 @@ async function load(q: Tx, applicationId: string, version: number | null) {
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const [pv] = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), eq(rolePackets.version, version ?? app.packetVersion))).limit(1);
   if (!candidate || !role || !company || !pv) return null;
-  return { app, candidate, role, company, packet: pv.packet, version: pv.version };
+  return { app, candidate, role, company, packet: readStoredPacket(pv.packet), version: pv.version };
 }
 
 const ENDED_RUN = ["completed", "failed", "cancelled"];

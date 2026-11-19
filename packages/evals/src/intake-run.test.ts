@@ -102,6 +102,25 @@ describe("a job-builder case as the runner drives it", () => {
     expect(out.failures).toEqual(["declined criterion leaked into the job: recent grads"]);
   });
 
+  // On the real models a job is written with no pay when the answers hold none. The stand-in always writes a pay, so
+  // only a scripted job can tell: the case fails with the reason, and the run goes on to the next case.
+  it("fails a case whose written job cannot be published, with the reason, and never stops the run", async () => {
+    const asked = byId("dental_assistant_owner_questions");
+    const noPay = Object.fromEntries(Object.entries(asked.facts ?? {}).filter(([k]) => !k.startsWith("compensation"))) as Partial<IntakeFacts>;
+    const { fake, call, draftOf } = standIn();
+    const written: DraftRolePacket = structuredClone(await draftOf(asked));
+    delete written.compensation;
+    fake.scriptNext("intake.compile", written);
+    const entry = await intakeCaseResult(call, { ...asked, facts: noPay }, true);
+    expect(entry.pass).toBe(false);
+    expect(entry.failures).toHaveLength(1);
+    expect(entry.failures[0]).toMatch(/^the job as written cannot be published: compensation: .+ \(pay in the answers: none; pay as written: none\)$/);
+    expect(entry.notes).toBeUndefined();
+    // a case whose own check throws is a failed case too
+    const thrown = await intakeCaseResult(standIn().call, { ...byId("dental_rdh_one_sentence"), expectTurn: () => { throw new Error("boom"); } }, false);
+    expect(thrown).toEqual({ id: "dental_rdh_one_sentence", pass: false, failures: ["the case stopped: boom"] });
+  });
+
   // Every written job fails on a skill named the same as one of its must-haves, though its case's own checks never look
   // at skills, and its entry in the result file keeps the job's skills by name. No stand-in job has such a skill, so
   // only a scripted one can tell.

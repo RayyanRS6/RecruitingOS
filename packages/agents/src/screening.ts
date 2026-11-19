@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, TEXT_SCREENS, appPaths, hasCheckedQuote, requirementFinding, type Actor, type ChatPlan, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, TEXT_SCREENS, appPaths, hasCheckedQuote, readStoredPacket, requirementFinding, type Actor, type ChatPlan, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScorecardContext, type ScreenContext } from "@ros/ai";
 import { buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, formAnswerSentences, formAnswersOf, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, screenAnswersSent, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, transition, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
@@ -130,7 +130,9 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
   const [role] = await q.select().from(roles).where(eq(roles.id, app.roleId)).limit(1);
   const [company] = await q.select().from(companies).where(eq(companies.id, app.companyId)).limit(1);
   const packetVersion = screenPacketVersion(screen, app);
-  const versions = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), inArray(rolePackets.version, [packetVersion, app.packetVersion])));
+  const stored = await q.select().from(rolePackets).where(and(eq(rolePackets.roleId, app.roleId), inArray(rolePackets.version, [packetVersion, app.packetVersion])));
+  // A version stored before the form had one list of questions is read with it filled in, as the parser reads it.
+  const versions = stored.map((v) => ({ ...v, packet: readStoredPacket(v.packet) }));
   const pv = versions.find((v) => v.version === packetVersion);
   if (!candidate || !role || !company || !pv) return null;
   const readings = await q.select({ packetVersion: assessments.packetVersion, result: assessments.result }).from(assessments).where(and(eq(assessments.applicationId, app.id), eq(assessments.kind, "triage"))).orderBy(desc(assessments.createdAt), desc(assessments.id));
