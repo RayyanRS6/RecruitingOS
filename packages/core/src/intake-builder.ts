@@ -356,7 +356,27 @@ export function normalizeFacts(facts: unknown): IntakeFacts {
     parsed = IntakeFactsSchema.safeParse(kept);
   }
   const f = parsed.success ? parsed.data : IntakeFactsSchema.parse({});
-  return { ...f, mustHaves: f.mustHaves.slice(0, MUST_HAVES_MAX) };
+  const out: IntakeFacts = { ...f, mustHaves: f.mustHaves.slice(0, MUST_HAVES_MAX) };
+  // The kind of job and the pay basis are kept as codes, and the assistant writes facts in plain words ("Full time",
+  // "per hour"). Words that name one code are read as it; words that name none, or more than one, are dropped, so the
+  // card for that essential is asked. Left as they came, they counted as answered for the cards and as missing for the
+  // job: nothing asked for them, and the job could never be written.
+  const kind = codeFromWords(f.employmentType, EmploymentType.options, EMPLOYMENT_WORDS);
+  if (kind) out.employmentType = kind;
+  else delete out.employmentType;
+  const basis = codeFromWords(f.compensationBasis, ["hourly", "salary"], BASIS_WORDS);
+  if (basis) out.compensationBasis = basis;
+  else delete out.compensationBasis;
+  return out;
+}
+
+/** One of a few codes from the words a fact came in; undefined when the words name none of them, or more than one. */
+function codeFromWords(value: string | undefined, allowed: readonly string[], list: Array<[RegExp, string]>): string | undefined {
+  const v = value?.trim();
+  if (!v) return undefined;
+  if (allowed.includes(v)) return v;
+  const named = [...new Set(list.filter(([re]) => re.test(v)).map(([, code]) => code))];
+  return named.length === 1 ? named[0] : undefined;
 }
 
 const REQUIREMENT_STOP_WORDS = new Set(["the", "and", "for", "with", "our", "your", "their", "must", "have", "has", "able", "can", "who", "will", "are", "experience", "years", "year", "you", "any", "all", "from", "into", "that", "this", "work", "working", "job", "role", "plus"]);

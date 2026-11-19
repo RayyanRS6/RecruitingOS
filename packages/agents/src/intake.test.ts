@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type I
 import { DraftRolePacket, IntakeQuestion, IntakeServerState, IntakeTurn, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import { unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
-import { fieldsKnownFromFacts, finalizeDraft, finalizePacket, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount } from "./intake";
+import { fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount } from "./intake";
 
 const OWNERS_SENTENCE = "Software Engineer required with 3 years of hands-on experience in Python and Flask";
 const HYGIENIST = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
@@ -121,6 +121,20 @@ describe("the cards as the server stores them", () => {
   it("knows what the facts already answer", () => {
     expect(fieldsKnownFromFacts(facts({ title: "Hygienist", remotePolicy: "onsite", compensationMin: 45, compensationMax: 55, compensationBasis: "hourly", mustHaves: ["RDH license"] }), false)).toEqual(["title", "remote_policy", "must_haves"]);
     expect(fieldsKnownFromFacts(facts({ compensationMin: 45, compensationMax: 55, compensationBasis: "hourly" }), true)).toEqual(["compensation", "compensation_basis"]);
+    expect(fieldsKnownFromFacts(facts({ employmentType: "part_time" }), false)).toEqual(["employment_type"]);
+  });
+
+  // Found on the live site on 19 November 2026. The real model writes facts in plain words; the stand-in writes codes,
+  // so only a scripted turn can tell.
+  it("reads the assistant's plain words for the kind of job and the pay basis, and never counts unreadable ones as answered", () => {
+    const read = mergeFacts(facts(), facts({ title: "Front desk coordinator", employmentType: "Full time", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26 }), [said("Front desk coordinator, full time, 22 to 26 dollars an hour.")]);
+    expect(read).toMatchObject({ employmentType: "full_time", compensationBasis: "hourly", compensationMin: 22, compensationMax: 26 });
+    expect(fieldsKnownFromFacts(read, false)).toEqual(["title", "employment_type"]);
+    // words that name no kind of job are not kept, are not settled, and so the server's own card asks for it
+    const unread = mergeFacts(facts(), facts({ title: "Front desk coordinator", employmentType: "flexible" }));
+    expect(unread.employmentType).toBeUndefined();
+    expect(fieldsKnownFromFacts({ ...unread, employmentType: "flexible", remotePolicy: "wherever" }, false)).toEqual(["title"]);
+    expect(prepare([], { missing: ["employment_type"], settled: fieldsKnownFromFacts(unread, false) }).map((q) => [q.field, q.options.map((o) => o.value)])).toEqual([["employment_type", ["full_time", "part_time"]]]);
   });
 
   it("tells two cards that ask the same thing from a must-have and a nice-to-have card", () => {
@@ -132,6 +146,14 @@ describe("the cards as the server stores them", () => {
     expect(withoutCardCount("Please answer the three questions beside this.")).toBe("Please answer the questions beside this.");
     expect(withoutCardCount("I have 3 quick questions for you.")).toBe("I have some quick questions for you.");
     expect(withoutCardCount("Three more cards are beside this.")).toBe("Some more cards are beside this.");
+  });
+
+  it("says a job is ready to be written, in the page's word, never ready to compile", () => {
+    expect(inThePagesWords("All the essentials are in place, so the job is ready to compile.")).toBe("All the essentials are in place, so the job is ready to be written.");
+    expect(inThePagesWords("Everything is in. It is ready to be compiled.")).toBe("Everything is in. It is ready to be written.");
+    expect(inThePagesWords("I can compile the job now.")).toBe("I can write the job now.");
+    // an owner's own must-have keeps its words
+    expect(inThePagesWords("Must-have noted: can compile and ship a C++ service.")).toBe("Must-have noted: can compile and ship a C++ service.");
   });
 });
 
