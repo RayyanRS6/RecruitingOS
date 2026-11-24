@@ -5,8 +5,8 @@ import {
 } from "../../packages/contracts/src/index";
 import {
   DRAFT_STEP_LABELS, FIELD_LABEL, addOwn, answerOf, answerPayload, answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftTitle,
-  draftingNow, echoText, enterSends, essentialsList, firstReplyKey, goTo, initialCards, isAnswered, messageLimit, messageProblem, nextLabel, parseAmount, payCardProblem, payFormFrom, payPayload,
-  payProblem, pickHint, publishHelp, redraftWarning, refusedLines, removeOwn, replyWords, sessionKey, setDraft, setPayForm, togglePick, turnProblem, typeInstead, typedWithCards, writeHelp,
+  draftingNow, echoText, enterSends, essentialsList, firstReplyKey, goTo, initialCards, isAnswered, messageLimit, messageProblem, nextLabel, parseAmount, payCardProblem, payFormFrom, payFormShown,
+  payPayload, payProblem, pickHint, publishHelp, redraftWarning, refusedLines, removeOwn, replyWords, sessionKey, setDraft, setPayForm, togglePick, turnProblem, typeInstead, typedWithCards, writeHelp,
   type CardState, type Deck, type PayForm,
 } from "../../apps/web/src/builder";
 
@@ -71,6 +71,38 @@ describe("question cards", () => {
     expect(answersPayload([arrangement, must], initialCards())).toEqual([{ questionId: "q1_1", selected: [], own: [], skipped: true }, { questionId: "q1_2", selected: [], own: [], skipped: true }]);
     // every payload is one the API accepts
     for (const a of answersPayload([arrangement, must, pay], s)) expect(IntakeAnswer.parse(a)).toEqual(a);
+  });
+
+  // Found by two audits in November 2026: a pasted ad's pay was drawn in the pay card's boxes, the owner pressed Send on
+  // the filled card, and the card went as skipped, so the pay stayed unconfirmed and "Write the job" stayed grey.
+  it("a pay card that shows the draft's pay, sent as it was drawn, sends the figures it shows; with empty boxes it is still a skip", () => {
+    const fromAd = { basis: "hourly" as const, stated: { min: 24, max: 28 } };
+    const nothing = { basis: null, stated: { min: null, max: null } };
+    // the deck's own Send with nothing touched: the figures in the boxes go, so the person who pressed Send has confirmed them
+    const sent = answersPayload([arrangement, pay], initialCards(), fromAd);
+    expect(sent).toEqual([{ questionId: "q1_1", selected: [], own: [], skipped: true }, { questionId: "q2_2", selected: [], own: [], skipped: false, pay: { basis: "hourly", min: 24, max: 28 } }]);
+    for (const a of sent) expect(IntakeAnswer.parse(a)).toEqual(a);
+    // and the conversation says so at once
+    expect(echoText([arrangement, pay], initialCards(), fromAd)).toBe("Pay: $24–$28 an hour");
+    // figures the person changed on the card go as they typed them, never the ad's
+    const changed = setPayForm(initialCards(), pay, { basis: "hourly", min: "26", max: "30" });
+    expect(answerPayload(pay, answerOf(changed, pay), fromAd).pay).toEqual({ basis: "hourly", min: 26, max: 30 });
+    // boxes the person emptied are a skip: the ad's figures are not sent behind their back
+    const emptied = setPayForm(initialCards(), pay, { basis: "hourly", min: "", max: "" });
+    expect(answerPayload(pay, answerOf(emptied, pay), fromAd).skipped).toBe(true);
+    // a card with nothing in its boxes, left alone, is skipped as before
+    expect(answersPayload([pay], initialCards(), nothing)).toEqual([{ questionId: "q2_2", selected: [], own: [], skipped: true }]);
+    expect(answersPayload([pay], initialCards())).toEqual([{ questionId: "q2_2", selected: [], own: [], skipped: true }]);
+    expect(echoText([pay], initialCards(), nothing)).toBe("Skipped those questions.");
+  });
+
+  it("a pay card nobody touched is confirmed only by the deck's own Send, never by typed words or 'Write the job' taking the answers along", () => {
+    const untouched: Deck = { key: "", state: togglePick(initialCards(), arrangement, "hybrid"), closed: false };
+    expect(isAnswered(pay, answerOf(untouched.state, pay))).toBe(false);
+    expect(answersToCarry([arrangement, pay], untouched)?.answers).toEqual([{ questionId: "q1_1", selected: ["hybrid"], own: [], skipped: false }]);
+    expect(typedWithCards([arrangement, pay], typeInstead(untouched), "The office is in Irvine.")?.echo).toBe("Work arrangement: Hybrid\nThe office is in Irvine.");
+    expect(carriedLine([arrangement, pay], typeInstead(untouched))).toBe("Sent with your message: Work arrangement: Hybrid");
+    expect(answersToCarry([pay], { key: "", state: initialCards(), closed: false })).toBeNull();
   });
 
   it("move one at a time, Next until the last card and Send on it, and are shown only while the draft is being built", () => {
@@ -314,9 +346,33 @@ describe("pay", () => {
     expect(payCardProblem([other], { index: 0, answers: {} })).toBeNull();
   });
 
+  it("on a question card, figures drawn from the draft that cannot be sent as they stand are said and held too, never sent as skipped", () => {
+    const other = q({ id: "q_other", field: "schedule", mode: "free" });
+    const card = q({ id: "q_pay", field: "compensation", mode: "pay" });
+    const untouched: CardState = { index: 0, answers: {} };
+    // a range read from an ad that did not say by the hour or a year: the boxes show it, with neither chosen
+    const noBasis = { basis: null, stated: { min: 24, max: 28 } };
+    expect(payCardProblem([other, card], untouched, noBasis)).toEqual({ index: 1, words: "Choose by the hour or a yearly salary." });
+    expect(answersPayload([card], untouched, noBasis)).toEqual([{ questionId: "q_pay", selected: [], own: [], skipped: true }]);
+    // once the person chooses, the card can go
+    const chosen = setPayForm(untouched, card, { ...payFormShown(answerOf(untouched, card), noBasis), basis: "hourly" });
+    expect(payCardProblem([card], chosen, noBasis)).toBeNull();
+    expect(answersPayload([card], chosen, noBasis)[0].pay).toEqual({ basis: "hourly", min: 24, max: 28 });
+    // drawn figures that can go as they stand hold nothing; a basis alone, with empty boxes, is a real skip
+    expect(payCardProblem([card], untouched, { basis: "hourly", stated: { min: 24, max: 28 } })).toBeNull();
+    expect(payCardProblem([card], untouched, { basis: "hourly", stated: { min: null, max: null } })).toBeNull();
+    // without the draft's pay (answers that only go along with something else) an untouched card is never a problem
+    expect(payCardProblem([card], untouched)).toBeNull();
+  });
+
   it("fills the pay card from what the draft already says, so a range read from an ad is shown to be confirmed", () => {
     expect(payFormFrom({ basis: "hourly", stated: { min: 45, max: 55 } })).toEqual({ basis: "hourly", min: "45", max: "55" });
     expect(payFormFrom({ basis: null, stated: { min: null, max: null } })).toEqual({ basis: "", min: "", max: "" });
+    // the boxes as drawn: the draft's pay until the person changes them, then what they typed
+    const card = q({ id: "q_pay", field: "compensation", mode: "pay" });
+    expect(payFormShown(answerOf(initialCards(), card), { basis: "hourly", stated: { min: 45, max: 55 } })).toEqual({ basis: "hourly", min: "45", max: "55" });
+    expect(payFormShown(answerOf(setPayForm(initialCards(), card, { basis: "salary", min: "60k", max: "" }), card), { basis: "hourly", stated: { min: 45, max: 55 } })).toEqual({ basis: "salary", min: "60k", max: "" });
+    expect(payFormShown(answerOf(initialCards(), card))).toEqual({ basis: "", min: "", max: "" });
   });
 });
 

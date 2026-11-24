@@ -141,13 +141,31 @@ export function nextLabel(index: number, total: number): "Next" | "Send" {
 
 const skippedAnswer = (q: Pick<IntakeQuestion, "id">): IntakeAnswer => ({ questionId: q.id, selected: [], own: [], skipped: true });
 
+/** The pay the draft already states (`IntakeSessionView.pay`), which the pay card draws in its boxes until the person changes them. */
+export type StatedPay = Pick<IntakePayCard, "basis" | "stated">;
+
+/**
+ * The pay card's boxes as they are drawn: what the person typed or chose on the card, else the pay the draft already
+ * states (a range read from a pasted ad, shown to be confirmed), else empty. The card draws this and its own Send sends
+ * this, so what a person sees in the boxes is what goes.
+ */
+export function payFormShown(a: Pick<CardAnswer, "pay">, stated?: StatedPay | null): PayForm {
+  return a.pay ?? (stated ? payFormFrom(stated) : { basis: "", min: "", max: "" });
+}
+
 /**
  * What one card sends (POST /intake/sessions/:id/answers). A card left alone is sent as skipped. Words still in the box
  * count as an answer. A card that takes no answers of the person's own sends none, except one that only takes typing.
+ *
+ * `stated`: given by the deck's own Send, which is on the last card, so every card has been in front of the person. A
+ * pay card left as it was drawn then sends the figures it shows, so the person who pressed Send has confirmed them; with
+ * empty boxes it is still a skip. Left out, as when the answers only go along with something else (typed words, "Write
+ * the job"), a pay card nobody touched is not an answer: pay is never confirmed by a card nobody sent.
  */
-export function answerPayload(q: IntakeQuestion, a: CardAnswer): IntakeAnswer {
+export function answerPayload(q: IntakeQuestion, a: CardAnswer, stated?: StatedPay | null): IntakeAnswer {
   if (q.mode === "pay") {
-    const pay = a.pay ? payPayload(a.pay) : null;
+    const form = a.pay ?? (stated ? payFormFrom(stated) : null);
+    const pay = form ? payPayload(form) : null;
     return pay ? { questionId: q.id, selected: [], own: [], skipped: false, pay } : skippedAnswer(q);
   }
   const typed = a.draft.trim().slice(0, 500);
@@ -158,34 +176,38 @@ export function answerPayload(q: IntakeQuestion, a: CardAnswer): IntakeAnswer {
   return { questionId: q.id, selected, own: own.slice(0, 6), skipped: false };
 }
 
+/** Whether the person answered a card themselves: ticked, typed, or set the pay. A pay card left as it was drawn is not counted, though its own Send sends what it shows. */
 export function isAnswered(q: IntakeQuestion, a: CardAnswer): boolean {
   return !answerPayload(q, a).skipped;
 }
 
-/** Every card's answer, in the order the cards were asked. */
-export function answersPayload(questions: readonly IntakeQuestion[], state: CardState): IntakeAnswer[] {
-  return questions.map((q) => answerPayload(q, answerOf(state, q)));
+/** Every card's answer, in the order the cards were asked. `stated`: see `answerPayload`. */
+export function answersPayload(questions: readonly IntakeQuestion[], state: CardState, stated?: StatedPay | null): IntakeAnswer[] {
+  return questions.map((q) => answerPayload(q, answerOf(state, q), stated));
 }
 
 /**
- * A pay card on the deck with figures typed that cannot be sent, as words and where it is, or null. Sending would count
- * it as skipped, so the figures would be gone with nothing to say why. Boxes left empty are a real skip.
+ * A pay card on the deck whose boxes hold figures that cannot be sent, as words and where it is, or null: figures the
+ * person typed, or, with `stated`, figures the card drew from the draft and nobody changed (a range with no "by the hour"
+ * or "a yearly salary" beside it, say). Sending would count the card as skipped, so the figures in front of the person
+ * would not go, with nothing to say why. Boxes left empty are a real skip.
  */
-export function payCardProblem(questions: readonly IntakeQuestion[], state: CardState): { index: number; words: string } | null {
+export function payCardProblem(questions: readonly IntakeQuestion[], state: CardState, stated?: StatedPay | null): { index: number; words: string } | null {
   for (const [index, q] of questions.entries()) {
-    const form = q.mode === "pay" ? answerOf(state, q).pay : undefined;
-    if (!form || ![form.min, form.max].some((v) => v.trim())) continue;
+    if (q.mode !== "pay") continue;
+    const form = payFormShown(answerOf(state, q), stated);
+    if (![form.min, form.max].some((v) => v.trim())) continue;
     const words = payProblem(form);
     if (words) return { index, words };
   }
   return null;
 }
 
-/** The picks as the one short message the conversation shows straight away; the server's own copy replaces it when the answer comes back. */
-export function echoText(questions: readonly IntakeQuestion[], state: CardState): string {
+/** The picks as the one short message the conversation shows straight away; the server's own copy replaces it when the answer comes back. `stated`: see `answerPayload`. */
+export function echoText(questions: readonly IntakeQuestion[], state: CardState, stated?: StatedPay | null): string {
   const lines: string[] = [];
   for (const q of questions) {
-    const a = answerPayload(q, answerOf(state, q));
+    const a = answerPayload(q, answerOf(state, q), stated);
     if (a.skipped) continue;
     if (a.pay) {
       lines.push(`${FIELD_LABEL.compensation}: ${formatPayRange(a.pay)}`);
