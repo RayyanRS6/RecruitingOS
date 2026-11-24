@@ -106,7 +106,7 @@ export function WelcomePage() {
         {/* Hero: the promise and its one way in on the left, a picture of the guide on the right, centred on each other */}
         <section aria-labelledby="welcome-title" className={`${wrap} grid items-center gap-12 pb-14 pt-14 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] md:gap-10 md:pb-20 md:pt-20`}>
           <div>
-            <h1 id="welcome-title" className="font-display text-[40px] font-bold leading-[1.02] tracking-[-0.035em] text-ink sm:text-[48px] md:text-[56px] motion-safe:animate-enter">
+            <h1 id="welcome-title" className="font-display text-[46px] font-bold leading-none tracking-[-0.015em] text-ink sm:text-[58px] md:text-[68px] motion-safe:animate-enter">
               Hiring, made <span className="block text-primary">more manageable.</span>
             </h1>
             <p className="mt-6 max-w-[27rem] text-[15px] leading-[1.65] text-ink-2 motion-safe:animate-enter [animation-delay:30ms]">
@@ -151,7 +151,7 @@ export function WelcomePage() {
         {/* How it works: three numbered steps */}
         <section id="how-it-works" aria-labelledby="how-title" className={`${wrap} grid scroll-mt-6 gap-10 pb-16 pt-6 md:grid-cols-2 md:gap-12 md:pb-24 md:pt-8`}>
           <div className="md:pt-6">
-            <h2 id="how-title" className="font-display text-[32px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[38px] md:text-[42px]">
+            <h2 id="how-title" className="font-display text-[38px] font-bold leading-[1.02] font-stretch-condensed tracking-[-0.015em] text-ink sm:text-[46px] md:text-[52px]">
               From {"“"}we need someone{"”"} <span className="block text-primary">to {"“"}I know who to call.{"”"}</span>
             </h2>
             <p className="mt-5 max-w-[25rem] text-[15px] leading-[1.65] text-ink-2">
@@ -176,7 +176,7 @@ export function WelcomePage() {
         <section id="for-owners" aria-labelledby="owners-title" className="scroll-mt-6 bg-primary text-white dark:bg-tint-2">
           <div className={`${wrap} grid items-center gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-20`}>
             <div>
-              <h2 id="owners-title" className="font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-white sm:text-[40px] md:text-[44px]">
+              <h2 id="owners-title" className="font-display text-[38px] font-bold leading-[1.02] font-stretch-condensed tracking-[-0.015em] text-white sm:text-[46px] md:text-[52px]">
                 You already have <span className="sm:block">a full-time job.</span>
               </h2>
               <p className="mt-5 max-w-[26rem] text-[15px] leading-[1.65] text-white/80">
@@ -188,7 +188,7 @@ export function WelcomePage() {
               </a>
             </div>
             <div className="rounded-2xl border border-white/15 bg-black/20 p-6 md:p-8">
-              <h3 className="font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-white md:text-[30px]">You don{"’"}t have to figure out every step alone.</h3>
+              <h3 className="font-display text-[30px] font-bold leading-[1.06] font-stretch-condensed tracking-[-0.01em] text-white md:text-[36px]">You don{"’"}t have to figure out every step alone.</h3>
               <p className="mt-4 text-[14px] leading-[1.65] text-white/80">
                 What really matters for this role? Which experience is relevant? What should you ask next? Talk it through with your AI hiring guide and keep the role, applicants and decisions in one place.
               </p>
@@ -199,7 +199,7 @@ export function WelcomePage() {
         {/* The owner keeps the decision */}
         <section aria-labelledby="review-title" className={`${wrap} grid gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-24`}>
           <div className="md:pt-5">
-            <h2 id="review-title" className="font-display text-[34px] font-bold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[40px] md:text-[44px]">
+            <h2 id="review-title" className="font-display text-[38px] font-bold leading-[1.02] font-stretch-condensed tracking-[-0.015em] text-ink sm:text-[46px] md:text-[52px]">
               Help with the review. <span className="block text-primary">You make the hire.</span>
             </h2>
           </div>
@@ -222,7 +222,7 @@ export function WelcomePage() {
             <span className="grid size-11 shrink-0 place-items-center rounded-full border border-line bg-surface text-primary shadow-xs" aria-hidden="true">
               <Icon name="sparkle" size={18} />
             </span>
-            <h2 id="next-title" className="min-w-0 flex-1 font-display text-[26px] font-bold leading-[1.1] tracking-[-0.03em] text-ink md:text-[30px]">
+            <h2 id="next-title" className="min-w-0 flex-1 font-display text-[30px] font-bold leading-[1.06] font-stretch-condensed tracking-[-0.01em] text-ink md:text-[36px]">
               You run the business. <span className="block">Get help with the hiring.</span>
             </h2>
             <a href="/login" className="btn primary group self-start md:self-center">

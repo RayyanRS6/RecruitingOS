@@ -21,7 +21,7 @@ function withClass(kit: string, className: string | undefined): string {
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "quiet" | "destructive";
 
 /** The tints an IconChip can sit on. */
-export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "neutral";
+export type ChipTone = "lavender" | "peach" | "plum" | "good" | "caution" | "critical" | "neutral";
 
 /**
  * A button, a pill in every size. Primary is plum, secondary is outlined, ghost has no box, danger is for the few

@@ -117,9 +117,10 @@ describe("System, Health: alerts", () => {
 
   it("names each severity in plain words", () => {
     const words = text(health({ ...noFailures, alerts: [alert("al5", "worker.stale", "The worker stopped"), alert("al6", "outbox.slow", "Email is slow", { severity: "warning" }), alert("al7", "note", "Heads up", { severity: "info" })] }));
-    expect(words).toContain("Urgent The worker stopped");
-    expect(words).toContain("Check soon Email is slow");
-    expect(words).toContain("For your information Heads up");
+    // the title leads; how urgent it is, in words, is on the quiet line under it beside the date
+    expect(words).toContain("The worker stopped Urgent · today");
+    expect(words).toContain("Email is slow Check soon · today");
+    expect(words).toContain("Heads up For your information · today");
     expect(words).not.toMatch(/\bcritical\b|\bwarning\b/);
     expect(words).toContain("today");
     // nothing about a credential kept after a disconnect: calendars are gone
@@ -147,7 +148,8 @@ describe("System, Health: failed work and the queue", () => {
     expect(html.match(/>Retry<\/button>/g)).toHaveLength(1);
     expect(words).toContain("Background tasks that failed (1) Workflow.tick");
     expect(words).toContain("Tried 5 times · lease lost");
-    expect(words).toContain("AI runs that were not OK (1) Answer not usable Triage");
+    expect(words).toContain("AI runs that were not OK (1) Triage Answer not usable · today");
+    expect(words).toContain("Failed workflow runs (1) Reading a new application Failed · 2 days ago");
     // a failed run names no candidate and opens nothing: the run browser is gone
     expect(html).not.toContain("ap1");
   });

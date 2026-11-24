@@ -3,7 +3,7 @@
 import { Children, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PLAN_REQUEST_ALERT_KIND, type AdminAlert, type AdminFailures, type AdminQueue, type ResolveAlert } from "@ros/contracts";
-import { Button, Card, Chip, cn, ErrorState, Icon, IconLabel, Skeleton } from "@ros/ui";
+import { Button, Card, Chip, cn, ErrorState, Icon, IconChip, IconLabel, type IconName, Skeleton } from "@ros/ui";
 import { api, errorWords, type Me } from "../../api/client";
 import { toast } from "../../toast";
 import { adminKeys, reason } from "./admin-api";
@@ -68,18 +68,48 @@ function When({ at }: { at: string | null | undefined }) {
   return <time dateTime={at} title={exactWhen(at)}>{whenWords(at)}</time>;
 }
 
-/** One problem: a chip (severity, kind), its title and when, then a sentence, one quieter line of details and its buttons. */
-function ProblemRow(props: { lead?: ReactNode; title: ReactNode; at?: string | null; body?: ReactNode; detail?: ReactNode; children?: ReactNode; index?: number }) {
+/**
+ * A problem's words, split for the eye: its first sentence is read at a glance, and the rest (a provider's own message,
+ * the reason, what to check) waits under "Details". Nothing is cut: both halves are always in the page.
+ */
+export function leadAndRest(body: string | null | undefined): { lead: string; rest: string } {
+  const words = (body ?? "").trim();
+  const first = /^(.{20,}?[.!?])\s+(?=\S)/s.exec(words);
+  return first ? { lead: first[1], rest: words.slice(first[0].length) } : { lead: words, rest: "" };
+}
+
+type ProblemTone = "critical" | "caution" | "neutral";
+
+/**
+ * One problem, read top to bottom: a mark in the colour of how urgent it is, its title, one quiet line (the word for
+ * how urgent or what kind, and when), one sentence, and the rest under "Details". Its buttons sit beside the title on a
+ * wide screen and under the words on a narrow one. The mark is decoration: the word beside the date says the same.
+ */
+function ProblemRow(props: { tone?: ProblemTone; icon?: IconName; tag?: ReactNode; title: ReactNode; at?: string | null; body?: string | null; detail?: ReactNode; children?: ReactNode; index?: number }) {
+  const { lead, rest } = leadAndRest(props.body);
   return (
-    <li className={`grid min-w-0 gap-1.5 px-6 py-4 last:pb-0 max-sm:px-4 ${ENTER}`} style={stagger(props.index ?? 0)}>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-        {props.lead}
-        <strong className="min-w-0 text-[15px] text-ink wrap-anywhere">{props.title}</strong>
-        {props.at ? <span className="small muted whitespace-nowrap">· <When at={props.at} /></span> : null}
+    <li className={`grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3.5 gap-y-3 px-6 py-4 max-sm:px-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] ${ENTER}`} style={stagger(props.index ?? 0)}>
+      <IconChip icon={props.icon ?? "alert"} tone={props.tone ?? "neutral"} size="sm" />
+      <div className="grid min-w-0 gap-0.5">
+        <strong className="text-[15px] leading-snug text-ink wrap-anywhere">{props.title}</strong>
+        {props.tag || props.at ? (
+          <p className="small muted flex flex-wrap items-center gap-x-1.5">
+            {props.tag ? <span>{props.tag}</span> : null}
+            {props.tag && props.at ? <span aria-hidden="true">·</span> : null}
+            <When at={props.at} />
+          </p>
+        ) : null}
+        {lead ? <p className="mt-1.5 max-w-[72ch] text-[14px] text-ink-2 wrap-anywhere">{lead}</p> : null}
+        {props.detail ? <p className="small muted mt-1 max-w-[72ch] wrap-anywhere">{props.detail}</p> : null}
+        {rest ? (
+          <details className="more mt-1.5">
+            {/* the button says what a press does: "Show details", then "Hide details" (the kit shows one of the two) */}
+            <summary><span className="if-closed">Show details</span><span className="if-open">Hide details</span></summary>
+            <p className="small max-w-[72ch] rounded-xl bg-surface-2 px-3.5 py-3 text-ink-2 wrap-anywhere">{rest}</p>
+          </details>
+        ) : null}
       </div>
-      {props.body ? <p className="text-[14px] text-ink-2">{props.body}</p> : null}
-      {props.detail ? <p className="small muted wrap-anywhere">{props.detail}</p> : null}
-      {Children.toArray(props.children).length ? <div className="mt-1 grid gap-2">{props.children}</div> : null}
+      {Children.toArray(props.children).length ? <div className="col-start-2 grid gap-2 sm:col-start-3 sm:row-start-1 sm:justify-items-end">{props.children}</div> : null}
     </li>
   );
 }
@@ -104,16 +134,28 @@ function Alerts({ alerts }: { alerts: AdminAlert[] }) {
   const needing = alerts.filter(needsAPerson);
   const others = alerts.filter((a) => !needsAPerson(a));
   const row = (a: AdminAlert, i: number) => (
-    <ProblemRow key={a.id} index={i} lead={<Chip tone={severityTone(a.severity)}>{severityWords(a.severity)}</Chip>} title={a.title} at={a.createdAt} body={a.body}>
-      <div className="row">
-        {a.status === "acknowledged" ? <Chip tone="neutral">Acknowledged</Chip> : null}
-        {ackIsForAnother(a, me.data?.user.id) ? (a.status === "open" ? <span className="small muted">{ACK_FOR_ANOTHER}</span> : null) : (
-          <>
-            {a.status === "open" ? <Button size="sm" variant="secondary" loading={ack.isPending && ack.variables === a.id} onClick={() => ack.mutate(a.id)}>Acknowledge</Button> : null}
-            <Button size="sm" variant="quiet" loading={resolve.isPending && resolve.variables === a.id} onClick={() => resolve.mutate(a.id)}>Resolve</Button>
-          </>
-        )}
-      </div>
+    <ProblemRow
+      key={a.id}
+      index={i}
+      tone={severityTone(a.severity)}
+      tag={severityWords(a.severity)}
+      title={a.title}
+      at={a.createdAt}
+      body={a.body}
+      // who acknowledges it is said under the alert's own words, where it is read, not squeezed beside the title
+      detail={ackIsForAnother(a, me.data?.user.id) && a.status === "open" ? ACK_FOR_ANOTHER : undefined}
+    >
+      {a.status === "acknowledged" || !ackIsForAnother(a, me.data?.user.id) ? (
+        <div className="row">
+          {a.status === "acknowledged" ? <Chip tone="neutral">Acknowledged</Chip> : null}
+          {ackIsForAnother(a, me.data?.user.id) ? null : (
+            <>
+              {a.status === "open" ? <Button size="sm" variant="secondary" loading={ack.isPending && ack.variables === a.id} onClick={() => ack.mutate(a.id)}>Acknowledge</Button> : null}
+              <Button size="sm" variant="quiet" loading={resolve.isPending && resolve.variables === a.id} onClick={() => resolve.mutate(a.id)}>Resolve</Button>
+            </>
+          )}
+        </div>
+      ) : null}
     </ProblemRow>
   );
   return (
@@ -145,7 +187,7 @@ function FailedWork({ failures }: { failures: AdminFailures }) {
         <Card title={`Failed workflow runs (${failedRuns.length})`}>
           <ul className={LIST}>
             {failedRuns.map((r, i) => (
-              <ProblemRow key={r.id} index={i} lead={<Chip tone="critical">Failed</Chip>} title={workflowWords(r.workflowKey)} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.attempts ? `Tried ${timesWord(r.attempts)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
+              <ProblemRow key={r.id} index={i} tone="critical" icon="refresh" tag="Failed" title={workflowWords(r.workflowKey)} at={r.updatedAt} detail={[r.currentStep ? `Step: ${plainCode(r.currentStep)}` : null, r.attempts ? `Tried ${timesWord(r.attempts)}` : null, r.lastError ? r.lastError.slice(0, 160) : null].filter(Boolean).join(" · ")}>
                 <div className="row">
                   <Button size="sm" variant="secondary" ariaLabel={`Retry: ${workflowWords(r.workflowKey)}`} loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>Retry</Button>
                 </div>
@@ -157,14 +199,14 @@ function FailedWork({ failures }: { failures: AdminFailures }) {
       {failedJobs.length ? (
         <Card title={`Background tasks that failed (${failedJobs.length})`}>
           <ul className={LIST}>
-            {failedJobs.map((j, i) => <ProblemRow key={j.id} index={i} title={firstUpper(plainCode(j.kind))} at={j.createdAt} detail={[j.attempts ? `Tried ${timesWord(j.attempts)}` : null, j.lastError].filter(Boolean).join(" · ")} />)}
+            {failedJobs.map((j, i) => <ProblemRow key={j.id} index={i} tone="caution" icon="activity" title={firstUpper(plainCode(j.kind))} at={j.createdAt} detail={[j.attempts ? `Tried ${timesWord(j.attempts)}` : null, j.lastError].filter(Boolean).join(" · ")} />)}
           </ul>
         </Card>
       ) : null}
       {failedAi.length ? (
         <Card title={`AI runs that were not OK (${failedAi.length})`}>
           <ul className={LIST}>
-            {failedAi.map((a, i) => <ProblemRow key={a.id} index={i} lead={<Chip tone="caution">{aiStatusWords(a.status)}</Chip>} title={codeWords(a.task)} at={a.createdAt} detail={[a.model, a.error].filter(Boolean).join(" · ")} />)}
+            {failedAi.map((a, i) => <ProblemRow key={a.id} index={i} tone="caution" icon="sparkle" tag={aiStatusWords(a.status)} title={codeWords(a.task)} at={a.createdAt} detail={[a.model, a.error].filter(Boolean).join(" · ")} />)}
           </ul>
         </Card>
       ) : null}

@@ -55,7 +55,7 @@ ${fontFaceCss(MONO_FONTS)}
   --sh-xs: 0 1px 2px rgb(47 34 57 / 0.04);
   --sh-pop: 0 18px 44px -14px rgb(47 34 57 / 0.3), 0 2px 6px rgb(47 34 57 / 0.06);
   --sh-primary: 0 8px 20px -10px rgb(82 50 103 / 0.6);
-  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
   --ui: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", Menlo, Consolas, monospace;
   --r-control: 12px;
@@ -108,7 +108,7 @@ main.wide { width: auto; max-width: 1120px; margin: 0 auto; padding: 48px 24px 8
 main:not(:has(.thread)) { animation: rise 200ms ease-out backwards; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 h1, h2, h3 { color: var(--ink); font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: anywhere; }
-h1 { margin: 0 0 10px; font-size: 34px; line-height: 1.08; letter-spacing: -0.035em; }
+h1 { margin: 0 0 10px; font-size: 34px; font-stretch: 75%; line-height: 1.08; letter-spacing: -0.02em; }
 h2 { margin: 36px 0 12px; font-size: 21px; line-height: 1.25; }
 h3 { margin: 24px 0 8px; font-size: 17px; line-height: 1.35; letter-spacing: -0.01em; }
 .card > h2:first-child, .card > label:first-child { margin-top: 0; }
@@ -160,7 +160,7 @@ main:not(.wide) .card[role="status"] { border-color: var(--line-tint); border-ra
 @media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }
 .btn.secondary { background: var(--surface); border-color: var(--line-2); color: var(--ink); }
 @media (hover: hover) and (pointer: fine) { .btn.secondary:hover { background: var(--surface-2); border-color: var(--line-strong); } }
-.btn.secondary, .btn.go, .btn:disabled { box-shadow: none; }
+.btn.secondary, .btn:disabled { box-shadow: none; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn .icon { width: 18px; height: 18px; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
@@ -170,21 +170,14 @@ main:not(.wide) .card[role="status"] { border-color: var(--line-tint); border-ra
 @media (min-width: 600px) { .btn { display: inline-flex; width: auto; min-width: 200px; } form:not(.actions) > .btn + .btn { margin-left: 12px; } }
 @media (prefers-reduced-motion: no-preference) { .btn:active:not(:disabled) { transform: scale(0.97); } }
 
-/* Apply now: on hover or keyboard focus the plum fill slides across (transform only) and
-   the words turn light as it passes them */
-.btn.go { position: relative; isolation: isolate; overflow: hidden; justify-content: flex-start; gap: 12px; min-height: 52px; padding: 4px 24px 4px 4px; border-color: var(--line-strong); background: var(--tint); color: var(--ink); transition: border-color 150ms ease, color 50ms linear 35ms, transform 150ms ease; }
-.go-fill { position: absolute; top: 4px; right: 4px; bottom: 4px; left: 4px; z-index: -1; border-radius: inherit; background: var(--primary); transform: translateX(calc(-100% - 4px)); }
-.go-icon { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--primary); color: var(--on-primary); }
-.go-text { flex: 1 1 auto; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+/* Apply now: the application's own plum pill, the words then an arrow in a light circle;
+   the arrow steps right on a mouse's hover (transform only) */
+.btn.go { justify-content: space-between; gap: 18px; min-height: 54px; padding: 6px 6px 6px 26px; font-size: 16.5px; }
+.go-text { min-width: 0; overflow-wrap: anywhere; }
+.go-icon { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 50%; background: var(--on-primary); color: var(--primary); }
 .btn.go:focus-visible { outline-offset: 3px; }
-.btn.go:focus-visible, .btn.go:active { border-color: var(--primary); color: var(--on-primary); transition: border-color 150ms ease, color 50ms linear 55ms, transform 150ms ease; }
-.btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }
-@media (hover: hover) and (pointer: fine) {
-  .btn.go:hover { border-color: var(--primary); color: var(--on-primary); transition: border-color 150ms ease, color 50ms linear 55ms, transform 150ms ease; }
-  .btn.go:hover .go-fill { transform: none; }
-  .btn.go:hover .go-icon .icon { transform: translateX(2px); }
-}
-@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }
+@media (hover: hover) and (pointer: fine) { .btn.go:hover .go-icon .icon { transform: translateX(3px); } }
+@media (prefers-reduced-motion: no-preference) { .go-icon .icon { transition: transform 200ms ease-out; } }
 
 /* Forms: field edges that can be seen (WCAG 1.4.11) */
 label { display: block; margin: 20px 0 8px; color: var(--ink); font-size: 14.5px; font-weight: 600; }
@@ -192,6 +185,9 @@ input[type=text], input[type=email], input[type=tel], input[type=date], input[ty
 @media (hover: hover) and (pointer: fine) { :is(input, textarea, select):hover, .slot:hover { border-color: var(--ink-3); } }
 :is(input, textarea, select):focus { border-color: var(--primary); }
 select, option, optgroup { background-color: var(--surface); color: var(--ink); }
+/* A dropdown's arrow is drawn (two strokes), with room on its right; the system's own list opens */
+select { appearance: none; padding-right: 44px; background-image: linear-gradient(to top right, transparent 40%, var(--ink-2) 41%, var(--ink-2) 59%, transparent 60%), linear-gradient(to top left, transparent 40%, var(--ink-2) 41%, var(--ink-2) 59%, transparent 60%); background-position: right 22px center, right 16px center; background-size: 6px 6px; background-repeat: no-repeat; }
+@media (forced-colors: active) { select { appearance: auto; padding-right: 14px; background-image: none; } }
 textarea { min-height: 120px; resize: vertical; }
 ::placeholder { color: var(--ink-3); opacity: 1; }
 [aria-invalid="true"] { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }
@@ -237,14 +233,16 @@ ul.steps li::marker { color: var(--accent); }
 /* The company: its logo, or its initials on a plum tile */
 .company { display: flex; align-items: center; gap: 14px; margin: 0 0 22px; }
 .company > div { min-width: 0; overflow-wrap: anywhere; }
-.company .eyebrow { margin: 0; }
-.logo { flex: none; display: grid; place-items: center; width: 56px; height: 56px; overflow: hidden; border-radius: 14px; background: var(--primary); color: var(--on-primary); font: 700 20px/1 var(--display); }
+.company-name { margin: 0; color: var(--ink); font-size: 15.5px; font-weight: 600; line-height: 1.4; }
+.company-name a { display: inline-flex; align-items: center; min-height: 40px; color: inherit; text-decoration: none; }
+.company-name a:hover { text-decoration: underline; text-decoration-thickness: 1px; }
+.logo { flex: none; display: grid; place-items: center; width: 48px; height: 48px; overflow: hidden; border-radius: 13px; background: var(--primary); color: var(--on-primary); font: 700 18px/1 var(--display); }
 .logo img { display: block; width: 100%; height: 100%; object-fit: contain; border: 1px solid var(--line); border-radius: inherit; background: var(--surface); }
 
 /* Careers: a hero, then the jobs as rows of one list */
 .careers { max-width: 920px; margin: 0 auto; }
 .careers-head { margin: 0 0 40px; }
-.careers-head h1, .job-head h1 { margin-top: 28px; font-size: 52px; line-height: 1.02; letter-spacing: -0.04em; }
+.careers-head h1, .job-head h1 { margin-top: 28px; font-size: 56px; line-height: 1.02; letter-spacing: -0.025em; }
 .careers-head h1 span { color: var(--primary); }
 .careers-head .lead { max-width: 60ch; font-size: 18px; }
 .roles { display: grid; gap: 12px; margin: 16px 0 24px; padding: 0; list-style: none; }
@@ -269,7 +267,7 @@ ul.steps li::marker { color: var(--accent); }
 .job-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 48px; align-items: start; }
 .job-layout.solo { grid-template-columns: minmax(0, 760px); }
 .job-main { min-width: 0; }
-.job-body { margin: 0; padding: 0; background: none; border: 0; box-shadow: none; }
+.job-body { margin: 0; padding: 32px 36px 34px; border-radius: var(--r-panel); }
 .desc { color: var(--ink-2); font-size: 16px; line-height: 1.7; overflow-wrap: anywhere; }
 .desc p { margin: 0 0 14px; color: inherit; white-space: pre-line; }
 .desc ul, .desc ol { margin: 6px 0 16px; padding-left: 22px; }
@@ -295,6 +293,8 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
   .job-layout, .job-layout.solo { display: block; }
   .job-body { margin-bottom: 24px; }
   .head-apply { display: none; }
+  .job-head { margin-bottom: 24px; }
+  .head-actions:not(:has(.apply-by)) { display: none; }
   .points-card { display: block; margin: 0 0 28px; }
   .points-card .points { margin: 0; padding: 0; border: 0; }
   .apply-panel { top: auto; bottom: 12px; }
@@ -309,16 +309,21 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
 
 /* Disclosures that work without script; each summary a 40px tap target */
 details.more { margin-top: 4px; }
-details.more > summary { padding: 9px 0; color: var(--ink-2); font-weight: 600; cursor: pointer; }
+details.more > summary { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 40px; padding: 7px 14px 7px 16px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 14.5px; font-weight: 600; line-height: 1.3; cursor: pointer; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: ""; flex: none; width: 6px; height: 6px; margin: -3px 3px 0 2px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); }
+details.more[open] > summary { margin-bottom: 12px; border-color: var(--line-tint); background: var(--tint); }
+details.more[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+@media (hover: hover) and (pointer: fine) { details.more:not([open]) > summary:hover { border-color: var(--line-strong); background: var(--surface-2); } }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 26px 18px 28px; border-radius: var(--r-card); }
   main.wide { margin: 0 auto; padding: 28px 16px 48px; }
   h1 { font-size: 28px; }
   .careers-head h1, .job-head h1 { font-size: 36px; }
   .card, .careers .role { padding: 18px; }
-  .job-body { padding: 0; }
+  .job-body { padding: 22px 18px 24px; border-radius: var(--r-card); }
   .about { padding: 22px 18px; }
-  .logo { width: 48px; height: 48px; }
+  .logo { width: 44px; height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 `;

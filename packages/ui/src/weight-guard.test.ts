@@ -337,8 +337,8 @@ describe("the kit's component layer", () => {
     const title = rule(app, ".card-title");
     expect(title).toContain("flex-wrap: wrap;");
     expect(title).toContain("gap: 8px 12px;");
-    expect(rule(app, ".card.hero > .card-title h2")).toContain("font-size: 26px;");
-    expect(app).toMatch(/@media \(min-width: 768px\) \{\s*\.card\.hero > \.card-title h2 \{ font-size: 30px; \}/);
+    expect(rule(app, ".card.hero > .card-title h2")).toContain("font-size: 30px;");
+    expect(app).toMatch(/@media \(min-width: 768px\) \{\s*\.card\.hero > \.card-title h2 \{ font-size: 36px; \}/);
     // a needs-you card in a side panel or a report is no hero: its title keeps the card's 19px
     expect(rule(app, ".card-title h2")).toContain("font-size: 19px;");
     expect(app).not.toMatch(/\.needs-you[^{}]*\.card-title/);
@@ -430,14 +430,14 @@ describe("the kit's component layer", () => {
     expect(insideMedia(app, app.indexOf(".split-switch { display: inline-flex;"), `(width < ${rail})`)).toBe(true);
   });
 
-  it("draws PageHeader's hero title at Home's greeting size (36, 44 from 640px, 52 from 768px), the plain title as before", () => {
-    expect(rule(app, ".page-header.hero .page-header-row h1")).toBe(" font-size: 36px; ");
-    expect(mediaBodies("(min-width: 640px)")).toContain(".page-header.hero .page-header-row h1 { font-size: 44px; }");
+  it("draws PageHeader's hero title at Home's greeting size (42, 50 from 640px, 60 from 768px: the narrow face reads smaller), the plain title a step under it", () => {
+    expect(rule(app, ".page-header.hero .page-header-row h1")).toBe(" font-size: 42px; ");
+    expect(mediaBodies("(min-width: 640px)")).toContain(".page-header.hero .page-header-row h1 { font-size: 50px; }");
     const wide = mediaBodies("(min-width: 768px)");
-    expect(wide).toContain(".page-header.hero .page-header-row h1 { font-size: 52px; }");
-    // after the plain title's 40px in the same block, so the hero's size wins there
-    expect(wide.indexOf(".page-header.hero .page-header-row h1")).toBeGreaterThan(wide.indexOf(".page-header-row h1 { font-size: 40px; }"));
-    expect(rule(app, ".page-header-row h1")).toContain("font-size: 34px;");
+    expect(wide).toContain(".page-header.hero .page-header-row h1 { font-size: 60px; }");
+    // after the plain title's 46px in the same block, so the hero's size wins there
+    expect(wide.indexOf(".page-header.hero .page-header-row h1")).toBeGreaterThan(wide.indexOf(".page-header-row h1 { font-size: 46px; }"));
+    expect(rule(app, ".page-header-row h1")).toContain("font-size: 38px;");
   });
 
   it("pads every card 16px at the sides and 20px above and below on a phone, and runs a list card's (flush) rows edge to edge", () => {
@@ -452,7 +452,7 @@ describe("the kit's component layer", () => {
     expect(phone).toContain(".card.flush > .card-title, .card.flush .list-row { padding-inline: 16px; }");
     // nothing is clipped (a row's menu opens over what lies below): the end rows take the card's corners instead
     expect(app).not.toMatch(/\.card\.flush[^{]*\{[^}]*overflow/);
-    expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 15px;");
+    expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 19px;");
     // and it comes after the needs-you wash, so a needs-you list card is flush too
     expect(app.indexOf(".card.flush {")).toBeGreaterThan(app.indexOf(".card.needs-you {"));
   });
@@ -542,12 +542,12 @@ describe("the candidate pages' stylesheet", () => {
     for (const m of cand.matchAll(/[^{}]*:active[^{}]*\{[^}]*transform:(?!\s*none)/g)) expect(insideMedia(cand, m.index ?? 0, "(prefers-reduced-motion: no-preference)"), m[0].trim()).toBe(true);
   });
 
-  it("fills a background on hover, or slides the arrow pill's fill, only where there is a mouse", () => {
+  it("fills a background on hover, or steps Apply now's arrow, only where there is a mouse", () => {
     for (const f of hoverFills(cand)) expect(insideMedia(cand, f.at, HOVER_MEDIA), f.selector).toBe(true);
-    for (const m of cand.matchAll(/\.btn\.go:hover \.go-fill/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA), m[0]).toBe(true);
+    for (const m of cand.matchAll(/\.btn\.go:hover \.go-icon/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA), m[0]).toBe(true);
     // the guard finds the fills it checks
     for (const sel of [".btn:hover", ".btn.secondary:hover", "input[type=file]::file-selector-button:hover"]) expect(hoverFills(cand).map((f) => f.selector)).toContain(sel);
-    expect(cand).toContain(".btn.go:hover .go-fill");
+    expect(cand).toContain(".btn.go:hover .go-icon .icon");
   });
 
   it("stays within its byte budget (gzip level 9, with comments, as it ships)", () => {
@@ -555,22 +555,23 @@ describe("the candidate pages' stylesheet", () => {
     // tokens copied in both themes (30 colours and shadows, 21 before: the lavender and peach tints, the glow, the plum
     // focus and shadows), and the pages gained the careers rows, the file's drop area and the "next step" status wash.
     // Measured at 5,481 (after the review's fixes).
-    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_500);
+    // 24 November 2026, the owner's look round: 5,500 raised to 5,700 (+200). A dropdown's arrow is drawn (two gradient
+    // strokes and their forced-colours fallback) and a folded part's summary is a pill with a chevron, as in the
+    // application. Measured at 5,602.
+    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_700);
   });
 
-  it("slides Apply now's fill by transform alone, edged in the field-border grey, with the candidate pages' literal timings", () => {
+  it("draws Apply now as the main plum pill and steps its arrow by transform alone, with the candidate pages' literal timings", () => {
     expect(rule(cand, ".btn")).toContain("transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;");
     expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .btn:active:not(:disabled) { transform: scale(0.97); } }");
+    // 24 November 2026: the pale pill with a sliding fill read as switched off; the pill is the plum button itself, so
+    // its rule sets no colour, no edge and no transition of its own, and nothing is laid over the words
     const go = rule(cand, ".btn.go");
-    expect(go).toContain("border-color: var(--line-strong);");
-    expect(go).toContain("transition: border-color 150ms ease, color 50ms linear 35ms, transform 150ms ease;");
-    expect(rule(cand, ".go-fill")).toContain("transform: translateX(calc(-100% - 4px));");
-    // placed by the four longhands: older phones' browsers (before Chrome 87, Safari 14.1) skip the `inset` shorthand, and
-    // the fill would shrink to nothing while the words still turned light on the pale pill
-    expect(rule(cand, ".go-fill")).toContain("position: absolute; top: 4px; right: 4px; bottom: 4px; left: 4px;");
+    expect(go).not.toMatch(/background|border-color|transition|(?<!-)color:/);
+    expect(cand).not.toContain("go-fill");
+    // older phones' browsers (before Chrome 87, Safari 14.1) skip the `inset` shorthand
     expect(cand).not.toMatch(/(^|[{;\s])inset\s*:/);
-    expect(cand).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
-    expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }");
+    expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .go-icon .icon { transition: transform 200ms ease-out; } }");
     // no unconditional .btn.go:hover: every hover of the pill waits for a mouse
     for (const m of cand.matchAll(/\.btn\.go:hover/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA)).toBe(true);
     expect(cand).not.toMatch(/transition:[^;]*width/);
