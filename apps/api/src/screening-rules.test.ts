@@ -219,11 +219,11 @@ describe("AI interview rules: the follow-up cap, choosing a person instead, and 
     // a resume that says nothing about the certificate, so the reading has only the form's answer to go on
     const RESUME = "Dental Assistant at Park Dental 2018 - present\nChairside assisting daily with two dentists\nDentrix";
     /** Applies with these answers on the form, is shortlisted, and presses Start: the chat's plan as it was fixed. */
-    const planOf = async (p: { first: string; email: string }, answers: Record<string, string>) => {
-      expect((await app.request(`/careers/${slug}/jobs/${job}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: "Tester", email: p.email, ...answers }, RESUME) })).status).toBe(302);
+    const planOf = async (p: { first: string; email: string }, answers: Record<string, string>, role = job) => {
+      expect((await app.request(`/careers/${slug}/jobs/${role}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: "Tester", email: p.email, ...answers }, RESUME) })).status).toBe(302);
       await container.drain();
       const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, p.email));
-      const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, job), eq(applications.candidateId, cand.id)));
+      const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, role), eq(applications.candidateId, cand.id)));
       expect((await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ action: "shortlist" }) })).status).toBe(200);
       await container.drain();
       const invited = await screenOf(a.id);
@@ -238,6 +238,21 @@ describe("AI interview rules: the follow-up cap, choosing a person instead, and 
     expect((reading.result as { requirementFindings: unknown[] }).requirementFindings).toEqual([{ requirementKey: "mh_xray", met: "no", evidence: { source: "application", quote: `${QUESTION} No.` } }]);
     expect(no.items).toEqual(own);
     expect(await pageOf(`/c/screen/${no.token}`)).toContain(`<p class="meta">Question 1 of ${own.length}</p>`);
+
+    // The live site, 25 November 2026: a job's own form mostly asks for a *current* (or active, or valid) certificate.
+    // The licence rule stores a "no" to that as not known, because a lapsed one is not current either, and the plan kept
+    // the certificate: the counter said one question more than the chat asked. The form asked what the chat would ask and
+    // they answered it, so it is not in the plan whichever way the form worded it.
+    const CURRENT = "Do you hold a current radiography certificate?";
+    const worded = await plantJob(container, { companyId: company.id, title: "Dental Assistant, afternoons", packet: (p) => { p.formQuestions = [{ kind: "yes_no", key: "fq_certificate", question: CURRENT, required: false }]; } });
+    const lapsed = await planOf({ first: "Petra", email: "petra.tester@rules.test" }, { q_fq_certificate: "no" }, worded);
+    const [notKnown] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, lapsed.application.id), eq(assessments.kind, "triage")));
+    expect((notKnown.result as { requirementFindings: unknown[] }).requirementFindings).toEqual([{ requirementKey: "mh_xray", met: "unknown", evidence: { source: "application", quote: `${CURRENT} No.` } }]);
+    expect(lapsed.items).toEqual(own);
+    expect(await pageOf(`/c/screen/${lapsed.token}`)).toContain(`<p class="meta">Question 1 of ${own.length}</p>`);
+    // a "yes" to it is shown, and was never asked about
+    const held = await planOf({ first: "Quinn", email: "quinn.tester@rules.test" }, { q_fq_certificate: "yes" }, worded);
+    expect(held.items).toEqual(own);
 
     // the form's question left unanswered: nothing shows the certificate, so the chat asks, once and as yes or no
     const blank = await planOf({ first: "Olga", email: "olga.tester@rules.test" }, {});
