@@ -64,7 +64,7 @@ describe("what an AI interview asks", () => {
     expect(more.map((i) => [i.key, i.status])).toEqual([["license", "answered"], ["experience", "unanswered"], ["pay", "unanswered"], ["mh_perio", "answered"], [CHAT_WRAP_KEY, "answered"]]);
   });
 
-  it("the fixed introduction is built from the notice and the job, never by the model", () => {
+  it("the fixed introduction is built from the notice, the code's own lines and the job's title and length, never by the model", () => {
     const intro = screenIntro({ companyName: "Harbor Dental", firstName: "Dana", packet: hygienist });
     expect(intro.title).toBe("A few questions about the Registered Dental Hygienist role");
     expect(intro.disclosure).toContain("Harbor Dental's hiring assistant, a software program");
@@ -72,7 +72,12 @@ describe("what an AI interview asks", () => {
     expect(intro.disclosure).toMatch(/people on the team make every decision/i);
     expect(intro.disclosure).toContain("You can ask for a person at any time.");
     expect(intro.aiNotice?.text).toMatch(/artificial intelligence/);
-    expect(intro).toMatchObject({ minutes: 10, humanAlternative: "Reply to reach a person.", packetDisclosure: "Sent with help from an AI assistant." });
+    // how to reach a person is the code's line, the same for every job: this job stores other words for it and for the
+    // AI disclosure, as a model wrote them, and none of those words is in the introduction
+    expect(hygienist.communication).toMatchObject({ humanAlternativeText: "Reply to reach a person.", disclosureText: "Sent with help from an AI assistant." });
+    expect(intro).toMatchObject({ minutes: 10, humanAlternative: "To reach a person at any time, reply to any of our emails or use the contact on the job page." });
+    expect(JSON.stringify(intro)).not.toMatch(/Reply to reach a person|Sent with help from an AI assistant/);
+    expect(Object.keys(intro).sort()).toEqual(["aiNotice", "disclosure", "humanAlternative", "minutes", "title"]);
   });
 });
 

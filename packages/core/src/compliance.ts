@@ -129,19 +129,30 @@ export function adverseDecisionLineApplies(input: { jobLocations: Array<Location
 }
 
 /**
- * The disclosure line every automated candidate message carries when the job has none of its own. How to reach a
- * person is the job's other line, beside it in every such message (`REACH_A_PERSON_LINE` when the job has none).
+ * The three lines under an automated candidate email, in the code's own words and the same for every job: the AI
+ * disclosure (`disclosureLine`), how to reach a person (`REACH_A_PERSON_LINE`) and who it is from
+ * (`hiringTeamSignature`). The emails about an application (packages/agents/src/coordinator.ts) and the AI interview's
+ * first page take them from here, never from a job record. The record still holds a copy of each (`communication`),
+ * which the fairness guard writes from here on every save (`guardPacket`), whatever a model wrote there: a notice a
+ * candidate reads is never words of a model's that nobody read first.
  */
+
+/** The AI disclosure under every automated candidate email. */
 export function disclosureLine(companyName: string): string {
   return `This message was sent by the hiring team at ${companyName} with help from an AI recruiting assistant.`;
 }
 
 /**
- * How to reach a person, as a job stores it when it has no line of its own. It is true wherever a job's line is shown:
- * under an email, where a reply lands with a person (packages/agents/src/coordinator.ts, `replyToFor`), and on the AI
- * interview's first page, since every job page prints a contact. Nothing reads a reply for a keyword, so it names none.
+ * How to reach a person. It is true wherever it is shown: under an email, where a reply lands with a person
+ * (packages/agents/src/coordinator.ts, `replyToFor`), and on the AI interview's first page, since every job page prints a
+ * contact. Nothing reads a reply for a keyword, so it names none.
  */
 export const REACH_A_PERSON_LINE = "To reach a person at any time, reply to any of our emails or use the contact on the job page.";
+
+/** Who an automated candidate email is from: the company's hiring team, never a sign-off a model wrote. */
+export function hiringTeamSignature(companyName: string): string {
+  return `The hiring team at ${companyName}`;
+}
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* What the law asks of a job ad before it goes public (plan D5; Track L: counsel confirms the lists first).      */

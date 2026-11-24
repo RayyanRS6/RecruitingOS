@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, TEXT_SCREENS, appPaths, hasCheckedQuote, readStoredPacket, requirementFinding, type Actor, type ChatPlan, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScorecardContext, type ScreenContext } from "@ros/ai";
-import { buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, formAnswerSentences, formAnswersOf, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, screenAnswersSent, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, transition, type ChatMove } from "@ros/core";
+import { REACH_A_PERSON_LINE, buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, formAnswerSentences, formAnswersOf, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, screenAnswersSent, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, transition, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
 import type { Integrations } from "@ros/integrations";
@@ -189,10 +189,13 @@ export function tapWords(packet: RolePacket, progress: Pick<ScreenProgress, "cur
 }
 
 /**
- * The fixed introduction shown before the chat starts: the AI notice, the disclosure in the hiring team's words, the
- * job's line about reaching a person, and about how many minutes it takes. Nothing here is written by the model.
+ * The fixed introduction shown before the chat starts: the AI notice, the disclosure in the hiring team's words, how to
+ * reach a person, and about how many minutes it takes. Of the job record it reads the title and the minutes, and none
+ * of its sentences: the record's own lines about AI and about reaching a person (`communication`) were written by the
+ * model that wrote the job and are never shown. How to reach a person is the code's line (`REACH_A_PERSON_LINE`), the
+ * same for every job; the AI notice is the versioned one (`noticesFor`). Nothing here is written by a model.
  */
-export type ScreenIntro = { title: string; disclosure: string; aiNotice: { version: string; text: string } | null; packetDisclosure: string; humanAlternative: string; minutes: number };
+export type ScreenIntro = { title: string; disclosure: string; aiNotice: { version: string; text: string } | null; humanAlternative: string; minutes: number };
 
 export function screenIntro(input: { companyName: string; firstName: string; packet: RolePacket; noticeOverrides?: CompanyRow["settings"]["notices"] }): ScreenIntro {
   const { packet, companyName } = input;
@@ -201,8 +204,7 @@ export function screenIntro(input: { companyName: string; firstName: string; pac
     title: `A few questions about the ${packet.identity.title} role`,
     disclosure: `Hi ${input.firstName}, this is ${companyName}'s hiring assistant, a software program. It will ask you a few short questions about the ${packet.identity.title} role, one at a time. Your answers go to the hiring team only when you press Send my answers, and people on the team make every decision. You can ask for a person at any time.`,
     aiNotice: notice ? { version: notice.version, text: notice.text } : null,
-    packetDisclosure: packet.communication.disclosureText,
-    humanAlternative: packet.communication.humanAlternativeText,
+    humanAlternative: REACH_A_PERSON_LINE,
     minutes: packet.screening.maxMinutes,
   };
 }
