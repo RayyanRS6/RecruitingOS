@@ -413,6 +413,25 @@ export function formAnswerAround(quote: string, application: string): string | n
   return null;
 }
 
+/** From the first word that says what a thing is about or belongs to: "restrictions | on your licence", "experience | with CPR". */
+const WHAT_IT_IS_ABOUT = /\s+(?:on|with|of|in|for|from|to|about|regarding|against|under|at)\s.*$/i;
+
+/**
+ * Whether an answer on the form (one line, the question then the answer: "Do you hold a current CPR certificate? No.")
+ * says, read with its question, that they do not hold a licence, certificate, permit or registration: a "no" to "Do you
+ * hold …?", "Do you have …?" or "Are you licensed …?" (`closedAnswer`), where what they do not hold is the credential
+ * itself (`namesCredential`) and never something about one: "Do you have any restrictions on your license? No." and "Do
+ * you have experience with CPR? No." say nothing of the kind. Nor does any other question ("Has your licence ever been
+ * suspended? No.") or any other answer. The AI interview goes by it (`answeredNoOnTheForm` in screening.ts). Pure.
+ */
+export function formAnswerSaysNotHeld(line: string): boolean {
+  const asked = line.trim().match(/^(.+\?)\s+(\S.*)$/);
+  const said = asked ? closedAnswer(asked[1] ?? "", asked[2] ?? "") : null;
+  if (!said || said.held) return false;
+  const what = said.statement.replace(/^I (?:do not (?:have|hold)|am not)\s+/i, "");
+  return namesCredential(what.replace(WHAT_IT_IS_ABOUT, ""));
+}
+
 /** The candidate's own record or words: a claim citing one of these must quote it, and the quote is checked. */
 const CANDIDATE_EVIDENCE_SOURCES: ReadonlySet<EvidenceSource> = new Set<EvidenceSource>(["resume", "application", "candidate_statement", "screen"]);
 

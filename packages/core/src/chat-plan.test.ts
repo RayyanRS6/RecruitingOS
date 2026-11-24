@@ -90,6 +90,20 @@ describe("the AI interview's plan (a counter and the section, never the question
     expect(chatCounter(stored([["question", true, "skipped"], ["gap", false, "unknown"]], "wrapping_up"))).toEqual({ done: 2, total: 2, label: "All 2 questions done" });
     expect(chatCounter(stored([["question", true, "skipped"]], "wrapping_up"))?.label).toBe("All questions done");
     expect(chatCounter(stored([], "wrapping_up"))?.label).toBe("One question");
+    // an item the chat passed over without asking (the model never asks again what the form asked) is not a question it
+    // asked: above the closing question the line says how many are done, never "Question 3 of 3" (the live site, 25
+    // November 2026); while another item is still being asked it counts as before
+    expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"], ["gap", false, "covered"]], "wrapping_up"))).toEqual({ done: 2, total: 2, label: "All 2 questions done" });
+    expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"]], "wrapping_up"))?.label).toBe("All questions done");
+    expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"], ["gap", false, "asking"]], "experience"))?.label).toBe("Question 2 of 3");
+    // as the plan itself moves: the closing question asked while a must-have was never asked about
+    let passed = buildChatPlan({ questions: ["q_explain", "q_room"], gaps: ["mh_arduino", "mh_teaching"], at });
+    passed = syncChatPlan(passed, { askedKeys: ["q_explain", "q_room", "mh_teaching"], currentQuestionKey: "mh_teaching" });
+    expect(chatCounter(passed)?.label).toBe("Question 3 of 4");
+    passed = syncChatPlan(passed, { askedKeys: ["q_explain", "q_room", "mh_teaching", CHAT_WRAP_KEY], currentQuestionKey: CHAT_WRAP_KEY }, { key: "mh_teaching", move: "covered" });
+    expect(passed.items.map((i) => i.state)).toEqual(["covered", "covered", "open", "covered"]);
+    expect(passed.section).toBe("wrapping_up");
+    expect(chatCounter(passed)).toEqual({ done: 3, total: 3, label: "All 3 questions done" });
   });
 });
 

@@ -111,12 +111,14 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
  * The one line above the chat: which question is being asked, of how many the chat asks ("Question 2 of 6"), and "All 6
  * questions done" once every one is closed (answered, settled as not known, or skipped) and only the closing question
  * is left. Every item of the plan counts, the job's interview questions and the must-haves asked about alike; the
- * closing question never does. Null before the chat has a plan.
+ * closing question never does. On the closing question an item the chat passed over without asking (the model never
+ * asks again what the form already asked) is not one of the questions it asked, so it is not counted: the line says how
+ * many are done, never "Question 8 of 8" above the closing question. Null before the chat has a plan.
  */
 export function chatCounter(plan: ChatPlan | null | undefined): ChatCounter | null {
   if (!plan) return null;
-  const total = plan.items.length;
   const done = plan.items.filter(chatItemSettled).length;
+  const total = plan.section === "wrapping_up" ? done : plan.items.length;
   const label = done < total ? `Question ${done + 1} of ${total}` : total > 1 ? `All ${total} questions done` : total === 1 ? "All questions done" : "One question";
   return { done, total, label };
 }
