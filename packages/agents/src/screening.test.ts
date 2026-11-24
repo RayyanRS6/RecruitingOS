@@ -6,7 +6,7 @@ import { SAMPLE_QUESTIONS } from "./fixtures/sample-questions";
 import { unfairQuestion } from "./fair-question";
 import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, gapQuestion,
-  nextQuestion, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending,
+  nextQuestion, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending, yesNoFormAnswers,
 } from "./screening";
 
 /**
@@ -52,6 +52,47 @@ describe("what an AI interview asks", () => {
     // reading it twice gives the same, and before the chat has a plan the job is as it is
     expect(chatPacket(chatPacket(hygienist, { chat: plan }), { chat: plan }).screening.questions).toEqual(asked);
     expect(chatPacket(hygienist, EMPTY_SCREEN_PROGRESS)).toBe(hygienist);
+  });
+
+  // The code check of 25 November 2026: the plan read only whether the stored reading found a must-have shown, so
+  // someone who had answered "No" on the form to the question about a licence was asked about that licence again.
+  it("does not ask again about a must-have the candidate answered 'no' about on the application form, where the stored reading rests on that answer, and only there", () => {
+    const LICENCE_NO = "Do you hold an active CA RDH license? No.";
+    const form = [LICENCE_NO, "Can you take digital x-rays? Yes."];
+    const others = ["mh_perio", "mh_xray", "mh_dentrix", "mh_nitrous", "mh_permit"];
+    const found = (met: string, evidence?: unknown) => readingOf([], [{ requirementKey: "mh_license", met, ...(evidence ? { evidence } : {}) }]);
+    // not met on their own "no" to the form's question: the chat does not ask about the licence again
+    const answeredNo = found("no", { source: "application", quote: LICENCE_NO });
+    expect(chatGaps(hygienist, answeredNo, form)).toEqual(others);
+    expect(chatPlanFor(hygienist, answeredNo, startedAt, form).items.filter((i) => i.kind === "gap").map((i) => i.key)).toEqual(others.slice(0, 4));
+    // spacing and case aside, and a quote of part of their answer's line
+    expect(chatGaps(hygienist, found("no", { source: "application", quote: "do you hold an  active CA RDH license? no." }), form)).toEqual(others);
+    expect(chatGaps(hygienist, found("no", { source: "application", quote: "active CA RDH license? No." }), form)).toEqual(others);
+    // a "yes" on their own answer is shown, and was never asked about
+    expect(chatGaps(hygienist, found("yes", { source: "application", quote: "Can you take digital x-rays? Yes." }), form)).toEqual(others);
+    // without the form's answers nothing links the two, and the plan is as it was
+    expect(chatGaps(hygienist, answeredNo)).toEqual(["mh_license", ...others]);
+    expect(chatPlanFor(hygienist, answeredNo, startedAt).items.map((i) => i.key)).toContain("mh_license");
+    // still asked about wherever that link is not certain
+    const uncertain: Array<[string, Pick<EvidenceAssessment, "requirementFindings">]> = [
+      ["the same words quoted from the resume", found("no", { source: "resume", quote: LICENCE_NO })],
+      ["their answer did not settle it", found("unknown", { source: "application", quote: LICENCE_NO })],
+      ["their answer covers part of it", found("partially", { source: "application", quote: LICENCE_NO })],
+      ["the quote did not pass the check", found("no", { source: "application", unquoted: true })],
+      ["the quote is in no answer of the form", found("no", { source: "application", quote: "Do you hold a Nevada RDH license? No." })],
+      ["the reading says nothing about it", readingOf([])],
+    ];
+    for (const [why, reading] of uncertain) expect(chatGaps(hygienist, reading, form), why).toEqual(["mh_license", ...others]);
+    // nothing is guessed from words: a must-have worded like a question of the form is asked about all the same
+    expect(chatGaps(hygienist, readingOf([]), form)).toContain("mh_xray");
+    // only a yes or a no counts: a choice or a number is not among the form's answers the plan reads, nor a question left unanswered
+    const applied = { formQuestions: [
+      { kind: "yes_no", key: "fq_license", question: "Do you hold an active CA RDH license?", required: true },
+      { kind: "number", key: "fq_years", question: "How many years have you charted?", unit: "years", required: true },
+      { kind: "choice", key: "fq_software", question: "Which software do you chart in?", options: ["Dentrix", "Eaglesoft"], required: true },
+      { kind: "yes_no", key: "fq_saturdays", question: "Can you work Saturdays?", required: false },
+    ] } as unknown as Pick<RolePacket, "formQuestions">;
+    expect(yesNoFormAnswers(applied, { answers: { form: { fq_license: "no", fq_years: "1", fq_software: "Eaglesoft" } } } as never)).toEqual([LICENCE_NO]);
   });
 
   it("a skipped question is never asked again, and counts toward the end of the questions", () => {

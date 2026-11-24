@@ -15,7 +15,8 @@ import { TRIAGE_READINGS, checkedClaims, credentialFinding, jobWords, linkReadin
  * link.
  *
  * One engine. The plan (`ScreenProgress.chat`) is fixed in code when the candidate presses Start: the job's interview
- * questions, then up to four must-haves the stored CV reading did not find shown, then one closing question. The model
+ * questions, then up to four must-haves the stored CV reading did not find shown (nor found answered with a "no" on the
+ * application form: `chatGaps`), then one closing question. The model
  * reads each reply and writes the words; the code holds every turn to the rules (`enforceChatTurn`), keeps where the chat
  * stands (`screens.progress`), and answers a skip, a tapped answer and the keyword commands without the model. After the
  * last question the candidate checks their own answers, may change any, and presses "Send my answers": nothing reaches
@@ -264,22 +265,55 @@ export function chatClosingMessage(closing: string | null | undefined, companyNa
 }
 
 /**
- * The must-haves the chat asks about, in the job's order: those the stored CV reading did not find shown (a "yes" on a
- * checked quote is shown; anything else is not). Without a reading none is shown. The plan takes at most
- * `CHAT_GAP_LIMIT` of them (`buildChatPlan`).
+ * The candidate's answers to the application form's yes-or-no questions, each as the sentence the CV reading was given
+ * and may quote ("Do you hold an active CA RDH license? No."). `packet`: the version they applied to, whose form they
+ * answered. A choice or a number is left out: only a yes or a no leaves nothing more to ask (`answeredNoOnTheForm`).
  */
-export function chatGaps(packet: Pick<RolePacket, "requirements">, reading: Pick<EvidenceAssessment, "requirementFindings"> | null | undefined): string[] {
+export function yesNoFormAnswers(packet: Pick<RolePacket, "formQuestions">, app: Pick<ApplicationRow, "answers">): string[] {
+  const closed = new Set(packet.formQuestions.filter((q) => q.kind === "yes_no").map((q) => q.key));
+  return formAnswerSentences(packet.formQuestions, formAnswersOf(app.answers)).filter((s) => closed.has(s.key)).map((s) => s.sentence);
+}
+
+/** A text as the quote check compares it: spacing and case aside. */
+const plainText = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Whether the stored CV reading found a must-have not met on the candidate's own answer to a yes-or-no question of the
+ * application form: the finding is "no", its evidence names the application as its source, and its quote, which the code
+ * checked, stands in one of those answers (`yesNoFormAnswers`). The form asked about it and they answered, so the chat
+ * does not ask again. This is the one link the record holds between a question of the form and a must-have: no key ties
+ * the two, and none is guessed from their words. So a must-have stays in the plan whenever the link is not there: the
+ * finding rests on the resume, or is "unknown" or "partially" (their answer did not settle it, or covers part of it), or
+ * its quote did not pass the check. A "yes" on such a quote is shown already, and is not asked about either (`chatGaps`).
+ */
+function answeredNoOnTheForm(found: EvidenceAssessment["requirementFindings"][number] | undefined, yesNoAnswers: readonly string[]): boolean {
+  const e = found?.evidence;
+  if (found?.met !== "no" || e?.source !== "application" || !hasCheckedQuote(e)) return false;
+  const quote = plainText(e.quote ?? "");
+  return yesNoAnswers.some((answer) => plainText(answer).includes(quote));
+}
+
+/**
+ * The must-haves the chat asks about, in the job's order: those the stored CV reading did not find shown (a "yes" on a
+ * checked quote is shown; anything else is not), less any it found not met on the candidate's own "no" on the
+ * application form (`answeredNoOnTheForm`; `yesNoAnswers`: their answers to the form's yes-or-no questions, none when
+ * left out). Without a reading none is shown. The plan takes at most `CHAT_GAP_LIMIT` of them (`buildChatPlan`).
+ */
+export function chatGaps(packet: Pick<RolePacket, "requirements">, reading: Pick<EvidenceAssessment, "requirementFindings"> | null | undefined, yesNoAnswers: readonly string[] = []): string[] {
   return packet.requirements.mustHaves
     .filter((m) => {
       const found = reading?.requirementFindings?.find((f) => f.requirementKey === m.key);
-      return requirementFinding(found?.met ?? "unknown", hasCheckedQuote(found?.evidence)) !== "shown";
+      return requirementFinding(found?.met ?? "unknown", hasCheckedQuote(found?.evidence)) !== "shown" && !answeredNoOnTheForm(found, yesNoAnswers);
     })
     .map((m) => m.key);
 }
 
-/** The plan of a chat that starts at `at`: the job's interview questions, then the must-haves to ask about (`chatGaps`). */
-export function chatPlanFor(packet: RolePacket, reading: Pick<EvidenceAssessment, "requirementFindings"> | null | undefined, at: string): ChatPlan {
-  return buildChatPlan({ questions: packet.screening.questions.map((q) => q.key), gaps: chatGaps(packet, reading), at });
+/**
+ * The plan of a chat that starts at `at`: the job's interview questions, then the must-haves to ask about (`chatGaps`).
+ * `yesNoAnswers`: the candidate's answers to the form's yes-or-no questions (`yesNoFormAnswers`).
+ */
+export function chatPlanFor(packet: RolePacket, reading: Pick<EvidenceAssessment, "requirementFindings"> | null | undefined, at: string, yesNoAnswers: readonly string[] = []): ChatPlan {
+  return buildChatPlan({ questions: packet.screening.questions.map((q) => q.key), gaps: chatGaps(packet, reading, yesNoAnswers), at });
 }
 
 /**
@@ -866,7 +900,7 @@ export async function startScreenConversation(q: Queryable, deps: Pick<ScreenDep
   const opened = screen.transcript.find((t) => t.role === "assistant");
   if (opened) return { ok: true, message: opened.content };
   const now = nowOf(deps).toISOString();
-  const planned: ScreenProgress = { ...screen.progress, chat: chatPlanFor(b.rolePacket, b.reading, now) };
+  const planned: ScreenProgress = { ...screen.progress, chat: chatPlanFor(b.rolePacket, b.reading, now, yesNoFormAnswers(b.appliedPacket, app)) };
   const first = nextQuestion(chatPacket(b.rolePacket, planned), planned, screen.answers);
   if (!first) return { ok: false, message: null };
   const content = chatOpening({ firstName: candidate.firstName, cv: cvLinesOf(app.extraction), question: first.question });
