@@ -221,8 +221,28 @@ const same = (a: string, b: string) => normalizeCriterion(a) === normalizeCriter
 const dedupe = (xs: string[]) => xs.filter((x, i) => xs.findIndex((y) => same(x, y)) === i);
 
 const EMPLOYMENT_WORDS: Array<[RegExp, string]> = [[/full/i, "full_time"], [/part/i, "part_time"], [/contract/i, "contract"], [/temp/i, "temporary"], [/per[\s_-]?diem/i, "per_diem"], [/intern/i, "internship"]];
-const REMOTE_WORDS: Array<[RegExp, string]> = [[/hybrid/i, "hybrid"], [/remote/i, "remote"], [/on[\s_-]?site|in[\s_-]?(?:office|person)/i, "onsite"]];
+/** What may stand between two words of an arrangement: a space, an underscore, or a hyphen of any kind ("on site", "on_site", "on-site"). */
+const GAP = "[\\s_\\-\\u2010-\\u2015]";
+/**
+ * The ordinary ways people say each work arrangement: "hybrid"; "remote", "remotely", "work from home", "working from
+ * home", "WFH", "home-based"; "on site", "on-site", "onsite", "in office", "in the office", "in person", "office-based".
+ * Whole words only: a "construction site" is no "on site". A place alone ("at our Irvine office") names none.
+ */
+const REMOTE_WORDS: Array<[RegExp, string]> = [
+  [/\bhybrid\b/i, "hybrid"],
+  [new RegExp(`\\bremote|\\bwork(?:s|ing|ed)?${GAP}+(?:from|at)${GAP}+home\\b|\\bwfh\\b|\\bhome${GAP}?based\\b|\\btelecommut|\\btelework`, "i"), "remote"],
+  [new RegExp(`\\bon${GAP}?site\\b|\\bin${GAP}?(?:the${GAP}+)?office\\b|\\bin${GAP}?person\\b|\\boffice${GAP}?based\\b`, "i"), "onsite"],
+];
 const BASIS_WORDS: Array<[RegExp, string]> = [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]];
+
+/**
+ * Whether words name a work arrangement in one of the ordinary ways people say it ("we all work from home", "it is in
+ * the office", "hybrid"). The job builder takes the arrangement the assistant read only when the owner's own typed words
+ * name one: asked, never assumed.
+ */
+export function namesWorkArrangement(text: string): boolean {
+  return REMOTE_WORDS.some(([re]) => re.test(text));
+}
 
 /**
  * A card's answer as the job keeps it. The model is asked to make an option's value the words to store, but it sometimes
@@ -357,16 +377,21 @@ export function normalizeFacts(facts: unknown): IntakeFacts {
   }
   const f = parsed.success ? parsed.data : IntakeFactsSchema.parse({});
   const out: IntakeFacts = { ...f, mustHaves: f.mustHaves.slice(0, MUST_HAVES_MAX) };
-  // The kind of job and the pay basis are kept as codes, and the assistant writes facts in plain words ("Full time",
-  // "per hour"). Words that name one code are read as it; words that name none, or more than one, are dropped, so the
-  // card for that essential is asked. Left as they came, they counted as answered for the cards and as missing for the
-  // job: nothing asked for them, and the job could never be written.
+  // The kind of job, the pay basis and the work arrangement are kept as codes, and the assistant writes facts in plain
+  // words ("Full time", "per hour", "On site"). Words that name one code are read as it; words that name none, or more
+  // than one, are dropped, so the card for that essential is asked. Left as they came, they counted as answered for the
+  // cards and as missing for the job: nothing asked for them, and the job could never be written.
   const kind = codeFromWords(f.employmentType, EmploymentType.options, EMPLOYMENT_WORDS);
   if (kind) out.employmentType = kind;
   else delete out.employmentType;
   const basis = codeFromWords(f.compensationBasis, ["hourly", "salary"], BASIS_WORDS);
   if (basis) out.compensationBasis = basis;
   else delete out.compensationBasis;
+  // "On site", "On-site", "In office", "Hybrid", "Remote", "Work from home". Whether the assistant may set it at all is
+  // the agent's rule (only when the owner's own typed words name an arrangement); this only reads what it wrote.
+  const arrangement = codeFromWords(f.remotePolicy, RemotePolicy.options, REMOTE_WORDS);
+  if (arrangement) out.remotePolicy = arrangement;
+  else delete out.remotePolicy;
   return out;
 }
 

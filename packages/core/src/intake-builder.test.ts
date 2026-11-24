@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { INTAKE_ESSENTIALS, IntakeQuestion, IntakeServerState, RolePacket, type DraftRolePacket, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import {
-  IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, normalizeFacts, payCard, payConfirmed, payKey, payTyped, sameRequirement,
-  storedAnswer, typedByOwner,
+  IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, namesWorkArrangement, normalizeFacts, payCard, payConfirmed, payKey, payTyped,
+  sameRequirement, storedAnswer, typedByOwner,
 } from "./intake-builder";
 
 const facts = (more: Partial<IntakeFacts> = {}): IntakeFacts => ({ mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...more });
@@ -245,11 +245,31 @@ describe("facts the assistant wrote in plain words", () => {
     expect(normalizeFacts({ compensationBasis: "hourly, with a yearly bonus" }).compensationBasis).toBeUndefined();
   });
 
+  // Found by an audit in November 2026: the real model wrote "On site", which is no code, so the arrangement the owner
+  // had just said was dropped and asked for again.
+  it("reads the work arrangement from the words it came in, like the kind of job", () => {
+    for (const words of ["onsite", "On site", "On-site", "on_site", "On‑site", "In office", "In the office", "In person", "In-person", "Office-based", " ONSITE "]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("onsite");
+    for (const words of ["remote", "Remote", "Fully remote", "Work from home", "Working from home", "work-from-home", "WFH", "Home-based"]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("remote");
+    for (const words of ["hybrid", "Hybrid", "Hybrid schedule"]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("hybrid");
+  });
+
+  it("drops words that name no work arrangement, or more than one, so it is asked and never half-known", () => {
+    for (const words of ["wherever", "flexible", "sometimes", "Tustin office", "On site or remote", "Hybrid: two days in the office, three remote"]) expect(normalizeFacts({ remotePolicy: words }), words).toEqual(facts());
+    // and a job is never written on one that was not read
+    expect(intakeReadiness({ facts: normalizeFacts({ ...complete(), remotePolicy: "On site or remote" }), state: state(paid), draft: null }).missing).toEqual(["remote_policy"]);
+  });
+
+  it("knows the ordinary ways people say a work arrangement, and that a place, a skill or a building site names none", () => {
+    for (const typed of ["We all work from home.", "They would be working from home most days", "it's WFH", "Everyone works remotely", "Remote is fine", "It is in the office, five days a week", "in person only", "On-site at our Tustin practice", "onsite", "hybrid, two days in", "It is a home-based job"]) expect(namesWorkArrangement(typed), typed).toBe(true);
+    for (const typed of ["Software Engineer required with 3 years of hands-on experience in Python and Flask", "A dental assistant for our Tustin office", "Front desk coordinator at our Irvine office", "Foreman for a construction site in Reno", "Homeowner outreach", "A personal assistant", "Workers' compensation claims"]) expect(namesWorkArrangement(typed), typed).toBe(false);
+  });
+
   it("writes the job once the owner's sentence gave every essential, whichever words the assistant kept them in", () => {
-    const asWritten = normalizeFacts({ ...complete(), employmentType: "Full time", compensationBasis: "per hour" });
+    const asWritten = normalizeFacts({ ...complete(), employmentType: "Full time", compensationBasis: "per hour", remotePolicy: "On site" });
     const r = intakeReadiness({ facts: asWritten, state: state(paid), draft: null });
     expect(r.missing).toEqual([]);
     expect(r.essentials.find((e) => e.key === "employment_type")).toMatchObject({ done: true, value: "Full time" });
+    expect(r.essentials.find((e) => e.key === "remote_policy")).toMatchObject({ done: true, value: "On site" });
     expect(r).toMatchObject({ payConfirmed: true, mayDraft: true, draftBlocker: null });
     // and pay the owner typed counts as typed, so the pay card is not shown again
     expect(payTyped([said("$45 to $55 an hour")], asWritten)).toBe(true);

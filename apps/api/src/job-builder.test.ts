@@ -311,6 +311,33 @@ describe("the job builder", () => {
     expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
   });
 
+  // Found by an audit in November 2026. The real model writes facts in plain words ("On site"); the stand-in writes
+  // codes and reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
+  it("knows the work arrangement when the assistant writes it in words and the owner said it as people do, and still asks when nobody said it", async () => {
+    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, missingFacts: [], questions: [], readyToCompile: true });
+    const arrangementOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "remote_policy");
+    // "On site", as the model wrote it
+    assistantAnswers({ title: "Front desk coordinator", locationText: "Tustin, CA", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26, mustHaves: ["Two years at a front desk"] });
+    const onSite = await start(owner, "Front desk coordinator in Tustin, CA, on site, full time, Monday to Friday, $22 to $26 an hour. Must-have: two years at a front desk.");
+    expect(onSite.facts.remotePolicy).toBe("onsite");
+    expect(arrangementOf(onSite)).toMatchObject({ done: true, value: "On site" });
+    expect(onSite.readiness).toMatchObject({ missing: [], mayDraft: true, draftBlocker: null });
+    expect(onSite.questions).toEqual([]);
+    // "we all work from home", as an owner says it
+    assistantAnswers({ title: "Bookkeeper", locationText: "Irvine, CA", remotePolicy: "Work from home", employmentType: "Part time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 30, compensationMax: 35, mustHaves: ["QuickBooks"] });
+    const fromHome = await start(owner, "Bookkeeper in Irvine, CA. We all work from home. Part time, Monday to Friday, $30 to $35 an hour. Must-have: QuickBooks.");
+    expect(fromHome.facts.remotePolicy).toBe("remote");
+    expect(arrangementOf(fromHome)).toMatchObject({ done: true, value: "Remote" });
+    expect(fromHome.readiness).toMatchObject({ missing: [], mayDraft: true });
+    expect(fromHome.questions.map((q) => q.field)).not.toContain("remote_policy");
+    // said by nobody: the assistant's own guess is not taken, and the card asks
+    assistantAnswers({ title: "Software Engineer", remotePolicy: "On site", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
+    const guessed = await start(owner, OWNERS_SENTENCE);
+    expect(guessed.facts.remotePolicy).toBeUndefined();
+    expect(arrangementOf(guessed)).toMatchObject({ done: false, value: null });
+    expect(guessed.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+  });
+
   it("holds publishing while flagged wording is open, and publishes once it is reworded or kept with a reason", async () => {
     const draft = await written(owner);
     const edited = await json(owner, "PATCH", `${sessions}/${draft.id}/draft`, { description: `${draft.draft!.description.publicJobDescription} We want a digital native.` });

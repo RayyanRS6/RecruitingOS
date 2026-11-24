@@ -7,8 +7,8 @@ import {
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  BENEFITS_DESCRIPTION_JURISDICTIONS, applyAnswers, dealBreakerOffer, draftFactsKey, emit, formQuestionProblems, guardPacket, intakeReadiness, jobJurisdictions, normalizeCriterion, normalizeFacts,
-  payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
+  BENEFITS_DESCRIPTION_JURISDICTIONS, applyAnswers, dealBreakerOffer, draftFactsKey, emit, formQuestionProblems, guardPacket, intakeReadiness, jobJurisdictions, namesWorkArrangement, normalizeCriterion,
+  normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -388,13 +388,13 @@ export function inThePagesWords(message: string): string {
     .replace(/\bcompile\s+(the|this|your)\s+job\b/gi, (_all, the: string) => `write ${the} job`);
 }
 
-const ARRANGEMENT_WORDS = /\bhybrid\b|\bremote\b|\bon[\s-]?site\b|\bin[\s-]?(?:office|person)\b/i;
-
 /**
  * The facts after a turn. A fact the assistant read replaces a single value and adds to a list. Two facts are kept only
  * when the owner's own words say them, because the assistant could otherwise fill them in from the company profile or by
  * guessing: the place (most of its words are the owner's) and the work arrangement (the owner named one in words they
- * typed; a pasted ad's mention is confirmed on a card). Asked, never assumed.
+ * typed, in any of the ordinary ways people say it, `namesWorkArrangement`; a pasted ad's mention is confirmed on a
+ * card). Asked, never assumed. The arrangement the assistant wrote is read from its words ("On site", "Work from home")
+ * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept.
  */
 export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: IntakeMessage[]): IntakeFacts {
   const out = { ...normalizeFacts(prev) } as Record<string, unknown>;
@@ -408,7 +408,7 @@ export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: Inta
     const words = ownerWordsOf(owner);
     const place = wordsOf(merged.locationText ?? "");
     if (merged.locationText !== prev.locationText && place.filter((w) => words.has(w)).length * 2 < place.length) merged.locationText = prev.locationText;
-    if (merged.remotePolicy !== prev.remotePolicy && !owner.some((m) => (m.kind ?? "text") === "text" && ARRANGEMENT_WORDS.test(m.content))) merged.remotePolicy = prev.remotePolicy;
+    if (merged.remotePolicy !== prev.remotePolicy && !owner.some((m) => (m.kind ?? "text") === "text" && namesWorkArrangement(m.content))) merged.remotePolicy = prev.remotePolicy;
   }
   if (!RemotePolicy.safeParse(merged.remotePolicy).success) delete merged.remotePolicy;
   return merged;

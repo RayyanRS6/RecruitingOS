@@ -199,6 +199,39 @@ describe("the facts after a turn", () => {
     expect(mergeFacts(facts(), facts({ remotePolicy: "sometimes" }), [said("It is on site sometimes.")]).remotePolicy).toBeUndefined();
   });
 
+  // Found by an audit in November 2026. The real model writes the arrangement in plain words ("On site"), which was
+  // dropped as no code; and "we all work from home" did not count as the owner naming one. The stand-in writes codes,
+  // so only a scripted fact can tell.
+  it("reads the arrangement the assistant wrote in plain words, once the owner's typed words name one", () => {
+    const typed = [said("It is on site two days and remote three, so hybrid.")];
+    for (const [written, code] of [["On site", "onsite"], ["On-site", "onsite"], ["In office", "onsite"], ["Hybrid", "hybrid"], ["Remote", "remote"], ["Work from home", "remote"]] as const) {
+      const read = mergeFacts(facts(), facts({ remotePolicy: written }), typed);
+      expect(read.remotePolicy, written).toBe(code);
+      expect(fieldsKnownFromFacts(read, false), written).toEqual(["remote_policy"]);
+    }
+    // words that name two arrangements are not one: nothing is kept, and the card asks
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site or remote" }), typed).remotePolicy).toBeUndefined();
+  });
+
+  it("takes the arrangement when the owner says it the way people do", () => {
+    for (const [typed, written, code] of [
+      ["We all work from home.", "Remote", "remote"], ["Everyone works remotely.", "Remote", "remote"], ["They would be working from home.", "Work from home", "remote"], ["It's WFH.", "remote", "remote"],
+      ["It is in the office.", "In office", "onsite"], ["In person, five days a week.", "On site", "onsite"], ["On-site only.", "onsite", "onsite"], ["Hybrid, two days in.", "Hybrid", "hybrid"],
+    ] as const) expect(mergeFacts(facts(), facts({ remotePolicy: written }), [said(typed)]).remotePolicy, typed).toBe(code);
+    // typed beside the cards, it counts the same
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Remote" }), [said(OWNERS_SENTENCE), replied("Got it."), said("Where the job is: Austin, TX", "answers"), said("And we all work from home.")]).remotePolicy).toBe("remote");
+  });
+
+  it("still asks, never assumes: an arrangement nobody typed is not taken, in whatever words the assistant wrote it, and one the owner gave is not lost", () => {
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site" }), [said(OWNERS_SENTENCE)]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site" }), [said("A dental assistant for our Tustin office, full time")]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Work from home" }), [said("Work from home. Apply today.", "pasted_ad")]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Remote" }), [said("On site, hybrid or remote: Remote", "answers")]).remotePolicy).toBeUndefined();
+    // answered on a card, then repeated by the assistant in its own words on a later turn: kept as it was
+    expect(mergeFacts(facts({ remotePolicy: "hybrid" }), facts({ remotePolicy: "Hybrid" }), [said("Remote days are Monday and Friday.")]).remotePolicy).toBe("hybrid");
+    expect(mergeFacts(facts({ remotePolicy: "hybrid" }), facts({ remotePolicy: "On site" }), [said("Nice to have: Dentrix")]).remotePolicy).toBe("hybrid");
+  });
+
   it("reads new facts only after words the owner typed or pasted, not after tapped answers alone", () => {
     expect(typedSinceReply([said("A job ad", "pasted_ad")])).toBe(true);
     expect(typedSinceReply([said("An idea"), replied("Got it."), said("Where the job is: Irvine, CA", "answers")])).toBe(false);
