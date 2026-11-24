@@ -99,12 +99,21 @@ describe("the job-page preview", () => {
     expect(html).toMatch(/<a href="\/api\/v1\/roles\/[^"]+\/preview\/page\?version=1">/);
   });
 
-  it("says when a job's page is not public: a job not published yet, and a closed one", async () => {
+  /**
+   * A closed job's page is not gone: it stays up and says the position is closed (public-job-surfaces.test.ts). The
+   * preview used to tell the team the page was "no longer public" under the words "Not public yet." (the code check of
+   * 25 November 2026); it now says where the page really stands and links to it.
+   */
+  it("says where a job's page stands: not published yet, and closed with its page still up", async () => {
     await container.db.update(roles).set({ status: "draft", currentPacketVersion: null }).where(eq(roles.id, roleId));
     try {
       expect(decode(await (await page(owner, `/api/v1/roles/${roleId}/preview/page`)).text())).toContain("<strong>Not public yet.</strong> Preview: this job is not published yet.");
-      await container.db.update(roles).set({ status: "closed" }).where(eq(roles.id, roleId));
-      expect(decode(await (await page(owner, `/api/v1/roles/${roleId}/preview/page`)).text())).toContain("Preview: this job is closed, so its page is no longer public.");
+      await container.db.update(roles).set({ status: "closed", currentPacketVersion: 1 }).where(eq(roles.id, roleId));
+      const closed = decode(await (await page(owner, `/api/v1/roles/${roleId}/preview/page`)).text());
+      expect(closed).toContain("<strong>Closed.</strong> This is a preview. The job's own page says the position is closed and takes no applications.");
+      expect(closed).not.toContain("no longer public");
+      expect(closed).not.toContain("Not public yet.");
+      expect(closed).toContain(">Open the public page</a>");
     } finally {
       await container.db.update(roles).set({ status: "open", currentPacketVersion: 1 }).where(eq(roles.id, roleId));
     }

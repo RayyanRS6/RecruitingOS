@@ -116,7 +116,7 @@ async function rolePreview(c: Context<Vars>) {
     const { role, pv, company } = found;
     const packet = RolePacket.parse(pv.packet);
     const meta = previewNote({ packet, company, source: { kind: "job", status: role.status, current: found.current?.version === pv.version } });
-    const preview: PreviewInfo = { notPublicYet: meta.notPublicYet, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, { version: String(pv.version) }), publicHref: meta.notPublicYet ? null : jobUrls(container.env, { slug: company.slug, roleId: role.id }).job };
+    const preview: PreviewInfo = { notPublicYet: meta.notPublicYet, lead: meta.lead, banner: meta.banner, gaps: [...meta.gaps, ...profileGaps(company)], ...hrefs(c, { version: String(pv.version) }), publicHref: meta.pageUp ? jobUrls(container.env, { slug: company.slug, roleId: role.id }).job : null };
     // Shown as candidates will meet it once it is live: taking applications, with its closing date when it has one.
     const view: JobPageRole = { id: role.id, accepting: true, closedMessage: null, postedOn: role.openedAt, applyBy: role.applicationsCloseOn ? applyByLabel(role.applicationsCloseOn) : null };
     return render(c, { packet, company, role: view, preview });

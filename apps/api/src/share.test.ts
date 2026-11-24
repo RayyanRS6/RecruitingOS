@@ -138,7 +138,7 @@ describe("a job's Share tab", () => {
     expect((await json(other.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(404);
   });
 
-  it("says why a job that is not public has nothing to share: a closed job, and a job not published yet", async () => {
+  it("says why a job has nothing to share: a closed job, whose page stays up and says so, and a job not published yet", async () => {
     const co = await newCompany("ultra");
     const roleId = await publishedJob(co.cookie);
     expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/close`, { confirm: true })).status).toBe(200);
