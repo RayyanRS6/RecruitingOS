@@ -354,8 +354,10 @@ describe("what each turn of the chat is held to", () => {
   });
 
   // Seen with the real model on 19 November 2026: it recorded two replies joined its own way ("… | …"), which is not
-  // what the candidate sent, and it wrote "résumé" where every page says "resume". The stand-in does neither.
-  it("records the candidate's replies as they sent them when the model's record is not their own words, and says resume as the pages do", () => {
+  // what the candidate sent, and it wrote "résumé" where every page says "resume". On 25 November 2026 it recorded only
+  // the latest of two replies, and the first one's words about their work were gone from the record. The stand-in does
+  // none of these. The record is every reply of theirs about the question, whatever the model kept.
+  it("records every reply of the candidate's about a question, as they sent them, whatever the model's own record holds, and says resume as the pages do", () => {
     const p = askingNow(start([]), "wq_explain", ["wq_explain"], { pushes: 1 });
     const first = "I show them a light sensor.";
     const second = "Last week a class covered it with a hand and saw the lamp go on.";
@@ -364,9 +366,9 @@ describe("what each turn of the chat is held to", () => {
     // joined the model's own way, or reworded in their name: their two replies stand, joined as the code joins them
     expect(settle(`${first} | ${second}`)).toMatchObject({ questionKey: "wq_explain", answer: `${first} ${second}` });
     expect(settle("The candidate demonstrates a light sensor to the class.")?.answer).toBe(`${first} ${second}`);
-    // their own words stand as the model recorded them, whole or with a sentence left out
+    // their own words in full: the same when the model recorded both replies, and when it kept only the latest one
     expect(settle(`${first} ${second}`)?.answer).toBe(`${first} ${second}`);
-    expect(settle(second)?.answer).toBe(second);
+    expect(settle(second)).toMatchObject({ questionKey: "wq_explain", answer: `${first} ${second}`, complete: true });
     // and the assistant's own message says "resume" (a first push, on a question not pushed yet)
     const fresh = askingNow(start([]), "wq_explain", ["wq_explain"]);
     const spelt = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "Your résumé lists a robotics club. What did you build there?" }), chatPacket(role, fresh), fresh, {}, { transcript: said("Q", "A few things"), latest: "A few things" });

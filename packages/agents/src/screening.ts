@@ -833,11 +833,13 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     // of the answer, and neither keeps a bare "yes" on the push from reading as one.
     const replies = usableReplies(replyListSince(input.transcript, item.key));
     const said = replies.join(" ");
-    // The model's record of the answer stands only as their own words: their replies about the item, whole or with a
-    // sentence left out (`saidByCandidate`). Anything else written in their name (a rewording, two replies joined its
-    // own way, "… | …") gives way to the replies as they sent them.
-    const theirOwn = (a: ScreenTurn["answerRecorded"]): ScreenTurn["answerRecorded"] => (a && a.questionKey === item.key && said && !saidByCandidate(a.answer, replies.join("\n")) ? { ...a, answer: redactProtected(said) } : a);
-    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : theirOwn(t.answerRecorded) ?? (said ? { questionKey: item.key, answer: redactProtected(said), complete: m === "covered" } : null));
+    // The answer is their replies about the item, every one of them, as they sent them (`said`): the words of the model's
+    // own record of the answer are never used. The real model has recorded two replies joined its own way ("… | …", 19
+    // November 2026), and only the latest of two replies (25 November 2026), so that what the candidate had said about
+    // their work in the first one was gone from what the team reads and the scorecard scores. Only when no reply of
+    // theirs is usable does the model's record stand as it wrote it.
+    const record = (complete: boolean): ScreenTurn["answerRecorded"] => (said ? { questionKey: item.key, answer: redactProtected(said), complete } : t.answerRecorded);
+    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : record(m === "covered"));
     if (chatMoveStays(expected) && modelStays) {
       move = { key: item.key, move: expected };
       ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
@@ -845,7 +847,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
       // "yes" or a plain "No" nothing is recorded, so neither ever stands as the answer, a "No" never as a "no" for a
       // skill; it settles with every reply as its answer (`answerFor`). Words with something in them are kept as they
       // stand, so "Skip this question" on a follow-up keeps them.
-      t = { ...t, answerRecorded: replies.every(bareReply) ? null : theirOwn(t.answerRecorded) ?? { questionKey: item.key, answer: redactProtected(said), complete: false } };
+      t = { ...t, answerRecorded: replies.every(bareReply) ? null : record(false) };
     } else if (chatMoveStays(expected)) {
       // The model moved on early: fine, the item settles as it stands.
       const settled: ChatMove = reading === "not_done" ? "unknown" : "covered";
