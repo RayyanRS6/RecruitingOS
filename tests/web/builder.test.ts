@@ -393,4 +393,16 @@ describe("a turn that fails", () => {
     expect(replyWords({ error: "x", recovery: "Try again.", upgrade: false, ask: null })).toBeNull();
     expect(replyWords(undefined)).toBeNull();
   });
+
+  // 24 November 2026: the AI provider refused our account, and every owner read "Try again", which could not work.
+  it("shows the server's one sentence exactly as it is when the AI provider itself is the problem, with no 'Try again' before or after it", () => {
+    const sentence = "The assistant is not available right now. Your words are saved; try again later.";
+    const p = turnProblem({ error: "The assistant is not available right now.", recovery: sentence, upgrade: false, ask: null, unavailable: true });
+    expect(p).toEqual({ message: sentence, ask: null });
+    expect(p?.message).not.toMatch(/Try again|could not reply/);
+    expect(replyWords({ error: "The assistant is not available right now.", recovery: sentence, upgrade: false, ask: null, unavailable: true })).toBeNull();
+    // any other failure keeps the words it had
+    expect(turnProblem({ error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false, ask: null })).toEqual({ message: "The assistant could not reply just now. Your words are saved. Try again.", ask: null });
+    expect(turnProblem({ error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false, ask: null, unavailable: false })?.message).toBe("The assistant could not reply just now. Your words are saved. Try again.");
+  });
 });

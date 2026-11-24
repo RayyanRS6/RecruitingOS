@@ -54,9 +54,11 @@ export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 /**
  * The assistant's turn as the builder reads it, or what went wrong and what to do next. On a failure `upgrade` is true
  * when the plan's AI help is used up: the way on is the request about the plan, not trying again. `ask`: that request's
- * button and the words it sends; null when nothing is used up, or for someone who may not ask.
+ * button and the words it sends; null when nothing is used up, or for someone who may not ask. `unavailable`: true when
+ * the AI provider itself is the problem (it refuses our account, or it is not answering): trying again at once would not
+ * help, an administrator has been alerted, and `recovery` is the whole sentence to show, exactly as it is.
  */
-export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null };
+export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
 
 /** POST /api/v1/intake/sessions: the new draft and its first turn; `session` is null when the message was not about hiring someone. */
 export type IntakeStartResponse = { session: IntakeSessionView | null; notARole: boolean; reply: IntakeTurnReply };

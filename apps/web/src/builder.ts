@@ -421,11 +421,14 @@ export type Problem = { message: string; ask: { label: string; reason: string } 
 
 /**
  * A turn the assistant could not take: what to say, and the server's own request to offer when the plan's AI help is
- * what ran out (never "try again" then). The model's own error text is never shown; it means nothing to the person.
+ * what ran out (never "try again" then). When the AI provider itself is the problem (`unavailable`), the server's one
+ * sentence is shown exactly as it is, with nothing before it: trying again at once would fail the same way, and it says
+ * so. The model's own error text is never shown; it means nothing to the person.
  */
 export function turnProblem(reply: IntakeTurnReply | null | undefined): Problem | null {
   if (!reply || !("error" in reply)) return null;
   if (reply.upgrade) return { message: reply.recovery, ask: reply.ask };
+  if (reply.unavailable) return { message: reply.recovery, ask: null };
   return { message: `The assistant could not reply just now. ${reply.recovery}`, ask: null };
 }
 
