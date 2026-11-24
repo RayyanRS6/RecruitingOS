@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, TEXT_SCREENS, appPaths, hasCheckedQuote, readStoredPacket, requirementFinding, type Actor, type ChatPlan, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
+import { CHAT_SECTION_LABEL, CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, SCREEN_ACTIVE_STATUSES, TEXT_SCREENS, appPaths, hasCheckedQuote, readStoredPacket, requirementFinding, type Actor, type ChatItem, type ChatPlan, type EvidenceAssessment, type ReviewItem, type RolePacket, type ScreenAssessment, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { outOfCredit, runPromptDetached, runPromptsDetached, screenAssessPrompt, screenTurnPrompt, type AiRuntime, type ChatPromptContext, type RunMeta, type RunOutcome, type ScorecardContext, type ScreenContext } from "@ros/ai";
 import { REACH_A_PERSON_LINE, buildChatPlan, chatMoveStays, chatNextMove, emit, entitlements, errorForLog, formAnswerSentences, formAnswersOf, jobNoticesFor, noticesFor, notify, payShown, saysNotDone, screenAnswersSent, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor, transition, type ChatMove } from "@ros/core";
 import { applications, assessments, candidates, companies, randomToken, rolePackets, roles, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
@@ -242,9 +242,14 @@ export const CHAT_LADDER_QUESTION: Readonly<Record<"push" | "analog" | "smaller"
   smaller: "Even a small moment counts: was there a time, even with just a few people, when you did something like it?",
 };
 
-/** What the chat says about a must-have the CV does not show: always true, whether or not it is on the CV in other words. */
+/**
+ * What the chat says about a must-have the CV does not show: always true, whether or not it is on the CV in other words.
+ * A licence, certificate, permit or registration (`namesCredential`, the scorecard's own test for one) is held or it is
+ * not, so it is asked as a plain yes or no, once (`ladderApplies`); anything else is asked about from their own work.
+ */
 export function gapQuestion(text: string): string {
-  return `This is one of the things the job needs: ${text.trim().replace(/[.!?]+$/, "")}. What can you tell me about it from your own work?`;
+  const need = text.trim().replace(/[.!?]+$/, "");
+  return namesCredential(text) ? `This is one of the things the job needs: ${need}. Do you have it?` : `This is one of the things the job needs: ${need}. What can you tell me about it from your own work?`;
 }
 
 /** What the chat says at its end, after the close: what happens next, and that nothing is sent before the candidate sends it. */
@@ -297,9 +302,16 @@ export function chatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "c
   return { ...packet, screening: { ...packet.screening, questions } };
 }
 
-/** Whether "No" climbs the ladder for an item: a must-have, or an open question; a yes-or-no question takes "No" as its answer. */
-function ladderApplies(kind: "question" | "gap", q: Pick<ScreeningQuestion, "kind"> | undefined): boolean {
-  return kind === "gap" || (!!q && (q.kind === "skills" || q.kind === "behavioral"));
+/**
+ * Whether "No" climbs the ladder for an item, and a vague reply gets its one push: a must-have, or an open question of
+ * the job's. A yes-or-no question takes its answer as it is, and so does a must-have that names a licence, certificate,
+ * permit or registration (`namesCredential`): they hold it or they do not, so the chat asks about it once and never for
+ * "something similar" or "a small moment" of it. `packet`: the chat's own (`chatPacket`), which keeps the job's must-haves.
+ */
+function ladderApplies(packet: Pick<RolePacket, "requirements" | "screening">, item: Pick<ChatItem, "key" | "kind">): boolean {
+  if (item.kind === "gap") return !namesCredential(packet.requirements.mustHaves.find((m) => m.key === item.key)?.text ?? "");
+  const q = packet.screening.questions.find((x) => x.key === item.key);
+  return !!q && (q.kind === "skills" || q.kind === "behavioral");
 }
 
 /**
@@ -323,7 +335,7 @@ export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string
     current,
     items: plan.items.map((i) => {
       const q = qs.get(i.key);
-      return { key: i.key, kind: i.kind, required: i.required, state: i.state, step: i.step, pushes: i.pushes, question: q?.question ?? i.key, ladder: ladderApplies(i.kind, q), ...(q?.modelAnswer ? { modelAnswer: q.modelAnswer } : {}) };
+      return { key: i.key, kind: i.kind, required: i.required, state: i.state, step: i.step, pushes: i.pushes, question: q?.question ?? i.key, ladder: ladderApplies(packet, i), ...(q?.modelAnswer ? { modelAnswer: q.modelAnswer } : {}) };
     }),
     wrap: { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION },
     cv: facts.cv,
@@ -712,7 +724,9 @@ function modelWordsOf(packet: RolePacket, text: string): string {
  * - the ladder: how the latest reply reads (a plain "No" climbs it whatever the model read) and what comes next
  *   (`chatNextMove`): a follow-up the ladder allows passes, one it does not is replaced by the next question; moving on
  *   early is fine (less pressing, never more). When the item settles, the candidate's replies about it are its answer,
- *   except a must-have settled as not known, which records nothing (never a "no" for a skill);
+ *   except a must-have settled as not known, which records nothing (never a "no" for a skill). A yes-or-no question,
+ *   and a must-have that names a licence, certificate, permit or registration, have no ladder (`ladderApplies`): any
+ *   reply is the answer, a "No" included, and nothing "similar" is asked for;
  * - the closing question is followed by the close; a close before the end goes on to what is left;
  * - every message is one restatement and one question (`shapeChatMessage`), and never says the job's private standard
  *   for a question (`modelAnswer`), even in part.
@@ -776,7 +790,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     const own = reply.trim();
     t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: t.answerRecorded ?? (own ? { questionKey: CHAT_WRAP_KEY, answer: own, complete: true } : null) };
   } else if (item && replied) {
-    const ladder = ladderApplies(item.kind, q(item.key));
+    const ladder = ladderApplies(packet, item);
     const modelStays = !!t.followUpReason && !t.questionKey && !t.done;
     const reading = ladder && saysNotDone(reply) ? "not_done" : t.reading === "not_done" && !ladder ? "concrete" : (t.reading ?? (modelStays ? "vague" : "concrete"));
     const expected = chatNextMove(item, reading, ladder);
@@ -1032,7 +1046,8 @@ export function chatCodeLead(tapped: string | null, kept = false): string {
  *   question again in the job's own words, and how to choose a person.
  * - Any other reply is the answer to the current question: every usable reply since it was asked (the caller records it
  *   through `redactProtected`), then the next question in the job's own words, after a plain "Thanks.". A plain "No"
- *   about a must-have records nothing and settles it as not known, as its ladder does in the end: never a "no" for a skill.
+ *   about a must-have records nothing and settles it as not known, as its ladder does in the end: never a "no" for a
+ *   skill. About a must-have that names a licence or a certificate it is the answer, as with the model (`ladderApplies`).
  * - No next question: the end of the questions (`done`).
  * Null with no current question: the caller ends the chat as it does at the turn cap.
  */
@@ -1046,7 +1061,7 @@ export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenPr
     return { turn: { ...SILENT_TURN, messageToCandidate: `${question.question}\n\n${PERSON_OFFER}`, sentiment: seemsConfused(latest) ? "confused" : "fine" }, move: null };
   }
   const item = progress.chat?.items.find((i) => i.key === current) ?? null;
-  const unknown = item?.kind === "gap" && saysNotDone(latest);
+  const unknown = item?.kind === "gap" && ladderApplies(packet, item) && saysNotDone(latest);
   const answerRecorded: ScreenTurn["answerRecorded"] = unknown ? null : { questionKey: current, answer: said, complete: true };
   const move = item ? { key: current, move: (unknown ? "unknown" : "covered") as ChatMove } : null;
   // The question being asked is among those asked already, so this is the one after it.

@@ -39,6 +39,11 @@ describe("the AI interview's plan (a counter and the section, never the question
     // a yes-or-no question takes its answer as it is: "No", or a bare "Yes"
     expect(chatNextMove({ kind: "question", step: "direct", pushes: 0 }, "not_done", false)).toBe("covered");
     expect(chatNextMove({ kind: "question", step: "direct", pushes: 0 }, "vague", false)).toBe("covered");
+    // and so does a must-have with no ladder (one that names a licence: held or not), whatever step a stored plan left it at
+    for (const step of ["direct", "analog", "smaller"] as const) {
+      expect(chatNextMove({ ...gap, step }, "not_done", false), step).toBe("covered");
+      expect(chatNextMove({ ...gap, step }, "vague", false), step).toBe("covered");
+    }
     expect(["push", "analog", "smaller"].every((m) => chatMoveStays(m as "push"))).toBe(true);
     expect(chatMoveStays("covered") || chatMoveStays("unknown")).toBe(false);
   });

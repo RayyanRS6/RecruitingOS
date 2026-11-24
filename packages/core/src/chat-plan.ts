@@ -44,14 +44,16 @@ export function chatItemSettled(item: Pick<ChatItem, "state">): boolean {
 
 /**
  * What the chat does next with the item being asked, from how the latest reply reads (`ChatReading`). A concrete reply
- * covers it, and so does any reply to a yes-or-no question (`ladder` false). A vague one gets one push for specifics,
- * then counts as covered (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done
- * that? something similar from your own work"), then, for a gap, the smaller version ("even a small moment?"), then
- * the item is settled as not known: never a "no" for a skill, and never read as one.
+ * covers it, and so does any reply to an item with no ladder (`ladder` false): a yes-or-no question, or a must-have that
+ * names a licence, certificate, permit or registration, which is held or is not (which items those are is decided by
+ * `ladderApplies` in packages/agents/src/screening.ts). A vague one gets one push for specifics, then counts as covered
+ * (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done that? something similar from
+ * your own work"), then, for a gap, the smaller version ("even a small moment?"), then the item is settled as not
+ * known: never a "no" for a skill, and never read as one.
  */
 export type ChatMove = "push" | "analog" | "smaller" | "covered" | "unknown";
 export function chatNextMove(item: Pick<ChatItem, "kind" | "step" | "pushes">, reading: ChatReading, ladder: boolean): ChatMove {
-  // A yes-or-no question (no ladder) takes its answer as it is, a bare "Yes" included.
+  // An item with no ladder (a yes-or-no question, a licence the job needs) takes its answer as it is: "No", or a bare "Yes".
   if (reading === "concrete" || !ladder) return "covered";
   if (reading === "vague") return item.pushes < 1 ? "push" : "covered";
   if (item.step === "direct") return "analog";

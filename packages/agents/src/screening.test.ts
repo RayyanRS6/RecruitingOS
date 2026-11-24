@@ -5,7 +5,7 @@ import { chatCounter, tapFormatFor } from "@ros/core";
 import { SAMPLE_QUESTIONS } from "./fixtures/sample-questions";
 import { unfairQuestion } from "./fair-question";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, currentTapFormat, enforceChatTurn, gapQuestion,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, gapQuestion,
   nextQuestion, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending,
 } from "./screening";
 
@@ -39,6 +39,13 @@ describe("what an AI interview asks", () => {
     expect(asked.map((q) => q.key)).toEqual(["license", "experience", "pay", "mh_perio", "mh_xray", "mh_dentrix", "mh_nitrous", CHAT_WRAP_KEY]);
     expect(asked[3].question).toBe(gapQuestion("Periodontal charting"));
     expect(asked[3].question).toBe("This is one of the things the job needs: Periodontal charting. What can you tell me about it from your own work?");
+    // a licence, certificate, permit or registration is held or it is not: a plain yes or no, never "from your own work"
+    const unread = chatPacket(hygienist, { chat: chatPlanFor(hygienist, null, startedAt) }).screening.questions;
+    expect(unread.find((q) => q.key === "mh_license")?.question).toBe("This is one of the things the job needs: Active CA RDH license. Do you have it?");
+    expect(unread.find((q) => q.key === "mh_perio")?.question).toBe(asked[3].question);
+    expect(gapQuestion("Local anesthesia permit.")).toBe("This is one of the things the job needs: Local anesthesia permit. Do you have it?");
+    expect(gapQuestion("Radiography certificate")).toBe("This is one of the things the job needs: Radiography certificate. Do you have it?");
+    expect(gapQuestion("Registration with the state dental board")).toBe("This is one of the things the job needs: Registration with the state dental board. Do you have it?");
     // the team's private note of a good answer goes to the models with its question, never into the question
     expect(asked[1]).toMatchObject({ question: "Tell me about your most recent work.", modelAnswer: "names the practice and what they did day to day" });
     expect(asked.at(-1)!.question).toBe(CHAT_WRAP_QUESTION);
@@ -803,6 +810,48 @@ describe("what each turn of the chat is held to", () => {
     expect(p.chat?.items[1].state).toBe("unknown");
     expect(p.chat?.section).toBe("required");
     expect(chatCounter(p.chat)?.label).toBe("Question 3 of 4");
+  });
+
+  // The code check of 25 November 2026: every must-have climbed the ladder, so someone who said they hold no licence was
+  // asked for "something similar from your own work" and then for "a small moment". A licence is held or it is not.
+  it("a must-have that names a licence is asked once and its answer taken: 'No' is the answer, with no analog and no smaller version; any other must-have keeps its ladder", () => {
+    const licensed = { ...role, requirements: { mustHaves: [{ key: "licence", text: "Active CA RDH license", rationale: "r" }, ...base.requirements.mustHaves], niceToHaves: [] } } as unknown as RolePacket;
+    const onLicence = askingNow(planOf(licensed, ["licence", "english"]), "licence", ["licence"]);
+    const pk = chatPacket(licensed, onLicence);
+    const LICENCE_ASK = "This is one of the things the job needs: Active CA RDH license. Do you have it?";
+    const ENGLISH_ASK = gapQuestion("Explaining technical ideas in English");
+    expect(pk.screening.questions.slice(0, 2).map((x) => x.question)).toEqual([LICENCE_ASK, ENGLISH_ASK]);
+    // the model is told which items have a ladder: the licence has none, the other must-have and an open question do
+    expect(chatPromptOf(pk, onLicence.chat!, "licence", facts).items.map((i) => [i.key, i.ladder])).toEqual([["licence", false], ["english", true], ["wq_explain", true], ["wq_room", true]]);
+    // a model that climbs the ladder all the same: the code moves on, and "No" is recorded as the answer
+    const pressed = enforceChatTurn(turnOf({ reading: "not_done", followUpReason: "the analog", messageToCandidate: CHAT_LADDER_QUESTION.analog }), pk, onLicence, {}, { transcript: said("Q", "No"), latest: "No" });
+    expect(pressed.move).toEqual({ key: "licence", move: "covered" });
+    expect(pressed.turn).toMatchObject({ questionKey: "english", followUpReason: null, done: false, answerRecorded: { questionKey: "licence", answer: "No", complete: true } });
+    expect(pressed.turn.messageToCandidate).toBe(ENGLISH_ASK);
+    for (const smaller of [CHAT_LADDER_QUESTION.smaller, "Got it. Even a small moment?"]) {
+      const again = enforceChatTurn(turnOf({ reading: "not_done", followUpReason: "the smaller version", messageToCandidate: smaller }), pk, onLicence, {}, { transcript: said("Q", "I don't"), latest: "I don't" });
+      expect(again.move, smaller).toEqual({ key: "licence", move: "covered" });
+      expect(again.turn.messageToCandidate, smaller).not.toMatch(/similar|small moment/i);
+      expect(again.turn.answerRecorded, smaller).toEqual({ questionKey: "licence", answer: "I don't", complete: true });
+    }
+    // a model that takes the answer: its calm line stands, the next item is asked, and the "No" is on record
+    const taken = enforceChatTurn(turnOf({ reading: "not_done", questionKey: "english", answerRecorded: { questionKey: "licence", answer: "No", complete: true }, messageToCandidate: `${CHAT_CALM_LINE}\n\n${ENGLISH_ASK}` }), pk, onLicence, {}, { transcript: said("Q", "No"), latest: "No" });
+    expect(taken.move).toEqual({ key: "licence", move: "covered" });
+    expect(taken.turn.answerRecorded).toEqual({ questionKey: "licence", answer: "No", complete: true });
+    expect(taken.turn.messageToCandidate).toBe(`${CHAT_CALM_LINE}\n\n${ENGLISH_ASK}`);
+    const next = advanceProgress(onLicence, taken.turn, taken.move);
+    expect(next.chat?.items.slice(0, 2).map((i) => [i.key, i.state, i.step])).toEqual([["licence", "covered", "direct"], ["english", "asking", "direct"]]);
+    // a bare "Yes" is its answer too: asked once, with no push for a specific time
+    const yes = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: `You said yes.\n\n${CHAT_LADDER_QUESTION.push}` }), pk, onLicence, {}, { transcript: said("Q", "Yes"), latest: "Yes" });
+    expect(yes.move).toEqual({ key: "licence", move: "covered" });
+    expect(yes.turn).toMatchObject({ questionKey: "english", answerRecorded: { questionKey: "licence", answer: "Yes", complete: true } });
+    expect(yes.turn.messageToCandidate).toBe(`You said yes.\n\n${ENGLISH_ASK}`);
+    // the other must-have of the same job, which names no licence, still gets "something similar"
+    const onEnglish = askingNow(planOf(licensed, ["licence", "english"]), "english", ["licence", "english"]);
+    const open = enforceChatTurn(turnOf({ followUpReason: "ladder", messageToCandidate: "Understood." }), chatPacket(licensed, onEnglish), onEnglish, {}, { transcript: said("Q", "No"), latest: "No" });
+    expect(open.move).toEqual({ key: "english", move: "analog" });
+    expect(open.turn.messageToCandidate).toBe(CHAT_LADDER_QUESTION.analog);
+    expect(open.turn.answerRecorded).toBeNull();
   });
 
   it("records nothing while an item is still being asked, whatever the model put in answerRecorded (Wave S9: the real model recorded a bare 'yes' on the push)", () => {
