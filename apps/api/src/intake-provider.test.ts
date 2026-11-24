@@ -152,7 +152,15 @@ describe("the job builder when the AI provider is the problem", () => {
     expect(await standing()).toEqual([]);
   });
 
-  it("raises the alert in its own words when the provider is not answering", async () => {
+  /**
+   * A provider now and then answers one call "overloaded" or too late, and the next one well. That one call tells the
+   * owner the truth and alerts nobody; a second failure within ten minutes is an outage an administrator should see.
+   * (A refused account, above, is alerted at once: it never mends by itself.)
+   */
+  it("alerts for an outage from its second failure, in its own words: one slow answer wakes nobody", async () => {
+    container.fake!.failNext("intake.turn", "throw");
+    expect((await say("Deal-breaker: cannot work Saturdays")).reply).toEqual(NOT_AVAILABLE);
+    expect(await standing()).toEqual([]);
     container.fake!.failNext("intake.turn", "throw");
     expect((await say("Deal-breaker: cannot work Saturdays")).reply).toEqual(NOT_AVAILABLE);
     const open = await standing();
