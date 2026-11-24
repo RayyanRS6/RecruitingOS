@@ -132,6 +132,10 @@ describe("repeat applications and lost links", () => {
     expect(notices[0].text).toContain(`https://jobs.example.test/c/status/${mariaApp.statusToken}`);
     expect(notices[0].text).toContain("If you did not send the second application, you do not need to do anything.");
     expect(notices[0].text).not.toMatch(/Mallory|Stranger|714|\/c\/screen\//);
+    // it signs in the code's own words, as every candidate email does, never with the sign-off the job record stores
+    // ("The team" in this job's record, which a model would have written): the code check of 25 November 2026
+    expect(notices[0].text.trimEnd().endsWith("\n\nThe hiring team at Repeat Dental")).toBe(true);
+    expect(notices[0].text).not.toMatch(/\nThe team\s*$/);
 
     // a third try the same day: the same receipt, no second email
     const r3 = await applyTo(roleId, {}, undefined, "203.0.113.91");

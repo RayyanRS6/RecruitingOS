@@ -88,8 +88,10 @@ const EditedFormQuestion = z.discriminatedUnion("kind", [
  * PATCH /api/v1/roles/:id/packet: the one editor of a job. It mirrors the job record's sections; only what is sent
  * changes, and everything else is copied from `baseVersion`, which must still be the newest version (someone else may
  * have saved since). A list is sent whole, in order: adding, removing and reordering are one list. An item keeps its
- * `key` when it is the same item, and then keeps what the editor does not carry (a must-have's `rationale`, a skill's
- * `indicators`, a question's `kind`); a new one has no key. Counts (one to six must-haves, three to twelve AI interview
+ * `key` when it is the same item. What the editor does not carry (a must-have's `rationale`, a skill's `indicators`, a
+ * question's `kind`) was written for the item's words: it is kept while those words are untouched, and when they change
+ * the rationale and the indicators go and the kind is worked out again from the new words (`applyFieldEdit`). A new item
+ * has no key. Counts (one to six must-haves, three to twelve AI interview
  * questions, at most ten form questions, two to eight choices) are checked on the server and refused in plain words.
  *
  * Saving an open or paused job makes a new version that is live at once. Pay set here counts as a person confirming it.

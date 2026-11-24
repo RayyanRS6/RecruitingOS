@@ -242,7 +242,7 @@ async function settleRepeatSubmission(tx: Tx, container: Container, input: { inp
   const [company] = await tx.select().from(companies).where(eq(companies.id, application.companyId)).limit(1);
   if (!company || candidate.anonymizedAt) return;
   const [pv] = await tx.select({ packet: rolePackets.packet }).from(rolePackets).where(and(eq(rolePackets.roleId, application.roleId), eq(rolePackets.version, application.packetVersion))).limit(1);
-  await sendRepeatApplicationNotice(tx, container.integrations, { application, candidate, company, roleTitle: pv?.packet.identity.title ?? input.roleTitle, signature: pv?.packet.communication.signature, appBaseUrl: container.env.JOBS_BASE_URL, actor: { kind: "system", id: "repeat_application" }, now: container.engine.clock() });
+  await sendRepeatApplicationNotice(tx, container.integrations, { application, candidate, company, roleTitle: pv?.packet.identity.title ?? input.roleTitle, appBaseUrl: container.env.JOBS_BASE_URL, actor: { kind: "system", id: "repeat_application" }, now: container.engine.clock() });
 }
 
 /**

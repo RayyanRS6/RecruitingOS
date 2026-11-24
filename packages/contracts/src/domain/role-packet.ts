@@ -12,7 +12,9 @@ import { Importance, importanceOf } from "./score";
  * - `competencies`: the skills the CV score counts beside the must-haves, each Essential, Important or Helpful.
  * - `formQuestions`: the application form's questions ("Screening questions" on screen).
  * - `screening`: the AI interview's questions and its advertised length (the AI interview is "screen" in code).
- * - `communication`, `compliance`: the texts and notices emails and candidate pages read.
+ * - `communication`, `compliance`: the tone and the notices of a job. The three lines under a candidate email (the AI
+ *   disclosure, how to reach a person, the signature) are the code's own (packages/core/src/compliance.ts); the record
+ *   only holds a copy of them, which no email and no candidate page reads.
  * - `provenance`: which AI runs wrote it, what was assumed, the wording flags and who confirmed the pay.
  */
 
@@ -54,7 +56,9 @@ export type Competency = z.infer<typeof Competency>;
 
 /**
  * One question of the AI interview. `modelAnswer`: what a good answer shows, the job's standard the scorecard holds the
- * answer to; never shown to a candidate. `kind` only decides whether the chat offers a tap answer.
+ * answer to; never shown to a candidate. `kind` decides what the chat does with the question: the tap answer it offers
+ * (Yes and No, days, a start date, a pay range), and whether a bare "No" or a vague reply is followed up (an open
+ * question: `skills`, `behavioral`) or is the answer (a question about a fact).
  */
 export const ScreeningQuestion = z.object({
   key: z.string().min(1),

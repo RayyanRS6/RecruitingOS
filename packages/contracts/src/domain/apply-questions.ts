@@ -135,6 +135,8 @@ export type ChatItemState = z.infer<typeof ChatItemState>;
  * One thing the chat must close. `question`: one of the job's interview questions (key = the question's key). `gap`: a
  * must-have the CV reading did not find shown (key = the must-have's key), asked along the ladder `direct` → `analog`
  * ("something similar from your own work") → `smaller` ("even a small moment?"), with at most one push for specifics.
+ * A must-have that names a licence, certificate, permit or registration has no ladder: it is asked once, as yes or no,
+ * and the answer is taken (`ladderApplies` in packages/agents/src/screening.ts).
  */
 export const ChatItem = z.object({
   key: z.string().min(1).max(100),
