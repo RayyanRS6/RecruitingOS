@@ -7,7 +7,7 @@ import { APP_FONTS, APP_FONT_CSS_FILE, FONT_LOCK_FILE, type FontLock, appFontCss
 /**
  * Puts the font files of the candidate pages and the signed-in application where the deployment serves them from its
  * own origin (apps/shell/public/fonts, served at /fonts/; apps/api/src/pages/fonts.ts names the files), and writes the
- * application's @font-face stylesheet (apps/shell/app/fonts.css). IBM Plex Sans, IBM Plex Mono and Bricolage Grotesque
+ * application's @font-face stylesheet (apps/shell/app/fonts.css). IBM Plex Sans, IBM Plex Mono and Instrument Sans
  * are published under the SIL Open Font License 1.1; the files come from their Fontsource packages and each package's
  * licence is saved beside its files. Run once, review, and commit the files together with the lock:
  *   node_modules\.bin\tsx.cmd scripts/fetch-fonts.ts

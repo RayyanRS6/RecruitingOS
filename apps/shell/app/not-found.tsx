@@ -12,7 +12,7 @@ export default function NotFound() {
         <div className="flex justify-center">
           <BrandMark />
         </div>
-        <h1 className="mt-8 font-display text-[30px] font-bold leading-[1.1] tracking-[-0.035em] text-ink">That page does not exist</h1>
+        <h1 className="mt-8 font-display text-[36px] font-bold leading-[1.04] tracking-[-0.015em] text-ink">That page does not exist</h1>
         <div className="mt-6">
           <Link to="/" className="btn primary">Go to Home</Link>
         </div>

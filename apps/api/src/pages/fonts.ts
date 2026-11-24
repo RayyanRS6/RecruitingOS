@@ -1,6 +1,6 @@
 /**
- * The typefaces of the candidate pages and the signed-in application (docs/07): IBM Plex Sans for text, Bricolage
- * Grotesque for headings and IBM Plex Mono for code. The files are served from this deployment's own origin (`/fonts/`,
+ * The typefaces of the candidate pages and the signed-in application (docs/07): IBM Plex Sans for text, Instrument Sans for
+ * headings and IBM Plex Mono for code. The files are served from this deployment's own origin (`/fonts/`,
  * the files in apps/shell/public/fonts), so both policies keep `font-src 'self'` and no font host learns who opened a
  * page. A face already installed on the device is used first; a missing file falls back to the system font, never to an
  * outside host. `scripts/fetch-fonts.ts` puts the files in place from the open-licensed (SIL OFL 1.1) releases, pinned
@@ -32,7 +32,8 @@ const UNICODE_RANGE = {
 export type FontSubset = keyof typeof UNICODE_RANGE;
 
 /** The weights and widths the one variable file of the headings' face covers (its `wght` and `wdth` axes). */
-export const DISPLAY_WEIGHTS = "200 800";
+export const DISPLAY_FAMILY = "Instrument Sans";
+export const DISPLAY_WEIGHTS = "400 700";
 export const DISPLAY_WIDTHS = "75% 100%";
 
 /**
@@ -44,15 +45,17 @@ export type SelfHostedFont = { family: string; slug: string; pkg: string; weight
 
 /**
  * Every face either surface uses. `candidate` marks the three the candidate stylesheet uses (body text at 400, labels and
- * buttons at 600, headings in Bricolage); the application also sets menu and tab labels at 500 and code in Plex Mono.
- * Bricolage Grotesque is one variable file (weights 200 to 800, widths 75% to 100%): the big headings are set narrow
- * (owner, 24 November 2026: the narrow bold headlines they like), the small ones at the normal width, from the same file.
+ * buttons at 600, headings in the display face); the application also sets menu and tab labels at 500 and code in Plex
+ * Mono. The display face is Instrument Sans (SIL OFL), one variable file (weights 400 to 700, widths 75% to 100%):
+ * the big headings are set narrow and bold, the small ones at the normal width, from the same file. The owner asked for
+ * Klarna Title and Helvetica Now Display Condensed Bold (24 November 2026); neither can be used without a licence, and
+ * of the open faces compared side by side (Mona Sans, Archivo, Bricolage Grotesque) its narrow bold cut is the nearest to both: the same two-storey a and one-storey g.
  */
 const FACES = [
   { family: "IBM Plex Sans", slug: "ibm-plex-sans", weight: 400, local: ["IBM Plex Sans", "IBMPlexSans"], candidate: true },
   { family: "IBM Plex Sans", slug: "ibm-plex-sans", weight: 500, local: ["IBM Plex Sans Medium", "IBMPlexSans-Medium"], candidate: false },
   { family: "IBM Plex Sans", slug: "ibm-plex-sans", weight: 600, local: ["IBM Plex Sans SemiBold", "IBMPlexSans-SemiBold"], candidate: true },
-  { family: "Bricolage Grotesque", slug: "bricolage-grotesque", weight: DISPLAY_WEIGHTS, stretch: DISPLAY_WIDTHS, local: [], candidate: true },
+  { family: DISPLAY_FAMILY, slug: "instrument-sans", weight: DISPLAY_WEIGHTS, stretch: DISPLAY_WIDTHS, local: [], candidate: true },
   { family: "IBM Plex Mono", slug: "ibm-plex-mono", weight: 400, local: ["IBM Plex Mono", "IBMPlexMono"], candidate: false },
 ] as const;
 

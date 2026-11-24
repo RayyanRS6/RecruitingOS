@@ -55,7 +55,7 @@ ${fontFaceCss(MONO_FONTS)}
   --sh-xs: 0 1px 2px rgb(47 34 57 / 0.04);
   --sh-pop: 0 18px 44px -14px rgb(47 34 57 / 0.3), 0 2px 6px rgb(47 34 57 / 0.06);
   --sh-primary: 0 8px 20px -10px rgb(82 50 103 / 0.6);
-  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --display: "Instrument Sans", "Helvetica Neue", Arial, sans-serif;
   --ui: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", Menlo, Consolas, monospace;
   --r-control: 12px;
@@ -108,7 +108,7 @@ main.wide { width: auto; max-width: 1120px; margin: 0 auto; padding: 48px 24px 8
 main:not(:has(.thread)) { animation: rise 200ms ease-out backwards; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 h1, h2, h3 { color: var(--ink); font-family: var(--display); font-weight: 700; letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: anywhere; }
-h1 { margin: 0 0 10px; font-size: 34px; font-stretch: 80%; line-height: 1.08; letter-spacing: -0.02em; }
+h1 { margin: 0 0 10px; font-size: 34px; font-stretch: 75%; line-height: 1.08; letter-spacing: -0.02em; }
 h2 { margin: 36px 0 12px; font-size: 21px; line-height: 1.25; }
 h3 { margin: 24px 0 8px; font-size: 17px; line-height: 1.35; letter-spacing: -0.01em; }
 .card > h2:first-child, .card > label:first-child { margin-top: 0; }
@@ -185,6 +185,9 @@ input[type=text], input[type=email], input[type=tel], input[type=date], input[ty
 @media (hover: hover) and (pointer: fine) { :is(input, textarea, select):hover, .slot:hover { border-color: var(--ink-3); } }
 :is(input, textarea, select):focus { border-color: var(--primary); }
 select, option, optgroup { background-color: var(--surface); color: var(--ink); }
+/* A dropdown's arrow is drawn (two strokes), with room on its right; the system's own list opens */
+select { appearance: none; padding-right: 44px; background-image: linear-gradient(to top right, transparent 40%, var(--ink-2) 41%, var(--ink-2) 59%, transparent 60%), linear-gradient(to top left, transparent 40%, var(--ink-2) 41%, var(--ink-2) 59%, transparent 60%); background-position: right 22px center, right 16px center; background-size: 6px 6px; background-repeat: no-repeat; }
+@media (forced-colors: active) { select { appearance: auto; padding-right: 14px; background-image: none; } }
 textarea { min-height: 120px; resize: vertical; }
 ::placeholder { color: var(--ink-3); opacity: 1; }
 [aria-invalid="true"] { border-color: var(--critical); box-shadow: 0 0 0 1px var(--critical); }
@@ -306,7 +309,12 @@ ul.checks .icon { margin-top: 4px; color: var(--primary); }
 
 /* Disclosures that work without script; each summary a 40px tap target */
 details.more { margin-top: 4px; }
-details.more > summary { padding: 9px 0; color: var(--ink-2); font-weight: 600; cursor: pointer; }
+details.more > summary { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 40px; padding: 7px 14px 7px 16px; border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--surface); color: var(--ink); font-size: 14.5px; font-weight: 600; line-height: 1.3; cursor: pointer; list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: ""; flex: none; width: 6px; height: 6px; margin: -3px 3px 0 2px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); }
+details.more[open] > summary { margin-bottom: 12px; border-color: var(--line-tint); background: var(--tint); }
+details.more[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+@media (hover: hover) and (pointer: fine) { details.more:not([open]) > summary:hover { border-color: var(--line-strong); background: var(--surface-2); } }
 @media (max-width: 600px) {
   main { width: auto; margin: 12px; padding: 26px 18px 28px; border-radius: var(--r-card); }
   main.wide { margin: 0 auto; padding: 28px 16px 48px; }

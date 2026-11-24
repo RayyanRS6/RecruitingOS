@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { APP_FONTS, CANDIDATE_FONTS, DISPLAY_WEIGHTS, DISPLAY_WIDTHS, FONT_LOCK_FILE, type FontLock, appFontCss, fontLicenceFile } from "../../api/src/pages/fonts";
+import { APP_FONTS, CANDIDATE_FONTS, DISPLAY_FAMILY, DISPLAY_WEIGHTS, DISPLAY_WIDTHS, FONT_LOCK_FILE, type FontLock, appFontCss, fontLicenceFile } from "../../api/src/pages/fonts";
 
 /**
  * The signed-in application's typefaces come from this deployment's own /fonts/ folder, like the candidate pages': the
@@ -31,7 +31,7 @@ function sources(dir: string): string[] {
 
 /**
  * The class strings (one quoted string each) that ask for bold or extra-bold type in a face that has none: everything
- * but Bricolage (font-display) and a bare h1-h4 (styles.css draws those in Bricolage). Plex Sans and Plex Mono have no
+ * but the display face (font-display) and a bare h1-h4 (styles.css draws those in it). Plex Sans and Plex Mono have no
  * 700 or 800 file, so the browser would smear a faux bold.
  */
 function fauxBold(file: string, text: string): string[] {
@@ -79,15 +79,18 @@ describe("the application's self-hosted fonts", () => {
     const styles = stripComments(read("packages/ui/src/styles.css"));
     const weights = new Set([...styles.matchAll(/font-weight: (\d+)|font: (\d+) /g)].map((m) => Number(m[1] ?? m[2])));
     const faces = (family: string) => new Set(APP_FONTS.filter((f) => f.family === family).map((f) => f.weight));
-    // text and labels in Plex Sans 400/500/600 (700 and 800 are the headings' Bricolage weights)
-    for (const w of weights) if (w !== 700 && w !== 800) expect(faces("IBM Plex Sans"), `IBM Plex Sans ${w}`).toContain(w);
+    // text and labels in Plex Sans 400/500/600 (700 is the headings' weight, in the display face)
+    for (const w of weights) if (w !== 700) expect(faces("IBM Plex Sans"), `IBM Plex Sans ${w}`).toContain(w);
     // Tailwind's weights without a face anywhere never appear in the stylesheet or the frame (they would render faux-bold or faux-light)
     const frame = ["apps/shell/components/AppShell.tsx", "apps/shell/components/BrandMark.tsx", "apps/shell/app/not-found.tsx", "apps/shell/app/(app)/loading.tsx"].map(read).join("\n");
     expect(`${styles}\n${frame}`).not.toMatch(/\bfont-(thin|extralight|light|black)\b/);
-    // headings in Bricolage at 600, 700 and 800, from its one variable file (weights 200 to 800); labels in Plex Mono 400
-    expect([...faces("Bricolage Grotesque")]).toEqual([DISPLAY_WEIGHTS]);
+    // headings in the display face at 600 and 700, from its one variable file (weights 400 to 700: nothing asks for 800,
+    // which it does not have); labels in Plex Mono 400
+    expect([...faces(DISPLAY_FAMILY)]).toEqual([DISPLAY_WEIGHTS]);
+    expect(styles).toContain(`--font-display: "${DISPLAY_FAMILY}", "Helvetica Neue", Arial, sans-serif;`);
     const [lightest, heaviest] = DISPLAY_WEIGHTS.split(" ").map(Number);
-    for (const w of [600, 700, 800]) expect(w >= lightest && w <= heaviest, `Bricolage Grotesque ${w}`).toBe(true);
+    for (const w of weights) expect(w >= lightest && w <= heaviest, `${DISPLAY_FAMILY} ${w}`).toBe(true);
+    expect(`${styles}\n${frame}`).not.toMatch(/\bfont-extrabold\b/);
     // a narrow heading asks for a width the file has
     const [narrowest, widest] = DISPLAY_WIDTHS.split(" ").map((w) => Number.parseFloat(w));
     const widths = [...styles.matchAll(/font-stretch: ([\d.]+)%/g)].map((m) => Number(m[1]));
@@ -97,7 +100,7 @@ describe("the application's self-hosted fonts", () => {
   });
 
   it("never asks for bold or extra-bold text outside the display face (spec 3: sans text uses font-semibold)", () => {
-    const fauxBoldFaces = new Set(APP_FONTS.filter((f) => f.family !== "Bricolage Grotesque" && Number(f.weight) >= 700).map((f) => `${f.family} ${f.weight}`));
+    const fauxBoldFaces = new Set(APP_FONTS.filter((f) => f.family !== DISPLAY_FAMILY && Number(f.weight) >= 700).map((f) => `${f.family} ${f.weight}`));
     // the rule holds only while Plex has no bold file; if one is added, this check can be relaxed
     expect([...fauxBoldFaces]).toEqual([]);
     const found = ["apps/web/src", "apps/shell/app", "apps/shell/components", "apps/shell/lib"].flatMap((dir) => sources(dir).flatMap((file) => fauxBold(file, read(file))));

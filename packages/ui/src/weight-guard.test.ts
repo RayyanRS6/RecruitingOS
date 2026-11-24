@@ -337,8 +337,8 @@ describe("the kit's component layer", () => {
     const title = rule(app, ".card-title");
     expect(title).toContain("flex-wrap: wrap;");
     expect(title).toContain("gap: 8px 12px;");
-    expect(rule(app, ".card.hero > .card-title h2")).toContain("font-size: 26px;");
-    expect(app).toMatch(/@media \(min-width: 768px\) \{\s*\.card\.hero > \.card-title h2 \{ font-size: 30px; \}/);
+    expect(rule(app, ".card.hero > .card-title h2")).toContain("font-size: 30px;");
+    expect(app).toMatch(/@media \(min-width: 768px\) \{\s*\.card\.hero > \.card-title h2 \{ font-size: 36px; \}/);
     // a needs-you card in a side panel or a report is no hero: its title keeps the card's 19px
     expect(rule(app, ".card-title h2")).toContain("font-size: 19px;");
     expect(app).not.toMatch(/\.needs-you[^{}]*\.card-title/);
@@ -430,14 +430,14 @@ describe("the kit's component layer", () => {
     expect(insideMedia(app, app.indexOf(".split-switch { display: inline-flex;"), `(width < ${rail})`)).toBe(true);
   });
 
-  it("draws PageHeader's hero title at Home's greeting size (36, 44 from 640px, 52 from 768px), the plain title as before", () => {
-    expect(rule(app, ".page-header.hero .page-header-row h1")).toBe(" font-size: 36px; ");
-    expect(mediaBodies("(min-width: 640px)")).toContain(".page-header.hero .page-header-row h1 { font-size: 44px; }");
+  it("draws PageHeader's hero title at Home's greeting size (42, 50 from 640px, 60 from 768px: the narrow face reads smaller), the plain title a step under it", () => {
+    expect(rule(app, ".page-header.hero .page-header-row h1")).toBe(" font-size: 42px; ");
+    expect(mediaBodies("(min-width: 640px)")).toContain(".page-header.hero .page-header-row h1 { font-size: 50px; }");
     const wide = mediaBodies("(min-width: 768px)");
-    expect(wide).toContain(".page-header.hero .page-header-row h1 { font-size: 52px; }");
-    // after the plain title's 40px in the same block, so the hero's size wins there
-    expect(wide.indexOf(".page-header.hero .page-header-row h1")).toBeGreaterThan(wide.indexOf(".page-header-row h1 { font-size: 40px; }"));
-    expect(rule(app, ".page-header-row h1")).toContain("font-size: 34px;");
+    expect(wide).toContain(".page-header.hero .page-header-row h1 { font-size: 60px; }");
+    // after the plain title's 46px in the same block, so the hero's size wins there
+    expect(wide.indexOf(".page-header.hero .page-header-row h1")).toBeGreaterThan(wide.indexOf(".page-header-row h1 { font-size: 46px; }"));
+    expect(rule(app, ".page-header-row h1")).toContain("font-size: 38px;");
   });
 
   it("pads every card 16px at the sides and 20px above and below on a phone, and runs a list card's (flush) rows edge to edge", () => {
@@ -452,7 +452,7 @@ describe("the kit's component layer", () => {
     expect(phone).toContain(".card.flush > .card-title, .card.flush .list-row { padding-inline: 16px; }");
     // nothing is clipped (a row's menu opens over what lies below): the end rows take the card's corners instead
     expect(app).not.toMatch(/\.card\.flush[^{]*\{[^}]*overflow/);
-    expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 15px;");
+    expect(rule(app, ".card.flush > :last-child, .card.flush > :is(ul, ol):last-child > :last-child")).toContain("border-bottom-left-radius: 19px;");
     // and it comes after the needs-you wash, so a needs-you list card is flush too
     expect(app.indexOf(".card.flush {")).toBeGreaterThan(app.indexOf(".card.needs-you {"));
   });
@@ -555,7 +555,10 @@ describe("the candidate pages' stylesheet", () => {
     // tokens copied in both themes (30 colours and shadows, 21 before: the lavender and peach tints, the glow, the plum
     // focus and shadows), and the pages gained the careers rows, the file's drop area and the "next step" status wash.
     // Measured at 5,481 (after the review's fixes).
-    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_500);
+    // 24 November 2026, the owner's look round: 5,500 raised to 5,700 (+200). A dropdown's arrow is drawn (two gradient
+    // strokes and their forced-colours fallback) and a folded part's summary is a pill with a chevron, as in the
+    // application. Measured at 5,602.
+    expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_700);
   });
 
   it("draws Apply now as the main plum pill and steps its arrow by transform alone, with the candidate pages' literal timings", () => {

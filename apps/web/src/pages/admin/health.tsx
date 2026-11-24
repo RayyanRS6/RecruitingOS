@@ -103,8 +103,9 @@ function ProblemRow(props: { tone?: ProblemTone; icon?: IconName; tag?: ReactNod
         {props.detail ? <p className="small muted mt-1 max-w-[72ch] wrap-anywhere">{props.detail}</p> : null}
         {rest ? (
           <details className="more mt-1.5">
-            <summary>Details</summary>
-            <p className="small max-w-[72ch] text-ink-2 wrap-anywhere">{rest}</p>
+            {/* the button says what a press does: "Show details", then "Hide details" (the kit shows one of the two) */}
+            <summary><span className="if-closed">Show details</span><span className="if-open">Hide details</span></summary>
+            <p className="small max-w-[72ch] rounded-xl bg-surface-2 px-3.5 py-3 text-ink-2 wrap-anywhere">{rest}</p>
           </details>
         ) : null}
       </div>

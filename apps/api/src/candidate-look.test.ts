@@ -7,7 +7,7 @@ import { applications, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
-import { CANDIDATE_FONTS, DISPLAY_WEIGHTS, DISPLAY_WIDTHS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
+import { CANDIDATE_FONTS, DISPLAY_FAMILY, DISPLAY_WEIGHTS, DISPLAY_WIDTHS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
 import { applicationForm, plantJob, seedCompany, statusTokenFor, usePlan } from "./test-helpers";
@@ -79,21 +79,26 @@ describe("candidate pages: design tokens and fonts", () => {
   });
 
   // Wave S6 (15 October 2026): in dark mode on Windows a dropdown's open list showed near-white words on a light list.
-  it("colours every dropdown's open list with the same rule as the application, and leaves the native arrow alone", () => {
+  it("colours every dropdown's open list with the same rule as the application, and draws its arrow with room on the right", () => {
     const rule = "select, option, optgroup { background-color: var(--surface); color: var(--ink); }";
     expect(uiCss).toContain(rule);
     expect(pageCss).toContain(rule);
     // the page's own select rule (the closed control) still sets the same two colours
     expect(pageCss).toMatch(/textarea, select \{[^}]*background: var\(--surface\); color: var\(--ink\);/);
-    expect(pageCss).not.toMatch(/appearance\s*:\s*none/);
+    // 24 November 2026 (owner): the arrow is drawn, as in the application, 16px in from the edge; only the select gives up
+    // the browser's drawing, no image file is used, and forced colours bring the browser's own arrow back
+    expect([...pageCss.matchAll(/([^{}]*)\{[^}]*appearance\s*:\s*none/g)].map((m) => m[1].trim())).toEqual(["select"]);
+    expect(pageCss).toMatch(/\nselect \{ appearance: none; padding-right: 44px; background-image: linear-gradient\(to top right, transparent 40%, var\(--ink-2\) 41%/);
+    expect(pageCss).toContain("@media (forced-colors: active) { select { appearance: auto; padding-right: 14px; background-image: none; } }");
     // the dark list reads: the page turns color-scheme with its tokens
     expect(pageCss).toMatch(/:root \{[^}]*color-scheme: light;/);
     expect(pageCss.slice(pageCss.indexOf("@media (prefers-color-scheme: dark)"))).toMatch(/:root \{[^}]*color-scheme: dark;/);
   });
 
-  it("declares IBM Plex Sans and Bricolage Grotesque from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
-    // Bricolage Grotesque is one variable file (weights 200 to 800, widths 75% to 100%), named by its width axis
-    for (const [family, weight, file] of [["IBM Plex Sans", "400", "400"], ["IBM Plex Sans", "600", "600"], ["Bricolage Grotesque", DISPLAY_WEIGHTS, "wdth"]] as const) {
+  it("declares IBM Plex Sans and the display face from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
+    // the display face (Instrument Sans) is one variable file, weights 400 to 700 and widths 75% to 100%, named by its width axis
+    expect(DISPLAY_FAMILY).toBe("Instrument Sans");
+    for (const [family, weight, file] of [["IBM Plex Sans", "400", "400"], ["IBM Plex Sans", "600", "600"], [DISPLAY_FAMILY, DISPLAY_WEIGHTS, "wdth"]] as const) {
       const faces = [...CSS.matchAll(/@font-face \{([^}]*)\}/g)].map((m) => m[1]).filter((f) => f.includes(`font-family: "${family}"`) && f.includes(`font-weight: ${weight};`));
       expect(faces, `${family} ${weight}`).toHaveLength(2); // the latin file and the latin-ext file
       for (const f of faces) {
@@ -106,7 +111,8 @@ describe("candidate pages: design tokens and fonts", () => {
       }
     }
     // the big headings are set narrow, inside the widths the file has
-    expect(pageCss).toMatch(/\nh1 \{[^}]*font-stretch: 80%;/);
+    expect(pageCss).toMatch(/\nh1 \{[^}]*font-stretch: 75%;/);
+    expect(pageCss).toContain(`--display: "${DISPLAY_FAMILY}", "Helvetica Neue", Arial, sans-serif;`);
     // nothing on a candidate page loads from another origin, so font-src 'self' covers the fonts
     expect(`${CSS}${SCREEN_CSS}`).not.toMatch(/https?:|url\((?!"\/fonts\/)/);
     const csp = buildCandidateCsp({ nonce: "n", production: true, reportPath: "/api/csp-report" });
