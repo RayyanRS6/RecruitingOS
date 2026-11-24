@@ -140,7 +140,7 @@ describe("jobs", () => {
     expect(detail.packet?.formQuestions).toEqual([{ kind: "yes_no", key: "license", question: "Do you hold an RDA license?", help: "Some duties need it.", required: true }]);
   });
 
-  it("saves an edit of an open job as a new version that is live at once, keeping what the editor does not carry", async () => {
+  it("saves an edit of an open job as a new version that is live at once, keeping what the editor does not carry for an item whose words did not change", async () => {
     const roleId = await job("open");
     const r = await json(member, "PATCH", `/api/v1/roles/${roleId}/packet`, {
       baseVersion: 1,
@@ -158,8 +158,11 @@ describe("jobs", () => {
     const p = saved.role.packet!;
     expect(p.identity).toMatchObject({ title: "Lead Dental Assistant", schedule: "Monday to Thursday, 7 to 5", remotePolicy: "onsite" });
     expect(p.compensation).toMatchObject({ basis: "hourly", min: 26, max: 30 });
-    // the same item keeps its key and what the editor does not carry; a new one gets a key
-    expect(p.requirements.mustHaves).toEqual([{ key: "mh_xray", text: "Current radiography certificate", rationale: "State law asks for it." }, { key: "mh_two_years_chairside", text: "Two years chairside" }]);
+    // the same item keeps its key, and what the editor does not carry for as long as its words are the same (the skill
+    // and the two questions sent back as they were); a new one gets a key. The must-have's words were rewritten, so the
+    // "why it matters" written for the old ones is not kept beside them (apps/api/src/packet-fields.test.ts has the rest)
+    expect(p.requirements.mustHaves).toEqual([{ key: "mh_xray", text: "Current radiography certificate" }, { key: "mh_two_years_chairside", text: "Two years chairside" }]);
+    expect(p.requirements.mustHaves[0]).not.toHaveProperty("rationale");
     expect(p.competencies).toEqual([{ key: "chairside", name: "Chairside skill", definition: "Anticipates the dentist's next step.", importance: "important", indicators: ["Four-handed dentistry"] }, { key: "skill_sterilization", name: "Sterilization", definition: "Keeps instruments ready.", importance: "helpful", indicators: [] }]);
     expect(p.screening.questions.map((q) => [q.key, q.kind, q.modelAnswer ?? null])).toEqual([["available", "availability", null], ["recent", "skills", "Names chairside work."], ["q_how_do_you_set_up_for_a_crown", "skills", "Names the tray and the steps."]]);
     expect(p.screening.maxMinutes).toBe(15);

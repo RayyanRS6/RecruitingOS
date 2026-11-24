@@ -1,21 +1,39 @@
 import {
   CHOICE_OPTIONS_MAX, CHOICE_OPTIONS_MIN, COMPETENCIES_MAX, FORM_QUESTIONS_MAX, MUST_HAVES_MAX, MUST_HAVES_MIN, SCREENING_QUESTIONS_MAX, SCREENING_QUESTIONS_MIN,
-  type DraftFieldEdit, type DraftRolePacket, type FormQuestion, type PacketFieldEdit,
+  type DraftFieldEdit, type DraftRolePacket, type FormQuestion, type PacketFieldEdit, type Requirement,
 } from "@ros/contracts";
-import { formQuestionProblems, normalizeCriterion } from "@ros/core";
+import { formQuestionProblems, normalizeCriterion, screeningKindFor } from "@ros/core";
 import { HttpError } from "../middleware/errors";
 
 /**
  * The one editor of a job: on a written draft in the job builder and on a job's page. The edit mirrors the job record's
- * sections; only what was sent changes. A list is sent whole, in order, and an item that keeps its key keeps what the
- * editor does not carry (a must-have's rationale, a skill's indicators, a question's kind). Anything that would break
- * the record's own limits is refused here in plain words, before anything is saved; the caller then saves the result
- * through the fairness guard.
+ * sections; only what was sent changes. A list is sent whole, in order, and an item matched by its key is the same item.
+ *
+ * Three parts of an item are neither shown nor carried by the editor, and each was written for the item's words by the
+ * model that wrote the job: why a must-have or a nice-to-have matters (`rationale`), what shows a skill (`indicators`),
+ * and an AI interview question's `kind`. An item sent back with the words it had keeps its part. One whose words
+ * changed does not keep what was written for the old words: the rationale and the indicators go (a skill's words are
+ * its name and its meaning), and the kind is worked out again from the new words (`screeningKindFor`), as it is for a
+ * question that is new.
+ *
+ * Anything that would break the record's own limits is refused here in plain words, before anything is saved; the
+ * caller then saves the result through the fairness guard.
  */
 
 type Edit = DraftFieldEdit & Pick<PacketFieldEdit, "keepFlags">;
 
 const sameWords = (a: string, b: string) => normalizeCriterion(a) === normalizeCriterion(b);
+
+/** The words as they were, spacing aside (the editor trims what it sends): the item was sent back untouched. */
+const untouched = (now: string, before: string | null | undefined): boolean => typeof before === "string" && now.replace(/\s+/g, " ").trim() === before.replace(/\s+/g, " ").trim();
+
+/**
+ * A must-have or a nice-to-have as edited. Why it matters (`rationale`, which the resume reading is given beside a
+ * must-have) was written for the words it had, so it stays only while the words do.
+ */
+function requirement(text: string, before: Requirement | null, key: string): Requirement {
+  return before && untouched(text, before.text) ? { ...before, key, text } : { key, text };
+}
 
 /** A key for a new item, from its words, unlike every key the list has or had. */
 function keyFrom(prefix: string, words: string, taken: Set<string>): string {
@@ -139,23 +157,32 @@ export function applyFieldEdit<T extends DraftRolePacket>(base: T, edit: Edit): 
   if (edit.requirements?.mustHaves !== undefined) {
     const sent = edit.requirements.mustHaves;
     if (sent.length < MUST_HAVES_MIN || sent.length > MUST_HAVES_MAX) throw new HttpError(400, "must_haves_count", `A job needs between ${MUST_HAVES_MIN} and ${MUST_HAVES_MAX} must-haves. This list has ${sent.length}.`);
-    p.requirements.mustHaves = matched("Must-have", base.requirements.mustHaves, sent, (m) => m.text, "mh").map(({ sent: m, before, key }) => ({ ...before, key, text: m.text }));
+    p.requirements.mustHaves = matched("Must-have", base.requirements.mustHaves, sent, (m) => m.text, "mh").map(({ sent: m, before, key }) => requirement(m.text, before, key));
   }
   if (edit.requirements?.niceToHaves !== undefined) {
     const sent = edit.requirements.niceToHaves;
     if (sent.length > 10) throw new HttpError(400, "nice_to_haves_count", `Keep at most 10 nice-to-haves. This list has ${sent.length}.`);
-    p.requirements.niceToHaves = matched("Nice-to-have", base.requirements.niceToHaves, sent, (m) => m.text, "nh").map(({ sent: m, before, key }) => ({ ...before, key, text: m.text }));
+    p.requirements.niceToHaves = matched("Nice-to-have", base.requirements.niceToHaves, sent, (m) => m.text, "nh").map(({ sent: m, before, key }) => requirement(m.text, before, key));
   }
   if (edit.competencies !== undefined) {
     if (edit.competencies.length > COMPETENCIES_MAX) throw new HttpError(400, "skills_count", `Keep at most ${COMPETENCIES_MAX} skills. This list has ${edit.competencies.length}.`);
-    p.competencies = matched("Skill", base.competencies, edit.competencies, (c) => c.name, "skill").map(({ sent: c, before, key }) => ({ key, name: c.name, definition: optionalText(c.definition, before?.definition) ?? "", importance: c.importance, indicators: before?.indicators ?? [] }));
+    p.competencies = matched("Skill", base.competencies, edit.competencies, (c) => c.name, "skill").map(({ sent: c, before, key }) => {
+      const definition = optionalText(c.definition, before?.definition) ?? "";
+      // What shows the skill (`indicators`, which the resume reading is given) was written for the name and the meaning
+      // it had: it stays only while both do. A change of importance alone changes neither.
+      const same = !!before && untouched(c.name, before.name) && untouched(definition, before.definition ?? "");
+      return { key, name: c.name, definition, importance: c.importance, indicators: same ? before.indicators ?? [] : [] };
+    });
   }
   if (edit.screening?.questions !== undefined) {
     const sent = edit.screening.questions;
     if (sent.length < SCREENING_QUESTIONS_MIN || sent.length > SCREENING_QUESTIONS_MAX) throw new HttpError(400, "interview_questions_count", `The AI interview needs between ${SCREENING_QUESTIONS_MIN} and ${SCREENING_QUESTIONS_MAX} questions. This list has ${sent.length}.`);
     p.screening.questions = matched("AI interview question", base.screening.questions, sent, (q) => q.question, "q").map(({ sent: q, before, key }) => {
       const modelAnswer = optionalText(q.modelAnswer, before?.modelAnswer);
-      return { key, question: q.question, kind: before?.kind ?? "skills", ...(modelAnswer ? { modelAnswer } : {}) };
+      // An untouched question keeps its kind. One that is new, or whose words changed, gets the kind its words ask for:
+      // a question that can only be answered yes or no offers Yes and No and takes "No" as its answer.
+      const kind = before && untouched(q.question, before.question) ? before.kind ?? "skills" : screeningKindFor(q.question, before?.kind);
+      return { key, question: q.question, kind, ...(modelAnswer ? { modelAnswer } : {}) };
     });
   }
   if (edit.screening?.maxMinutes !== undefined) p.screening.maxMinutes = edit.screening.maxMinutes;
