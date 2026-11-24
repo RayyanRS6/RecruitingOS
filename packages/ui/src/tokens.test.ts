@@ -146,7 +146,7 @@ describe("design tokens", () => {
   });
 
   // Wave S6 (15 October 2026): in dark mode on Windows a dropdown's open list showed near-white words on a light list.
-  it("colours every dropdown's open list itself, readable in both themes, and leaves the native arrow alone", () => {
+  it("colours every dropdown's open list itself, readable in both themes, and draws the arrow with room on its right", () => {
     expect(css).toContain("select, option, optgroup { background-color: var(--surface); color: var(--ink); }");
     // an element rule, so a select without a class is covered; the .select class rule still dresses the closed control
     expect(css.indexOf("select, option, optgroup {")).toBeLessThan(css.indexOf(".input, .textarea, .select {"));
@@ -155,8 +155,26 @@ describe("design tokens", () => {
       const ratio = contrast(colour(theme, "--ink"), colour(theme, "--surface"));
       expect(ratio, `an option's words on its list are ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(7);
     }
-    // no drawn arrow: the native one follows color-scheme in both themes
-    expect(css).not.toMatch(/appearance\s*:\s*none/);
+    // 24 November 2026 (owner): the native arrow touched the control's edge and the open list did not look like the
+    // theme. The control stays a <select>; only it gives up the browser's drawing, and the kit draws the arrow from two
+    // gradient strokes in the theme's own ink (no image file, so both themes and the content-security policy hold),
+    // 16px in from the right edge with the words kept clear of it
+    expect([...css.matchAll(/([^{}]*)\{[^}]*appearance\s*:\s*none/g)].map((m) => m[1].trim())).toEqual([".select"]);
+    const select = css.match(/\n\s*\.select \{([^}]*)\}/)?.[1] ?? "";
+    expect(select).toContain("padding-right: 44px;");
+    expect(select).toMatch(/background-image: linear-gradient\(to top right, transparent 40%, var\(--ink-2\) 41%, var\(--ink-2\) 59%, transparent 60%\), linear-gradient\(to top left, /);
+    expect(select).toContain("background-position: right 22px center, right 16px center;");
+    expect(select).not.toMatch(/url\(/);
+    for (const theme of [light, darkByPreference, darkByChoice]) expect(contrast(colour(theme, "--ink-2"), colour(theme, "--surface"))).toBeGreaterThanOrEqual(3);
+    // where the browser lets a page dress the open list, and there is a mouse, the list is the kit's: every option
+    // keeps the surface and ink above (the chosen one is told by its weight and a plum tick, never by a pale fill)
+    const dressed = css.slice(css.indexOf("@supports (appearance: base-select)"));
+    expect(dressed).toMatch(/^@supports \(appearance: base-select\) \{\s*@media \(hover: hover\) and \(pointer: fine\) \{\s*\.select, \.select::picker\(select\) \{ appearance: base-select; \}/);
+    expect(dressed).toMatch(/\.select::picker\(select\) \{[^}]*border: 1px solid var\(--line-2\);[^}]*background: var\(--surface\);/);
+    expect(dressed).toContain(".select option:checked { font-weight: 600; }");
+    expect(dressed).not.toMatch(/\.select option(:checked)? \{[^}]*(?<!-)color:/);
+    // under forced colours a drawn arrow would keep the theme's colour: the browser's own comes back
+    expect(mediaBody("(forced-colors: active)")).toContain(".select { appearance: auto; padding-right: 14px; background-image: none; }");
     // form fields are edged in the field-border grey, 3:1 or more (checked above)
     expect(css).toMatch(/\.input, \.textarea, \.select \{[^}]*border: 1px solid var\(--line-strong\);/);
   });

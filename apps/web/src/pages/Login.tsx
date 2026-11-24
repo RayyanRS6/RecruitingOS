@@ -69,7 +69,7 @@ export function Login() {
             <Icon name="bars" size={24} />
           </span>
           {/* the name as the logo writes it: "OS" in coral, which is large text at this size (AA from 18.66px bold) */}
-          <h1 className="mt-6 font-display text-[34px] font-bold leading-[1.05] tracking-[-0.035em] text-ink">Recruiting <span className="text-accent">OS</span></h1>
+          <h1 className="mt-6 font-display text-[38px] font-bold leading-[1.02] tracking-[-0.015em] text-ink">Recruiting <span className="text-accent">OS</span></h1>
         </div>
         <div className="stack mt-8 gap-4">
           {error ? <Alert tone="critical">{error}</Alert> : null}

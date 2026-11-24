@@ -55,7 +55,7 @@ export function CompanyLine(props: { company: Pick<JobPageCompany, "name" | "log
       <span class="logo" aria-hidden="true">{props.company.logoSrc ? <img src={props.company.logoSrc} alt="" width="56" height="56" /> : initials(props.company.name)}</span>
       {props.eyebrow ? (
         <div>
-          <p class="eyebrow">{props.eyebrow}</p>
+          <p class="company-name">{props.eyebrow}</p>
         </div>
       ) : null}
     </div>
@@ -73,12 +73,12 @@ export function HelpLine(props: { contact: ContactLine; class?: string }) {
 }
 
 /**
- * The inside of the Apply now button: a plum circle with an arrow, then the words. On a mouse's hover or a keyboard's
- * focus the plum fill slides across the words (CSS only, layout.tsx). The fill and the arrow are decoration, hidden from
- * screen readers; the words are the button's name.
+ * The inside of the Apply now button: the words, then an arrow in a light circle on the application's plum pill. On a
+ * mouse's hover the arrow steps right (CSS only, layout.tsx). The arrow is decoration, hidden from screen readers; the
+ * words are the button's name.
  */
 function ApplyInner() {
-  return <><span class="go-fill" aria-hidden="true" /><span class="go-icon"><Icon name="arrow-right" /></span><span class="go-text">Apply now</span></>;
+  return <><span class="go-text">Apply now</span><span class="go-icon"><Icon name="arrow-right" /></span></>;
 }
 
 /** Four things that are true of every application here: how long it takes, what to send, who decides, how to reach a person. */

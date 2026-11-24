@@ -6,13 +6,14 @@ import { createCompanyThroughTheForm, signIn, skipWithoutFakeSignIn } from "./he
  * list unless the options themselves are coloured. Both stylesheets (the kit's, packages/ui/src/styles.css, and the
  * candidate pages' own sheet) colour the options with the theme's surface and ink, so the list reads whichever colour
  * the system paints it. Checked here by the computed style of every option on the page, in dark mode, on the
- * application's pages and on a candidate page; the native arrow is left as it is.
+ * application's pages and on a candidate page. The arrow is the kit's own (owner, 24 November 2026: the native one
+ * touched the control's edge): drawn on the select with room on its right, never left bare.
  */
 test.use({ colorScheme: "dark" });
 
 type Reading = { dark: boolean; ink: string; surface: string; selects: number; wrong: string[] };
 
-/** Every select on the page: each option drawn in the theme's ink on its surface, and no select's native arrow replaced. */
+/** Every select on the page: each option drawn in the theme's ink on its surface, and its drawn arrow given room on the right. */
 async function readSelects(page: Page): Promise<Reading> {
   return page.evaluate(() => {
     const probe = document.createElement("span");
@@ -26,7 +27,10 @@ async function readSelects(page: Page): Promise<Reading> {
     const wrong: string[] = [];
     for (const s of selects) {
       const label = s.id || s.getAttribute("aria-label") || s.getAttribute("name") || "a select";
-      if (getComputedStyle(s).appearance === "none") wrong.push(`${label}: its native arrow was replaced`);
+      const look = getComputedStyle(s);
+      // the browser's own arrow is gone (appearance none, or the customisable select), so ours must be there, clear of the words
+      if (look.appearance !== "auto" && (look.backgroundImage === "none" || Number.parseFloat(look.paddingRight) < 40)) wrong.push(`${label}: no drawn arrow with room on its right`);
+      if (look.appearance === "auto" || look.appearance === "menulist") wrong.push(`${label}: the native arrow, which touches the edge`);
       for (const o of [...s.options]) {
         const cs = getComputedStyle(o);
         if (cs.color !== ink || cs.backgroundColor !== surface) wrong.push(`${label} › ${o.text}: ${cs.color} on ${cs.backgroundColor}`);
@@ -58,7 +62,7 @@ test.describe("the application's dropdowns in dark mode", () => {
   skipWithoutFakeSignIn();
   const run = Date.now().toString(36);
 
-  test("the company form and Settings: every option reads, the native arrow stays", async ({ page }) => {
+  test("the company form and Settings: every option reads, and each dropdown's arrow is drawn with room", async ({ page }) => {
     test.setTimeout(180_000);
     await signIn(page, { email: `dropdowns+${run}@brightline.test`, name: "Dana Whitfield", provider: "google" });
 

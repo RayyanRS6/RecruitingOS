@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { NotificationHistoryPage, NotificationView, NotificationsMarked } from "@ros/contracts";
-import { Button, Card, cn, EmptyState, ErrorState, IconChip, PageHeader, Pill, Segmented, Skeleton } from "@ros/ui";
+import { Button, Card, cn, EmptyState, ErrorState, Icon, IconChip, PageHeader, Pill, Segmented, Skeleton } from "@ros/ui";
 import { api, errorWords } from "../api/client";
 import { Link } from "../nav";
 import { toast } from "../toast";
@@ -96,12 +96,11 @@ function UpdateRow({ n, busy, onMark }: { n: NotificationView; busy: boolean; on
           {isNew ? <Pill size="sm" tone="accent">Unread</Pill> : null}
         </div>
         <p className="small whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{n.body}</p>
-        <p className="small muted">
-          {updateFacts(n)}
-          {n.action ? <> · <Link to={n.action.href}>{n.action.label}</Link></> : null}
-        </p>
+        <p className="small muted">{updateFacts(n)}</p>
       </div>
+      {/* the page an update opens is a button of its own beside the row's other one, never a word inside the grey line */}
       <div className="list-row-end">
+        {n.action ? <Link to={n.action.href} className="btn secondary sm">{n.action.label}<Icon name="arrow-right" size={16} /></Link> : null}
         <Button size="sm" variant="quiet" loading={busy} onClick={() => onMark(isNew)} ariaLabel={`${isNew ? "Mark read" : "Mark unread"}: ${n.title}`}>{isNew ? "Mark read" : "Mark unread"}</Button>
       </div>
     </li>
