@@ -497,9 +497,9 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
     }
   }
   // The three lines under an automatic message to a candidate are the code's own, the same for every job
-  // (compliance.ts). The emails about an application and the AI interview's first page take them from the code
-  // (coordinator.ts and screening.ts in packages/agents); the record holds a copy, written here on every save, so that
-  // nothing which still reads the copy finds the words a model or an earlier version wrote there.
+  // (compliance.ts). The emails about an application take them from the code, and the AI interview's first page its
+  // line about a person (coordinator.ts and screening.ts in packages/agents); the record holds a copy, written here on
+  // every save, so that nothing which still reads the copy finds the words a model or an earlier version wrote there.
   packet.communication.disclosureText = disclosureLine(ctx.companyName);
   packet.communication.humanAlternativeText = REACH_A_PERSON_LINE;
   packet.communication.signature = hiringTeamSignature(ctx.companyName);

@@ -131,10 +131,11 @@ export function adverseDecisionLineApplies(input: { jobLocations: Array<Location
 /**
  * The three lines under an automated candidate email, in the code's own words and the same for every job: the AI
  * disclosure (`disclosureLine`), how to reach a person (`REACH_A_PERSON_LINE`) and who it is from
- * (`hiringTeamSignature`). The emails about an application (packages/agents/src/coordinator.ts) and the AI interview's
- * first page take them from here, never from a job record. The record still holds a copy of each (`communication`),
- * which the fairness guard writes from here on every save (`guardPacket`), whatever a model wrote there: a notice a
- * candidate reads is never words of a model's that nobody read first.
+ * (`hiringTeamSignature`). The emails about an application take all three from here (packages/agents/src/coordinator.ts),
+ * and the AI interview's first page takes the line about a person (packages/agents/src/screening.ts, `screenIntro`):
+ * neither reads a job record for them. The record still holds a copy of each (`communication`), which the fairness
+ * guard writes from here on every save (`guardPacket`), whatever a model wrote there: a notice a candidate reads is
+ * never words of a model's that nobody read first.
  */
 
 /** The AI disclosure under every automated candidate email. */

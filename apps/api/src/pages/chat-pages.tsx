@@ -21,9 +21,10 @@ export { candidatePages as chatPages };
 /**
  * The fixed introduction, before the first question: it is the company's AI assistant, not a person; what it is for; a
  * conversation, not a test; how long; skip, stop and come back; how to reach a person; then Start, or I'd rather talk to
- * a person. Every word is this page's own, the code's line about reaching a person or the versioned AI notice
- * (`screenIntro`): none is written by a model, and none is read from the job record's own lines about AI and about a
- * person, which a model wrote. Start shows the first question at once.
+ * a person. Every sentence is this page's own, the code's line about reaching a person, or the versioned AI notice
+ * (`screenIntro`). Of the job record the page shows the title and the length in minutes, which the company sees and
+ * can edit, and never the record's own lines about AI and about a person, which a model wrote and nobody was shown. No
+ * sentence here is written by a model. Start shows the first question at once.
  */
 function IntroPage(props: { view: ConversationView }) {
   const { view } = props;

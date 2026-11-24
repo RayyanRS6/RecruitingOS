@@ -191,10 +191,11 @@ export function tapWords(packet: RolePacket, progress: Pick<ScreenProgress, "cur
 
 /**
  * The fixed introduction shown before the chat starts: the AI notice, the disclosure in the hiring team's words, how to
- * reach a person, and about how many minutes it takes. Of the job record it reads the title and the minutes, and none
- * of its sentences: the record's own lines about AI and about reaching a person (`communication`) were written by the
- * model that wrote the job and are never shown. How to reach a person is the code's line (`REACH_A_PERSON_LINE`), the
- * same for every job; the AI notice is the versioned one (`noticesFor`). Nothing here is written by a model.
+ * reach a person, and about how many minutes it takes. Of the job record it reads the title and the minutes, which the
+ * company sees and can edit, and none of its sentences: the record's own lines about AI and about reaching a person
+ * (`communication`) were written by the model that wrote the job, shown to nobody, and are never read here. How to
+ * reach a person is the code's line (`REACH_A_PERSON_LINE`), the same for every job; the AI notice is the versioned one
+ * (`noticesFor`). No sentence here is written by a model.
  */
 export type ScreenIntro = { title: string; disclosure: string; aiNotice: { version: string; text: string } | null; humanAlternative: string; minutes: number };
 
