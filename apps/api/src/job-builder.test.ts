@@ -338,6 +338,32 @@ describe("the job builder", () => {
     expect(guessed.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
   });
 
+  // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so pay the owner had just typed was held as
+  // unconfirmed, the pay card asked for it again, and "Write the job" waited.
+  it("counts pay typed as '45-55k' as set by the owner: no pay card, and the job can be written", async () => {
+    const words = (pay: string) => `Office manager in Irvine, CA, on site, full time, Monday to Friday, ${pay}. Must-have: two years running an office.`;
+    // with a dollar sign the stand-in reads the range as the real model does: 45,000 to 55,000 a year
+    const draft = await start(owner, words("$45-55k a year"));
+    expect(draft.facts).toMatchObject({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000 });
+    expect(draft.pay).toMatchObject({ confirmed: { via: "typed" }, summary: "Pay: $45,000–$55,000 a year." });
+    expect(draft.readiness).toMatchObject({ payConfirmed: true, missing: [], mayDraft: true, draftBlocker: null });
+    expect(draft.questions).toEqual([]);
+    // without one the stand-in reads no pay at all, so this turn is scripted with what the real model answers
+    container.fake!.scriptNext("intake.turn", {
+      assistantMessage: "Got it.", missingFacts: [], questions: [], readyToCompile: true,
+      factsExtracted: { title: "Office manager", locationText: "Irvine, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000, mustHaves: ["Two years running an office"], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] },
+    });
+    const plain = await start(owner, words("45-55k"));
+    expect(plain.pay.confirmed).toMatchObject({ via: "typed" });
+    expect(plain.readiness).toMatchObject({ payConfirmed: true, mayDraft: true });
+    expect(plain.questions.filter((q) => q.mode === "pay")).toEqual([]);
+    const w = await json(owner, "POST", `${sessions}/${plain.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const job = ((await w.json()) as { session: IntakeSessionView }).session.draft!;
+    expect(job.compensation).toMatchObject({ basis: "salary", min: 45000, max: 55000 });
+    expect(job.provenance.payConfirmedBy).toMatchObject({ via: "typed" });
+  });
+
   it("holds publishing while flagged wording is open, and publishes once it is reworded or kept with a reason", async () => {
     const draft = await written(owner);
     const edited = await json(owner, "PATCH", `${sessions}/${draft.id}/draft`, { description: `${draft.draft!.description.publicJobDescription} We want a digital native.` });

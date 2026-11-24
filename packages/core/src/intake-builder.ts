@@ -17,12 +17,27 @@ export function looksLikePastedAd(text: string): boolean {
   return text.length >= 1200 || (lines >= 8 && text.length >= 400);
 }
 
-/** The amounts in a person's words: "$60,000", "60k", "$45.50" (commas and the k read as people mean them). */
+const FIGURE = "\\d+(?:\\.\\d+)?";
+/** A thousand, written after a figure: "60k", "60K", "60 thousand". */
+const THOUSAND = "(?:k|thousand)\\b";
+/**
+ * A range whose first figure leaves its thousand to the second: "45-55k", "$45 to $55k", "between 45 and 55 thousand".
+ * The first figure, then what joins it to the second with its thousand.
+ */
+const SHARED_THOUSAND = new RegExp(`(${FIGURE})(\\s*(?:[-\\u2010-\\u2015]|\\bto\\b|\\band\\b)\\s*\\$?\\s*${FIGURE}\\s*${THOUSAND})`, "gi");
+const AMOUNT = new RegExp(`(${FIGURE})\\s*(${THOUSAND})?`, "gi");
+
+/**
+ * The amounts in a person's words, read as people mean them: "$60,000", "60k", "60 thousand", "$45.50", and a range
+ * that says its thousand once ("45-55k" is 45,000 and 55,000; only a first figure under a thousand takes it, so
+ * "$60,000 to 75k" stays as it is written).
+ */
 export function amountsIn(text: string): number[] {
   let t = text;
   while (/\d,\d{3}/.test(t)) t = t.replace(/(\d),(\d{3})/g, "$1$2");
+  t = t.replace(SHARED_THOUSAND, (all: string, first: string, rest: string) => (Number(first) < 1000 ? `${first}k${rest}` : all));
   const out: number[] = [];
-  for (const m of t.matchAll(/(\d+(?:\.\d+)?)\s*(k\b)?/gi)) out.push(Number(m[1]) * (m[2] ? 1000 : 1));
+  for (const m of t.matchAll(AMOUNT)) out.push(Number(m[1]) * (m[2] ? 1000 : 1));
   return out;
 }
 
@@ -49,9 +64,12 @@ export function typedByOwner(messages: IntakeMessage[]): string[] {
 const isBasis = (b: string | undefined): b is "hourly" | "salary" => b === "hourly" || b === "salary";
 
 /**
- * Pay a person set by typing it: the range on the facts appears, figure for figure, in words the person typed. The model
- * only read the numbers; this check is code, so the confirmation is never the model's word. A range read from a pasted
- * ad is not typed and waits for the pay card.
+ * Pay a person set by typing it: the range on the facts appears, figure for figure, in words the person typed, read as
+ * people type a range (`amountsIn`: "45-55k", "$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$22–$26 an hour"). One
+ * figure typed ("20 dollars an hour") is the pay when the facts carry it as both the lowest and the highest, as the
+ * read of a pasted ad keeps a single figure (`factsFromExtraction` in @ros/agents); a lowest figure alone is not a
+ * range, and the pay card asks for the rest. The model only read the numbers; this check is code, so the confirmation
+ * is never the model's word. A range read from a pasted ad is not typed and waits for the pay card.
  */
 export function payTyped(messages: IntakeMessage[], facts: IntakeFacts): boolean {
   if (facts.compensationMin === undefined || facts.compensationMax === undefined || !isBasis(facts.compensationBasis)) return false;

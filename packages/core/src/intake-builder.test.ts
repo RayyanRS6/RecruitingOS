@@ -44,6 +44,38 @@ describe("what the owner's own words say", () => {
     expect(basisFromText("good pay")).toBeNull();
   });
 
+  // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so the range the assistant read from it
+  // (45,000 to 55,000) was not found in the owner's own words, and pay they had just typed waited for the pay card.
+  it("reads a range that says its thousand once, and leaves every other figure as it is written", () => {
+    for (const typed of ["45-55k", "$45-55k", "$45 - $55K a year", "45 to 55k", "45–55k", "between 45 and 55 thousand"]) expect(amountsIn(typed), typed).toEqual([45000, 55000]);
+    expect(amountsIn("45.5-55k")).toEqual([45500, 55000]);
+    // each figure with its own thousand, with commas, or with none: as they were read before
+    for (const typed of ["$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$45,000 - $55,000", "45 thousand to 55 thousand"]) expect(amountsIn(typed), typed).toEqual([45000, 55000]);
+    expect(amountsIn("$22–$26 an hour")).toEqual([22, 26]);
+    expect(amountsIn("20 dollars an hour")).toEqual([20]);
+    // the thousand is taken only by the figure it is joined to, and only by one under a thousand
+    expect(amountsIn("$22-26 an hour, or 45-55k a year")).toEqual([22, 26, 45000, 55000]);
+    expect(amountsIn("3 to 5 years of experience, 60k")).toEqual([3, 5, 60000]);
+    expect(amountsIn("Monday to Friday, 8 to 5, 55 kg boxes")).toEqual([8, 5, 55]);
+    expect(amountsIn("$60,000 to 75k")).toEqual([60000, 75000]);
+  });
+
+  it("counts pay typed the ways people type a range, and one figure when the facts carry it as both the lowest and the highest", () => {
+    const salary = facts({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000 });
+    for (const typed of ["45-55k", "$45-55k", "$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$45,000 - $55,000", "The pay is 45 to 55 thousand a year."]) expect(payTyped([said(typed)], salary), typed).toBe(true);
+    expect(payTyped([said("$22–$26 an hour")], facts({ compensationBasis: "hourly", compensationMin: 22, compensationMax: 26 }))).toBe(true);
+    // one figure typed: the lowest and the highest are the same, as a single figure in a pasted ad is kept
+    expect(payTyped([said("20 dollars an hour")], facts({ compensationBasis: "hourly", compensationMin: 20, compensationMax: 20 }))).toBe(true);
+    // a lowest figure alone is no range: the pay card asks for the rest
+    expect(payTyped([said("20 dollars an hour")], facts({ compensationBasis: "hourly", compensationMin: 20 }))).toBe(false);
+    // still only the owner's own typed words, and still figure for figure
+    expect(payTyped([said("45-55k", "pasted_ad")], salary)).toBe(false);
+    expect(payTyped([said("Pay: $45,000–$55,000 a year", "answers")], salary)).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 60000 }))).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationBasis: "salary", compensationMin: 45, compensationMax: 55000 }))).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationMin: 45000, compensationMax: 55000 }))).toBe(false);
+  });
+
   it("counts pay as typed only when both figures are in words the owner typed, never in a pasted ad or a summary of answers", () => {
     const f = complete();
     expect(typedByOwner([said("typed"), said("pasted", "pasted_ad"), said("Pay: $45-$55", "answers")])).toEqual(["typed"]);
