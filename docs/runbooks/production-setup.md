@@ -26,6 +26,7 @@ Four values are made up here rather than issued by a provider: `SESSION_SECRET`,
 - The two database roles: `scripts\db-setup.ps1` (below) sets new passwords for `ros_app` and `ros_worker` on every full run and hands over the two new connection strings. The strings on Vercel and Railway stop working until they are replaced.
 - The storage key pairs: [resume-storage.md](resume-storage.md), "Rotate a key".
 - The Microsoft client secret expires: keep its date beside it in the vault, with a reminder a month before. An expired secret locks every administrator out.
+- The Anthropic key (`ANTHROPIC_API_KEY`) is on Vercel and on the worker, and a key deleted or switched off at the provider stops every AI step at once (24 November 2026). What shows it: in the job builder the owner reads "The assistant is not available right now. Your words are saved; try again later.", and **System**, **Health** has the critical alert "The AI provider refuses our account: the job builder cannot answer". Applications are held, not failed, under "The AI provider refuses our account: applications are on hold", and go on by themselves once a key works. The provider's own words are in the newest rows of `ai_runs` (`error`). To mend it: make a new key at the provider under a name nobody will delete by mistake, paste it on both sides, redeploy both, and send one message in the job builder: the alert resolves itself. Then delete the old keys at the provider.
 
 ## Set up once
 
