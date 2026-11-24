@@ -4,8 +4,8 @@ import type { EvidenceAssessment, RolePacket, ScreenProgress, ScreenTranscriptEn
 import { buildChatPlan } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
 import { hasPlaceholder } from "./scoring-view";
-import { EMPTY_SCREEN_PROGRESS, askedQuestions, scorecardInput, scorecardOutcome } from "./screening";
-import { formAnswerAround, meaningfulQuote, readingsOutcome, restoreReadingQuotes, scoringInput, verifyAssessmentQuotes } from "./triage";
+import { EMPTY_SCREEN_PROGRESS, askedQuestions, chatGaps, scorecardInput, scorecardOutcome, yesNoFormAnswers } from "./screening";
+import { formAnswerAround, formAnswerSaysNotHeld, meaningfulQuote, readingsOutcome, restoreReadingQuotes, scoringInput, verifyAssessmentQuotes } from "./triage";
 
 /**
  * Evidence honesty: what the team sees has passed the code-side rules, whatever the model said. A quote not in the
@@ -213,8 +213,26 @@ describe("what the AI sees when it scores", () => {
     const plain = readingsOutcome(said("unknown", "Do you hold a CA RDH license? No."), view, { ...input, formAnswers: { el_license: "no" }, packet: plainRole as never });
     if (!plain.ok) throw new Error("expected a reading");
     expect(plain.output.requirementFindings[0]?.met).toBe("no");
+    // Either way the form asked what the AI interview would ask ("… Do you have it?") and they answered no: the interview
+    // does not ask about the licence again, on the reading as these rules leave it (seen on the live site, 25 November
+    // 2026: a form that asked for a *current* certificate left the question in the plan). Without the form's answers, or
+    // on a "yes" the rules left not known, it still asks.
+    const answered = (packet: unknown, licence: "yes" | "no") => yesNoFormAnswers(packet as never, { answers: { form: { el_license: licence } } } as never);
+    expect(answered(role, "no")).toEqual(["Do you hold an active CA RDH license? No."]);
+    expect(chatGaps(role as never, no.output, answered(role, "no"))).toEqual([]);
+    expect(chatGaps(plainRole as never, plain.output, answered(plainRole, "no"))).toEqual([]);
+    expect(chatGaps(role as never, no.output)).toEqual(["licence"]);
+    expect(chatGaps(role as never, { requirementFindings: [{ requirementKey: "licence", met: "unknown", evidence: { source: "application", quote: "Do you hold an active CA RDH license? Yes." } }] }, answered(role, "yes"))).toEqual(["licence"]);
     expect(formAnswerAround("CA RDH license? No", "Do you hold a CA RDH license? No.\nCan you work the posted schedule? Yes.")).toBe("I do not hold a CA RDH license");
     expect(formAnswerAround("posted schedule", "Can you work the posted schedule? Yes.")).toBe("Can you work the posted schedule? Yes.");
+    // a "no" to a question about holding the credential itself says they do not hold it ...
+    for (const line of ["Do you hold a current CPR certificate? No.", "Do you have a valid driver's license? No, I don't.", "Are you currently certified in CPR? No.", "Do you hold an active RDA license in the state where this office is located? No.", "Do you have a certificate of completion for HIPAA training? No."]) expect(formAnswerSaysNotHeld(line), line).toBe(true);
+    // ... a "no" about something to do with one does not (no restrictions on a licence is no word on holding it), nor
+    // does any other question or any other answer
+    for (const line of ["Do you have any restrictions on your license? No.", "Do you have experience with CPR? No.", "Do you have at least two years of experience and a CPR certificate? No.", "Do you hold a current CPR certificate? Yes.", "Has your RDH license ever been suspended? No.", "Can you work the posted schedule? No.", "Which certificates do you hold? No.", "Current CPR certificate: No.", "Do you hold a current CPR certificate? Maybe."]) expect(formAnswerSaysNotHeld(line), line).toBe(false);
+    // so a licence the reading left not known on such an answer is still asked about
+    const restrictions = "Do you have any restrictions on your license? No.";
+    expect(chatGaps(role as never, { requirementFindings: [{ requirementKey: "licence", met: "unknown", evidence: { source: "application", quote: restrictions } }] }, [restrictions])).toEqual(["licence"]);
     // a field name quoted as it was stored is still no evidence
     const json = readingsOutcome(said("yes", 'el_license":"yes'), view, { ...input, packet: role as never });
     if (!json.ok) throw new Error("expected a reading");

@@ -58,9 +58,11 @@ describe("what an AI interview asks", () => {
   // someone who had answered "No" on the form to the question about a licence was asked about that licence again.
   it("does not ask again about a must-have the candidate answered 'no' about on the application form, where the stored reading rests on that answer, and only there", () => {
     const LICENCE_NO = "Do you hold an active CA RDH license? No.";
-    const form = [LICENCE_NO, "Can you take digital x-rays? Yes."];
+    const SUSPENDED_NO = "Has your RDH license ever been suspended? No.";
+    const CHARTING_NO = "Do you have experience of periodontal charting? No.";
+    const form = [LICENCE_NO, "Can you take digital x-rays? Yes.", SUSPENDED_NO, CHARTING_NO];
     const others = ["mh_perio", "mh_xray", "mh_dentrix", "mh_nitrous", "mh_permit"];
-    const found = (met: string, evidence?: unknown) => readingOf([], [{ requirementKey: "mh_license", met, ...(evidence ? { evidence } : {}) }]);
+    const found = (met: string, evidence?: unknown, requirementKey = "mh_license") => readingOf([], [{ requirementKey, met, ...(evidence ? { evidence } : {}) }]);
     // not met on their own "no" to the form's question: the chat does not ask about the licence again
     const answeredNo = found("no", { source: "application", quote: LICENCE_NO });
     expect(chatGaps(hygienist, answeredNo, form)).toEqual(others);
@@ -68,21 +70,38 @@ describe("what an AI interview asks", () => {
     // spacing and case aside, and a quote of part of their answer's line
     expect(chatGaps(hygienist, found("no", { source: "application", quote: "do you hold an  active CA RDH license? no." }), form)).toEqual(others);
     expect(chatGaps(hygienist, found("no", { source: "application", quote: "active CA RDH license? No." }), form)).toEqual(others);
+    // "No" to holding an *active* licence is stored as not known (a lapsed one is not active either: the licence rule),
+    // and that is how a job's own form mostly asks. The form asked what the chat would ask, and they answered it: the
+    // chat does not ask again (the live site, 25 November 2026: it stayed in the plan, and the counter counted it)
+    const notKnown = found("unknown", { source: "application", quote: LICENCE_NO });
+    expect(chatGaps(hygienist, notKnown, form)).toEqual(others);
+    expect(chatGaps(hygienist, found("unknown", { source: "application", quote: "active CA RDH license? No." }), form)).toEqual(others);
+    expect(chatPlanFor(hygienist, notKnown, startedAt, form).items.map((i) => i.key)).not.toContain("mh_license");
     // a "yes" on their own answer is shown, and was never asked about
     expect(chatGaps(hygienist, found("yes", { source: "application", quote: "Can you take digital x-rays? Yes." }), form)).toEqual(others);
     // without the form's answers nothing links the two, and the plan is as it was
     expect(chatGaps(hygienist, answeredNo)).toEqual(["mh_license", ...others]);
+    expect(chatGaps(hygienist, notKnown)).toEqual(["mh_license", ...others]);
     expect(chatPlanFor(hygienist, answeredNo, startedAt).items.map((i) => i.key)).toContain("mh_license");
     // still asked about wherever that link is not certain
     const uncertain: Array<[string, Pick<EvidenceAssessment, "requirementFindings">]> = [
       ["the same words quoted from the resume", found("no", { source: "resume", quote: LICENCE_NO })],
-      ["their answer did not settle it", found("unknown", { source: "application", quote: LICENCE_NO })],
+      ["not known on the same words quoted from the resume", found("unknown", { source: "resume", quote: LICENCE_NO })],
+      ["not known on a 'no' that is not about holding it", found("unknown", { source: "application", quote: SUSPENDED_NO })],
+      ["not known on a 'yes' to another question", found("unknown", { source: "application", quote: "Can you take digital x-rays? Yes." })],
       ["their answer covers part of it", found("partially", { source: "application", quote: LICENCE_NO })],
       ["the quote did not pass the check", found("no", { source: "application", unquoted: true })],
+      ["not known, and the quote did not pass the check", found("unknown", { source: "application", unquoted: true })],
       ["the quote is in no answer of the form", found("no", { source: "application", quote: "Do you hold a Nevada RDH license? No." })],
+      ["not known, and the quote is in no answer of the form", found("unknown", { source: "application", quote: "Do you hold a Nevada RDH license? No." })],
       ["the reading says nothing about it", readingOf([])],
     ];
     for (const [why, reading] of uncertain) expect(chatGaps(hygienist, reading, form), why).toEqual(["mh_license", ...others]);
+    // not known on their "yes" to holding it (the reading did not take it as shown) is still asked about
+    expect(chatGaps(hygienist, found("unknown", { source: "application", quote: "Do you hold an active CA RDH license? Yes." }), ["Do you hold an active CA RDH license? Yes."])).toEqual(["mh_license", ...others]);
+    // only a licence, certificate, permit or registration is held or not: not known on a "no" about a skill keeps its question
+    expect(chatGaps(hygienist, found("unknown", { source: "application", quote: CHARTING_NO }, "mh_perio"), form)).toEqual(["mh_license", ...others]);
+    expect(chatGaps(hygienist, found("no", { source: "application", quote: CHARTING_NO }, "mh_perio"), form)).toEqual(["mh_license", ...others.slice(1)]);
     // nothing is guessed from words: a must-have worded like a question of the form is asked about all the same
     expect(chatGaps(hygienist, readingOf([]), form)).toContain("mh_xray");
     // only a yes or a no counts: a choice or a number is not among the form's answers the plan reads, nor a question left unanswered

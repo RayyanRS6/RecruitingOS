@@ -7,7 +7,7 @@ import { resumeAsWeWriteIt } from "./assistant-words";
 import type { Integrations } from "@ros/integrations";
 import { unfairQuestion } from "./fair-question";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringView } from "./scoring-view";
-import { TRIAGE_READINGS, checkedClaims, credentialFinding, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
+import { TRIAGE_READINGS, checkedClaims, credentialFinding, formAnswerSaysNotHeld, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
 
 /**
  * The AI interview ("screen" in code): a web chat a shortlisted candidate does from an emailed link. This file is the
@@ -279,32 +279,43 @@ export function yesNoFormAnswers(packet: Pick<RolePacket, "formQuestions">, app:
 const plainText = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 
 /**
- * Whether the stored CV reading found a must-have not met on the candidate's own answer to a yes-or-no question of the
- * application form: the finding is "no", its evidence names the application as its source, and its quote, which the code
- * checked, stands in one of those answers (`yesNoFormAnswers`). The form asked about it and they answered, so the chat
- * does not ask again. This is the one link the record holds between a question of the form and a must-have: no key ties
- * the two, and none is guessed from their words. So a must-have stays in the plan whenever the link is not there: the
- * finding rests on the resume, or is "unknown" or "partially" (their answer did not settle it, or covers part of it), or
- * its quote did not pass the check. A "yes" on such a quote is shown already, and is not asked about either (`chatGaps`).
+ * Whether the candidate already said "no" about a must-have on the application form, in answer to one of its yes-or-no
+ * questions (`yesNoFormAnswers`): the form asked about it and they answered, so the chat does not ask again. The stored
+ * CV reading holds the one link between a question of the form and a must-have (no key ties the two, and none is guessed
+ * from their words): its finding's evidence names the application as its source, and its quote, which the code checked,
+ * stands in one of those answers. Two findings count:
+ * - "no": the reading found the must-have not met on that answer;
+ * - "unknown", for a must-have that names a licence, certificate, permit or registration (`credential`), where the
+ *   answer says, read with its question, that they do not hold it (`formAnswerSaysNotHeld`: "Do you hold a current CPR
+ *   certificate? No."). The licence rule reads a "no" to holding a *current*, *active* or *valid* one as not known,
+ *   because a lapsed one is not current either (`credentialFinding`), and a job's own form mostly asks in those words.
+ *   The form asked what the chat would ask ("… Do you have it?") all the same, and they answered it (seen on the live
+ *   site on 25 November 2026: the plan kept the certificate, and the counter said "of 8" for the 7 questions asked).
+ * A must-have stays in the plan whenever that link is not there: the finding rests on the resume, or is "partially"
+ * (their answer covers part of it), or is "unknown" on any other answer or for anything that is not a credential (their
+ * answer did not settle it), or its quote did not pass the check. A "yes" on such a quote is shown already, and is not
+ * asked about either (`chatGaps`).
  */
-function answeredNoOnTheForm(found: EvidenceAssessment["requirementFindings"][number] | undefined, yesNoAnswers: readonly string[]): boolean {
+function answeredNoOnTheForm(found: EvidenceAssessment["requirementFindings"][number] | undefined, yesNoAnswers: readonly string[], credential: boolean): boolean {
   const e = found?.evidence;
-  if (found?.met !== "no" || e?.source !== "application" || !hasCheckedQuote(e)) return false;
+  if (e?.source !== "application" || !hasCheckedQuote(e)) return false;
   const quote = plainText(e.quote ?? "");
-  return yesNoAnswers.some((answer) => plainText(answer).includes(quote));
+  const theirs = yesNoAnswers.filter((answer) => plainText(answer).includes(quote));
+  if (found?.met === "no") return theirs.length > 0;
+  return found?.met === "unknown" && credential && theirs.some(formAnswerSaysNotHeld);
 }
 
 /**
  * The must-haves the chat asks about, in the job's order: those the stored CV reading did not find shown (a "yes" on a
- * checked quote is shown; anything else is not), less any it found not met on the candidate's own "no" on the
- * application form (`answeredNoOnTheForm`; `yesNoAnswers`: their answers to the form's yes-or-no questions, none when
- * left out). Without a reading none is shown. The plan takes at most `CHAT_GAP_LIMIT` of them (`buildChatPlan`).
+ * checked quote is shown; anything else is not), less any the candidate already answered "no" about on the application
+ * form (`answeredNoOnTheForm`; `yesNoAnswers`: their answers to the form's yes-or-no questions, none when left out).
+ * Without a reading none is shown. The plan takes at most `CHAT_GAP_LIMIT` of them (`buildChatPlan`).
  */
 export function chatGaps(packet: Pick<RolePacket, "requirements">, reading: Pick<EvidenceAssessment, "requirementFindings"> | null | undefined, yesNoAnswers: readonly string[] = []): string[] {
   return packet.requirements.mustHaves
     .filter((m) => {
       const found = reading?.requirementFindings?.find((f) => f.requirementKey === m.key);
-      return requirementFinding(found?.met ?? "unknown", hasCheckedQuote(found?.evidence)) !== "shown" && !answeredNoOnTheForm(found, yesNoAnswers);
+      return requirementFinding(found?.met ?? "unknown", hasCheckedQuote(found?.evidence)) !== "shown" && !answeredNoOnTheForm(found, yesNoAnswers, namesCredential(m.text));
     })
     .map((m) => m.key);
 }
