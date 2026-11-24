@@ -17,12 +17,27 @@ export function looksLikePastedAd(text: string): boolean {
   return text.length >= 1200 || (lines >= 8 && text.length >= 400);
 }
 
-/** The amounts in a person's words: "$60,000", "60k", "$45.50" (commas and the k read as people mean them). */
+const FIGURE = "\\d+(?:\\.\\d+)?";
+/** A thousand, written after a figure: "60k", "60K", "60 thousand". */
+const THOUSAND = "(?:k|thousand)\\b";
+/**
+ * A range whose first figure leaves its thousand to the second: "45-55k", "$45 to $55k", "between 45 and 55 thousand".
+ * The first figure, then what joins it to the second with its thousand.
+ */
+const SHARED_THOUSAND = new RegExp(`(${FIGURE})(\\s*(?:[-\\u2010-\\u2015]|\\bto\\b|\\band\\b)\\s*\\$?\\s*${FIGURE}\\s*${THOUSAND})`, "gi");
+const AMOUNT = new RegExp(`(${FIGURE})\\s*(${THOUSAND})?`, "gi");
+
+/**
+ * The amounts in a person's words, read as people mean them: "$60,000", "60k", "60 thousand", "$45.50", and a range
+ * that says its thousand once ("45-55k" is 45,000 and 55,000; only a first figure under a thousand takes it, so
+ * "$60,000 to 75k" stays as it is written).
+ */
 export function amountsIn(text: string): number[] {
   let t = text;
   while (/\d,\d{3}/.test(t)) t = t.replace(/(\d),(\d{3})/g, "$1$2");
+  t = t.replace(SHARED_THOUSAND, (all: string, first: string, rest: string) => (Number(first) < 1000 ? `${first}k${rest}` : all));
   const out: number[] = [];
-  for (const m of t.matchAll(/(\d+(?:\.\d+)?)\s*(k\b)?/gi)) out.push(Number(m[1]) * (m[2] ? 1000 : 1));
+  for (const m of t.matchAll(AMOUNT)) out.push(Number(m[1]) * (m[2] ? 1000 : 1));
   return out;
 }
 
@@ -49,9 +64,12 @@ export function typedByOwner(messages: IntakeMessage[]): string[] {
 const isBasis = (b: string | undefined): b is "hourly" | "salary" => b === "hourly" || b === "salary";
 
 /**
- * Pay a person set by typing it: the range on the facts appears, figure for figure, in words the person typed. The model
- * only read the numbers; this check is code, so the confirmation is never the model's word. A range read from a pasted
- * ad is not typed and waits for the pay card.
+ * Pay a person set by typing it: the range on the facts appears, figure for figure, in words the person typed, read as
+ * people type a range (`amountsIn`: "45-55k", "$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$22–$26 an hour"). One
+ * figure typed ("20 dollars an hour") is the pay when the facts carry it as both the lowest and the highest, as the
+ * read of a pasted ad keeps a single figure (`factsFromExtraction` in @ros/agents); a lowest figure alone is not a
+ * range, and the pay card asks for the rest. The model only read the numbers; this check is code, so the confirmation
+ * is never the model's word. A range read from a pasted ad is not typed and waits for the pay card.
  */
 export function payTyped(messages: IntakeMessage[], facts: IntakeFacts): boolean {
   if (facts.compensationMin === undefined || facts.compensationMax === undefined || !isBasis(facts.compensationBasis)) return false;
@@ -221,8 +239,28 @@ const same = (a: string, b: string) => normalizeCriterion(a) === normalizeCriter
 const dedupe = (xs: string[]) => xs.filter((x, i) => xs.findIndex((y) => same(x, y)) === i);
 
 const EMPLOYMENT_WORDS: Array<[RegExp, string]> = [[/full/i, "full_time"], [/part/i, "part_time"], [/contract/i, "contract"], [/temp/i, "temporary"], [/per[\s_-]?diem/i, "per_diem"], [/intern/i, "internship"]];
-const REMOTE_WORDS: Array<[RegExp, string]> = [[/hybrid/i, "hybrid"], [/remote/i, "remote"], [/on[\s_-]?site|in[\s_-]?(?:office|person)/i, "onsite"]];
+/** What may stand between two words of an arrangement: a space, an underscore, or a hyphen of any kind ("on site", "on_site", "on-site"). */
+const GAP = "[\\s_\\-\\u2010-\\u2015]";
+/**
+ * The ordinary ways people say each work arrangement: "hybrid"; "remote", "remotely", "work from home", "working from
+ * home", "WFH", "home-based"; "on site", "on-site", "onsite", "in office", "in the office", "in person", "office-based".
+ * Whole words only: a "construction site" is no "on site". A place alone ("at our Irvine office") names none.
+ */
+const REMOTE_WORDS: Array<[RegExp, string]> = [
+  [/\bhybrid\b/i, "hybrid"],
+  [new RegExp(`\\bremote|\\bwork(?:s|ing|ed)?${GAP}+(?:from|at)${GAP}+home\\b|\\bwfh\\b|\\bhome${GAP}?based\\b|\\btelecommut|\\btelework`, "i"), "remote"],
+  [new RegExp(`\\bon${GAP}?site\\b|\\bin${GAP}?(?:the${GAP}+)?office\\b|\\bin${GAP}?person\\b|\\boffice${GAP}?based\\b`, "i"), "onsite"],
+];
 const BASIS_WORDS: Array<[RegExp, string]> = [[/hour/i, "hourly"], [/salar|year|annual/i, "salary"]];
+
+/**
+ * Whether words name a work arrangement in one of the ordinary ways people say it ("we all work from home", "it is in
+ * the office", "hybrid"). The job builder takes the arrangement the assistant read only when the owner's own typed words
+ * name one: asked, never assumed.
+ */
+export function namesWorkArrangement(text: string): boolean {
+  return REMOTE_WORDS.some(([re]) => re.test(text));
+}
 
 /**
  * A card's answer as the job keeps it. The model is asked to make an option's value the words to store, but it sometimes
@@ -357,16 +395,21 @@ export function normalizeFacts(facts: unknown): IntakeFacts {
   }
   const f = parsed.success ? parsed.data : IntakeFactsSchema.parse({});
   const out: IntakeFacts = { ...f, mustHaves: f.mustHaves.slice(0, MUST_HAVES_MAX) };
-  // The kind of job and the pay basis are kept as codes, and the assistant writes facts in plain words ("Full time",
-  // "per hour"). Words that name one code are read as it; words that name none, or more than one, are dropped, so the
-  // card for that essential is asked. Left as they came, they counted as answered for the cards and as missing for the
-  // job: nothing asked for them, and the job could never be written.
+  // The kind of job, the pay basis and the work arrangement are kept as codes, and the assistant writes facts in plain
+  // words ("Full time", "per hour", "On site"). Words that name one code are read as it; words that name none, or more
+  // than one, are dropped, so the card for that essential is asked. Left as they came, they counted as answered for the
+  // cards and as missing for the job: nothing asked for them, and the job could never be written.
   const kind = codeFromWords(f.employmentType, EmploymentType.options, EMPLOYMENT_WORDS);
   if (kind) out.employmentType = kind;
   else delete out.employmentType;
   const basis = codeFromWords(f.compensationBasis, ["hourly", "salary"], BASIS_WORDS);
   if (basis) out.compensationBasis = basis;
   else delete out.compensationBasis;
+  // "On site", "On-site", "In office", "Hybrid", "Remote", "Work from home". Whether the assistant may set it at all is
+  // the agent's rule (only when the owner's own typed words name an arrangement); this only reads what it wrote.
+  const arrangement = codeFromWords(f.remotePolicy, RemotePolicy.options, REMOTE_WORDS);
+  if (arrangement) out.remotePolicy = arrangement;
+  else delete out.remotePolicy;
   return out;
 }
 

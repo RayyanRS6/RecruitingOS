@@ -11,6 +11,7 @@ import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, refusedForNow, type AiHelpWords } from "../services/ai-credit";
+import { ASSISTANT_UNAVAILABLE_LINE, assistantAnswered, assistantUnavailable } from "../services/assistant-unavailable";
 import { applyFieldEdit } from "../services/packet-fields";
 import { limitReached, planRoom } from "../services/plan-room";
 import { draftChecks, draftClosingDate, publishResultOf, publishRole } from "../services/publish";
@@ -77,13 +78,24 @@ function sessionErrors(err: unknown): never {
   throw err;
 }
 
-/** A turn as the routes read it. `busy`: refused only for money held by work still running. `words`: the company's plan and the day its credit starts again. */
-type TurnOutcome = IntakeTurnOutcome & { busy?: boolean; words?: AiHelpWords };
+/**
+ * A turn as the routes read it. `busy`: refused only for money held by work still running. `words`: the company's plan
+ * and the day its credit starts again. `unavailable`: the AI provider itself is the problem (services/assistant-unavailable.ts).
+ */
+type TurnOutcome = IntakeTurnOutcome & { busy?: boolean; words?: AiHelpWords; unavailable?: boolean };
 
+/**
+ * One turn, for every route that takes one (a new draft, a message, tapped answers). A turn the model answered resolves
+ * the alert that the assistant is not available, if one stands; a turn that failed because of the provider raises it.
+ */
 async function turn(container: Container, input: Parameters<typeof runIntakeTurn>[2]): Promise<TurnOutcome> {
   try {
     const r = await runIntakeTurn(container.db, { ai: container.ai }, input);
-    if (!("error" in r) || !r.noCredit) return r;
+    if (!("error" in r)) {
+      await assistantAnswered(container);
+      return r;
+    }
+    if (!r.noCredit) return (await assistantUnavailable(container, { error: r.error, task: "intake.turn", aiRunId: r.aiRunId })) ? { ...r, unavailable: true } : r;
     if (await refusedForNow(container, input.companyId, r.refusedHoldUsd ?? 0)) return { ...r, busy: true };
     return { ...r, words: await withTenant(container.db, input.companyId, (tx) => aiHelpWordsOf(tx, input.companyId, container.engine.clock())) };
   } catch (err) {
@@ -94,12 +106,15 @@ async function turn(container: Container, input: Parameters<typeof runIntakeTurn
 /**
  * The turn as the page reads it; a failed turn says what to do next. With no AI credit left nothing failed: the owner's
  * words are saved, and the way on is to upgrade (`upgrade`, with the request this person may send), never "try again".
- * Refused only for money held by work still running, the way on is to try again in a few minutes.
+ * Refused only for money held by work still running, the way on is to try again in a few minutes. When the AI provider
+ * itself is the problem (`unavailable`), trying again at once would fail the same way: the page shows the one sentence
+ * as it is, and an administrator has been alerted. Any other failure keeps "Try again".
  */
 function turnReply(r: TurnOutcome, t: Pick<Tenant, "role">): IntakeTurnReply {
   if (!("error" in r)) return { assistantMessage: r.turn.assistantMessage, readyToCompile: r.turn.readyToCompile, takenFromAd: r.turn.takenFromAd, notARole: r.notARole };
   if (r.busy) return { error: "The assistant did not answer.", recovery: AI_HELP_BUSY_LINE.turn, upgrade: false, ask: null };
   if (r.noCredit) return { error: "The assistant did not answer.", recovery: aiHelpLine("turn", r.words), upgrade: true, ask: can(t.role, "plan.request") ? askForAiHelpOn(r.words?.planKey) : null };
+  if (r.unavailable) return { error: "The assistant is not available right now.", recovery: ASSISTANT_UNAVAILABLE_LINE, upgrade: false, ask: null, unavailable: true };
   return { error: "The assistant could not answer that.", recovery: "Your words are saved. Try again.", upgrade: false, ask: null };
 }
 
@@ -202,7 +217,9 @@ intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
  * it runs, GET /sessions/:id shows `progress.stage` moving through writing and checking to done. Writing it again
  * replaces what a person edited on it since (`readiness.draftEdits` counts those), so the page asks first. This is the
  * dearest call the job builder makes: a company with no room for another job is refused first, and with too little AI
- * credit left everything confirmed is kept.
+ * credit left everything confirmed is kept. A writing that failed answers 502: `assistant_unavailable` when the AI
+ * provider itself is the problem (an administrator is alerted, and the message never says "Try again"), `ai_failed` for
+ * anything else.
  */
 intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -220,8 +237,11 @@ intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
   }
   if ("error" in out) {
     if (out.noCredit) throw await creditRefusedDraft(c, out.refusedHoldUsd ?? 0);
+    // The AI provider itself is the problem: said as it is, with an alert for an administrator, and never "Try again".
+    if (await assistantUnavailable(container, { error: out.error, task: "intake.compile", aiRunId: out.aiRunId })) throw new HttpError(502, "assistant_unavailable", ASSISTANT_UNAVAILABLE_LINE, { aiRunId: out.aiRunId });
     throw new HttpError(502, "ai_failed", "The assistant could not write the job. Everything you confirmed is kept. Try again.", { aiRunId: out.aiRunId });
   }
+  await assistantAnswered(container);
   return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
 });
 

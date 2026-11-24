@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { PERSON_REPLY, WITHDRAW_CONFIRM_KEY } from "@ros/agents";
 import { REACH_A_PERSON_LINE } from "@ros/core";
-import { applications, candidates, events, notifications, screens } from "@ros/db";
+import { applications, candidates, events, notifications, rolePackets, screens } from "@ros/db";
+import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { PERSON_ON_THE_WEB, forTheWeb } from "./pages/web-wording";
@@ -135,11 +136,66 @@ describe("AI interview keywords: whole-message commands, a person chosen on the 
   });
 });
 
-describe("a job's own lines on the AI interview's pages", () => {
-  it("shows the line a job written now stores as it is, and never a stored sentence that asks for a reply with a keyword or an email's own footer", () => {
+/**
+ * The lines about AI and about reaching a person that a candidate reads under every email and on "Before you start" are
+ * the code's own (packages/core/src/compliance.ts), the same for every job. A job record stores lines of its own, which a
+ * model wrote with the job and nobody was shown: this job stores other words (as `plantJob` writes them), and none of
+ * them reaches a candidate.
+ */
+describe("the lines about AI and about a person are the code's own, never the job's stored ones", () => {
+  let container: Container;
+  let app: ReturnType<typeof createApp>;
+  const STORED = { humanAlternativeText: "Reply to reach a person.", disclosureText: "This message was sent with help from an AI assistant.", signature: "The team" };
+  const DISCLOSURE = "This message was sent by the hiring team at Notice Dental with help from an AI recruiting assistant.";
+  const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+  beforeAll(async () => {
+    container = await createContainer({ memory: true, env: { ...process.env, NODE_ENV: "test", AI_PROVIDER: "fake", EMAIL_PROVIDER: "fake", WORKER_INLINE: "true", STORAGE_PROVIDER: "memory" } });
+    app = createApp(container);
+  });
+  afterAll(async () => {
+    await container.close();
+  });
+
+  it("every email about the application ends with the code's three lines, and Before you start says how to reach a person in the code's words, for a job that stores other words", async () => {
+    const company = await seedCompany(app, { email: "dana@notice.test", name: "Notice Dental" });
+    await usePlan(container, company.companyId);
+    const roleId = await plantJob(container, { companyId: company.companyId, title: "Dental Hygienist" });
+    const [stored] = await container.db.select().from(rolePackets).where(eq(rolePackets.roleId, roleId));
+    expect(stored.packet.communication).toMatchObject(STORED);
+    // someone applies and is shortlisted: the receipt and the AI interview's invitation go out
+    const email = "nora.tester@notice.test";
+    expect((await app.request(`/careers/${company.slug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: "Nora", lastName: "Tester", email }) })).status).toBe(302);
+    await container.drain();
+    const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, email));
+    const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
+    expect((await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: company.owner }, body: JSON.stringify({ action: "shortlist" }) })).status).toBe(200);
+    await container.drain();
+    const mail = (container.integrations.email as FakeEmailAdapter).sent.filter((m) => m.to === email);
+    expect(mail.map((m) => m.subject)).toEqual(["Thank you for applying: Dental Hygienist at Notice Dental", "Your next step: a short AI interview for Dental Hygienist"]);
+    for (const m of mail) {
+      expect(m.text.endsWith(`${REACH_A_PERSON_LINE}\n\nThe hiring team at Notice Dental\n\n${DISCLOSURE}`), m.subject).toBe(true);
+      expect(m.text, m.subject).not.toContain(STORED.humanAlternativeText);
+      expect(m.text, m.subject).not.toContain(STORED.disclosureText);
+      expect(m.text, m.subject).not.toMatch(/\nThe team\n/);
+    }
+    // "Before you start": how to reach a person in the code's words, the AI notice word for word, nothing of the job's own
+    const [scr] = await container.db.select().from(screens).where(eq(screens.applicationId, a.id));
+    const page = decodeEntities(await (await app.request(`/c/screen/${scr.token}`)).text());
+    expect(page).toContain("<title>Before you start: Dental Hygienist at Notice Dental</title>");
+    expect(page).toContain(`<p class="pre">${REACH_A_PERSON_LINE}</p>`);
+    expect(page).toContain("This conversation is with Notice Dental's AI assistant, a software program, not a person. People on the hiring team make every decision.");
+    expect(page).toContain('<details class="more"><summary>How AI is used</summary><p class="notice">This employer uses software that includes artificial intelligence');
+    expect(page).not.toContain(STORED.humanAlternativeText);
+    expect(page).not.toContain(STORED.disclosureText);
+  });
+});
+
+describe("words written for an email, read on the AI interview's pages", () => {
+  it("takes out of an assistant's message a sentence that asks for a reply with a keyword and an email's own footer; the code's line about a person stands as it is", () => {
     expect(REACH_A_PERSON_LINE).toBe("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
     expect(forTheWeb(REACH_A_PERSON_LINE)).toBe(REACH_A_PERSON_LINE);
-    // a job stored before: the keyword sentence goes, and where the page has its own way to a person it says that instead
+    // a chat stored before: the keyword sentence goes, and where the page has its own way to a person it says that instead
     expect(forTheWeb("Reply HUMAN at any time and a person from our team will follow up.")).toBe("");
     expect(forTheWeb("We are glad you applied. Reply HUMAN at any time to reach a person.", PERSON_ON_THE_WEB)).toBe(`We are glad you applied. ${PERSON_ON_THE_WEB}`);
     expect(forTheWeb("This message was sent by the hiring team at Keyword Dental with help from an AI recruiting assistant.")).toBe("");

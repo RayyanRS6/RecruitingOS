@@ -54,9 +54,11 @@ export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 /**
  * The assistant's turn as the builder reads it, or what went wrong and what to do next. On a failure `upgrade` is true
  * when the plan's AI help is used up: the way on is the request about the plan, not trying again. `ask`: that request's
- * button and the words it sends; null when nothing is used up, or for someone who may not ask.
+ * button and the words it sends; null when nothing is used up, or for someone who may not ask. `unavailable`: true when
+ * the AI provider itself is the problem (it refuses our account, or it is not answering): trying again at once would not
+ * help, an administrator has been alerted, and `recovery` is the whole sentence to show, exactly as it is.
  */
-export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null };
+export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
 
 /** POST /api/v1/intake/sessions: the new draft and its first turn; `session` is null when the message was not about hiring someone. */
 export type IntakeStartResponse = { session: IntakeSessionView | null; notARole: boolean; reply: IntakeTurnReply };
@@ -86,8 +88,10 @@ const EditedFormQuestion = z.discriminatedUnion("kind", [
  * PATCH /api/v1/roles/:id/packet: the one editor of a job. It mirrors the job record's sections; only what is sent
  * changes, and everything else is copied from `baseVersion`, which must still be the newest version (someone else may
  * have saved since). A list is sent whole, in order: adding, removing and reordering are one list. An item keeps its
- * `key` when it is the same item, and then keeps what the editor does not carry (a must-have's `rationale`, a skill's
- * `indicators`, a question's `kind`); a new one has no key. Counts (one to six must-haves, three to twelve AI interview
+ * `key` when it is the same item. What the editor does not carry (a must-have's `rationale`, a skill's `indicators`, a
+ * question's `kind`) was written for the item's words: it is kept while those words are untouched, and when they change
+ * the rationale and the indicators go and the kind is worked out again from the new words (`applyFieldEdit`). A new item
+ * has no key. Counts (one to six must-haves, three to twelve AI interview
  * questions, at most ten form questions, two to eight choices) are checked on the server and refused in plain words.
  *
  * Saving an open or paused job makes a new version that is live at once. Pay set here counts as a person confirming it.

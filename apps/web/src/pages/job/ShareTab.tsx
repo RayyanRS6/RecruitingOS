@@ -13,7 +13,8 @@ import { toast } from "../../toast";
  * A job's Share tab: the Apply link (the job page's address) with Copy, then the LinkedIn post and the Indeed post,
  * each in a box a person can change, with Copy, "Write again" and the Apply link that post should carry. The posts are
  * written in the background after a job is published, so the tab asks again every few seconds while they are on their
- * way. The server says in one line when the job page is not public, and when the posts could not be written.
+ * way. The server says in one line when there is nothing to share (a job not published yet, a closed job, whose page
+ * stays up and says so), and when the posts could not be written.
  */
 export function ShareTab({ roleId }: { roleId: string }) {
   const q = useQuery({ queryKey: ["share", roleId], queryFn: () => api.get<ShareView>(`/api/v1/roles/${roleId}/share`), refetchInterval: (query) => shareRefresh(query.state.data) });

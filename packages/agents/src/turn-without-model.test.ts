@@ -9,7 +9,9 @@ import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, turnWithoutModel }
  */
 const Q1 = { key: "q1", question: "What did you do at your last job?", kind: "behavioral" };
 const Q2 = { key: "q2", question: "Which software have you used?", kind: "skills" };
-const packet = { screening: { questions: [Q1, Q2], maxMinutes: 10 } } as unknown as RolePacket;
+/** The chat's own packet (`chatPacket`): its questions, and the job's must-haves (the first item, as a must-have, is `q1`). */
+const packetWith = (mustHave: string) => ({ screening: { questions: [Q1, Q2], maxMinutes: 10 }, requirements: { mustHaves: [{ key: "q1", text: mustHave }], niceToHaves: [] } }) as unknown as RolePacket;
+const packet = packetWith("Front desk experience");
 const at = "2026-11-05T10:00:00.000Z";
 const plan = (kind: "gap" | "question"): NonNullable<ScreenProgress["chat"]> => ({ v: 1, section: kind === "gap" ? "experience" : "required", items: [{ key: "q1", kind, required: kind === "question", state: "asking", step: "direct", pushes: 0 }, { key: "q2", kind: "question", required: true, state: "open", step: "direct", pushes: 0 }], current: "q1", builtAt: at });
 const progress = (over: Partial<ScreenProgress> = {}): ScreenProgress => ({ ...EMPTY_SCREEN_PROGRESS, askedKeys: ["q1"], currentQuestionKey: "q1", chat: plan("question"), ...over });
@@ -78,5 +80,13 @@ describe("a turn with no model", () => {
     expect(turn("No, but at my last job I did something like it.", { progress: progress({ chat: plan("gap") }) })!.turn.answerRecorded?.answer).toBe("No, but at my last job I did something like it.");
     // and a plain No to one of the job's own questions is its answer
     expect(turn("No.")!.turn.answerRecorded?.answer).toBe("No.");
+  });
+
+  it("a plain No about a licence the job needs is its answer, as with the model: recorded, and the next question follows a plain Thanks", () => {
+    const transcript = [asked("q1"), said("No, I haven't.")];
+    const r = turnWithoutModel({ packet: packetWith("Active CA RDH license"), progress: progress({ chat: plan("gap") }), answers: {}, transcript, latest: "No, I haven't." })!;
+    expect(r.turn.answerRecorded).toEqual({ questionKey: "q1", answer: "No, I haven't.", complete: true });
+    expect(r.move).toEqual({ key: "q1", move: "covered" });
+    expect(r.turn.messageToCandidate).toBe(`Thanks.\n\n${Q2.question}`);
   });
 });

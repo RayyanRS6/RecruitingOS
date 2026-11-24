@@ -129,7 +129,8 @@ for (const action of ["pause", "resume"] as const) {
 }
 
 /**
- * Closes a job, for good: its page is no longer public, it takes no applications, and its place on the plan comes back.
+ * Closes a job, for good: its page stays up and says the position is closed, it takes no applications, and its place on
+ * the plan comes back.
  * Nobody is told anything by a close, and nobody's place in the process changes: a person tells a candidate a decision.
  * An AI interview of the job that was still open closes with it, so no link works for a job that takes no more
  * applications; an interview already sent keeps its answers and its score (`closeAiInterviewsOfJob`).

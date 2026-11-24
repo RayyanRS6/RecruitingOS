@@ -136,12 +136,12 @@ function AiLine(props: { companyName: string }) {
 /**
  * Every page of the AI interview: the AI line, the page, the line that says an answer is on its way (empty until a
  * button is pressed), the AI notice, the privacy link, and the script that stops a second press. The AI line on top
- * already says it is the company's AI assistant, so the notice's full text (and `aiMore`, the job's own AI wording on
- * the introduction) sits one click away under "How AI is used". No "Company · Job" eyebrow: the AI line names the
- * company, and the browser tab names the job. `extraCss` is a page's own styles, added to the AI interview's in the same
- * style element.
+ * already says it is the company's AI assistant, so the notice's full text sits one click away under "How AI is used":
+ * the versioned AI notice and nothing else (never a line the job record stores, which a model wrote). No "Company · Job"
+ * eyebrow: the AI line names the company, and the browser tab names the job. `extraCss` is a page's own styles, added to
+ * the AI interview's in the same style element.
  */
-export function ConversationPage(props: { view: ConversationView; title: string; aiMore?: string | null; extraCss?: string; busyNote?: string | null; children?: unknown }) {
+export function ConversationPage(props: { view: ConversationView; title: string; extraCss?: string; busyNote?: string | null; children?: unknown }) {
   const { view } = props;
   return (
     <Layout title={`${props.title}: ${view.roleTitle} at ${view.companyName}`} extraCss={props.extraCss ? `${SCREEN_CSS}${props.extraCss}` : SCREEN_CSS}>
@@ -149,11 +149,10 @@ export function ConversationPage(props: { view: ConversationView; title: string;
       {props.children}
       {/* `busyNote` (the chat's "Reading your reply…"): what the line says while an answer is on its way. */}
       <p class="sending" id="sending" role="status" data-wait={props.busyNote ?? undefined} />
-      {view.intro.aiNotice || props.aiMore ? (
+      {view.intro.aiNotice ? (
         <details class="more">
           <summary>How AI is used</summary>
-          {props.aiMore ? <p class="notice">{props.aiMore}</p> : null}
-          {view.intro.aiNotice ? <p class="notice">{view.intro.aiNotice.text}</p> : null}
+          <p class="notice">{view.intro.aiNotice.text}</p>
         </details>
       ) : null}
       <p class="foot"><a href="/privacy">How we handle your information</a></p>

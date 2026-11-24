@@ -36,22 +36,29 @@ export type PreviewSource = { kind: "draft" } | { kind: "job"; status: string; c
 
 /**
  * The note on a preview: whether candidates see this page now, the banner that says so, and what the page still lacks.
- * A job's page is public while the job is open or paused, for a company an administrator accepted.
+ * A job's page is the one candidates apply from while the job is open or paused, for a company an administrator
+ * accepted. A closed job's page stays up and says the position is closed (`careers-pages.tsx`), so its preview says
+ * that, never that the page is no longer public.
  */
-export function previewNote(input: { packet: DraftRolePacket; company: Company; source: PreviewSource }): { notPublicYet: boolean; banner: string; gaps: string[] } {
+export function previewNote(input: { packet: DraftRolePacket; company: Company; source: PreviewSource }): { notPublicYet: boolean; lead: string; pageUp: boolean; banner: string; gaps: string[] } {
   const { packet, company, source } = input;
-  const live = source.kind === "job" && source.current && (source.status === "open" || source.status === "paused") && isCompanyLive(company.settings);
+  const companyLive = isCompanyLive(company.settings);
+  const live = source.kind === "job" && source.current && (source.status === "open" || source.status === "paused") && companyLive;
+  const closed = source.kind === "job" && source.status === "closed";
   const banner = live
     ? "This is the job page as candidates see it now."
     : source.kind === "draft"
       ? "Preview of your draft: this is what candidates will see. Nothing is public until you publish the job."
-      : source.status === "closed"
-        ? "Preview: this job is closed, so its page is no longer public."
+      : closed
+        ? "This is a preview. The job's own page says the position is closed and takes no applications."
         : source.current ? "Preview: this job is not published yet." : "Preview of an earlier version: candidates do not see this one.";
+  // The words in bold before the banner, and whether the job has a page of its own to open (a closed job's stays up).
+  const lead = live ? "Preview." : closed ? "Closed." : "Not public yet.";
+  const pageUp = live || (closed && companyLive);
   const gaps: string[] = [];
   const notices = jobNoticesFor({ jobLocations: packet.identity.locations, companyLocations: company.locations, overrides: company.settings.notices });
   if (!packet.compensation) gaps.push("Pay is not set yet, so the page shows no pay. Set or confirm it on the pay card.");
   else if (!payShown(packet.compensation, notices)) gaps.push("The pay range is hidden on this page.");
   if (!packet.identity.locations.some((l) => l.city || l.region)) gaps.push("The job has no place yet.");
-  return { notPublicYet: !live, banner, gaps };
+  return { notPublicYet: !live, lead, pageUp, banner, gaps };
 }

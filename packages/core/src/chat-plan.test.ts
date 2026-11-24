@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CHAT_WRAP_KEY, ChatPlan } from "@ros/contracts";
-import { CHAT_GAP_LIMIT, buildChatPlan, chatCounter, chatItemSettled, chatMoveStays, chatNextMove, saysNotDone, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor } from "./chat-plan";
+import { CHAT_GAP_LIMIT, asksYesOrNo, buildChatPlan, chatCounter, chatItemSettled, chatMoveStays, chatNextMove, saysNotDone, screeningKindFor, syncChatPlan, tapAnswerText, tapEcho, tapFormatFor } from "./chat-plan";
 
 describe("the AI interview's plan (a counter and the section, never the questions in advance)", () => {
   const at = "2026-11-18T10:00:00.000Z";
@@ -39,6 +39,11 @@ describe("the AI interview's plan (a counter and the section, never the question
     // a yes-or-no question takes its answer as it is: "No", or a bare "Yes"
     expect(chatNextMove({ kind: "question", step: "direct", pushes: 0 }, "not_done", false)).toBe("covered");
     expect(chatNextMove({ kind: "question", step: "direct", pushes: 0 }, "vague", false)).toBe("covered");
+    // and so does a must-have with no ladder (one that names a licence: held or not), whatever step a stored plan left it at
+    for (const step of ["direct", "analog", "smaller"] as const) {
+      expect(chatNextMove({ ...gap, step }, "not_done", false), step).toBe("covered");
+      expect(chatNextMove({ ...gap, step }, "vague", false), step).toBe("covered");
+    }
     expect(["push", "analog", "smaller"].every((m) => chatMoveStays(m as "push"))).toBe(true);
     expect(chatMoveStays("covered") || chatMoveStays("unknown")).toBe(false);
   });
@@ -159,6 +164,40 @@ describe("tap answers", () => {
     expect(tapFormatFor({ kind: "logistics", question: "Is there a time when you would need to leave early?" }, comp)).toBeNull();
     // one that only places the noun still asks nothing open
     expect(tapFormatFor({ kind: "availability", question: "Can you work on the days when the office is busiest?" }, comp)).toEqual({ kind: "yes_no" });
+  });
+
+  // The code check of 25 November 2026: the job editor shows no kind and sets none, so "Can you work Saturdays?" added
+  // there was kept as an open question: no Yes and No, and a "No" was followed by "tell me about something similar".
+  it("a question a person writes or rewords in the editor gets its kind from its words: yes-or-no words make it a question about a fact", () => {
+    for (const question of ["Can you work Saturdays?", "Do you hold an active California RDA license?", "Are you able to lift 25 pounds safely?", "Have you used Dentrix before?"]) {
+      expect(asksYesOrNo(question), question).toBe(true);
+      // new, or reworded from an open question: a question about a fact, with Yes and No
+      for (const was of [undefined, "skills", "behavioral", "motivation", "compensation"] as const) expect(screeningKindFor(question, was), `${question} (${was})`).toBe("eligibility");
+      expect(tapFormatFor({ kind: screeningKindFor(question), question }, comp), question).toEqual({ kind: "yes_no" });
+      // it keeps the kind it had when that was already one about a fact
+      for (const was of ["availability", "logistics", "eligibility"] as const) expect(screeningKindFor(question, was), `${question} (${was})`).toBe(was);
+    }
+    // a request for their own words that only opens like a yes-or-no question stays open
+    for (const question of ["Can you give an example of a time you calmed a nervous patient?", "Could you give us a recent example?", "Could you talk us through a crown prep?", "Can you tell us about your last job?", "Would you describe a hard day?", "Can you talk about a mistake you made?"]) {
+      expect(screeningKindFor(question), question).toBe("skills");
+      expect(screeningKindFor(question, "behavioral"), question).toBe("behavioral");
+    }
+    expect(screeningKindFor("Can you give two weeks' notice?")).toBe("eligibility");
+  });
+
+  it("words that are not yes-or-no leave a question the kind it had, and make a new one an open question; a pay question keeps its pay range only while it speaks of pay", () => {
+    for (const question of ["How do you set up for a crown prep?", "Tell me about a nervous patient and what you did.", "Which certifications do you hold?", "What are you looking for in your next role?"]) {
+      expect(asksYesOrNo(question), question).toBe(false);
+      expect(screeningKindFor(question), question).toBe("skills");
+      for (const was of ["skills", "behavioral", "motivation", "availability", "logistics", "eligibility"] as const) expect(screeningKindFor(question, was), `${question} (${was})`).toBe(was);
+    }
+    // the days tap and the start date stay with a reworded availability question
+    expect(tapFormatFor({ kind: screeningKindFor("Which days can you work?", "availability"), question: "Which days can you work?" }, comp)).toMatchObject({ kind: "days" });
+    // pay: reworded, it is still the pay question; with other words it is an open question, never a pay range under them
+    for (const question of ["What hourly range are you looking for?", "What salary are you hoping for?", "What pay do you expect?", "How much are you looking to earn, in $ an hour?"]) expect(screeningKindFor(question, "compensation"), question).toBe("compensation");
+    expect(screeningKindFor("Tell me about a nervous patient and what you did.", "compensation")).toBe("skills");
+    expect(tapFormatFor({ kind: screeningKindFor("Tell me about a nervous patient and what you did.", "compensation"), question: "Tell me about a nervous patient and what you did." }, comp)).toBeNull();
+    expect(screeningKindFor("Is $24 to $28 an hour within the range you are looking for?", "compensation")).toBe("eligibility");
   });
 
   it("records a tap as fixed words, and refuses one that does not fit the question", () => {

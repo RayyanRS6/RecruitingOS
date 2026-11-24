@@ -247,9 +247,10 @@ export function Builder({ sessionId }: { sessionId: string }) {
     const withCards = typedWithCards(cards, live, typed);
     return withCards ? answer.mutate(withCards) : send.mutate(typed);
   };
+  // The deck's own Send: a pay card left as it was drawn sends the pay it shows, so the person sending has confirmed it.
   const sendCards = () => {
     handOff.current = { from: deckKey };
-    answer.mutate({ answers: answersPayload(cards, live.state), echo: echoText(cards, live.state) });
+    answer.mutate({ answers: answersPayload(cards, live.state, view.pay), echo: echoText(cards, live.state, view.pay) });
   };
 
   const above = (

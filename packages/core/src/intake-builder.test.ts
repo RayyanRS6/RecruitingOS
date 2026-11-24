@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { INTAKE_ESSENTIALS, IntakeQuestion, IntakeServerState, RolePacket, type DraftRolePacket, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import {
-  IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, normalizeFacts, payCard, payConfirmed, payKey, payTyped, sameRequirement,
-  storedAnswer, typedByOwner,
+  IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, namesWorkArrangement, normalizeFacts, payCard, payConfirmed, payKey, payTyped,
+  sameRequirement, storedAnswer, typedByOwner,
 } from "./intake-builder";
 
 const facts = (more: Partial<IntakeFacts> = {}): IntakeFacts => ({ mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...more });
@@ -42,6 +42,38 @@ describe("what the owner's own words say", () => {
     expect(basisFromText("$24 to $28")).toBe("hourly");
     expect(basisFromText("$500 a week")).toBeNull();
     expect(basisFromText("good pay")).toBeNull();
+  });
+
+  // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so the range the assistant read from it
+  // (45,000 to 55,000) was not found in the owner's own words, and pay they had just typed waited for the pay card.
+  it("reads a range that says its thousand once, and leaves every other figure as it is written", () => {
+    for (const typed of ["45-55k", "$45-55k", "$45 - $55K a year", "45 to 55k", "45–55k", "between 45 and 55 thousand"]) expect(amountsIn(typed), typed).toEqual([45000, 55000]);
+    expect(amountsIn("45.5-55k")).toEqual([45500, 55000]);
+    // each figure with its own thousand, with commas, or with none: as they were read before
+    for (const typed of ["$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$45,000 - $55,000", "45 thousand to 55 thousand"]) expect(amountsIn(typed), typed).toEqual([45000, 55000]);
+    expect(amountsIn("$22–$26 an hour")).toEqual([22, 26]);
+    expect(amountsIn("20 dollars an hour")).toEqual([20]);
+    // the thousand is taken only by the figure it is joined to, and only by one under a thousand
+    expect(amountsIn("$22-26 an hour, or 45-55k a year")).toEqual([22, 26, 45000, 55000]);
+    expect(amountsIn("3 to 5 years of experience, 60k")).toEqual([3, 5, 60000]);
+    expect(amountsIn("Monday to Friday, 8 to 5, 55 kg boxes")).toEqual([8, 5, 55]);
+    expect(amountsIn("$60,000 to 75k")).toEqual([60000, 75000]);
+  });
+
+  it("counts pay typed the ways people type a range, and one figure when the facts carry it as both the lowest and the highest", () => {
+    const salary = facts({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000 });
+    for (const typed of ["45-55k", "$45-55k", "$45k-$55k", "45k to 55k", "$45,000 to $55,000", "$45,000 - $55,000", "The pay is 45 to 55 thousand a year."]) expect(payTyped([said(typed)], salary), typed).toBe(true);
+    expect(payTyped([said("$22–$26 an hour")], facts({ compensationBasis: "hourly", compensationMin: 22, compensationMax: 26 }))).toBe(true);
+    // one figure typed: the lowest and the highest are the same, as a single figure in a pasted ad is kept
+    expect(payTyped([said("20 dollars an hour")], facts({ compensationBasis: "hourly", compensationMin: 20, compensationMax: 20 }))).toBe(true);
+    // a lowest figure alone is no range: the pay card asks for the rest
+    expect(payTyped([said("20 dollars an hour")], facts({ compensationBasis: "hourly", compensationMin: 20 }))).toBe(false);
+    // still only the owner's own typed words, and still figure for figure
+    expect(payTyped([said("45-55k", "pasted_ad")], salary)).toBe(false);
+    expect(payTyped([said("Pay: $45,000–$55,000 a year", "answers")], salary)).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 60000 }))).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationBasis: "salary", compensationMin: 45, compensationMax: 55000 }))).toBe(false);
+    expect(payTyped([said("45-55k")], facts({ compensationMin: 45000, compensationMax: 55000 }))).toBe(false);
   });
 
   it("counts pay as typed only when both figures are in words the owner typed, never in a pasted ad or a summary of answers", () => {
@@ -245,11 +277,31 @@ describe("facts the assistant wrote in plain words", () => {
     expect(normalizeFacts({ compensationBasis: "hourly, with a yearly bonus" }).compensationBasis).toBeUndefined();
   });
 
+  // Found by an audit in November 2026: the real model wrote "On site", which is no code, so the arrangement the owner
+  // had just said was dropped and asked for again.
+  it("reads the work arrangement from the words it came in, like the kind of job", () => {
+    for (const words of ["onsite", "On site", "On-site", "on_site", "On‑site", "In office", "In the office", "In person", "In-person", "Office-based", " ONSITE "]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("onsite");
+    for (const words of ["remote", "Remote", "Fully remote", "Work from home", "Working from home", "work-from-home", "WFH", "Home-based"]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("remote");
+    for (const words of ["hybrid", "Hybrid", "Hybrid schedule"]) expect(normalizeFacts({ remotePolicy: words }).remotePolicy, words).toBe("hybrid");
+  });
+
+  it("drops words that name no work arrangement, or more than one, so it is asked and never half-known", () => {
+    for (const words of ["wherever", "flexible", "sometimes", "Tustin office", "On site or remote", "Hybrid: two days in the office, three remote"]) expect(normalizeFacts({ remotePolicy: words }), words).toEqual(facts());
+    // and a job is never written on one that was not read
+    expect(intakeReadiness({ facts: normalizeFacts({ ...complete(), remotePolicy: "On site or remote" }), state: state(paid), draft: null }).missing).toEqual(["remote_policy"]);
+  });
+
+  it("knows the ordinary ways people say a work arrangement, and that a place, a skill or a building site names none", () => {
+    for (const typed of ["We all work from home.", "They would be working from home most days", "it's WFH", "Everyone works remotely", "Remote is fine", "It is in the office, five days a week", "in person only", "On-site at our Tustin practice", "onsite", "hybrid, two days in", "It is a home-based job"]) expect(namesWorkArrangement(typed), typed).toBe(true);
+    for (const typed of ["Software Engineer required with 3 years of hands-on experience in Python and Flask", "A dental assistant for our Tustin office", "Front desk coordinator at our Irvine office", "Foreman for a construction site in Reno", "Homeowner outreach", "A personal assistant", "Workers' compensation claims"]) expect(namesWorkArrangement(typed), typed).toBe(false);
+  });
+
   it("writes the job once the owner's sentence gave every essential, whichever words the assistant kept them in", () => {
-    const asWritten = normalizeFacts({ ...complete(), employmentType: "Full time", compensationBasis: "per hour" });
+    const asWritten = normalizeFacts({ ...complete(), employmentType: "Full time", compensationBasis: "per hour", remotePolicy: "On site" });
     const r = intakeReadiness({ facts: asWritten, state: state(paid), draft: null });
     expect(r.missing).toEqual([]);
     expect(r.essentials.find((e) => e.key === "employment_type")).toMatchObject({ done: true, value: "Full time" });
+    expect(r.essentials.find((e) => e.key === "remote_policy")).toMatchObject({ done: true, value: "On site" });
     expect(r).toMatchObject({ payConfirmed: true, mayDraft: true, draftBlocker: null });
     // and pay the owner typed counts as typed, so the pay card is not shown again
     expect(payTyped([said("$45 to $55 an hour")], asWritten)).toBe(true);

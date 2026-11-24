@@ -136,7 +136,9 @@ describe("the API, from sign-in to an application and the administrator's view",
     const ack = mine[0];
     expect(ack.text).toContain(`/c/status/${a.statusToken}`);
     expect(ack.text).not.toContain("/c/screen/");
-    expect(ack.text).toMatch(/AI assistant/);
+    // the AI disclosure and how to reach a person, in the code's own words: this job stores other words for both
+    expect(ack.text).toContain("This message was sent by the hiring team at Brightline Dental Group with help from an AI recruiting assistant.");
+    expect(ack.text).toContain("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
     expect(ack.text).not.toMatch(/HUMAN/);
     const comms = await container.db.select().from(communications).where(eq(communications.applicationId, a.id));
     expect(comms).toHaveLength(1);

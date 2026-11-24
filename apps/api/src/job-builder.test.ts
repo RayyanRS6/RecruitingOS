@@ -257,6 +257,113 @@ describe("the job builder", () => {
     expect(((await stale.json()) as Refusal).error.code).toBe("unknown_question");
   });
 
+  // Found on the live site in November 2026: a draft read "Still needed before the job can be written: at least one
+  // must-have" and showed no card, because the must-haves card had been shown once and nothing asked again.
+  it("never leaves 'still needed' without a card: a skipped card, and one whose answer could not be used, come back until the essential is answered", async () => {
+    let draft = await start(owner, "Front desk coordinator in Tustin, CA, on site, full time, Monday to Friday, $22 to $26 an hour.");
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    const answer = async (a: Record<string, unknown>): Promise<IntakeSessionView> => {
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/answers`, { answers: [{ questionId: draft.questions[0].id, ...a }] });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as IntakeTurnResponse).session;
+    };
+    // skipped: the job still cannot be written, and the card is there again
+    draft = await answer({ skipped: true });
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["must_haves"], draftBlocker: "Still needed before the job can be written: at least one must-have." });
+    expect(draft.questions.map((q) => [q.field, q.mode, q.prompt, q.allowOwn])).toEqual([["must_haves", "multi", "What must the person have?", true]]);
+    // answered in words the fairness check refuses: nothing was taken, so the card is there again
+    draft = await answer({ own: ["Recent grads only"] });
+    expect(draft.facts.mustHaves).toEqual([]);
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    // typing something else does not lose it either
+    const typed = await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "Nice to have: Dentrix" });
+    draft = ((await typed.json()) as IntakeTurnResponse).session;
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    // answered: the card goes, and the job can be written
+    draft = await answer({ own: ["Two years at a front desk"] });
+    expect(draft.questions).toEqual([]);
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [], draftBlocker: null });
+  });
+
+  it("brings skipped cards back in the essentials' order, three at most, beside the cards for what was not asked yet", async () => {
+    let draft = await start(owner, OWNERS_SENTENCE);
+    expect(draft.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+    const send = async (answers: Array<Record<string, unknown>>): Promise<IntakeSessionView> => {
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/answers`, { answers });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as IntakeTurnResponse).session;
+    };
+    const cardFor = (field: string) => draft.questions.find((q) => q.field === field)!;
+    // the place answered; the work arrangement and the pay skipped
+    draft = await send([{ questionId: cardFor("location").id, own: ["Austin, TX"] }, { questionId: cardFor("remote_policy").id, skipped: true }, { questionId: cardFor("compensation").id, skipped: true }]);
+    expect(draft.readiness.missing).toEqual(["remote_policy", "compensation_range", "employment_type", "schedule"]);
+    expect(draft.questions.map((q) => [q.field, q.mode])).toEqual([["remote_policy", "single"], ["compensation", "pay"], ["employment_type", "single"]]);
+    expect(cardFor("remote_policy").options.map((o) => o.value)).toEqual(["onsite", "hybrid", "remote"]);
+    // all three skipped: the same three are offered again
+    draft = await send(draft.questions.map((q) => ({ questionId: q.id, skipped: true })));
+    expect(draft.questions.map((q) => q.field)).toEqual(["remote_policy", "compensation", "employment_type"]);
+    // two answered: their cards go, the skipped one stays, and the next thing still needed gets its card
+    draft = await send([{ questionId: cardFor("remote_policy").id, selected: ["hybrid"] }, { questionId: cardFor("compensation").id, pay: { basis: "salary", min: 120000, max: 150000 } }, { questionId: cardFor("employment_type").id, skipped: true }]);
+    expect(draft.readiness).toMatchObject({ payConfirmed: true, missing: ["employment_type", "schedule"] });
+    expect(draft.questions.map((q) => q.field)).toEqual(["employment_type", "schedule"]);
+    draft = await send([{ questionId: cardFor("employment_type").id, selected: ["full_time"] }, { questionId: cardFor("schedule").id, own: ["Monday to Friday, 9 to 5"] }]);
+    expect(draft.questions).toEqual([]);
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+  });
+
+  // Found by an audit in November 2026. The real model writes facts in plain words ("On site"); the stand-in writes
+  // codes and reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
+  it("knows the work arrangement when the assistant writes it in words and the owner said it as people do, and still asks when nobody said it", async () => {
+    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, missingFacts: [], questions: [], readyToCompile: true });
+    const arrangementOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "remote_policy");
+    // "On site", as the model wrote it
+    assistantAnswers({ title: "Front desk coordinator", locationText: "Tustin, CA", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26, mustHaves: ["Two years at a front desk"] });
+    const onSite = await start(owner, "Front desk coordinator in Tustin, CA, on site, full time, Monday to Friday, $22 to $26 an hour. Must-have: two years at a front desk.");
+    expect(onSite.facts.remotePolicy).toBe("onsite");
+    expect(arrangementOf(onSite)).toMatchObject({ done: true, value: "On site" });
+    expect(onSite.readiness).toMatchObject({ missing: [], mayDraft: true, draftBlocker: null });
+    expect(onSite.questions).toEqual([]);
+    // "we all work from home", as an owner says it
+    assistantAnswers({ title: "Bookkeeper", locationText: "Irvine, CA", remotePolicy: "Work from home", employmentType: "Part time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 30, compensationMax: 35, mustHaves: ["QuickBooks"] });
+    const fromHome = await start(owner, "Bookkeeper in Irvine, CA. We all work from home. Part time, Monday to Friday, $30 to $35 an hour. Must-have: QuickBooks.");
+    expect(fromHome.facts.remotePolicy).toBe("remote");
+    expect(arrangementOf(fromHome)).toMatchObject({ done: true, value: "Remote" });
+    expect(fromHome.readiness).toMatchObject({ missing: [], mayDraft: true });
+    expect(fromHome.questions.map((q) => q.field)).not.toContain("remote_policy");
+    // said by nobody: the assistant's own guess is not taken, and the card asks
+    assistantAnswers({ title: "Software Engineer", remotePolicy: "On site", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
+    const guessed = await start(owner, OWNERS_SENTENCE);
+    expect(guessed.facts.remotePolicy).toBeUndefined();
+    expect(arrangementOf(guessed)).toMatchObject({ done: false, value: null });
+    expect(guessed.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+  });
+
+  // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so pay the owner had just typed was held as
+  // unconfirmed, the pay card asked for it again, and "Write the job" waited.
+  it("counts pay typed as '45-55k' as set by the owner: no pay card, and the job can be written", async () => {
+    const words = (pay: string) => `Office manager in Irvine, CA, on site, full time, Monday to Friday, ${pay}. Must-have: two years running an office.`;
+    // with a dollar sign the stand-in reads the range as the real model does: 45,000 to 55,000 a year
+    const draft = await start(owner, words("$45-55k a year"));
+    expect(draft.facts).toMatchObject({ compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000 });
+    expect(draft.pay).toMatchObject({ confirmed: { via: "typed" }, summary: "Pay: $45,000–$55,000 a year." });
+    expect(draft.readiness).toMatchObject({ payConfirmed: true, missing: [], mayDraft: true, draftBlocker: null });
+    expect(draft.questions).toEqual([]);
+    // without one the stand-in reads no pay at all, so this turn is scripted with what the real model answers
+    container.fake!.scriptNext("intake.turn", {
+      assistantMessage: "Got it.", missingFacts: [], questions: [], readyToCompile: true,
+      factsExtracted: { title: "Office manager", locationText: "Irvine, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000, mustHaves: ["Two years running an office"], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] },
+    });
+    const plain = await start(owner, words("45-55k"));
+    expect(plain.pay.confirmed).toMatchObject({ via: "typed" });
+    expect(plain.readiness).toMatchObject({ payConfirmed: true, mayDraft: true });
+    expect(plain.questions.filter((q) => q.mode === "pay")).toEqual([]);
+    const w = await json(owner, "POST", `${sessions}/${plain.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const job = ((await w.json()) as { session: IntakeSessionView }).session.draft!;
+    expect(job.compensation).toMatchObject({ basis: "salary", min: 45000, max: 55000 });
+    expect(job.provenance.payConfirmedBy).toMatchObject({ via: "typed" });
+  });
+
   it("holds publishing while flagged wording is open, and publishes once it is reworded or kept with a reason", async () => {
     const draft = await written(owner);
     const edited = await json(owner, "PATCH", `${sessions}/${draft.id}/draft`, { description: `${draft.draft!.description.publicJobDescription} We want a digital native.` });

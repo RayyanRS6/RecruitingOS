@@ -1,18 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { CHAT_WRAP_KEY, type CandidatePanel, type ScreenTurn } from "@ros/contracts";
-import { aiRuns, applications, candidates, events, notifications, screens } from "@ros/db";
+import { aiRuns, applications, assessments, candidates, companies, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers";
 
 /**
- * Two rules of the AI interview, proven over HTTP. A question gets at most one follow-up: the stand-in model is scripted
- * to keep asking for more, since its own handler would not, and the code still moves on. And "I'd rather talk to a
+ * Rules of the AI interview, proven over HTTP. A question gets at most one follow-up: the stand-in model is scripted
+ * to keep asking for more, since its own handler would not, and the code still moves on. "I'd rather talk to a
  * person" leads to one plain choice that closes the AI interview as the candidate's own choice, tells the hiring team
- * once, sends them nothing the candidate typed, changes nothing when pressed again, and is rate-limited per link.
+ * once, sends them nothing the candidate typed, changes nothing when pressed again, and is rate-limited per link. And a
+ * must-have the candidate answered No about on the application form is not asked about again, while a licence or a
+ * certificate the chat does ask about is asked once, as yes or no.
  */
-describe("AI interview rules: the follow-up cap and choosing a person instead", () => {
+describe("AI interview rules: the follow-up cap, choosing a person instead, and what is not asked twice", () => {
   let container: Container;
   let app: ReturnType<typeof createApp>;
   let owner = "";
@@ -206,5 +208,48 @@ describe("AI interview rules: the follow-up cap and choosing a person instead", 
     expect(html).toContain("<h1>This link has closed</h1>");
     expect(html).toContain("The link to this AI interview has closed. The answers you did not send were not passed on. If you would still like to do it, reply to any of our emails: the hiring team at Rules Dental Group can send you a new link.");
     expect(html).not.toContain('action="/c/screen/');
+  });
+
+  // The code check of 25 November 2026: the form asked "Do you hold a radiography certificate?", they answered No, and
+  // the AI interview asked them about that certificate again.
+  it("someone who answered No on the application form about a certificate the job needs is not asked about it again; someone the form's question went unanswered for is asked once, as yes or no", async () => {
+    const [company] = await container.db.select({ id: companies.id }).from(companies).where(eq(companies.slug, slug));
+    const QUESTION = "Do you hold a radiography certificate?";
+    const job = await plantJob(container, { companyId: company.id, title: "Dental Assistant", packet: (p) => { p.formQuestions = [{ kind: "yes_no", key: "fq_certificate", question: QUESTION, required: false }]; } });
+    // a resume that says nothing about the certificate, so the reading has only the form's answer to go on
+    const RESUME = "Dental Assistant at Park Dental 2018 - present\nChairside assisting daily with two dentists\nDentrix";
+    /** Applies with these answers on the form, is shortlisted, and presses Start: the chat's plan as it was fixed. */
+    const planOf = async (p: { first: string; email: string }, answers: Record<string, string>) => {
+      expect((await app.request(`/careers/${slug}/jobs/${job}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: "Tester", email: p.email, ...answers }, RESUME) })).status).toBe(302);
+      await container.drain();
+      const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, p.email));
+      const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, job), eq(applications.candidateId, cand.id)));
+      expect((await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ action: "shortlist" }) })).status).toBe(200);
+      await container.drain();
+      const invited = await screenOf(a.id);
+      expect((await form(`/c/screen/${invited.token}/start`)).status).toBe(302);
+      return { application: a, token: invited.token, items: (await screenOf(a.id)).progress.chat?.items.map((i) => [i.key, i.kind]) };
+    };
+    const own = [["recent", "question"], ["nervous", "question"], ["available", "question"]];
+
+    // answered No on the form: the reading found the certificate not met on that answer, and the chat does not ask again
+    const no = await planOf({ first: "Nell", email: "nell.tester@rules.test" }, { q_fq_certificate: "no" });
+    const [reading] = await container.db.select().from(assessments).where(and(eq(assessments.applicationId, no.application.id), eq(assessments.kind, "triage")));
+    expect((reading.result as { requirementFindings: unknown[] }).requirementFindings).toEqual([{ requirementKey: "mh_xray", met: "no", evidence: { source: "application", quote: `${QUESTION} No.` } }]);
+    expect(no.items).toEqual(own);
+    expect(await pageOf(`/c/screen/${no.token}`)).toContain(`<p class="meta">Question 1 of ${own.length}</p>`);
+
+    // the form's question left unanswered: nothing shows the certificate, so the chat asks, once and as yes or no
+    const blank = await planOf({ first: "Olga", email: "olga.tester@rules.test" }, {});
+    expect(blank.items).toEqual([...own, ["mh_xray", "gap"]]);
+    for (const answer of ["I assist chairside every day and keep the rooms ready.", "I calmed a nervous patient by explaining each step before I did it.", "Monday to Friday, any hours, and I can start in two weeks."]) expect((await form(`/c/screen/${blank.token}`, { message: answer })).status).toBe(302);
+    let scr = await screenOf(blank.application.id);
+    expect(scr.progress.currentQuestionKey).toBe("mh_xray");
+    expect(scr.transcript.at(-1)?.content).toContain("This is one of the things the job needs: Radiography certificate. Do you have it?");
+    expect((await form(`/c/screen/${blank.token}`, { message: "No" })).status).toBe(302);
+    scr = await screenOf(blank.application.id);
+    expect(scr.answers.mh_xray).toBe("No");
+    expect(scr.progress.currentQuestionKey).toBe(CHAT_WRAP_KEY);
+    expect(scr.transcript.filter((t) => t.role === "assistant").map((t) => t.content).join("\n")).not.toMatch(/something similar|small moment/);
   });
 });

@@ -44,14 +44,16 @@ export function chatItemSettled(item: Pick<ChatItem, "state">): boolean {
 
 /**
  * What the chat does next with the item being asked, from how the latest reply reads (`ChatReading`). A concrete reply
- * covers it, and so does any reply to a yes-or-no question (`ladder` false). A vague one gets one push for specifics,
- * then counts as covered (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done
- * that? something similar from your own work"), then, for a gap, the smaller version ("even a small moment?"), then
- * the item is settled as not known: never a "no" for a skill, and never read as one.
+ * covers it, and so does any reply to an item with no ladder (`ladder` false): a yes-or-no question, or a must-have that
+ * names a licence, certificate, permit or registration, which is held or is not (which items those are is decided by
+ * `ladderApplies` in packages/agents/src/screening.ts). A vague one gets one push for specifics, then counts as covered
+ * (the team reads the words). "No" / "I haven't" climbs the ladder: the analog ("not done that? something similar from
+ * your own work"), then, for a gap, the smaller version ("even a small moment?"), then the item is settled as not
+ * known: never a "no" for a skill, and never read as one.
  */
 export type ChatMove = "push" | "analog" | "smaller" | "covered" | "unknown";
 export function chatNextMove(item: Pick<ChatItem, "kind" | "step" | "pushes">, reading: ChatReading, ladder: boolean): ChatMove {
-  // A yes-or-no question (no ladder) takes its answer as it is, a bare "Yes" included.
+  // An item with no ladder (a yes-or-no question, a licence the job needs) takes its answer as it is: "No", or a bare "Yes".
   if (reading === "concrete" || !ladder) return "covered";
   if (reading === "vague") return item.pushes < 1 ? "push" : "covered";
   if (item.step === "direct") return "analog";
@@ -139,6 +141,19 @@ const OPEN_ENDED = /\b(what|which|when|how|why|where|who|whose|whether|tell (?:m
 const RELATIVE_CLAUSE = /\b(?:in|at|on|to|near|within)\s+(?:the|a|an|any|this|that|these|those|your|our|their|its|each|every)\s+(?:(?!(?:and|or|but|nor|of|in|on|at|to|for|from|with|by|about|as|than|if|whether)\b)[\w-]+\s+){1,2}(?:where|when|which|who|whom|whose)\b.*?(?=[,;?]|\s(?:and|or|but)\b|$)/gi;
 const START = /\b(start|begin|starting|earliest)\b/i;
 const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
+/** The kinds of a question about a fact: the ones that can offer Yes and No, and whose "No" is an answer, never followed up. */
+const FACTUAL_KINDS: ReadonlyArray<ScreeningQuestion["kind"]> = ["availability", "logistics", "eligibility"];
+
+/**
+ * Whether a question's own words can only be answered yes or no: it starts "Do you", "Are you", "Can you"… and asks
+ * nothing open after that (`OPEN_ENDED`, less a clause that only places a noun: `RELATIVE_CLAUSE`). The one test for it:
+ * the Yes and No buttons go by it (`tapFormatFor`), and so does the kind of a question a person writes in the job editor
+ * (`screeningKindFor`).
+ */
+export function asksYesOrNo(question: string): boolean {
+  const text = question.trim();
+  return YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, "").replace(RELATIVE_CLAUSE, " "));
+}
 
 /**
  * The tap answer a question offers, or null for a free answer only. Worked out from the question's kind and its wording:
@@ -155,14 +170,43 @@ const DAYS = /\b(days?|weekends?|weekdays?|which shifts?|schedule)\b/i;
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();
   if (question.kind === "compensation") return { kind: "pay_range", basis: compensation.basis, currency: compensation.currency || "USD" };
-  if (!["availability", "logistics", "eligibility"].includes(question.kind)) return null;
+  if (!FACTUAL_KINDS.includes(question.kind)) return null;
   const asksStart = START.test(text) && /\b(when|date|how soon|earliest)\b/i.test(text);
   const asksDays = question.kind === "availability" && DAYS.test(text) && /\b(which|what)\b/i.test(text);
   // A question that asks two things ("which days, and when could you start?") is answered in the candidate's own words.
   if (asksStart && asksDays) return null;
   if (asksStart) return { kind: "start_date" };
   if (asksDays) return { kind: "days", options: [...WEEK_DAYS] };
-  return YES_NO.test(text) && !OPEN_ENDED.test(text.replace(/^\S+\s/, "").replace(RELATIVE_CLAUSE, " ")) ? { kind: "yes_no" } : null;
+  return asksYesOrNo(text) ? { kind: "yes_no" } : null;
+}
+
+/**
+ * A request for their own words that only opens like a yes-or-no question ("Can you give an example of a time…?",
+ * "Could you talk us through…?"): a "Yes" would answer none of it, so it is an open question (`screeningKindFor`).
+ */
+const ASKS_FOR_AN_ACCOUNT = /\bgive (?:(?:me|us) )?(?:(?:an?|one|some|two|a few) )?(?:\w+ )?examples?\b|\btalk (?:(?:me|us) through|about)\b|\bsay more\b/i;
+/** Words of a question about the pay someone is looking for: a pay question that is reworded keeps its pay-range answer only while it has one of them. */
+const ABOUT_PAY = /\b(?:pay|paid|salary|salaries|wages?|compensation|hourly|rate|range|earn(?:ings?)?|income)\b|\$/i;
+
+/**
+ * The kind of an AI interview question whose words a person wrote or changed in the job editor, which shows no kind and
+ * sets none. The kind decides what the chat does with the question: the tap answer it offers (`tapFormatFor`), and
+ * whether a bare "No" or a vague reply is followed up (an open question, "skills" or "behavioral") or is its answer
+ * (`ladderApplies` in packages/agents/src/screening.ts). So the kind follows the words, with the kind the question had
+ * (`was`; none for a new question):
+ * - words that can only be answered yes or no (`asksYesOrNo`, and no request for an account: `ASKS_FOR_AN_ACCOUNT`) make
+ *   it a question about a fact: the kind it had when that was one of those (availability, logistics, eligibility),
+ *   "eligibility" otherwise. It gets Yes and No, and "No" is its answer: "Can you work Saturdays?" is never followed by
+ *   "tell me about something similar";
+ * - any other words leave it the kind it had, and make a new question "skills", the open kind. Nothing in an open
+ *   question's words tells one about a fact ("Which certifications do you hold?") from one about a skill, so the words
+ *   alone never take a kind away. The one exception is a pay question, whose answer is a pay range whatever its words:
+ *   it keeps that kind only while its words still speak of pay (`ABOUT_PAY`), and is an open question otherwise.
+ */
+export function screeningKindFor(question: string, was?: ScreeningQuestion["kind"]): ScreeningQuestion["kind"] {
+  if (asksYesOrNo(question) && !ASKS_FOR_AN_ACCOUNT.test(question)) return was && FACTUAL_KINDS.includes(was) ? was : "eligibility";
+  if (was === "compensation" && !ABOUT_PAY.test(question)) return "skills";
+  return was ?? "skills";
 }
 
 function money(n: number, currency: string): string {
