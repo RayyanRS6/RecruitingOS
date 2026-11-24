@@ -219,7 +219,10 @@ export function rememberPrompts(asked: readonly string[], shown: readonly Intake
 
 const ARRANGEMENT_OPTIONS: IntakeQuestion["options"] = [{ label: "On site", value: "onsite", origin: "assistant" }, { label: "Hybrid", value: "hybrid", origin: "assistant" }, { label: "Remote", value: "remote", origin: "assistant" }];
 
-/** The server's own card for each essential, asked when the essential is missing and the assistant wrote no card for it. */
+/**
+ * The server's own card for each essential, shown while the essential is missing and no card of the assistant's asks for
+ * it on this turn: again on every later turn until it is answered, so "still needed" always comes with a card to answer.
+ */
 const ESSENTIAL_CARD: Record<IntakeEssentialKey, Omit<IntakeQuestion, "id">> = {
   title: { field: "title", prompt: "What is the job title?", mode: "free", options: [], allowOwn: true, why: "It is the first thing candidates read." },
   location: { field: "location", prompt: "Where is the job? Give the city and state.", mode: "free", options: [], allowOwn: true, why: "The place is on the job page, and it decides which notices the page carries." },
@@ -236,14 +239,20 @@ const ESSENTIAL_FIELD: Record<IntakeEssentialKey, IntakeQuestionField> = { title
 const BENEFITS_CARD: Omit<IntakeQuestion, "id"> = { field: "benefits", prompt: "What benefits come with the job?", mode: "free", options: [], allowOwn: true, why: "The law where this job is asks the job ad to describe the benefits." };
 
 /**
- * The cards as they are stored and shown. The assistant chooses and words them; the server decides: it drops a card whose
- * field was already asked in this draft or that the facts already answer (`settled`), one that asks which company the
- * job is for, and one worded like a card already shown; draws the pay card itself (no options); gives the work
- * arrangement exactly its three choices; drops any offered answer that fails the fairness check; labels "Your words" only
- * where the words are the owner's; adds its own card for an essential still missing that nothing asks (`missing`), in the
- * essentials' order; offers stated deal-breakers back as must-haves, each worded as the requirement it rules people out
- * on (`mustHaveOf`), with none ready-made for one whose words still rule someone out, which the card's question names;
- * and asks for the benefits when the law of the job's place asks the ad to describe them. Three cards at most.
+ * The cards as they are stored and shown. The assistant chooses and words them; the server decides: it drops a card of
+ * the assistant's whose field was already asked in this draft or that the facts already answer (`settled`), one that asks
+ * which company the job is for, and one worded like a card already shown; draws the pay card itself (no options); gives
+ * the work arrangement exactly its three choices; drops any offered answer that fails the fairness check; labels "Your
+ * words" only where the words are the owner's; adds its own card for an essential still missing that nothing asks on this
+ * turn (`missing`), in the essentials' order; offers stated deal-breakers back as must-haves, each worded as the
+ * requirement it rules people out on (`mustHaveOf`), with none ready-made for one whose words still rule someone out,
+ * which the card's question names; and asks for the benefits when the law of the job's place asks the ad to describe
+ * them. Three cards at most.
+ *
+ * The assistant never asks twice; the server keeps offering what is still needed. `settled` stops the assistant's cards
+ * only: the server's own card for a missing essential comes back on every turn until the essential is answered (a card
+ * skipped, or answered in words that could not be used, would otherwise leave "still needed" with nothing to tap), and so
+ * does the pay card while the pay is stated and no person has confirmed it (the caller lists it in `missing`).
  */
 export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number; payConfirmed: boolean; dealBreakers: string[]; missing?: readonly IntakeEssentialKey[]; benefitsNeeded?: boolean; settled?: readonly IntakeQuestionField[]; ownerWords?: ReadonlySet<string>; askedPrompts?: readonly string[] }): IntakeQuestion[] {
   const settled = new Set(input.settled ?? []);
@@ -267,9 +276,10 @@ export function prepareQuestions(raw: IntakeQuestion[], input: { turnNo: number;
     if ((q.mode === "single" || q.mode === "multi") && !options.length && !q.allowOwn) continue;
     out.push({ ...q, options });
   }
+  // Whatever was asked before: an essential still missing always has its card.
   for (const key of input.missing ?? []) {
     const field = ESSENTIAL_FIELD[key];
-    if (!settled.has(field) && !out.some((x) => cardField(x) === field)) out.push(ESSENTIAL_CARD[key]);
+    if (!out.some((x) => cardField(x) === field)) out.push(ESSENTIAL_CARD[key]);
   }
   const rank = (q: Omit<IntakeQuestion, "id">) => { const i = INTAKE_ESSENTIALS.findIndex((key) => ESSENTIAL_FIELD[key] === cardField(q)); return i < 0 ? INTAKE_ESSENTIALS.length : i; };
   const cards = out.map((q, i) => ({ q, i })).sort((a, b) => rank(a.q) - rank(b.q) || a.i - b.i).map((x) => x.q);

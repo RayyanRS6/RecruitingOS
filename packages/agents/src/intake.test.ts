@@ -94,10 +94,30 @@ describe("the cards as the server stores them", () => {
     expect(q.options.map((o) => o.value)).toEqual(["onsite", "hybrid", "remote"]);
   });
 
-  it("asks for an essential that is missing when the assistant wrote no card for it, once", () => {
+  it("asks for an essential that is missing when the assistant wrote no card for it", () => {
     const out = prepare([], { missing: ["location", "remote_policy", "compensation_range", "employment_type"] });
     expect(out.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
-    expect(prepare([], { missing: ["location", "remote_policy"], settled: ["location", "remote_policy"] })).toEqual([]);
+  });
+
+  // Found on the live site in November 2026: a draft read "Still needed before the job can be written: at least one
+  // must-have" with no card, because a card for the field had been shown once (skipped, or answered in words that could
+  // not be used) and nothing asked for it again.
+  it("never shows the assistant's own card for a field twice, and keeps offering its own card for an essential until it is answered", () => {
+    const asked = ["location", "remote_policy", "must_haves"] as const;
+    const again = prepare([card({ field: "location", prompt: "Which city is the job in?" }), card({ field: "must_haves", prompt: "Which of these must they have?", mode: "multi" })], { missing: ["location", "remote_policy", "must_haves"], settled: asked });
+    // the assistant's two cards are dropped: it asked for those fields before; the server's own three stand in their place
+    expect(again.map((q) => [q.id, q.field, q.prompt])).toEqual([["q1_1", "location", "Where is the job? Give the city and state."], ["q1_2", "remote_policy", "Is the job on site, hybrid or remote?"], ["q1_3", "must_haves", "What must the person have?"]]);
+    // an essential that is answered is asked by nobody, whoever asked before
+    expect(prepare([card({ field: "location" })], { missing: ["must_haves"], settled: asked }).map((q) => q.field)).toEqual(["must_haves"]);
+    expect(prepare([card({ field: "location" })], { missing: [], settled: asked })).toEqual([]);
+    // three at most, in the essentials' order, however many are still missing
+    expect(prepare([], { missing: ["title", "location", "remote_policy", "compensation_range", "employment_type", "schedule", "must_haves"], settled: ["title", "location", "remote_policy", "compensation", "compensation_basis", "employment_type", "schedule", "must_haves"] }).map((q) => q.field)).toEqual(["title", "location", "remote_policy"]);
+  });
+
+  it("brings the pay card back while the pay is stated and nobody has confirmed it, and never once it is confirmed", () => {
+    const shown = ["compensation", "compensation_basis"] as const;
+    expect(prepare([], { missing: ["compensation_range"], settled: shown }).map((q) => [q.field, q.mode, q.options])).toEqual([["compensation", "pay", []]]);
+    expect(prepare([], { missing: [], settled: shown, payConfirmed: true })).toEqual([]);
   });
 
   it("drops an offered answer that stands in for a protected trait, and says whose words an answer is in", () => {

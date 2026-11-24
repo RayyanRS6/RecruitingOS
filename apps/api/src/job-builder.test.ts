@@ -257,6 +257,60 @@ describe("the job builder", () => {
     expect(((await stale.json()) as Refusal).error.code).toBe("unknown_question");
   });
 
+  // Found on the live site in November 2026: a draft read "Still needed before the job can be written: at least one
+  // must-have" and showed no card, because the must-haves card had been shown once and nothing asked again.
+  it("never leaves 'still needed' without a card: a skipped card, and one whose answer could not be used, come back until the essential is answered", async () => {
+    let draft = await start(owner, "Front desk coordinator in Tustin, CA, on site, full time, Monday to Friday, $22 to $26 an hour.");
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    const answer = async (a: Record<string, unknown>): Promise<IntakeSessionView> => {
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/answers`, { answers: [{ questionId: draft.questions[0].id, ...a }] });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as IntakeTurnResponse).session;
+    };
+    // skipped: the job still cannot be written, and the card is there again
+    draft = await answer({ skipped: true });
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["must_haves"], draftBlocker: "Still needed before the job can be written: at least one must-have." });
+    expect(draft.questions.map((q) => [q.field, q.mode, q.prompt, q.allowOwn])).toEqual([["must_haves", "multi", "What must the person have?", true]]);
+    // answered in words the fairness check refuses: nothing was taken, so the card is there again
+    draft = await answer({ own: ["Recent grads only"] });
+    expect(draft.facts.mustHaves).toEqual([]);
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    // typing something else does not lose it either
+    const typed = await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "Nice to have: Dentrix" });
+    draft = ((await typed.json()) as IntakeTurnResponse).session;
+    expect(draft.questions.map((q) => q.field)).toEqual(["must_haves"]);
+    // answered: the card goes, and the job can be written
+    draft = await answer({ own: ["Two years at a front desk"] });
+    expect(draft.questions).toEqual([]);
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [], draftBlocker: null });
+  });
+
+  it("brings skipped cards back in the essentials' order, three at most, beside the cards for what was not asked yet", async () => {
+    let draft = await start(owner, OWNERS_SENTENCE);
+    expect(draft.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+    const send = async (answers: Array<Record<string, unknown>>): Promise<IntakeSessionView> => {
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/answers`, { answers });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as IntakeTurnResponse).session;
+    };
+    const cardFor = (field: string) => draft.questions.find((q) => q.field === field)!;
+    // the place answered; the work arrangement and the pay skipped
+    draft = await send([{ questionId: cardFor("location").id, own: ["Austin, TX"] }, { questionId: cardFor("remote_policy").id, skipped: true }, { questionId: cardFor("compensation").id, skipped: true }]);
+    expect(draft.readiness.missing).toEqual(["remote_policy", "compensation_range", "employment_type", "schedule"]);
+    expect(draft.questions.map((q) => [q.field, q.mode])).toEqual([["remote_policy", "single"], ["compensation", "pay"], ["employment_type", "single"]]);
+    expect(cardFor("remote_policy").options.map((o) => o.value)).toEqual(["onsite", "hybrid", "remote"]);
+    // all three skipped: the same three are offered again
+    draft = await send(draft.questions.map((q) => ({ questionId: q.id, skipped: true })));
+    expect(draft.questions.map((q) => q.field)).toEqual(["remote_policy", "compensation", "employment_type"]);
+    // two answered: their cards go, the skipped one stays, and the next thing still needed gets its card
+    draft = await send([{ questionId: cardFor("remote_policy").id, selected: ["hybrid"] }, { questionId: cardFor("compensation").id, pay: { basis: "salary", min: 120000, max: 150000 } }, { questionId: cardFor("employment_type").id, skipped: true }]);
+    expect(draft.readiness).toMatchObject({ payConfirmed: true, missing: ["employment_type", "schedule"] });
+    expect(draft.questions.map((q) => q.field)).toEqual(["employment_type", "schedule"]);
+    draft = await send([{ questionId: cardFor("employment_type").id, selected: ["full_time"] }, { questionId: cardFor("schedule").id, own: ["Monday to Friday, 9 to 5"] }]);
+    expect(draft.questions).toEqual([]);
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+  });
+
   it("holds publishing while flagged wording is open, and publishes once it is reworded or kept with a reason", async () => {
     const draft = await written(owner);
     const edited = await json(owner, "PATCH", `${sessions}/${draft.id}/draft`, { description: `${draft.draft!.description.publicJobDescription} We want a digital native.` });
