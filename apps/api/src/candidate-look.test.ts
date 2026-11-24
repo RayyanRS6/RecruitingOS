@@ -7,7 +7,7 @@ import { applications, roles, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { SCREEN_CSS, STATUS_CSS } from "./pages/candidate";
-import { CANDIDATE_FONTS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
+import { CANDIDATE_FONTS, DISPLAY_WEIGHTS, DISPLAY_WIDTHS, FONT_DIR, FONT_LOCK_FILE, type FontLock, fontLicenceFile } from "./pages/fonts";
 import { AI_NOTICE_LINE } from "./pages/job-page";
 import { CSS } from "./pages/layout";
 import { applicationForm, plantJob, seedCompany, statusTokenFor, usePlan } from "./test-helpers";
@@ -92,26 +92,33 @@ describe("candidate pages: design tokens and fonts", () => {
   });
 
   it("declares IBM Plex Sans and Bricolage Grotesque from this deployment's own /fonts/ folder, and the policy still names no outside host", () => {
-    for (const [family, weight] of [["IBM Plex Sans", 400], ["IBM Plex Sans", 600], ["Bricolage Grotesque", 700]] as const) {
+    // Bricolage Grotesque is one variable file (weights 200 to 800, widths 75% to 100%), named by its width axis
+    for (const [family, weight, file] of [["IBM Plex Sans", "400", "400"], ["IBM Plex Sans", "600", "600"], ["Bricolage Grotesque", DISPLAY_WEIGHTS, "wdth"]] as const) {
       const faces = [...CSS.matchAll(/@font-face \{([^}]*)\}/g)].map((m) => m[1]).filter((f) => f.includes(`font-family: "${family}"`) && f.includes(`font-weight: ${weight};`));
       expect(faces, `${family} ${weight}`).toHaveLength(2); // the latin file and the latin-ext file
       for (const f of faces) {
         expect(f).toContain("font-display: swap");
-        expect(f).toMatch(new RegExp(`url\\("${FONT_DIR}/[a-z-]+-latin(-ext)?-${weight}-normal\\.woff2"\\) format\\("woff2"\\)`));
+        expect(f).toMatch(new RegExp(`url\\("${FONT_DIR}/[a-z-]+-latin(-ext)?-${file}-normal\\.woff2"\\) format\\("woff2"\\)`));
         expect(f).toContain("unicode-range: U+");
+        // the variable face says its widths and is never taken from the device (an installed copy may be one fixed cut)
+        expect(f.includes(`font-stretch: ${DISPLAY_WIDTHS};`)).toBe(file === "wdth");
+        if (file === "wdth") expect(f).not.toContain("local(");
       }
     }
+    // the big headings are set narrow, inside the widths the file has
+    expect(pageCss).toMatch(/\nh1 \{[^}]*font-stretch: 80%;/);
     // nothing on a candidate page loads from another origin, so font-src 'self' covers the fonts
     expect(`${CSS}${SCREEN_CSS}`).not.toMatch(/https?:|url\((?!"\/fonts\/)/);
     const csp = buildCandidateCsp({ nonce: "n", production: true, reportPath: "/api/csp-report" });
     expect(csp).toContain("font-src 'self';");
     expect(csp).not.toMatch(/https?:\/\//);
-    // only the weights that have a file: no faux bold
-    const weights = [...pageCss.matchAll(/font-weight: (\d+)|font: (\d+) /g)].map((m) => Number(m[1] ?? m[2]));
+    // only the weights that have a file: no faux bold (the rules that use a weight, not the faces that declare theirs)
+    const weights = [...pageCss.replace(/@font-face \{[^}]*\}/g, "").matchAll(/font-weight: (\d+)|font: (\d+) /g)].map((m) => Number(m[1] ?? m[2]));
     for (const w of weights) expect([400, 600, 700], `font weight ${w}`).toContain(w);
     // Fontsource's file names, one file per face and subset, so scripts/fetch-fonts.ts can copy them one for one
     expect(new Set(CANDIDATE_FONTS.map((f) => f.file)).size).toBe(CANDIDATE_FONTS.length);
-    for (const f of CANDIDATE_FONTS) expect(f.file).toBe(`${f.slug}-${f.subset}-${f.weight}-normal.woff2`);
+    for (const f of CANDIDATE_FONTS) expect(f.file).toBe(`${f.slug}-${f.subset}-${f.stretch ? "wdth" : f.weight}-normal.woff2`);
+    for (const f of CANDIDATE_FONTS) expect(f.pkg).toBe(`${f.stretch ? "@fontsource-variable" : "@fontsource"}/${f.slug}`);
   });
 
   const fontsDir = new URL("../../shell/public/fonts/", import.meta.url);
@@ -222,7 +229,10 @@ describe("candidate pages: the look, page by page", () => {
   it("the job page: the company beside its initials, the facts as pills with icons and spoken names, an Apply button at the top and one in the panel that stays on a phone's screen, the notices before the panel", async () => {
     const html = await page(`/careers/${slug}/jobs/${roleId}`);
     expect(html).toContain('<main class="wide">');
-    expect(html).toMatch(/<p class="eyebrow"><a href="\/careers\/[^"]+">Careers at Look Dental<\/a><\/p>/);
+    // the company in plain semibold words beside its logo (24 November 2026: no small capitals, no underline at rest)
+    expect(html).toMatch(/<p class="company-name"><a href="\/careers\/[^"]+">Careers at Look Dental<\/a><\/p>/);
+    expect(CSS).toMatch(/\.company-name \{[^}]*font-size: 15\.5px; font-weight: 600;/);
+    expect(CSS).toMatch(/\.company-name a \{[^}]*min-height: 40px;[^}]*text-decoration: none; \}/);
     // no logo uploaded: the square shows the initials, hidden from screen readers since the name is written beside it
     expect(html).toContain('<span class="logo" aria-hidden="true">LD</span>');
     const facts = html.slice(html.indexOf('<ul class="facts">'), html.indexOf("</ul>", html.indexOf('<ul class="facts">')));
@@ -236,23 +246,27 @@ describe("candidate pages: the look, page by page", () => {
     expect(facts).toMatch(/<li class="fact"><svg class="icon"[^>]*>.*?<\/svg><span class="fact-text">Posted [A-Z][a-z]+ \d{1,2}, \d{4}<\/span><\/li>/);
     // two Apply buttons: one by the title (hidden on a phone, where the bar is always there) and one in the panel
     expect(html.match(/>Apply now</g)).toHaveLength(2);
-    expect(html).toMatch(/<a class="btn go head-apply" href="\/careers\/[^"]+\/apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
+    expect(html).toMatch(/<a class="btn go head-apply" href="\/careers\/[^"]+\/apply"><span class="go-text">Apply now<\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><\/a>/);
     expect(CSS).toMatch(/@media \(max-width: 899px\) \{[^@]*\.head-apply \{ display: none; \}/);
     const panel = html.indexOf('<div class="apply-panel">');
     expect(panel).toBeGreaterThan(0);
-    // Apply now: the circle and arrow, the fill hidden from screen readers, the words its only name; in the panel too
-    expect(html.slice(panel)).toMatch(/<a class="btn go" href="\/careers\/[^"]+\/apply"><span class="go-fill" aria-hidden="true"><\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><span class="go-text">Apply now<\/span><\/a>/);
+    // Apply now (24 November 2026): the application's own plum pill, the words then an arrow in a light circle, the
+    // words its only name; in the panel too
+    expect(html.slice(panel)).toMatch(/<a class="btn go" href="\/careers\/[^"]+\/apply"><span class="go-text">Apply now<\/span><span class="go-icon"><svg class="icon"[^>]*>.*?<\/svg><\/span><\/a>/);
     // each one's accessible name is exactly "Apply now": take away what screen readers skip and only the words are left
     const goLinks = [...html.matchAll(/<a class="btn go[^"]*" href="[^"]+">(.*?)<\/a>/g)].map((m) => m[1]);
     expect(goLinks).toHaveLength(2);
     for (const inner of goLinks) expect(inner.replace(/<(span|svg)\b[^>]*aria-hidden="true"[^>]*>.*?<\/\1>/g, "").replace(/<[^>]+>/g, "")).toBe("Apply now");
-    // the fill moves by transform alone, in 200ms, on a mouse's hover or a keyboard's focus; a tap never leaves it plum
-    expect(CSS).toMatch(/\.go-fill \{[^}]*transform: translateX\(calc\(-100% - 4px\)\); \}/);
-    expect(CSS).toMatch(/@media \(hover: hover\) and \(pointer: fine\) \{[^@]*\.btn\.go:hover \.go-fill \{ transform: none; \}/);
-    expect(CSS).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
-    expect(CSS).toContain("@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }");
-    // its edge is the field-border grey, so the pill shows on the open ground too; a tap on a phone never fills a button
-    expect(CSS).toMatch(/\.btn\.go \{[^}]*border-color: var\(--line-strong\);/);
+    // it is the main button as it stands (plum fill, light words, the plum shadow): nothing slides across it and it
+    // never looks switched off; the arrow steps right by transform alone, in 200ms, on a mouse's hover only
+    expect(CSS).not.toContain("go-fill");
+    const go = CSS.match(/\.btn\.go \{([^}]*)\}/)?.[1] ?? "";
+    expect(go).toContain("justify-content: space-between;");
+    expect(go).not.toMatch(/background|border-color|(?<!-)color:/);
+    expect(CSS).toContain(".btn.secondary, .btn:disabled { box-shadow: none; }");
+    expect(CSS).toMatch(/\.go-icon \{[^}]*border-radius: 50%; background: var\(--on-primary\); color: var\(--primary\); \}/);
+    expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn.go:hover .go-icon .icon { transform: translateX(3px); } }");
+    expect(CSS).toContain("@media (prefers-reduced-motion: no-preference) { .go-icon .icon { transition: transform 200ms ease-out; } }");
     expect(CSS).toContain("@media (hover: hover) and (pointer: fine) { .btn:hover { background: var(--primary-hover); border-color: var(--primary-hover); } }");
     expect(CSS).not.toMatch(/backdrop-filter|filter:\s*blur|transition:[^;]*width/);
     expect(html.lastIndexOf(">Apply now<")).toBeGreaterThan(panel);

@@ -69,6 +69,15 @@ The decisions and open items that hold around the product in [PRODUCT.md](PRODUC
 - **Q12 B** (7 Oct 2026). A closing date stops new applications at the end of that day. Nobody is rejected by it, and closing the job stays a person's decision.
 - (19 Nov 2026, the team.) An AI interview asks the questions of the job as it is when the interview is made, by Shortlist or by a new link, and keeps them to its end. Closing a job closes its AI interview links that are still open. An interview the candidate sent is always scored.
 
+## The look
+
+- (24 Nov 2026, owner.) "The job page does not match the UI of my app. Apply now button is very worse"; "fix inconsistent UI"; "do not completely transform my website", "keep my current app's theme"; changes to hierarchy, components and smoothness are allowed. The owner likes narrow bold headlines (Klarna Title, Helvetica Now Display Condensed) and the look of coss.com/ui, klarna.com and ugly.cash.
+- (24 Nov 2026, the team.) Apply now is the application's own plum pill, the words then an arrow in a light circle; the pale pill with a sliding fill is gone. The job page's text sits in a card like the application's, and the company is named in plain semibold words beside its logo.
+- (24 Nov 2026, the team.) Big headings and figures are set narrow: the same Bricolage Grotesque, as one variable file with a width axis, at 80%. Small headings keep the normal width. No second display family and no paid font.
+- (24 Nov 2026, the team.) A page under another has one quiet back link above its heading ("‹ Jobs"), in no bar of its own. A page title wraps inside its row, so its status and buttons stay on its first line.
+- (24 Nov 2026, the team.) System, Health: each problem is a mark, its title, one quiet line (how urgent, when), one sentence, and the rest under "Details"; its buttons sit beside the title.
+- (24 Nov 2026, the team.) The libraries the owner named (coss.com/ui, reactbits.dev, obsidianui.dev, libraries.dev) are references for the feel only. None is installed and no code is copied: the kit stays our own (mixed licences, and pages must stay light on old phones). The small mono eyebrows stay, as part of the owner's theme. Candidate pages keep following the device's light or dark setting.
+
 ## Hosting and releases
 
 - (9 Oct 2026.) Keep Vercel, Supabase and Railway: "don't change anything" about hosting. Vercel runs the app, the API included; Railway runs the worker; Supabase holds the database, sign-in and files.

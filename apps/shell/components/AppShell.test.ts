@@ -428,7 +428,11 @@ describe("the bar above the page", () => {
     expect(render(meAs("owner"))).toMatch(/<a href="\/" class="[^"]*">Home<\/a><span aria-hidden="true">\/<\/span><span class="[^"]*">Updates<\/span>/);
     // a job's page: the way back up is there from the first draw, without the job's name
     nav.path = "/roles/r-open/talent";
-    expect(render(meAs("owner"))).toMatch(/<p class="[^"]*"><a href="\/roles" class="[^"]*">Jobs<\/a><\/p>/);
+    // alone it is a back link: a chevron (decoration) and the section's word, in the page's column, in no bar of its own
+    const jobPage = render(meAs("owner"));
+    expect(jobPage).toMatch(/<p class="[^"]*"><a href="\/roles" class="[^"]*"><svg class="icon"[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Jobs<\/a><\/p>/);
+    expect(jobPage).not.toMatch(/<div class="[^"]*\bborder-b\b[^"]*"><p class="[^"]*"><a href="\/roles"/);
+    expect(jobPage).not.toMatch(/<a href="\/roles" class="[^"]*\bunderline\b/);
   });
 });
 

@@ -23,8 +23,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "apps", "shell", "public", "fonts");
 const LOCK = join(ROOT, FONT_LOCK_FILE);
 const APP_CSS = join(ROOT, APP_FONT_CSS_FILE);
-const FONTSOURCE = "https://cdn.jsdelivr.net/npm/@fontsource";
-const RESOLVE = "https://data.jsdelivr.com/v1/packages/npm/@fontsource";
+// A face names its own Fontsource package: "@fontsource/<slug>" for fixed weights, "@fontsource-variable/<slug>" for a variable file.
+const CDN = "https://cdn.jsdelivr.net/npm";
+const RESOLVE = "https://data.jsdelivr.com/v1/packages/npm";
 const MAJOR = "5";
 const EXACT = /^\d+\.\d+\.\d+$/;
 
@@ -38,11 +39,11 @@ async function download(url: string): Promise<Uint8Array> {
 }
 
 /** The exact version of the newest release in the major line, asked once and then kept in the lock. */
-async function newestRelease(slug: string): Promise<string> {
-  const res = await fetch(`${RESOLVE}/${slug}/resolved?specifier=${MAJOR}`);
-  if (!res.ok) throw new Error(`could not look up @fontsource/${slug}@${MAJOR}: ${res.status}`);
+async function newestRelease(pkg: string): Promise<string> {
+  const res = await fetch(`${RESOLVE}/${pkg}/resolved?specifier=${MAJOR}`);
+  if (!res.ok) throw new Error(`could not look up ${pkg}@${MAJOR}: ${res.status}`);
   const version = ((await res.json()) as { version?: unknown }).version;
-  if (typeof version !== "string" || !EXACT.test(version)) throw new Error(`@fontsource/${slug}@${MAJOR} did not resolve to an exact version`);
+  if (typeof version !== "string" || !EXACT.test(version)) throw new Error(`${pkg}@${MAJOR} did not resolve to an exact version`);
   return version;
 }
 
@@ -52,12 +53,14 @@ async function main() {
   const lock: FontLock = existsSync(LOCK) ? (JSON.parse(readFileSync(LOCK, "utf8")) as FontLock) : { packages: {}, files: {} };
   if (!check) mkdirSync(OUT, { recursive: true });
 
-  const slugs = [...new Set(APP_FONTS.map((f) => f.slug))];
+  // one package for each family (its slug is the lock's key and names the licence file)
+  const pkgOf = new Map(APP_FONTS.map((f) => [f.slug, f.pkg]));
+  const slugs = [...pkgOf.keys()];
   for (const slug of slugs) {
     const pinned = lock.packages[slug];
     if (pinned && !EXACT.test(pinned)) problems.push(`${slug} is pinned to "${pinned}", which is not an exact version`);
     else if (!pinned && check) problems.push(`${slug} has no pinned version in ${FONT_LOCK_FILE}`);
-    else if (!pinned) lock.packages[slug] = await newestRelease(slug);
+    else if (!pinned) lock.packages[slug] = await newestRelease(pkgOf.get(slug) as string);
   }
 
   const wanted = [...APP_FONTS.map((f) => ({ slug: f.slug, file: f.file, url: `files/${f.file}`, woff2: true })), ...slugs.map((slug) => ({ slug, file: fontLicenceFile(slug), url: "LICENSE", woff2: false }))];
@@ -71,11 +74,12 @@ async function main() {
       problems.push(`${w.file} is missing`);
       continue;
     } else {
-      bytes = await download(`${FONTSOURCE}/${w.slug}@${version}/${w.url}`);
+      const pkg = pkgOf.get(w.slug) as string;
+      bytes = await download(`${CDN}/${pkg}@${version}/${w.url}`);
       if (w.woff2 && !isWoff2(bytes)) throw new Error(`${w.file}: the download is not a woff2 file`);
       if (expected && sha256(bytes) !== expected) throw new Error(`${w.file}: the download does not match the hash in ${FONT_LOCK_FILE}; nothing was saved`);
       writeFileSync(path, bytes);
-      console.log(`saved ${w.file} from @fontsource/${w.slug}@${version} (${bytes.length} bytes)`);
+      console.log(`saved ${w.file} from ${pkg}@${version} (${bytes.length} bytes)`);
     }
     if (w.woff2 && !isWoff2(bytes)) problems.push(`${w.file} is not a woff2 file`);
     const actual = sha256(bytes);

@@ -542,12 +542,12 @@ describe("the candidate pages' stylesheet", () => {
     for (const m of cand.matchAll(/[^{}]*:active[^{}]*\{[^}]*transform:(?!\s*none)/g)) expect(insideMedia(cand, m.index ?? 0, "(prefers-reduced-motion: no-preference)"), m[0].trim()).toBe(true);
   });
 
-  it("fills a background on hover, or slides the arrow pill's fill, only where there is a mouse", () => {
+  it("fills a background on hover, or steps Apply now's arrow, only where there is a mouse", () => {
     for (const f of hoverFills(cand)) expect(insideMedia(cand, f.at, HOVER_MEDIA), f.selector).toBe(true);
-    for (const m of cand.matchAll(/\.btn\.go:hover \.go-fill/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA), m[0]).toBe(true);
+    for (const m of cand.matchAll(/\.btn\.go:hover \.go-icon/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA), m[0]).toBe(true);
     // the guard finds the fills it checks
     for (const sel of [".btn:hover", ".btn.secondary:hover", "input[type=file]::file-selector-button:hover"]) expect(hoverFills(cand).map((f) => f.selector)).toContain(sel);
-    expect(cand).toContain(".btn.go:hover .go-fill");
+    expect(cand).toContain(".btn.go:hover .go-icon .icon");
   });
 
   it("stays within its byte budget (gzip level 9, with comments, as it ships)", () => {
@@ -558,19 +558,17 @@ describe("the candidate pages' stylesheet", () => {
     expect(gzipSync(Buffer.from(candidate), { level: 9 }).length).toBeLessThanOrEqual(5_500);
   });
 
-  it("slides Apply now's fill by transform alone, edged in the field-border grey, with the candidate pages' literal timings", () => {
+  it("draws Apply now as the main plum pill and steps its arrow by transform alone, with the candidate pages' literal timings", () => {
     expect(rule(cand, ".btn")).toContain("transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;");
     expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .btn:active:not(:disabled) { transform: scale(0.97); } }");
+    // 24 November 2026: the pale pill with a sliding fill read as switched off; the pill is the plum button itself, so
+    // its rule sets no colour, no edge and no transition of its own, and nothing is laid over the words
     const go = rule(cand, ".btn.go");
-    expect(go).toContain("border-color: var(--line-strong);");
-    expect(go).toContain("transition: border-color 150ms ease, color 50ms linear 35ms, transform 150ms ease;");
-    expect(rule(cand, ".go-fill")).toContain("transform: translateX(calc(-100% - 4px));");
-    // placed by the four longhands: older phones' browsers (before Chrome 87, Safari 14.1) skip the `inset` shorthand, and
-    // the fill would shrink to nothing while the words still turned light on the pale pill
-    expect(rule(cand, ".go-fill")).toContain("position: absolute; top: 4px; right: 4px; bottom: 4px; left: 4px;");
+    expect(go).not.toMatch(/background|border-color|transition|(?<!-)color:/);
+    expect(cand).not.toContain("go-fill");
+    // older phones' browsers (before Chrome 87, Safari 14.1) skip the `inset` shorthand
     expect(cand).not.toMatch(/(^|[{;\s])inset\s*:/);
-    expect(cand).toContain(".btn.go:focus-visible .go-fill, .btn.go:active .go-fill { transform: none; }");
-    expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .go-fill, .go-icon .icon { transition: transform 200ms ease-out; } }");
+    expect(cand).toContain("@media (prefers-reduced-motion: no-preference) { .go-icon .icon { transition: transform 200ms ease-out; } }");
     // no unconditional .btn.go:hover: every hover of the pill waits for a mouse
     for (const m of cand.matchAll(/\.btn\.go:hover/g)) expect(insideMedia(cand, m.index ?? 0, HOVER_MEDIA)).toBe(true);
     expect(cand).not.toMatch(/transition:[^;]*width/);

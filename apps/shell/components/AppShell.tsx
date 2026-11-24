@@ -404,13 +404,15 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
         </div>
       </nav>
       <div className="group/page flex min-w-0 flex-col">
-        {/* The way back up, on a page under another only (parentTrail): words and one link, not a landmark (the rail
-            and the page's own heading lead). The company is not repeated here: the rail's chip names it. Phones have
-            their own top bar. */}
+        {/* The way back up, on a page under another only (parentTrail): one quiet link in the page's own column, right
+            above its heading, not a landmark (the rail and the heading lead) and not a bar of its own. Alone it is a
+            back link with a chevron ("‹ Jobs"); with the page's word it is a short trail ("Jobs / Start a hire"). The
+            company is not repeated here: the rail's chip names it. Phones have their own top bar. */}
         {trail ? (
-          <div className="hidden h-16 shrink-0 border-b border-line bg-ground/95 rail:block">
-            <p className={cx("mx-auto flex h-full w-full min-w-0 items-center gap-2 px-10 text-[13px] text-ink-3", width)}>
-              <NextLink href={trail.parent.href} className="shrink-0 rounded-md font-medium text-ink-2 underline decoration-line-strong underline-offset-[3px] transition-colors duration-150 ease-soft hover:text-primary hover:decoration-current pointer-coarse:inline-flex pointer-coarse:min-h-10 pointer-coarse:items-center">
+          <div className="hidden shrink-0 rail:block">
+            <p className={cx("mx-auto flex w-full min-w-0 items-center gap-1.5 px-10 pt-6 text-[13.5px] text-ink-3", width)}>
+              <NextLink href={trail.parent.href} className="-ml-2.5 inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2.5 font-medium text-ink-2 transition-colors duration-150 ease-soft hover:bg-surface-2 hover:text-ink pointer-coarse:h-10">
+                {trail.here ? null : <Icon name="chevron-left" size={15} />}
                 {trail.parent.label}
               </NextLink>
               {trail.here ? (
@@ -422,7 +424,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
             </p>
           </div>
         ) : null}
-        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 sm:px-6 rail:px-10 rail:pb-20", trail ? "rail:pt-9" : "rail:pt-12", width)}>
+        <main id="main" className={cx("mx-auto w-full min-w-0 flex-1 px-4 pb-16 pt-5 sm:px-6 rail:px-10 rail:pb-20", trail ? "rail:pt-3" : "rail:pt-12", width)}>
           {me.ai.provider === "fake" ? <div className="mb-4"><Alert tone="caution">Development mode: the AI provider is a deterministic stand-in, so its drafts are rough.</Alert></div> : null}
           {children}
         </main>
