@@ -288,8 +288,9 @@ export const IntakeServerState = z.object({
   openQuestions: z.array(IntakeQuestion).default([]),
   answeredRounds: z.number().int().default(0),
   /**
-   * What is never asked on a card again in this draft: the field of every card already shown (answered, skipped or left).
-   * Server-kept; the assistant is told the list and the server drops any card that asks one of them.
+   * What the assistant never asks on a card again in this draft: the field of every card already shown (answered, skipped
+   * or left). Server-kept; the assistant is told the list and the server drops any card of the assistant's that asks one
+   * of them. It does not stop the server's own card for an essential still missing, which comes back until it is answered.
    */
   settledFields: z.array(IntakeQuestionField).default([]),
   /**

@@ -1,5 +1,5 @@
 import { SCREEN_LINK_OPEN_DAYS, type Actor, type RolePacket } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, closeOutNoteLine, disclosureLine, emit, onFileReceiptLine } from "@ros/core";
+import { ADVERSE_DECISION_LINE, REACH_A_PERSON_LINE, closeOutNoteLine, disclosureLine, emit, hiringTeamSignature, onFileReceiptLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -8,7 +8,9 @@ import { queueCommunication } from "./outbox";
  * The emails a candidate gets about their application, each templated here and never written by a model: application
  * received, the AI interview's invitation, its reminder and the note that its link closed, the decision message, and the
  * close-out note to someone past the plan's candidates per job. Every one goes through the outbox (`deliver`) and
- * carries the AI disclosure and the line about reaching a person. No email shows a score, and none says a word about a plan.
+ * carries the AI disclosure, the line about reaching a person and the signature, each in the code's own words
+ * (packages/core/src/compliance.ts) and never in the words a job record stores for them, which a model wrote. No email
+ * shows a score, and none says a word about a plan.
  */
 
 type App = typeof applications.$inferSelect;
@@ -31,11 +33,11 @@ export function replyToFor(integrations: Integrations, company: Pick<Company, "s
   return company.settings.hiringContact?.email ?? integrations.env.replyTo;
 }
 
-function signature(packet: RolePacket, company: Company): string {
-  return packet.communication.signature || `The hiring team at ${company.name}`;
-}
-
-/** A sentence that asks for a reply (or a text) with the keyword HUMAN. Nothing reads a reply for a keyword. */
+/**
+ * A sentence that asks for a reply (or a text) with the keyword HUMAN. Nothing reads a reply for a keyword. No email
+ * written here carries one; the AI interview's pages take one out of an assistant's message in a stored chat
+ * (apps/api/src/pages/web-wording.ts), and the job builder's evaluation checks a written job for one.
+ */
 export const HUMAN_KEYWORD = /\b(?:[Rr]epl(?:y|ying)|[Tt]ext(?:ing)?|[Ss]end(?:ing)?)\b.*\bHUMAN\b/;
 
 /**
@@ -62,31 +64,13 @@ export function replaceSentences(text: string, patterns: readonly RegExp[], inst
 }
 
 /**
- * How to reach a person, as an email says it: the address the company gives candidates when it set one (the one its job
- * page prints, and where a reply lands too); otherwise a reply, which lands in the mailbox ITS reads (`replyToFor`), the
- * address the job page prints for such a company.
+ * The lines under every email: how to reach a person, who it is from, and the AI disclosure. All three are the code's
+ * own (`REACH_A_PERSON_LINE`, `hiringTeamSignature`, `disclosureLine`), the same for every job and every company. A job
+ * record's own `communication` lines are never sent: a model wrote them when it wrote the job, and nobody was shown
+ * them first. A reply lands with a person either way (`replyToFor`).
  */
-export function personLine(company: Pick<Company, "settings">): string {
-  const own = company.settings.hiringContact?.email;
-  return own ? `To reach a person at any time, email ${own}.` : "To reach a person at any time, reply to this email.";
-}
-
-/**
- * The job's own two lines under an automatic email, as the email carries them: how to reach a person, and the AI
- * disclosure. A sentence in them that asks for a reply with the keyword HUMAN gives way to `personLine` (once: a second
- * one is dropped). The stored job keeps its words.
- */
-function linesOfTheJob(packet: RolePacket, company: Company): { person: string; disclosure: string } {
-  const instead = personLine(company);
-  const person = replaceSentences(packet.communication.humanAlternativeText, [HUMAN_KEYWORD], instead);
-  const disclosure = replaceSentences(packet.communication.disclosureText || disclosureLine(company.name), [HUMAN_KEYWORD], person.includes(instead) ? null : instead);
-  return { person, disclosure };
-}
-
-/** The lines under every email: how to reach a person, who it is from, and the AI disclosure. */
-function footer(packet: RolePacket, company: Company): string {
-  const lines = linesOfTheJob(packet, company);
-  return `${lines.person}\n\n${signature(packet, company)}\n\n${lines.disclosure}`;
+function footer(company: Company): string {
+  return `${REACH_A_PERSON_LINE}\n\n${hiringTeamSignature(company.name)}\n\n${disclosureLine(company.name)}`;
 }
 
 /** The address already belonged to someone on the company's records: the email says it was sent using it. */
@@ -131,7 +115,7 @@ You can check where things stand at any time: ${statusUrl}`;
     ...input,
     templateKey: "acknowledgment",
     subject: `Thank you for applying: ${title} at ${company.name}`,
-    text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer(packet, company)}`,
+    text: `Hi ${candidate.firstName},\n\n${body}\n\n${footer(company)}`,
     idempotencyKey: `ack:${application.id}`,
     to: candidate.email,
   });
@@ -143,20 +127,20 @@ export const DECISION_TEMPLATE = "disposition";
 /**
  * The decision message for someone marked Not selected: one standard wording, ours and never the AI's, with no reason
  * given. A decision is private until a person sends this. Below the signature: how to reach a person, Colorado's line
- * about asking for the reasons when it applies (`adverseDecisionLine`), and the AI disclosure. Pure, so the preview shows
- * exactly what will go.
+ * about asking for the reasons when it applies (`adverseDecisionLine`), and the AI disclosure. The signature and the two
+ * lines are the code's own, as under every email (`footer`); of the job record only its title is read. Pure, so the
+ * preview shows exactly what will go.
  */
 export function decisionMessage(input: Pick<MessageInput, "candidate" | "company" | "packet"> & { adverseDecisionLine: boolean }): { subject: string; text: string } {
   const { candidate, company, packet } = input;
-  const lines = linesOfTheJob(packet, company);
-  const below = [lines.person, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, lines.disclosure].filter((x): x is string => !!x);
+  const below = [REACH_A_PERSON_LINE, input.adverseDecisionLine ? ADVERSE_DECISION_LINE.text : null, disclosureLine(company.name)].filter((x): x is string => !!x);
   const text = `Hi ${candidate.firstName},
 
 Thank you for your interest in the ${packet.identity.title} position at ${company.name}.
 
 After reviewing your background against what this role needs, the team has decided not to move forward at this time.
 
-${signature(packet, company)}
+${hiringTeamSignature(company.name)}
 
 ${below.join("\n\n")}`;
   return { subject: `Your application to ${company.name}`, text };
@@ -245,7 +229,7 @@ Prefer a person? Choose "I'd rather talk to a person" on the interview page, or 
 If you need an adjustment, such as more time or another format, reply and tell us.
 People on the hiring team make every decision.
 
-${footer(packet, company)}`;
+${footer(company)}`;
   return deliver(q, integrations, { ...input, templateKey: "screen_invite", subject: `Your next step: a short AI interview for ${packet.identity.title}`, text, idempotencyKey: `screen_invite:${input.screen.id}`, to: candidate.email });
 }
 
@@ -261,7 +245,7 @@ A quick reminder: your short AI interview for the ${packet.identity.title} posit
 
 If you started it, your answers are saved, and nothing goes to the hiring team until you press "Send my answers". Prefer a person? Choose "I'd rather talk to a person" on the interview page, or reply to this email.
 
-${footer(packet, company)}`;
+${footer(company)}`;
   return deliver(q, integrations, { ...input, templateKey: "screen_reminder", subject: `Reminder: your AI interview for ${packet.identity.title}`, text, idempotencyKey: input.sendKey ?? `screen_reminder:${input.screen.id}`, to: candidate.email });
 }
 
@@ -274,7 +258,7 @@ The link to your short AI interview for the ${packet.identity.title} position at
 
 If you would still like to do the interview, reply to this email and someone on the team can send you a new link.
 
-${footer(packet, company)}`;
+${footer(company)}`;
   return deliver(q, integrations, { ...input, templateKey: "screen_expired", subject: `Your AI interview link for ${packet.identity.title} has closed`, text, idempotencyKey: `screen_expired:${input.screen.id}`, to: candidate.email });
 }
 
@@ -291,6 +275,6 @@ export async function sendCloseOutNote(q: Queryable, integrations: Integrations,
 
 ${closeOutNoteLine({ roleTitle: packet.identity.title, companyName: company.name, statusUrl: input.statusUrl })}
 
-${footer(packet, company)}`;
+${footer(company)}`;
   return deliver(q, integrations, { ...input, templateKey: CLOSE_OUT_TEMPLATE, subject: `Your application: ${packet.identity.title} at ${company.name}`, text, idempotencyKey: `close_out:${application.id}`, to: candidate.email });
 }

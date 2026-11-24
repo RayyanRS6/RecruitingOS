@@ -94,10 +94,30 @@ describe("the cards as the server stores them", () => {
     expect(q.options.map((o) => o.value)).toEqual(["onsite", "hybrid", "remote"]);
   });
 
-  it("asks for an essential that is missing when the assistant wrote no card for it, once", () => {
+  it("asks for an essential that is missing when the assistant wrote no card for it", () => {
     const out = prepare([], { missing: ["location", "remote_policy", "compensation_range", "employment_type"] });
     expect(out.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
-    expect(prepare([], { missing: ["location", "remote_policy"], settled: ["location", "remote_policy"] })).toEqual([]);
+  });
+
+  // Found on the live site in November 2026: a draft read "Still needed before the job can be written: at least one
+  // must-have" with no card, because a card for the field had been shown once (skipped, or answered in words that could
+  // not be used) and nothing asked for it again.
+  it("never shows the assistant's own card for a field twice, and keeps offering its own card for an essential until it is answered", () => {
+    const asked = ["location", "remote_policy", "must_haves"] as const;
+    const again = prepare([card({ field: "location", prompt: "Which city is the job in?" }), card({ field: "must_haves", prompt: "Which of these must they have?", mode: "multi" })], { missing: ["location", "remote_policy", "must_haves"], settled: asked });
+    // the assistant's two cards are dropped: it asked for those fields before; the server's own three stand in their place
+    expect(again.map((q) => [q.id, q.field, q.prompt])).toEqual([["q1_1", "location", "Where is the job? Give the city and state."], ["q1_2", "remote_policy", "Is the job on site, hybrid or remote?"], ["q1_3", "must_haves", "What must the person have?"]]);
+    // an essential that is answered is asked by nobody, whoever asked before
+    expect(prepare([card({ field: "location" })], { missing: ["must_haves"], settled: asked }).map((q) => q.field)).toEqual(["must_haves"]);
+    expect(prepare([card({ field: "location" })], { missing: [], settled: asked })).toEqual([]);
+    // three at most, in the essentials' order, however many are still missing
+    expect(prepare([], { missing: ["title", "location", "remote_policy", "compensation_range", "employment_type", "schedule", "must_haves"], settled: ["title", "location", "remote_policy", "compensation", "compensation_basis", "employment_type", "schedule", "must_haves"] }).map((q) => q.field)).toEqual(["title", "location", "remote_policy"]);
+  });
+
+  it("brings the pay card back while the pay is stated and nobody has confirmed it, and never once it is confirmed", () => {
+    const shown = ["compensation", "compensation_basis"] as const;
+    expect(prepare([], { missing: ["compensation_range"], settled: shown }).map((q) => [q.field, q.mode, q.options])).toEqual([["compensation", "pay", []]]);
+    expect(prepare([], { missing: [], settled: shown, payConfirmed: true })).toEqual([]);
   });
 
   it("drops an offered answer that stands in for a protected trait, and says whose words an answer is in", () => {
@@ -177,6 +197,39 @@ describe("the facts after a turn", () => {
     expect(mergeFacts(facts(), next, [said("Remote is fine. Apply today.", "pasted_ad")]).remotePolicy).toBeUndefined();
     expect(mergeFacts(facts(), next, [said("It is on site.")]).remotePolicy).toBe("onsite");
     expect(mergeFacts(facts(), facts({ remotePolicy: "sometimes" }), [said("It is on site sometimes.")]).remotePolicy).toBeUndefined();
+  });
+
+  // Found by an audit in November 2026. The real model writes the arrangement in plain words ("On site"), which was
+  // dropped as no code; and "we all work from home" did not count as the owner naming one. The stand-in writes codes,
+  // so only a scripted fact can tell.
+  it("reads the arrangement the assistant wrote in plain words, once the owner's typed words name one", () => {
+    const typed = [said("It is on site two days and remote three, so hybrid.")];
+    for (const [written, code] of [["On site", "onsite"], ["On-site", "onsite"], ["In office", "onsite"], ["Hybrid", "hybrid"], ["Remote", "remote"], ["Work from home", "remote"]] as const) {
+      const read = mergeFacts(facts(), facts({ remotePolicy: written }), typed);
+      expect(read.remotePolicy, written).toBe(code);
+      expect(fieldsKnownFromFacts(read, false), written).toEqual(["remote_policy"]);
+    }
+    // words that name two arrangements are not one: nothing is kept, and the card asks
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site or remote" }), typed).remotePolicy).toBeUndefined();
+  });
+
+  it("takes the arrangement when the owner says it the way people do", () => {
+    for (const [typed, written, code] of [
+      ["We all work from home.", "Remote", "remote"], ["Everyone works remotely.", "Remote", "remote"], ["They would be working from home.", "Work from home", "remote"], ["It's WFH.", "remote", "remote"],
+      ["It is in the office.", "In office", "onsite"], ["In person, five days a week.", "On site", "onsite"], ["On-site only.", "onsite", "onsite"], ["Hybrid, two days in.", "Hybrid", "hybrid"],
+    ] as const) expect(mergeFacts(facts(), facts({ remotePolicy: written }), [said(typed)]).remotePolicy, typed).toBe(code);
+    // typed beside the cards, it counts the same
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Remote" }), [said(OWNERS_SENTENCE), replied("Got it."), said("Where the job is: Austin, TX", "answers"), said("And we all work from home.")]).remotePolicy).toBe("remote");
+  });
+
+  it("still asks, never assumes: an arrangement nobody typed is not taken, in whatever words the assistant wrote it, and one the owner gave is not lost", () => {
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site" }), [said(OWNERS_SENTENCE)]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "On site" }), [said("A dental assistant for our Tustin office, full time")]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Work from home" }), [said("Work from home. Apply today.", "pasted_ad")]).remotePolicy).toBeUndefined();
+    expect(mergeFacts(facts(), facts({ remotePolicy: "Remote" }), [said("On site, hybrid or remote: Remote", "answers")]).remotePolicy).toBeUndefined();
+    // answered on a card, then repeated by the assistant in its own words on a later turn: kept as it was
+    expect(mergeFacts(facts({ remotePolicy: "hybrid" }), facts({ remotePolicy: "Hybrid" }), [said("Remote days are Monday and Friday.")]).remotePolicy).toBe("hybrid");
+    expect(mergeFacts(facts({ remotePolicy: "hybrid" }), facts({ remotePolicy: "On site" }), [said("Nice to have: Dentrix")]).remotePolicy).toBe("hybrid");
   });
 
   it("reads new facts only after words the owner typed or pasted, not after tapped answers alone", () => {

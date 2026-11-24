@@ -1,4 +1,5 @@
 import type { Actor } from "@ros/contracts";
+import { hiringTeamSignature } from "@ros/core";
 import type { Queryable, applications, candidates, companies } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
 import { fromAddress, replyToFor } from "./coordinator";
@@ -32,8 +33,10 @@ function hourKey(now: Date): string {
 /**
  * Someone sent the form again with an address that already has an application for this role. The page they see is the
  * same as for anyone else; the person who owns the address learns here that nothing was changed, and gets their link.
+ * It signs as every candidate email does, in the code's own words (`hiringTeamSignature`), never with the sign-off a
+ * job record stores, which a model wrote.
  */
-export async function sendRepeatApplicationNotice(q: Queryable, integrations: Integrations, input: { application: App; candidate: Cand; company: Company; roleTitle: string; signature?: string | null; appBaseUrl: string; actor: Actor; now: Date }): Promise<QueueResult | null> {
+export async function sendRepeatApplicationNotice(q: Queryable, integrations: Integrations, input: { application: App; candidate: Cand; company: Company; roleTitle: string; appBaseUrl: string; actor: Actor; now: Date }): Promise<QueueResult | null> {
   const { application, candidate, company } = input;
   if (!candidate.email) return null;
   const text = `Hi ${candidate.firstName},
@@ -45,7 +48,7 @@ ${statusUrlFor(input.appBaseUrl, application)}
 
 If you did not send the second application, you do not need to do anything. If something looks wrong, reply to this email and a person will look into it.
 
-${input.signature || `The hiring team at ${company.name}`}`;
+${hiringTeamSignature(company.name)}`;
   return queueCommunication(q, integrations, {
     channel: "email",
     companyId: company.id,

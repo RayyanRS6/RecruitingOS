@@ -68,13 +68,15 @@ export type PostsState = z.infer<typeof PostsState>;
 
 /**
  * The plain lines a job's Share tab shows. The API sends the one that applies (`ShareView.stateLine` for `no_ai` and
- * `failed`, `ShareView.notPublicLine` for a draft and a closed job); a screen shows what it gets.
+ * `failed`, `ShareView.notPublicLine` for a draft and a closed job); a screen shows what it gets. A closed job has
+ * nothing to share, but its page is not gone: it stays up, says the position is closed and takes no applications
+ * (`careers-pages.tsx`), so the line says that and never that the page is no longer public.
  */
 export const SHARE_LINE = {
   noAi: AI_HELP_LINE.posts,
   failed: "The posts could not be written. Press Write again, or write your own.",
   draft: "Publish the job to share it.",
-  closed: "This job is closed, so its job page is no longer public.",
+  closed: "This job is closed. Its job page says so and takes no applications.",
 } as const;
 
 /** The two posts of a job (`roles.posts`): the texts, and where their writing stands. Null on a job never published. */

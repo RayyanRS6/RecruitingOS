@@ -31,7 +31,8 @@ export type JobPageRole = {
 };
 
 /** How a preview introduces itself, and where its own links go. */
-export type PreviewInfo = { notPublicYet: boolean; banner: string; gaps: string[]; jobHref: string; applyHref: string; publicHref: string | null };
+/** `lead`: the words in bold before the banner ("Closed." for a closed job, whose page was public and still stands). */
+export type PreviewInfo = { notPublicYet: boolean; lead?: string; banner: string; gaps: string[]; jobHref: string; applyHref: string; publicHref: string | null };
 
 /** "Harbor Dental" → "HD": what the logo square shows when the company has not uploaded one. */
 export function initials(name: string): string {
@@ -120,7 +121,7 @@ export function PreviewNote(props: { preview: PreviewInfo }) {
   const p = props.preview;
   return (
     <div class="preview-note" role="note">
-      <p><strong>{p.notPublicYet ? "Not public yet." : "Preview."}</strong> {p.banner}</p>
+      <p><strong>{p.lead ?? (p.notPublicYet ? "Not public yet." : "Preview.")}</strong> {p.banner}</p>
       {p.gaps.length ? <ul>{p.gaps.map((g) => <li>{g}</li>)}</ul> : null}
       {p.publicHref ? <p><a href={p.publicHref}>Open the public page</a></p> : null}
     </div>

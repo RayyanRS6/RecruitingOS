@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { IntakePayCard, IntakeQuestion } from "@ros/contracts";
 import { Alert, AutoTextarea, Button, Eyebrow, Field, Icon, IconButton, IconLabel, Segmented } from "@ros/ui";
 import {
-  addOwn, answerOf, goTo, isAnswered, nextLabel, payCardProblem, payFormFrom, pickHint, picksOne, removeOwn, setDraft, setPayForm, togglePick,
+  addOwn, answerOf, goTo, isAnswered, nextLabel, payCardProblem, payFormShown, pickHint, picksOne, removeOwn, setDraft, setPayForm, togglePick,
   type CardState, type PayForm,
 } from "../../builder";
 import { OPTION_WORDS, OPTIONS, OWN_CHIP, OWN_CHIP_X, OWN_CHIPS } from "./look";
@@ -33,7 +33,8 @@ export function PayFields({ form, onChange, idBase }: { form: PayForm; onChange:
  * The question card docked where the message box is: one question at a time with "1 of 3" and arrows, the answers as
  * rows to tick (the assistant's own ideas carry a sparkle), "Add your own…", a "Why we ask" line, and Next (Send on the
  * last card). "Or type your own answer…" puts the message box back. Every answer is the person's choice; nothing is
- * ticked for them.
+ * ticked for them. The pay card draws the pay the draft already states (`pay`), and what its boxes show is what Send
+ * sends: left as drawn, the person sending confirms those figures.
  */
 export function QuestionCard(props: {
   questions: IntakeQuestion[];
@@ -64,12 +65,12 @@ export function QuestionCard(props: {
   const a = answerOf(state, q);
   const next = () => {
     if (index < total - 1) {
-      const here = payCardProblem([q], state);
+      const here = payCardProblem([q], state, props.pay);
       setPayWords(here?.words ?? null);
       if (!here) onState(goTo(state, index + 1, total));
       return;
     }
-    const wrong = payCardProblem(questions, state);
+    const wrong = payCardProblem(questions, state, props.pay);
     setPayWords(wrong?.words ?? null);
     if (!wrong) props.onSend();
     else if (wrong.index !== index) onState(goTo(state, wrong.index, total));
@@ -94,7 +95,7 @@ export function QuestionCard(props: {
         <h2 ref={heading} tabIndex={-1} className="qcard-prompt font-display text-[19px] font-bold leading-snug tracking-[-0.02em] focus:outline-none">{q.prompt}</h2>
         {q.mode === "pay" ? (
           <>
-            <PayFields form={a.pay ?? payFormFrom(props.pay)} onChange={(f) => { setPayWords(null); onState(setPayForm(state, q, f)); }} idBase={name} />
+            <PayFields form={payFormShown(a, props.pay)} onChange={(f) => { setPayWords(null); onState(setPayForm(state, q, f)); }} idBase={name} />
             {payWords ? <Alert tone="caution">{payWords}</Alert> : null}
           </>
         ) : q.mode === "free" ? (

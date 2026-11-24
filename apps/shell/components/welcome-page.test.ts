@@ -32,6 +32,19 @@ describe("the public welcome page", () => {
     expect(levels.filter((l) => l === 2)).toHaveLength(4);
   });
 
+  /**
+   * The page told every owner that "every applicant stays visible" and "stays available for your review" (the code
+   * check of 25 November 2026). On a plan with a limit of applicants per job that is untrue: someone past the limit is
+   * kept on file and not shown until the plan changes. What the page may promise is what holds on every plan: the
+   * software turns nobody away, and people decide.
+   */
+  it("promises only what holds on every plan: nobody is turned away automatically, and people decide", () => {
+    const words = text(html);
+    expect(words).toContain("nobody is turned away automatically");
+    expect(words).toContain("No automatic rejection or hiring decision: the people on your team make every one.");
+    expect(words).not.toMatch(/every applicant stays (visible|available)/i);
+  });
+
   it("every way in leads to the sign-in page", () => {
     // the header's and the footer's
     expect(named("Sign in").map((l) => l.href)).toEqual(["/login", "/login"]);

@@ -24,7 +24,7 @@ vi.mock("next/link", () => ({ default: (props: { href: string; children?: ReactN
 const { JobBuilder } = await import("@ros/web/src/pages/JobBuilder");
 const { QuestionCard } = await import("@ros/web/src/pages/builder/QuestionCard");
 const { AI_LINE } = await import("@ros/web/src/pages/builder/Conversation");
-const { initialCards, togglePick } = await import("@ros/web/src/builder");
+const { answersPayload, initialCards, setPayForm, togglePick } = await import("@ros/web/src/builder");
 const { ApiError } = await import("@ros/web/src/api/client");
 
 const plain = (s: string) => s.replace(/&#x27;/g, "'").replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
@@ -155,7 +155,7 @@ describe("a draft being built", () => {
 });
 
 describe("a question card", () => {
-  const card = (questions: IntakeQuestion[], state = initialCards()) => renderToStaticMarkup(createElement(QuestionCard, { questions, state, onState: () => undefined, onSend: () => undefined, onClose: () => undefined, onTypeInstead: () => undefined, sending: false, pay: { basis: null, stated: { min: null, max: null }, confirmed: null, summary: "Not set yet" } }));
+  const card = (questions: IntakeQuestion[], state = initialCards(), payOfDraft: IntakeSessionView["pay"] = { basis: null, stated: { min: null, max: null }, confirmed: null, summary: "Not set yet" }) => renderToStaticMarkup(createElement(QuestionCard, { questions, state, onState: () => undefined, onSend: () => undefined, onClose: () => undefined, onTypeInstead: () => undefined, sending: false, pay: payOfDraft }));
 
   it("names every radio and checkbox by its option, never by the input's default value, and ticks nothing for the person", () => {
     const one = card([arrangement]);
@@ -189,6 +189,20 @@ describe("a question card", () => {
     expect(html).toContain('<label for="card-q3-min">Lowest</label>');
     expect(html).toContain('<label for="card-q3-max">Highest</label>');
     expect(html).toMatch(/<input id="card-q3-min" class="input" inputMode="decimal" placeholder="e\.g\. 24" value=""\/>/);
+  });
+
+  it("draws the pay the draft already states in the pay card's boxes, which is what its Send then sends", () => {
+    const stated: IntakeSessionView["pay"] = { basis: "hourly", stated: { min: 24, max: 28 }, confirmed: null, summary: "Pay: $24–$28 an hour. Nobody has confirmed it yet: confirm it or change it." };
+    const html = card([pay], initialCards(), stated);
+    expect(html).toMatch(/<button type="button" class="[^"]*" aria-pressed="true">By the hour<\/button>/);
+    expect(html).toContain('<label for="card-q3-min">Lowest (an hour)</label>');
+    expect(html).toMatch(/<input id="card-q3-min" class="input" inputMode="decimal" placeholder="e\.g\. 24" value="24"\/>/);
+    expect(html).toMatch(/<input id="card-q3-max" class="input" inputMode="decimal" placeholder="e\.g\. 28" value="28"\/>/);
+    // the same boxes, by the page's own rule, are the answer the card sends when nothing is changed
+    expect(answersPayload([pay], initialCards(), stated)).toEqual([{ questionId: "q3", selected: [], own: [], skipped: false, pay: { basis: "hourly", min: 24, max: 28 } }]);
+    // figures the person typed replace what the draft said
+    const typed = card([pay], setPayForm(initialCards(), pay, { basis: "hourly", min: "26", max: "30" }), stated);
+    expect(typed).toMatch(/<input id="card-q3-min" class="input" inputMode="decimal" placeholder="e\.g\. 24" value="26"\/>/);
   });
 });
 

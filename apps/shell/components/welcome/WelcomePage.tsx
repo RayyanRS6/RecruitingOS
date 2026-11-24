@@ -50,7 +50,7 @@ const STEPS: Array<{ icon: IconName; title: string; body: string }> = [
   {
     icon: "star",
     title: "Choose your shortlist with context",
-    body: "Applicants are ranked by score, best match first, and every applicant stays visible. You choose who to shortlist; only they do a short AI interview about the job, and you decide who to hire.",
+    body: "Applicants are ranked by score, best match first, and nobody is turned away automatically. You choose who to shortlist; only they do a short AI interview about the job, and you decide who to hire.",
   },
 ];
 
@@ -63,7 +63,7 @@ const POINTS: Array<{ icon: IconName; title: string; body: string }> = [
   {
     icon: "user",
     title: "A shortlist you can stand behind",
-    body: "Use the evidence to decide whom to meet. No automatic rejection or hiring decision; every applicant stays available for your review.",
+    body: "Use the evidence to decide whom to meet. No automatic rejection or hiring decision: the people on your team make every one.",
   },
   {
     icon: "file-text",

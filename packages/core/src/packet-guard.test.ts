@@ -31,17 +31,29 @@ describe("the guard's fixed rules", () => {
     expect(changes).toHaveLength(2);
   });
 
-  it("puts the AI disclosure and the human alternative back, in words that ask for no reply keyword, and keeps six must-haves at most", () => {
+  it("writes the AI disclosure, how to reach a person and the signature in the code's own words, whatever the job held, and keeps six must-haves at most", () => {
     const { packet: p } = guardPacket(packet((x) => {
       x.communication.disclosureText = "From the team.";
       x.communication.humanAlternativeText = " ";
       x.requirements.mustHaves = Array.from({ length: 8 }, (_, i) => ({ key: `m${i}`, text: `Skill ${i}`, rationale: "r" }));
     }), ctx);
-    expect(p.communication.disclosureText).toBe("This message was sent by the hiring team at Brightline Dental with help from an AI recruiting assistant.");
-    expect(p.communication.humanAlternativeText).toBe("To reach a person at any time, reply to any of our emails or use the contact on the job page.");
-    // a job's own lines are kept as written
-    const own = guardPacket(packet(), ctx).packet.communication;
-    expect([own.disclosureText, own.humanAlternativeText]).toEqual(["This message was written with help from an AI assistant.", "Reply to any of our emails to reach a person."]);
+    const CODE_LINES = {
+      disclosureText: "This message was sent by the hiring team at Brightline Dental with help from an AI recruiting assistant.",
+      humanAlternativeText: "To reach a person at any time, reply to any of our emails or use the contact on the job page.",
+      signature: "The hiring team at Brightline Dental",
+    };
+    expect(p.communication).toMatchObject(CODE_LINES);
+    // lines that read well enough are replaced too: a model wrote them with the job, and nobody was shown them, so the
+    // record never keeps them (it kept them until 25 November 2026, and every email carried them)
+    const written = packet();
+    expect(written.communication).toMatchObject({ disclosureText: "This message was written with help from an AI assistant.", humanAlternativeText: "Reply to any of our emails to reach a person.", signature: "The team" });
+    const saved = guardPacket(written, ctx);
+    expect(saved.packet.communication).toMatchObject(CODE_LINES);
+    // the rest of that section is the job's own, and the owner is told of no change: these lines are not theirs to see or edit
+    expect(saved.packet.communication.companyBlurb).toBe("A friendly practice.");
+    expect(saved.changes).toEqual([]);
+    // saving it again changes nothing
+    expect(guardPacket(saved.packet, ctx).packet.communication).toEqual(saved.packet.communication);
     expect(p.requirements.mustHaves).toHaveLength(6);
   });
 

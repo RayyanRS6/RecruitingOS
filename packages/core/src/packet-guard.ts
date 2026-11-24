@@ -1,5 +1,5 @@
 import { mustHaveOf, restatementsOf, type Actor, type DeclinedCriterion, type DraftRolePacket, type FormQuestionRefusal, type Location, type PacketFlag } from "@ros/contracts";
-import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, resolveJurisdictions } from "./compliance";
+import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, hiringTeamSignature, resolveJurisdictions } from "./compliance";
 
 /**
  * The fairness guard on a job's wording. The deterministic guarantees every saved job record gets, whoever or whatever
@@ -8,11 +8,12 @@ import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, resolveJurisdicti
  * open (a person edits the words out, or keeps them and says why).
  *
  * Fixed by rule: jurisdictions and the notices that follow from them; pay shown on every job ad; a reversed range put the
- * right way round; the AI disclosure and "a person is available" lines; at most six must-haves; anything the owner was
- * told could not be used taken out of the lists it appears in. Flagged: wording that stands in for a protected trait,
- * anywhere a candidate or a reader of applications would meet it (the phrase list below), what the owner was told could
- * not be used, reworded or not, and a pay figure in the job description that nobody set or that is not the advertised
- * range.
+ * right way round; the AI disclosure, how to reach a person and the signature, each written from the code's own wording
+ * whatever was there (a model writes these three when it writes a job, and no page shows them to anyone before a
+ * candidate would read them); at most six must-haves; anything the owner was told could not be used taken out of the
+ * lists it appears in. Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
+ * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
+ * pay figure in the job description that nobody set or that is not the advertised range.
  *
  * The application form's questions (`formQuestions`) are read like every other words, and for the protected-question
  * list too (`PROTECTED_QUESTION_RULES`); a question that asks about a protected characteristic is refused where it is
@@ -495,8 +496,13 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
       changes.push("The pay range was the wrong way round and was swapped.");
     }
   }
-  if (!packet.communication.disclosureText || !/\bAI\b|artificial intelligence/i.test(packet.communication.disclosureText)) packet.communication.disclosureText = disclosureLine(ctx.companyName);
-  if (!packet.communication.humanAlternativeText?.trim()) packet.communication.humanAlternativeText = REACH_A_PERSON_LINE;
+  // The three lines under an automatic message to a candidate are the code's own, the same for every job
+  // (compliance.ts). The emails about an application take them from the code, and the AI interview's first page its
+  // line about a person (coordinator.ts and screening.ts in packages/agents); the record holds a copy, written here on
+  // every save, so that nothing which still reads the copy finds the words a model or an earlier version wrote there.
+  packet.communication.disclosureText = disclosureLine(ctx.companyName);
+  packet.communication.humanAlternativeText = REACH_A_PERSON_LINE;
+  packet.communication.signature = hiringTeamSignature(ctx.companyName);
   if (packet.requirements.mustHaves.length > 6) {
     packet.requirements.mustHaves = packet.requirements.mustHaves.slice(0, 6);
     changes.push("Must-haves were cut to six.");

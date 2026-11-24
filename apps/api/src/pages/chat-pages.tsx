@@ -9,7 +9,7 @@ import { linkGone, screenPath } from "./candidate-shared";
 import { AnswerForms, AsideActions, Bubble, CHAT_BUSY_NOTE, CHAT_CSS, ConversationPage, ErrorNote, WhereAnswersGo, assistantWords, openConversation, turnActionFrom, turnErrorCode, type Line } from "./conversation-frame";
 import { Icon } from "./icons";
 import { ReviewPage } from "./review-page";
-import { PERSON_ON_THE_WEB, forTheWeb } from "./web-wording";
+import { PERSON_ON_THE_WEB } from "./web-wording";
 
 /**
  * The AI interview on the web: the introduction, the chat, a person instead, withdrawing, and the closed pages. "Check
@@ -20,19 +20,18 @@ export { candidatePages as chatPages };
 
 /**
  * The fixed introduction, before the first question: it is the company's AI assistant, not a person; what it is for; a
- * conversation, not a test; how long; skip, stop and come back; then Start, or I'd rather talk to a person. Nothing here
- * is written by the model. Start shows the first question at once.
+ * conversation, not a test; how long; skip, stop and come back; how to reach a person; then Start, or I'd rather talk to
+ * a person. Every sentence is this page's own, the code's line about reaching a person, or the versioned AI notice
+ * (`screenIntro`). Of the job record the page shows the title and the length in minutes, which the company sees and
+ * can edit, and never the record's own lines about AI and about a person, which a model wrote and nobody was shown. No
+ * sentence here is written by a model. Start shows the first question at once.
  */
 function IntroPage(props: { view: ConversationView }) {
   const { view } = props;
   const { intro } = view;
   const base = screenPath(view.token);
-  // The job's lines are written for email ("Reply HUMAN…", "This message was sent by…"): on this page a person is one
-  // press away, so it says that, and keeps whatever else the company wrote.
-  const teamLine = forTheWeb(intro.humanAlternative);
-  const disclosure = forTheWeb(intro.packetDisclosure);
   return (
-    <ConversationPage view={view} title="Before you start" aiMore={disclosure || null}>
+    <ConversationPage view={view} title="Before you start">
       <h1>{intro.title}</h1>
       <p class="lead">{intro.disclosure}</p>
       <ul class="points">
@@ -41,7 +40,7 @@ function IntroPage(props: { view: ConversationView }) {
         <li><Icon name="check" /><span>You can skip any question, or stop and come back later: this page keeps your place.</span></li>
         <li><Icon name="eye" /><span>It helps the hiring team at {view.companyName} learn about your work. People decide.</span></li>
       </ul>
-      {teamLine ? <p class="pre">{teamLine}</p> : null}
+      <p class="pre">{intro.humanAlternative}</p>
       <div class="actions">
         <form method="post" action={`${base}/start`}><button class="btn" type="submit">Start</button></form>
         <a class="btn secondary" href={`${base}/person`}>I'd rather talk to a person</a>
