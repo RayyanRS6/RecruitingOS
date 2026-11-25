@@ -5,7 +5,7 @@ import { z } from "zod";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import type { PromptDef } from "./prompts/registry";
 import { AnthropicProvider, ROUTE_RESERVE_MS } from "./providers/anthropic";
-import { AI_CREDIT_BUSY, API_ROUTE_LIMIT_MS, callPrompt, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
+import { AI_CREDIT_BUSY, API_ROUTE_LIMIT_MS, callPrompt, createAppRuntime, createRuntime, routeDeadline, runPromptDetached, type AiCreditGate, type AiRunValues, type AiRuntime } from "./runner";
 import type { AiProvider, StructuredRequest, StructuredResult } from "./types";
 
 /**
@@ -69,6 +69,64 @@ describe("the models and effort the runner asks for", () => {
     expect(call.result).toMatchObject({ kind: "invalid", final: true, error: "provider refused: claude-opus-5 is not allowed; the app runs only on claude-haiku-5-5 and claude-sonnet-5-5" });
     const allowed = runtime([ok], { id: "anthropic", model: "claude-sonnet-5-5" });
     expect((await callPrompt(allowed.rt, prompt, null, { companyId: null })).result.kind).toBe("ok");
+  });
+});
+
+/**
+ * The same settings, read by the app and by an evaluation. The app (and the worker) builds its runtime with
+ * `createAppRuntime`, which holds the owner's rule whatever the environment says; the evaluations build theirs with
+ * `createRuntime`, because the fairness run names a model and an effort for screening on purpose, to compare.
+ */
+describe("the app's runtime and an evaluation's, on the same settings", () => {
+  const HAIKU = "claude-haiku-5-5";
+  const SONNET = "claude-sonnet-5-5";
+  /** What the provider was asked, for each of the two scoring readings, on a runtime built from these settings. */
+  async function readingsAsked(build: (env: Record<string, string>, fake: AiProvider) => Promise<AiRuntime>, settings: Record<string, string>): Promise<Array<string | undefined>> {
+    const { rt: stub, requests } = runtime([ok, ok]);
+    const rt = await build({ AI_PROVIDER: "fake", ...settings }, stub.provider);
+    await callPrompt(rt, { ...prompt, task: "triage.assess" }, null, { companyId: null });
+    await callPrompt(rt, { ...prompt, task: "screen.assess" }, null, { companyId: null });
+    return requests.map((r) => r.effort);
+  }
+
+  it("the app asks both scoring readings at high whatever AI_EFFORT_STANDARD says, and says once that a lower one was ignored", async () => {
+    for (const effort of ["", "low", "medium", "high"]) {
+      const said: string[] = [];
+      expect(await readingsAsked((env, fake) => createAppRuntime(env, fake, (line) => said.push(line)), { AI_EFFORT_STANDARD: effort }), `AI_EFFORT_STANDARD=${effort}`).toEqual(["high", "high"]);
+      expect(said).toEqual(effort === "low" || effort === "medium" ? [`[ai] AI_EFFORT_STANDARD=${effort} is ignored: it would lower a scoring reading (triage.assess runs at high, screen.assess runs at high).`] : []);
+    }
+  });
+
+  it("an evaluation still runs the readings at the effort it names, to compare one with another", async () => {
+    expect(await readingsAsked(createRuntime, { AI_EFFORT_STANDARD: "low" })).toEqual(["low", "low"]);
+    expect(await readingsAsked(createRuntime, { AI_EFFORT_STANDARD: "medium" })).toEqual(["medium", "medium"]);
+    expect(await readingsAsked(createRuntime, {})).toEqual(["high", "high"]);
+  });
+
+  it("the app keeps the larger model for the writing of the job alone and says what it ignored; an evaluation may run screening on it", async () => {
+    const env = { AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "fake-key-for-this-test", AI_MODEL_STANDARD: SONNET, AI_MODEL_FAST: SONNET };
+    const said: string[] = [];
+    const app = await createAppRuntime(env, undefined, (line) => said.push(line));
+    expect(app.models).toEqual({ judgment: SONNET, standard: HAIKU, fast: HAIKU });
+    expect(said).toEqual([
+      "[ai] AI_MODEL_STANDARD=claude-sonnet-5-5 is ignored: claude-sonnet-5-5 writes the job and runs nothing else. This tier stays on claude-haiku-5-5.",
+      "[ai] AI_MODEL_FAST=claude-sonnet-5-5 is ignored: claude-sonnet-5-5 writes the job and runs nothing else. This tier stays on claude-haiku-5-5.",
+    ]);
+    expect(said.join("\n")).not.toContain("fake-key-for-this-test");
+    expect((await createRuntime({ ...env, AI_MODEL_FAST: "" })).models).toEqual({ judgment: SONNET, standard: SONNET, fast: HAIKU });
+  });
+
+  it("the app may write the job on the small model, with nothing ignored", async () => {
+    const said: string[] = [];
+    const app = await createAppRuntime({ AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "fake-key-for-this-test", AI_MODEL_JUDGMENT: HAIKU }, undefined, (line) => said.push(line));
+    expect(app.models).toEqual({ judgment: HAIKU, standard: HAIKU, fast: HAIKU });
+    expect(said).toEqual([]);
+  });
+
+  it("neither starts on a model outside the two", async () => {
+    const env = { AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "fake-key-for-this-test", AI_MODEL_STANDARD: "claude-opus-5" };
+    await expect(createAppRuntime(env, undefined, () => undefined)).rejects.toThrow("AI_MODEL_STANDARD=claude-opus-5 is not allowed: the app runs only on claude-haiku-5-5 and claude-sonnet-5-5");
+    await expect(createRuntime(env)).rejects.toThrow("AI_MODEL_STANDARD=claude-opus-5 is not allowed: the app runs only on claude-haiku-5-5 and claude-sonnet-5-5");
   });
 });
 
