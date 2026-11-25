@@ -3,7 +3,7 @@ import { SCORING_PLACEHOLDER } from "@ros/agents";
 // A complete, valid job (not exported by @ros/agents): read by path, as suites.ts reads core.
 import { samplePacket } from "../../agents/src/fixtures/sample-packet";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EvalApplication } from "./scoring-inputs";
-import { EARLIER_REJECTION, SCREEN_CANDIDATE, biasPairs, formAnswersFor, redactionCases, screenRedactionCases, sentInterview } from "./suites";
+import { EARLIER_REJECTION, SCREEN_CANDIDATE, WAREHOUSE_JOB, biasPairs, consistencyCases, formAnswersFor, redactionCases, screenRedactionCases, sentInterview } from "./suites";
 
 /**
  * What the evals send the two readings that score, checked without any model: the inputs are built by the app's own
@@ -34,6 +34,21 @@ describe("what the CV reading is sent of the job and the form", () => {
     // a nice-to-have and the pay are not in the score, so the reading is not sent them
     expect(text).not.toContain("Dentrix experience");
     expect(text).not.toMatch(/\b24\b.*\b28\b/);
+  });
+
+  it("the second job is sent the same way: its own must-haves and skills, and the form's answers as the candidate gave them", () => {
+    const lapsed = consistencyCases.find((c) => c.id === "warehouse_lapsed_certificate")!;
+    expect(lapsed.job).toBe(WAREHOUSE_JOB);
+    const { text, messages, promptInput } = triageModelInput(application({ packet: WAREHOUSE_JOB, resumeText: lapsed.resume, identity: lapsed.candidate, formAnswers: formAnswersFor(WAREHOUSE_JOB, { licenceHeld: lapsed.licenceHeld }) }));
+    expect(text).toContain("Role: Warehouse Associate (full time, Monday to Friday, 6 a.m. to 2:30 p.m.) at Reno, NV.");
+    expect(text).toContain("Must-haves: [forklift_certificate] Current forklift operator certification");
+    expect(text).toContain("[order_picking] Order picking with an RF scanner");
+    expect(text).toContain("Competencies: [inventory_accuracy] Inventory accuracy: Keeps what is on the shelf and what the system says the same. Indicators: cycle counts; reports a mismatch | [safe_loading] Safe loading");
+    expect(promptInput.answerSentences).toEqual(["Do you hold a current forklift operator certification? No.", "Can you work Monday to Friday, 6 a.m. to 2:30 p.m.? Yes."]);
+    // the candidate's own lines are there and the name is not
+    expect(messages).toContain("Forklift certification expired in 2023; not renewed");
+    expect(leakedDetails(text, ["Jamie", "Flores"])).toEqual([]);
+    expect(messages).not.toMatch(/dental|hygien|RDH/i);
   });
 });
 
