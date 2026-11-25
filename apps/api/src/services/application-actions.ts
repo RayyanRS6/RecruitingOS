@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { ACTION_BLOCKED, CANDIDATE_TAB_LABEL, MORE_INTERVIEWS_UPGRADE_QUESTION, candidateActionState, stageLabel, tabOf, type ActionResult, type Actor, type BulkActionResult, type BulkApplicationAction, type CandidateAction, type DecisionMessagePreview, type PlanLimitDetails, type PlanStop } from "@ros/contracts";
+import { ACTION_BLOCKED, CANDIDATE_TAB_LABEL, MORE_INTERVIEWS_UPGRADE_QUESTION, PLAN_STOP_REASON, candidateActionState, stageLabel, tabOf, type ActionResult, type Actor, type BulkActionResult, type BulkApplicationAction, type CandidateAction, type DecisionMessagePreview, type PlanLimitDetails, type PlanStop } from "@ros/contracts";
 import { TransitionError, aiInterviewViewOf, can, emit, entitlements, notLocked, recordHire, takeBackDecision, takeBackDecisionEmail, transition } from "@ros/core";
 import { DecisionMessageError, decisionMessageDraft, latestScreen, loadDecisionParts, queueDecisionMessage, sendScreenReminder } from "@ros/agents";
 import { cancelAiInterview, startAiInterview } from "@ros/workflows";
@@ -21,15 +21,12 @@ import { TRIAL_PLAN_QUESTION } from "./trial";
 
 type Who = { tenant: Pick<Tenant, "companyId" | "role">; actor: Actor };
 
-/** The reasons of `ACTION_BLOCKED` that are the plan's, and so answer 402. */
-const PLAN_REASONS: Record<PlanStop, string> = { ai_interviews_used_up: ACTION_BLOCKED.interviewsUsedUp, ai_used_up: ACTION_BLOCKED.aiUsedUp, trial_ended: ACTION_BLOCKED.trialEnded };
-
-/** The 402 for an action the plan stops: its plain reason, and the request this person may send about it. */
+/** The 402 for an action the plan stops: its plain reason (`PLAN_STOP_REASON`, the rule's own table), and the request this person may send about it. */
 async function planRefusal(tx: Tx, who: Who, stop: PlanStop): Promise<HttpError> {
   const planKey = (await entitlements.planOf(tx, who.tenant.companyId))?.key;
   const ask = stop === "trial_ended" ? { label: "Ask ITS to choose a plan", reason: TRIAL_PLAN_QUESTION } : stop === "ai_used_up" ? askForAiHelpOn(planKey) : { ...askForAiHelpOn(planKey), reason: MORE_INTERVIEWS_UPGRADE_QUESTION };
   const details: PlanLimitDetails = { upgrade: true, ask: can(who.tenant.role, "plan.request") ? ask : null };
-  return new HttpError(402, "limit_reached", PLAN_REASONS[stop], details);
+  return new HttpError(402, "limit_reached", PLAN_STOP_REASON[stop], details);
 }
 
 /**
@@ -45,7 +42,7 @@ export async function performAction(tx: Tx, container: Container, who: Who, inpu
   const ctx = await jobContext(tx, container, role);
   const state = candidateActionState(actionFacts(person, ctx), input.action);
   if (!state) throw new HttpError(409, "action_not_allowed", "That cannot be done with this person where they are now.");
-  if (!state.allowed) throw ctx.planStop && state.reason === PLAN_REASONS[ctx.planStop] ? await planRefusal(tx, who, ctx.planStop) : new HttpError(409, "action_not_allowed", state.reason ?? "That cannot be done right now.");
+  if (!state.allowed) throw ctx.planStop && state.reason === PLAN_STOP_REASON[ctx.planStop] ? await planRefusal(tx, who, ctx.planStop) : new HttpError(409, "action_not_allowed", state.reason ?? "That cannot be done right now.");
   let done: { message: string; undoUntil: string | null };
   try {
     done = await act(tx, container, who.actor, person, input.action, ctx.now);

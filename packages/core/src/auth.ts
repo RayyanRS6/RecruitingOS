@@ -6,7 +6,8 @@ import { activeGrantFor } from "./platform-roles";
 
 /** A sign-in link is short-lived. Team invitations are no longer links that sign a person in: see ./invitations. */
 export const MAGIC_LINK_TTL_MS = 15 * 60_000;
-const SESSION_IDLE_MS = 30 * 24 * 3600_000;
+/** A customer's session lasts thirty days from when it was last used (sliding). The one copy: every way a session opens reads it. */
+export const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 /** Staff sessions are shorter (I8): eight hours, sliding, and never extended to the customer window. */
 export const STAFF_SESSION_MS = 8 * 3600_000;
 

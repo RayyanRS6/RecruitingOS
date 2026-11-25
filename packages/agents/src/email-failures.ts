@@ -1,9 +1,8 @@
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm";
 import { ACCESS_REQUEST_STATUSES, appPaths, type Actor } from "@ros/contracts";
-import { RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
+import { DECISION_TEMPLATE, RETRY_DELAYS_MS, SOFT_BOUNCE_LIMIT, SOFT_BOUNCE_WINDOW_MS, applicationLocked, emit, notify, onlyLockedApplications, raiseAlert, raiseAlertOnce, suppressAddress } from "@ros/core";
 import { applications, candidates, communications, events, jobs, memberships, users, type Queryable } from "@ros/db";
 import { mailbox, type EmailEvent, type Integrations } from "@ros/integrations";
-import { DECISION_TEMPLATE } from "./coordinator";
 import { QUIET_ON_FAILURE_TAG, queueCommunication } from "./outbox";
 
 /**

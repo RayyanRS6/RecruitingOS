@@ -104,11 +104,17 @@ export async function stageBeforeDecision(q: Queryable, applicationId: string): 
 }
 
 /**
+ * The key the decision message is recorded under (`communications.template_key`). The one copy: the taking back below
+ * reads it, and so do the agents that write, send and stop the message (packages/agents).
+ */
+export const DECISION_TEMPLATE = "disposition";
+
+/**
  * Takes back the decision email of an application while it still waits in the outbox, and puts the told state back to not
  * told. Recorded as `message.cancelled`. An email already being sent cannot be called back. Returns how many were taken back.
  */
 export async function takeBackDecisionEmail(q: Queryable, input: { applicationId: string; companyId: string; actor: Actor; reason: string }): Promise<number> {
-  const rows = await q.update(communications).set({ status: "cancelled", error: input.reason }).where(and(eq(communications.applicationId, input.applicationId), like(communications.templateKey, "disposition%"), eq(communications.status, "queued"))).returning({ id: communications.id, templateKey: communications.templateKey });
+  const rows = await q.update(communications).set({ status: "cancelled", error: input.reason }).where(and(eq(communications.applicationId, input.applicationId), like(communications.templateKey, `${DECISION_TEMPLATE}%`), eq(communications.status, "queued"))).returning({ id: communications.id, templateKey: communications.templateKey });
   for (const r of rows) await emit(q, { type: "message.cancelled", companyId: input.companyId, actor: input.actor, subject: { type: "communication", id: r.id }, payload: { template: r.templateKey, applicationId: input.applicationId, reason: input.reason } });
   if (rows.length) await q.update(applications).set({ toldState: "not_told" }).where(and(eq(applications.id, input.applicationId), eq(applications.toldState, "queued")));
   return rows.length;

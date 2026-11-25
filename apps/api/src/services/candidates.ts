@@ -1,7 +1,7 @@
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { CV_FILE_STATUS_LABEL, CandidateTab, RolePacket as RolePacketSchema, STAGE_TAB, TEXT_SCREENS, TOLD_STATE_LABEL, applySourceLabel, byCvScore, byInterviewScore, candidateActions, cvScoreSummary, formAnswerViews, interviewScoreSummary, noCvScore, noInterviewScore, quoteFrom, stageLabel, tabOf, type AiReview, type ApplicationStage, type CandidateActionFacts, type CandidateCounts, type CandidateDocument, type CandidateList, type CandidatePanel, type CandidateRow, type CvFileStatus, type CvNoScore, type CvScore, type EvidenceAssessment, type InterviewAnswer, type InterviewScore, type PlanStop, type RolePacket, type RoleStatus, type ScreenAssessment } from "@ros/contracts";
-import { aiCreditStanding, aiInterviewViewOf, audit, cvScoreFromReading, entitlements, formAnswersOf, interviewScoreFromScorecard, lockedAndWaiting, notLocked, remindedRecently, sameRequirements, screenAnswersSent } from "@ros/core";
-import { DECISION_TEMPLATE, askedQuestions, chatPacket, screenPacketVersion } from "@ros/agents";
+import { DECISION_TEMPLATE, ENDED_RUN, aiCreditStanding, aiInterviewViewOf, audit, cvScoreFromReading, entitlements, formAnswersOf, interviewScoreFromScorecard, lockedAndWaiting, notLocked, remindedRecently, sameRequirements, screenAnswersSent } from "@ros/core";
+import { askedQuestions, chatPacket, screenPacketVersion } from "@ros/agents";
 import { applications, assessments, candidates, communications, documents, events, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import type { Actor } from "@ros/contracts";
 import type { Container } from "../container";
@@ -40,7 +40,6 @@ export type Person = {
 };
 
 const iso = (at: string): string => new Date(at).toISOString();
-const ENDED_RUN = ["completed", "failed", "cancelled"];
 
 /** The people behind these applications, with one query per kind of fact for all of them, never one per person. */
 export async function loadPeople(tx: Tx, apps: readonly App[]): Promise<Person[]> {
@@ -55,7 +54,7 @@ export async function loadPeople(tx: Tx, apps: readonly App[]): Promise<Person[]
   const waiting = new Set((await tx.select({ applicationId: communications.applicationId }).from(communications).where(and(inArray(communications.applicationId, ids), eq(communications.templateKey, DECISION_TEMPLATE), eq(communications.status, "queued")))).map((r) => r.applicationId));
   // A sent interview with no scorecard yet: whether its run is still going (being scored) or over (it could not be scored).
   const unscored = [...newest.values()].filter((s) => screenAnswersSent(s) && !s.assessmentId && s.workflowRunId).map((s) => s.workflowRunId!);
-  const over = new Set(unscored.length ? (await tx.select({ id: workflowRuns.id }).from(workflowRuns).where(and(inArray(workflowRuns.id, unscored), inArray(workflowRuns.status, ENDED_RUN)))).map((r) => r.id) : []);
+  const over = new Set(unscored.length ? (await tx.select({ id: workflowRuns.id }).from(workflowRuns).where(and(inArray(workflowRuns.id, unscored), inArray(workflowRuns.status, [...ENDED_RUN])))).map((r) => r.id) : []);
   return apps.flatMap((app) => {
     const candidate = people.find((c) => c.id === app.candidateId);
     if (!candidate) return [];

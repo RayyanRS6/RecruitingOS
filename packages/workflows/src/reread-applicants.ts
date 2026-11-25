@@ -1,10 +1,8 @@
 import { and, eq, notInArray } from "drizzle-orm";
 import { inProcess, type Actor } from "@ros/contracts";
-import { notLocked } from "@ros/core";
+import { ENDED_RUN, notLocked } from "@ros/core";
 import { applications, workflowRuns, type Tx } from "@ros/db";
 import type { WorkflowEngine } from "./engine";
-
-const ENDED_RUN = ["completed", "failed", "cancelled"];
 
 /**
  * A job's must-haves or skills changed: everyone still in the process on that job is read again, against the version
@@ -19,7 +17,7 @@ const ENDED_RUN = ["completed", "failed", "cancelled"];
  */
 export async function rereadApplicants(q: Tx, engine: Pick<WorkflowEngine, "start">, input: { companyId: string; roleId: string; version: number; actor: Actor }): Promise<number> {
   const people = await q.select({ id: applications.id, stage: applications.stage }).from(applications).where(and(eq(applications.roleId, input.roleId), notLocked()));
-  const stillOn = await q.select({ subject: workflowRuns.subject }).from(workflowRuns).where(and(eq(workflowRuns.companyId, input.companyId), eq(workflowRuns.workflowKey, "application_intake"), notInArray(workflowRuns.status, ENDED_RUN)));
+  const stillOn = await q.select({ subject: workflowRuns.subject }).from(workflowRuns).where(and(eq(workflowRuns.companyId, input.companyId), eq(workflowRuns.workflowKey, "application_intake"), notInArray(workflowRuns.status, [...ENDED_RUN])));
   const beingRead = new Set(stillOn.map((run) => run.subject.id));
   let started = 0;
   for (const person of people) {

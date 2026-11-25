@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
-import { STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
+import { SESSION_IDLE_MS, STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
 import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 
@@ -12,7 +12,6 @@ import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 export type IdentityLike = { subject: string; email: string; emailVerified: boolean; name: string | null; provider: string; /** Every provider linked to the account at the identity service, its first (`provider`) included. */ providers?: string[]; aal: "aal1" | "aal2"; mfaVerifiedAt: string | null };
 export type SignInPolicy = { staffDomains: string[]; staffProvider: string; requireStaffMfa: boolean; /** One-time bootstrap list (BOOTSTRAP_ADMIN_EMAILS): honoured only while no administrator exists; never a standing grant. */ bootstrapAdmins?: string[]; /** The providers the deployment offers (AUTH_SIGNIN_PROVIDERS): a session opens through these only. */ allowedProviders?: string[] };
 export const DEFAULT_SIGN_IN_POLICY: SignInPolicy = { staffDomains: ["identifiedtalent.com"], staffProvider: "azure", requireStaffMfa: true, bootstrapAdmins: [], allowedProviders: ["azure", "google"] };
-const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 
 export type SignInDecision = { ok: true; staff: boolean } | { ok: false; staff: boolean; code: "email_unverified" | "staff_provider_required" | "staff_provider_linked" | "mfa_required"; message: string };
 export type SignInIdentity<T extends IdentityLike> = { ok: true; identity: T } | { ok: false; code: "provider_mismatch" | "provider_not_allowed" | "email_invalid"; message: string };

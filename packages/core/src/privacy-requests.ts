@@ -8,6 +8,7 @@ import { normalizeEmail } from "./auth";
 import { dedupeKey } from "./dedupe";
 import { storedScreenWords, withoutCandidateWords } from "./screen-answers";
 import { canTransition, transition } from "./stages";
+import { ENDED_RUN } from "./workflow-runs";
 
 /**
  * Candidate privacy requests (correction 7, docs/runbooks/privacy-requests.md). Everything here is the recorded,
@@ -412,9 +413,6 @@ async function workflowRunsAbout(q: Queryable, companyId: string, candidateId: s
   )));
 }
 
-/** Run statuses the engine never moves on from (WorkflowEngine.tick returns at once for them). */
-const ENDED_RUN = new Set(["completed", "failed", "cancelled"]);
-
 /** Cancels one workflow run with a reason; WorkflowEngine.cancel (packages/workflows) has this shape once bound to an actor. */
 export type CancelWorkflowRun = (q: Queryable, runId: string, reason: string) => Promise<void>;
 
@@ -428,7 +426,7 @@ export type CancelWorkflowRun = (q: Queryable, runId: string, reason: string) =>
 export function cancelRunAsEngineDoes(actor: Actor): CancelWorkflowRun {
   return async (q, runId, reason) => {
     const [run] = await q.select({ status: workflowRuns.status, companyId: workflowRuns.companyId }).from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
-    if (!run || ENDED_RUN.has(run.status)) return;
+    if (!run || ENDED_RUN.includes(run.status)) return;
     await q.update(workflowRuns).set({ status: "cancelled", wait: null, lastError: reason }).where(eq(workflowRuns.id, runId));
     await emit(q, { type: "workflow.cancelled", companyId: run.companyId, actor, subject: { type: "workflow_run", id: runId }, payload: { reason }, correlationId: runId });
   };
@@ -514,12 +512,12 @@ export async function scrubCandidateWorkflowData(q: Queryable, input: { companyI
   if (!found.length) return result;
   const cancel = input.cancelRun ?? cancelRunAsEngineDoes(input.actor ?? SYSTEM_ACTOR);
   for (const r of found) {
-    if (ENDED_RUN.has(r.status)) continue;
+    if (ENDED_RUN.includes(r.status)) continue;
     await cancel(q, r.id, DELETION_REASON);
     result.cancelledRuns++;
   }
   const runs = await q.select({ id: workflowRuns.id, status: workflowRuns.status, state: workflowRuns.state, wait: workflowRuns.wait, lastError: workflowRuns.lastError }).from(workflowRuns).where(inArray(workflowRuns.id, found.map((r) => r.id)));
-  const ended = runs.filter((r) => ENDED_RUN.has(r.status));
+  const ended = runs.filter((r) => ENDED_RUN.includes(r.status));
   for (const r of ended) {
     const after = { state: scrubWorkflowRecord(r.state) as typeof r.state, wait: (r.wait === null ? null : scrubWorkflowRecord(r.wait)) as typeof r.wait, lastError: scrubWorkflowError(r.lastError) };
     if (JSON.stringify(after) === JSON.stringify({ state: r.state, wait: r.wait, lastError: r.lastError })) continue;
