@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CHAT_WRAP_KEY, type RolePacket, type ScreenTurn } from "@ros/contracts";
 import { FakeProvider, callPrompt, intakeCompilePrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
 import { PERSON_OFFER, chatNextLine, finalizePacket, registerFakeHandlers } from "@ros/agents";
-import { personas, runConversation, runConversationSuite, withPayQuestion } from "./conversation-suite";
+import { personas, runConversation, runConversationSuite, withPayQuestion, withoutLicenceQuestions } from "./conversation-suite";
 import { intakeContextOf } from "./intake-run";
 import { COOPERATIVE_PAY, RDH_FACTS } from "./suites";
 
@@ -75,9 +75,18 @@ describe("screen.conversation", () => {
   // Round 1's rule had no evaluation over a whole chat (the code check of 25 November 2026): a licence the resume does not
   // show is asked about once, as yes or no, "No" is taken, and nothing "similar" is asked.
   it("asks about a licence the resume does not show once, as yes or no, and takes 'No'; a model that climbs the ladder is named, while the candidate is still asked nothing similar", async () => {
-    const job = await goldenJob();
-    const [licence = "", perio = ""] = job.requirements.mustHaves.map((m) => m.key);
+    const golden = await goldenJob();
     const p = persona("licence_not_on_the_resume");
+    // Their job asks about the licence in the must-have only. The stand-in's job also asks about it in a question of its
+    // own, which is left out for them: asked twice, the second ask is a check on the first answer, and a "No" to it
+    // can be read either way.
+    expect(p.job).toBe(withoutLicenceQuestions);
+    const job = withoutLicenceQuestions(golden);
+    expect(golden.screening.questions.filter((q) => /license/i.test(q.question)).map((q) => q.key)).toEqual(["must_have"]);
+    expect(job.screening.questions).toEqual(golden.screening.questions.filter((q) => q.key !== "must_have"));
+    expect(job.requirements).toBe(golden.requirements);
+    expect(withoutLicenceQuestions(job)).toBe(job);
+    const [licence = "", perio = ""] = job.requirements.mustHaves.map((m) => m.key);
     const { conversation: c, failed } = await runConversation(p, job, run);
     expect(failed).toBeNull();
     // the plan: the job's own questions, then both must-haves (their resume shows neither), then the closing question
@@ -103,13 +112,16 @@ describe("screen.conversation", () => {
     // the cooperative candidate's resume shows the licence: their chat never asks about it
     const shown = await runConversation(persona("cooperative"), job, run);
     expect(shown.conversation.questions.map((q) => q.key)).not.toContain(licence);
+    // on the job as written the chat would ask about the licence twice: the persona says so, and judges nothing else
+    const twice = await runConversation(p, golden, run);
+    expect(p.expect(twice.conversation)).toEqual(["the job asks about the licence in a question of its own too, so this chat asks twice: This job needs: Active CA RDH license. Tell me about your experience with that."]);
   });
 
   // The persona's own setup must not be what fails on a real model. What the model is told of their resume names no
   // licence and no licensed title, so a "No" about it contradicts nothing; and a model that words the question "Can you
   // tell me whether you hold …?" still asks yes or no, where "Could you tell me about your licence?" asks for an account.
   it("gives the model a resume with no licence on it for that persona, and reads 'Can you tell me whether you hold it?' as a yes-or-no question", async () => {
-    const job = await goldenJob();
+    const job = withoutLicenceQuestions(await goldenJob());
     const [licence = ""] = job.requirements.mustHaves.map((m) => m.key);
     const p = persona("licence_not_on_the_resume");
     const seen: ScreenContext[] = [];

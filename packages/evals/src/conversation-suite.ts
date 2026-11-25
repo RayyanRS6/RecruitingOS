@@ -125,6 +125,21 @@ export function withPayQuestion(job: RolePacket): RolePacket {
   return { ...job, screening: { ...job.screening, questions: [pay, ...job.screening.questions] } };
 }
 
+/** A question that asks about a licence, a certificate or a permit, in any words. */
+const ABOUT_A_LICENCE = /licen[cs]e|certif|\bpermit\b/i;
+
+/**
+ * The job without those of its own interview questions that ask about a licence, for the persona whose resume does not
+ * show one: their chat then asks about the licence in one place only, the must-have, which is what that persona checks.
+ * A job that asks about it in a question of its own as well (the stand-in's job does) has the model word the second ask
+ * as a check on the first answer (the chat never asks again what they already said), and a "No" to such a check can be
+ * read either way. A job with no such question comes back as it is.
+ */
+export function withoutLicenceQuestions(job: RolePacket): RolePacket {
+  const questions = job.screening.questions.filter((q) => !ABOUT_A_LICENCE.test(q.question));
+  return questions.length === job.screening.questions.length ? job : { ...job, screening: { ...job.screening, questions } };
+}
+
 const questionMarks = (message: string): number => (message.match(/\?/g) ?? []).length;
 /** A message without what it quotes of the candidate's own words. */
 const withoutQuotes = (message: string): string => message.replace(/"[^"]*"/g, "");
@@ -293,20 +308,22 @@ export const personas: Persona[] = [
     // about it once, as yes or no, and takes "No" as the answer. Nothing "similar from your own work" and no "small
     // moment" follows; the "No" is the answer on record, and the chat goes on to the next thing in its plan. They answer
     // the job's own questions first (the plan asks those before a must-have), and stop after the turn that takes the "No".
+    // Their job asks about the licence nowhere else (`withoutLicenceQuestions`), so the "No" answers one plain question.
     id: "licence_not_on_the_resume",
     provenance: "synthetic",
     licenceOnResume: false,
+    job: withoutLicenceQuestions,
     reply: (at) => {
       if (at.replied.some(asksIfTheyHoldIt)) return null;
       if (at.kind === "gap" && asksIfTheyHoldIt(at.asking)) return "No";
-      // one of the job's own questions about the licence: the same person, who does not hold it
-      if (/licen[cs]e|certif|\bpermit\b/i.test(at.asking.question)) return at.followUp ? "I assist chairside every day and I am studying for the hygiene board exam." : "I am not licensed as a hygienist yet. I have assisted chairside for six years.";
       return cooperative(at);
     },
     expect: (c) => {
       const licence = [...credentialMustHaves(c.job)][0];
       if (!licence) return ["the job has no licence must-have to ask about"];
       if (!c.questions.some((q) => q.key === licence)) return ["the chat's plan does not ask about the licence the resume does not show"];
+      const own = c.job.screening.questions.filter((q) => ABOUT_A_LICENCE.test(q.question));
+      if (own.length) return [`the job asks about the licence in a question of its own too, so this chat asks twice: ${own.map((q) => q.question).join(" | ")}`];
       const f: string[] = [];
       // the message that moved on to it, and their one reply about it
       const asked = c.transcript.filter((t) => t.role === "assistant" && t.questionKey === licence).map((t) => questionOf(t.content));
