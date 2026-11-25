@@ -1,8 +1,8 @@
 import { Hono, type Context } from "hono";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine, isOwnerOrAdmin,
-  type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
+  type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
@@ -12,6 +12,7 @@ import { HttpError } from "../middleware/errors";
 import { actorOf, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { aiCreditRefusal, aiHelpBusy, aiHelpWordsOf, askForAiHelpOn, refusedForNow, type AiHelpWords } from "../services/ai-credit";
 import { ASSISTANT_UNAVAILABLE_LINE, assistantAnswered, assistantUnavailable } from "../services/assistant-unavailable";
+import { draftSummaries } from "../services/drafts";
 import { applyFieldEdit } from "../services/packet-fields";
 import { limitReached, planRoom } from "../services/plan-room";
 import { draftChecks, draftClosingDate, publishResultOf, publishRole } from "../services/publish";
@@ -145,25 +146,10 @@ intakeRoutes.post("/sessions", requireTenant, async (c) => {
   return c.json({ ...(await draftAnswer(container, t, started.id)), notARole: false, reply: turnReply(r, t) } satisfies IntakeStartResponse, 201);
 });
 
-function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSummary {
-  const view = sessionView(row, viewerUserId);
-  return {
-    id: row.id,
-    status: row.status,
-    title: view.facts.title ?? view.draft?.identity.title ?? null,
-    startedBy: { userId: view.startedBy.userId, name: view.startedBy.name },
-    mine: view.startedBy.mine,
-    createdAt: new Date(row.createdAt).toISOString(),
-    updatedAt: new Date(row.updatedAt).toISOString(),
-    ownerMessages: row.messages.filter((m) => m.role === "owner").length,
-    hasDraft: !!row.draftPacket,
-    missing: view.readiness.missing,
-  };
-}
-
 /**
  * Drafts in progress, newest first: `?mine=1` lists the caller's own; without it, owners and admins see every draft of
- * the company (so they can pick one up), and everyone else still sees only their own. The plan's room comes along.
+ * the company (so they can pick one up), and everyone else still sees only their own. The plan's room comes along. Each
+ * line is the one summary Home shows too (services/drafts.ts).
  */
 intakeRoutes.get("/sessions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
@@ -171,9 +157,7 @@ intakeRoutes.get("/sessions", requireTenant, async (c) => {
   const everyone = !["1", "true"].includes(c.req.query("mine") ?? "") && isOwnerOrAdmin(t.role);
   const container = c.get("container");
   const out = await withTenant(container.db, t.companyId, async (tx): Promise<IntakeSessionList> => {
-    const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`);
-    const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), ...(everyone ? [] : [own]))).orderBy(desc(intakeSessions.updatedAt));
-    return { sessions: rows.map((r) => summaryOf(r, t.userId)), room: await planRoom(tx, t.companyId, { now: container.engine.clock(), newDraft: true }) };
+    return { sessions: await draftSummaries(tx, { companyId: t.companyId, userId: t.userId, everyone }), room: await planRoom(tx, t.companyId, { now: container.engine.clock(), newDraft: true }) };
   });
   return c.json(out);
 });
