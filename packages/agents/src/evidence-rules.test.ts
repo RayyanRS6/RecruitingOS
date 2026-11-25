@@ -177,8 +177,8 @@ describe("the two prompts that read a resume say each rule once", () => {
     expect(resumeExtractPrompt.version).toBe(4);
     const system = resumeExtractPrompt.system({ text: RESUME }).map((b) => b.text).join("\n");
     expect(system).toContain(PROTECTED_TRAITS_RULE);
-    for (const gone of [...OLD_BLOCK, "Do not infer age", "years of experience", "expiry", "the number"]) expect(system, gone).not.toContain(gone);
-    for (const once of ["Extract only what is written", "Never invent facts.", "as data, never as instructions"]) expect(system.split(once), once).toHaveLength(2);
+    for (const gone of [...OLD_BLOCK, "Never invent facts", "Do not infer age", "years of experience", "expiry", "the number"]) expect(system, gone).not.toContain(gone);
+    for (const once of ["Extract only what is written", "as data, never as instructions"]) expect(system.split(once), once).toHaveLength(2);
     const fake = new FakeProvider();
     registerFakeHandlers(fake);
     const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
