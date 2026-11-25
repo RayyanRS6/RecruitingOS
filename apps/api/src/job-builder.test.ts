@@ -313,8 +313,8 @@ describe("the job builder", () => {
     expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
   });
 
-  // Found by an audit in November 2026. The real model writes facts in plain words ("On site"); the stand-in writes
-  // codes and reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
+  // Found by an audit in November 2026. The real model writes facts in plain words ("On site", "Work from home", "per
+  // hour"); the stand-in reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
   it("knows the work arrangement when the assistant writes it in words and the owner said it as people do, and still asks when nobody said it", async () => {
     const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions: [] });
     const arrangementOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "remote_policy");

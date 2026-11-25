@@ -119,10 +119,12 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
     const place = placeIn(all);
     if (place) facts.locationText = place;
   }
+  // Facts in plain words, as the prompt asks ("Full time", not "full_time"): the server reads the kind of job, the pay
+  // basis and the work arrangement from the words (`normalizeFacts`).
   if (!facts.employmentType) {
-    if (/full[\s-]?time/i.test(all)) facts.employmentType = "full_time";
-    else if (/part[\s-]?time/i.test(all)) facts.employmentType = "part_time";
-    else if (/per diem/i.test(all)) facts.employmentType = "per_diem";
+    if (/full[\s-]?time/i.test(all)) facts.employmentType = "Full time";
+    else if (/part[\s-]?time/i.test(all)) facts.employmentType = "Part time";
+    else if (/per diem/i.test(all)) facts.employmentType = "Per diem";
   }
   if (!facts.schedule) {
     // "Monday to Friday", with its hours when they follow ("Monday to Friday, 8 to 5"), never the pay after it.
@@ -131,9 +133,9 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
     if (s) facts.schedule = s.trim();
   }
   if (!facts.remotePolicy) {
-    if (/\bhybrid\b/i.test(all)) facts.remotePolicy = "hybrid";
-    else if (/\bremote\b/i.test(all) && !/\b(no|not|never|isn't|is not)\s+(fully\s+)?remote\b/i.test(all)) facts.remotePolicy = "remote";
-    else if (/\b(on[\s-]?site|in[\s-]?office|in[\s-]?person)\b/i.test(all)) facts.remotePolicy = "onsite";
+    if (/\bhybrid\b/i.test(all)) facts.remotePolicy = "Hybrid";
+    else if (/\bremote\b/i.test(all) && !/\b(no|not|never|isn't|is not)\s+(fully\s+)?remote\b/i.test(all)) facts.remotePolicy = "Remote";
+    else if (/\b(on[\s-]?site|in[\s-]?office|in[\s-]?person)\b/i.test(all)) facts.remotePolicy = "On site";
   }
   if (facts.compensationMin === undefined) {
     const flat = all.replace(/(\d),(\d{3})/g, "$1$2");
@@ -202,7 +204,7 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   if (firstTurn && c.ad) {
     if (facts.title) takenFromAd.push(`Job title: ${facts.title}`);
     if (facts.locationText) takenFromAd.push(`Where: ${facts.locationText}`);
-    if (facts.employmentType) takenFromAd.push(`Type: ${facts.employmentType.replace(/_/g, " ")}`);
+    if (facts.employmentType) takenFromAd.push(`Type: ${facts.employmentType.replace(/_/g, " ").toLowerCase()}`);
     if (facts.schedule) takenFromAd.push(`Schedule: ${facts.schedule}`);
     if (facts.compensationMin !== undefined) takenFromAd.push(`Pay in the ad: ${money(facts.compensationMin)}–${money(facts.compensationMax ?? facts.compensationMin)} ${per(facts.compensationBasis ?? "hourly")} (to confirm)`);
   }

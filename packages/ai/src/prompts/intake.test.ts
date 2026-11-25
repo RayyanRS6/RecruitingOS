@@ -20,12 +20,19 @@ describe("intake.turn: the builder's conversation", () => {
     expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 9, task: "intake.turn", agent: "intake" });
   });
 
-  // Version 8, after the real models' first run on the builder (19 November 2026): they wrote "Full time" for the kind
-  // of job, and held a job back for the hours when the owner gave the days.
-  it("names the values of the facts kept as codes, and takes the days alone as a schedule", () => {
-    const t = turn();
-    expect(t).toContain("employmentType (full_time, part_time, contract, temporary, per_diem or internship) and compensationBasis (hourly or salary)");
-    expect(t).toContain("The days alone are enough: once the owner gave them the schedule is answered, and you never hold the job back or ask again for the hours");
+  // Version 8, after the real models' first run on the builder (19 November 2026): they held a job back for the hours
+  // when the owner gave the days.
+  it("takes the days alone as a schedule", () => {
+    expect(turn()).toContain("The days alone are enough: once the owner gave them the schedule is answered, and you never hold the job back or ask again for the hours");
+  });
+
+  // Version 9. One bullet asked for every fact in plain words, never a code, and in the same breath for the work
+  // arrangement, the kind of job and the pay basis as codes. On that first run the models wrote "Full time"; the code
+  // has read all three from words since (`normalizeFacts` in packages/core), so the bullet asks for one thing.
+  it("asks for every fact in plain words, and for none as a code", () => {
+    const bullet = turn().split("\n").find((line) => line.startsWith("- Put every fact"));
+    expect(bullet).toBe('- Put every fact the owner gives into factsExtracted, in plain words as a candidate would read them, never a code: "California RDA license", not "rda_license"; "Full time", not "full_time". Record remotePolicy (on site, hybrid or remote) only when the owner stated it. Do not ask for what you already have.');
+    expect(turn()).not.toMatch(/written exactly so|part_time, contract|compensationBasis \(|\(onsite, hybrid or remote\)/);
   });
 
   // Version 9 (25 November 2026). The model was asked what is still missing and whether the job can be written, and
@@ -46,7 +53,7 @@ describe("intake.turn: the builder's conversation", () => {
     const t = turn();
     for (const essential of ["the job title", "where the job is", "the work arrangement: on site, hybrid or remote", "the pay: hourly or a salary, and the range", "full time or part time", "the schedule: the days and hours", "at least one must-have requirement"]) expect(t).toContain(essential);
     expect(t).toContain("Ask it unless the owner said it in their own words. Never assume it, not even for a job that sounds on site");
-    expect(t).toContain("Record remotePolicy (onsite, hybrid or remote) only when the owner stated it");
+    expect(t).toContain("Record remotePolicy (on site, hybrid or remote) only when the owner stated it");
     expect(t).toContain("Only the owner states pay; never suggest or invent a figure");
   });
 

@@ -53,11 +53,15 @@ describe("the stand-in assistant's turn (intake.turn)", () => {
 
   it("has nothing left to ask after one sentence that names every essential, and does not say that the job can be written", async () => {
     const t = await turn(ctx([said(HYGIENIST)]));
-    expect(t.factsExtracted).toMatchObject({ title: "registered dental hygienist", locationText: "Tustin, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55 });
+    // every fact in plain words, as the prompt asks: "Full time", not "full_time"
+    expect(t.factsExtracted).toMatchObject({ title: "registered dental hygienist", locationText: "Tustin, CA", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55 });
     expect(t.factsExtracted.mustHaves).toEqual(["Active CA RDH license", "Periodontal charting"]);
     expect(t.questions).toEqual([]);
-    // the server finds every essential in and the pay typed by the owner, so the page says the job can be written; the reply does not
-    expect(after(t, [said(HYGIENIST)])).toMatchObject({ missing: [], mayDraft: true, payTyped: true, questions: [], message: "Got it: registered dental hygienist in Tustin, CA." });
+    // the server reads the arrangement and the kind of job from those words, finds every essential in and the pay typed by
+    // the owner, so the page says the job can be written; the reply does not
+    const done = after(t, [said(HYGIENIST)]);
+    expect(done.facts).toMatchObject({ remotePolicy: "onsite", employmentType: "full_time", compensationBasis: "hourly" });
+    expect(done).toMatchObject({ missing: [], mayDraft: true, payTyped: true, questions: [], message: "Got it: registered dental hygienist in Tustin, CA." });
     expect(withoutReadyClaim(t.assistantMessage)).toBe(t.assistantMessage);
     // a later turn with nothing to ask and nothing new understood says no more than that it was noted
     const later = await turn(ctx([said(HYGIENIST), replied("Got it."), said("Thanks.")], t.factsExtracted));
@@ -153,8 +157,8 @@ describe("the cards as the server stores them", () => {
     expect(fieldsKnownFromFacts(facts({ employmentType: "part_time" }), false)).toEqual(["employment_type"]);
   });
 
-  // Found on the live site on 19 November 2026. The real model writes facts in plain words; the stand-in writes codes,
-  // so only a scripted turn can tell.
+  // Found on the live site on 19 November 2026. The real model writes facts in plain words, and in more ways than the
+  // stand-in does ("per hour", "flexible"), so these facts are scripted.
   it("reads the assistant's plain words for the kind of job and the pay basis, and never counts unreadable ones as answered", () => {
     const read = mergeFacts(facts(), facts({ title: "Front desk coordinator", employmentType: "Full time", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26 }), [said("Front desk coordinator, full time, 22 to 26 dollars an hour.")]);
     expect(read).toMatchObject({ employmentType: "full_time", compensationBasis: "hourly", compensationMin: 22, compensationMax: 26 });
@@ -263,8 +267,8 @@ describe("the facts after a turn", () => {
   });
 
   // Found by an audit in November 2026. The real model writes the arrangement in plain words ("On site"), which was
-  // dropped as no code; and "we all work from home" did not count as the owner naming one. The stand-in writes codes,
-  // so only a scripted fact can tell.
+  // dropped as no code; and "we all work from home" did not count as the owner naming one. The stand-in writes only "On
+  // site", "Hybrid" and "Remote", so the other ways of saying it are scripted.
   it("reads the arrangement the assistant wrote in plain words, once the owner's typed words name one", () => {
     const typed = [said("It is on site two days and remote three, so hybrid.")];
     for (const [written, code] of [["On site", "onsite"], ["On-site", "onsite"], ["In office", "onsite"], ["Hybrid", "hybrid"], ["Remote", "remote"], ["Work from home", "remote"]] as const) {
