@@ -138,7 +138,8 @@ describe("a job's Share tab", () => {
     expect((await json(other.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(404);
   });
 
-  // The model writes both posts in its one call. What it wrote for the post nobody pressed is never stored.
+  // The model writes both posts in its one call. What it wrote for the post nobody pressed is not stored: that post
+  // has words, and they stay (a post with no words yet is the one exception; the failed-writing case below has it).
   it("Write again on one post leaves the other exactly as it is, words, time and all, though the model wrote both", async () => {
     const co = await newCompany("ultra");
     const roleId = await publishedJob(co.cookie);
@@ -216,18 +217,15 @@ describe("a job's Share tab", () => {
       const failed = await share(co.cookie, roleId);
       expect(failed).toMatchObject({ state: "failed", stateLine: SHARE_LINE.failed });
       expect(failed.posts.map((p) => p.text)).toEqual([null, null]);
-      // Write again on one post tries once more and writes that post alone: the other has no words until its own
-      // Write again (until 25 November 2026 the one press also filled in the post nobody had pressed)
+      // Write again on one post tries once more and writes both posts, since neither has words yet: the tab said
+      // "Press Write again", and shows "Being written…" in both empty boxes while it runs
       expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/indeed/rewrite`)).status).toBe(202);
-      const one = await share(co.cookie, roleId);
-      expect(one.state).toBe("ready");
-      expect(one.posts.map((p) => [p.channel, p.text === null])).toEqual([["linkedin", true], ["indeed", false]]);
-      expect(one.posts[1].text).toContain(one.posts[1].applyUrl);
+      const view = await share(co.cookie, roleId);
+      expect(view.state).toBe("ready");
+      expect(view.posts.every((p) => !!p.text && p.text.includes(p.applyUrl))).toBe(true);
+      // from here each post has words, so a Write again on one leaves the other exactly as it is
       expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(202);
-      const both = await share(co.cookie, roleId);
-      expect(both.state).toBe("ready");
-      expect(both.posts.every((p) => !!p.text && p.text.includes(p.applyUrl))).toBe(true);
-      expect(both.posts[1]).toEqual(one.posts[1]);
+      expect((await share(co.cookie, roleId)).posts[1]).toEqual(view.posts[1]);
     } finally {
       moveClock(null);
       container.fake!.clearScripts();

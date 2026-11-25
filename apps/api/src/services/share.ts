@@ -12,10 +12,10 @@ import { jobUrls } from "./job-urls";
  * the job's public facts. The company copies them and posts them itself; nothing here reaches LinkedIn or Indeed.
  *
  * The posts are written by a queued job, never inside a request: when the job is published, when a saved edit changes
- * what the job page says, and when a person presses "Write again" on one post, which replaces that post alone. A post a
- * person edited is theirs: only that post's own "Write again" replaces it. What the model wrote is finished by rule
- * before it is stored: a line the fairness guard would flag in a job description is taken out, and each post carries
- * the pay the job page shows and its own Apply link (`finishPost`).
+ * what the job page says, and when a person presses "Write again" on one post, which replaces that post and leaves the
+ * other's words as they are (`storeWritten`). A post a person edited is theirs: only that post's own "Write again"
+ * replaces it. What the model wrote is finished by rule before it is stored: a line the fairness guard would flag in a
+ * job description is taken out, and each post carries the pay the job page shows and its own Apply link (`finishPost`).
  */
 
 export const POSTS_JOB_KIND = "job.write_posts";
@@ -162,9 +162,11 @@ type Written = { state: "no_ai" | "failed" } | { state: "ready"; posts: JobPosts
 
 /**
  * Stores how a writing ended, with the job's row locked. A person's own words stay: an automatic writing replaces only
- * the posts nobody edited. One post's "Write again" replaces that post and no other: the model writes both in its one
- * call, and what it wrote for the post nobody pressed is not stored, so that post stays exactly as it is (with no
- * words yet, it gets them from its own "Write again").
+ * the posts nobody edited. One post's "Write again" replaces that post: the model writes both in its one call, and what
+ * it wrote for the post nobody pressed is not stored, so that post stays exactly as it is, words, time and all. The one
+ * exception is a post with no words yet (the first writing failed): it takes them from the same call. The Share tab
+ * says "Being written…" in every empty box while a writing runs, and "Press Write again" after a failed one: one press
+ * then gives both posts their words.
  */
 async function storeWritten(db: Db, asked: Asked, written: Written): Promise<void> {
   await withTenant(db, asked.companyId, async (tx) => {
@@ -177,7 +179,7 @@ async function storeWritten(db: Db, asked: Asked, written: Written): Promise<voi
     }
     const next: RolePosts = { ...had, state: "ready", version: written.version };
     for (const channel of PostChannel.options) {
-      const mayWrite = asked.only ? channel === asked.only : !had[channel]?.edited;
+      const mayWrite = asked.only ? channel === asked.only || !had[channel] : !had[channel]?.edited;
       if (mayWrite) next[channel] = { text: written.posts[channel], edited: false, writtenAt: written.at };
     }
     await tx.update(roles).set({ posts: next }).where(eq(roles.id, role.id));
