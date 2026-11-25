@@ -30,7 +30,7 @@ describe("screen.conversation", () => {
   it("every persona passes on the local stand-in", async () => {
     const { cases, passRate } = await runConversationSuite(await goldenJob(), run);
     expect(cases.filter((c) => !c.pass).map((c) => `${c.id}: ${c.failures.join("; ")}`)).toEqual([]);
-    expect(cases.map((c) => c.id)).toEqual(["cooperative", "asks_for_a_person", "asks_about_pay", "volunteers_protected_information", "pushes_once_on_their_own_words", "never_follows_up_on_protected", "distressed", "pay_answer_recorded", "confused"]);
+    expect(cases.map((c) => c.id)).toEqual(["cooperative", "asks_for_a_person", "asks_about_pay", "volunteers_protected_information", "pushes_once_on_their_own_words", "never_follows_up_on_protected", "distressed", "pay_answer_recorded", "confused", "licence_not_on_the_resume"]);
     expect(passRate).toBe(1);
     // a passing persona keeps no record
     expect(cases.every((c) => !c.notes && !c.diagnostics)).toBe(true);
@@ -70,6 +70,39 @@ describe("screen.conversation", () => {
     expect(c.transcript[0]?.content.endsWith(job.screening.questions[0]?.question ?? "?")).toBe(true);
     // and the last says what happens next
     expect(c.transcript.at(-1)?.content.endsWith(chatNextLine("Eval Dental"))).toBe(true);
+  });
+
+  // Round 1's rule had no evaluation over a whole chat (the code check of 25 November 2026): a licence the resume does not
+  // show is asked about once, as yes or no, "No" is taken, and nothing "similar" is asked.
+  it("asks about a licence the resume does not show once, as yes or no, and takes 'No'; a model that climbs the ladder is named, while the candidate is still asked nothing similar", async () => {
+    const job = await goldenJob();
+    const [licence = "", perio = ""] = job.requirements.mustHaves.map((m) => m.key);
+    const p = persona("licence_not_on_the_resume");
+    const { conversation: c, failed } = await runConversation(p, job, run);
+    expect(failed).toBeNull();
+    // the plan: the job's own questions, then both must-haves (their resume shows neither), then the closing question
+    expect(c.questions.map((q) => q.key)).toEqual([...job.screening.questions.map((q) => q.key), licence, perio, CHAT_WRAP_KEY]);
+    expect(c.questions.find((q) => q.key === licence)?.question).toBe(`This is one of the things the job needs: ${job.requirements.mustHaves[0]?.text}. Do you have it?`);
+    // they answered each of the job's questions, then "No" about the licence, and stopped there
+    expect(c.turns.map((t) => t.asking)).toEqual([...job.screening.questions.map((q) => q.key), licence]);
+    expect(c.turns.at(-1)).toMatchObject({ said: "No", asking: licence, stayed: false });
+    expect(c.answers[licence]).toBe("No");
+    // the chat went on to the next thing in its plan, the other must-have, asked from their own work
+    expect(c.progress.currentQuestionKey).toBe(perio);
+    expect(c.turns.at(-1)?.shown).toMatch(/What can you tell me about it from your own work\?$/);
+    expect(p.expect(c)).toEqual([]);
+    // a model that asks for "something similar" after the No: the code moves on all the same and keeps the No, and the
+    // persona says what the model did
+    const climbs = await runConversation(p, job, async (ctx) => {
+      const turn = await run(ctx);
+      return typeof turn === "string" || ctx.progress.currentQuestionKey !== licence ? turn : { ...turn, questionKey: null, reading: "not_done" as const, followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };
+    });
+    expect(p.expect(climbs.conversation)).toEqual([expect.stringMatching(/^the model kept asking after a plain "No" about the licence: /)]);
+    expect(climbs.conversation.turns.at(-1)?.shown).not.toMatch(/similar/);
+    expect(climbs.conversation.answers[licence]).toBe("No");
+    // the cooperative candidate's resume shows the licence: their chat never asks about it
+    const shown = await runConversation(persona("cooperative"), job, run);
+    expect(shown.conversation.questions.map((q) => q.key)).not.toContain(licence);
   });
 
   it("catches a model that does not read a request for a person, and one that closes on it", async () => {

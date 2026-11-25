@@ -367,7 +367,8 @@ async function main() {
   };
 
   // The scorecard: one finding for every question asked, a skip not known, the licence rule, and only the candidate's
-  // own words quoted. `expect` reads the model's own first reading; `expectShown` what the team sees.
+  // own words quoted. `expect` reads the model's own first reading; `expectShown` what the team sees. And no reading
+  // gives a verdict on the person in its own words (`verdictWords`, as for the resume reading), in any case.
   if (runs("screen.assess")) {
     const packet = await goldenPacket();
     const out: CaseResult[] = [];
@@ -376,7 +377,7 @@ async function main() {
       const chat = await scoreChat(c.id, interview);
       const { shown, raws } = chat;
       if (!shown.ok || !raws[0]) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${shown.ok ? "no reading came back" : shown.error}`], notes: scorecardNotes(interview, chat), diagnostics: scorecardDiagnostics(interview, [chat]) }); continue; }
-      const f = [...(c.expect?.(raws[0], interview) ?? []), ...(c.expectShown?.(shown.output, interview) ?? []).map((x) => `shown: ${x}`)];
+      const f = [...(c.expect?.(raws[0], interview) ?? []), ...(c.expectShown?.(shown.output, interview) ?? []).map((x) => `shown: ${x}`), ...raws.flatMap((raw, i) => verdictWords(raw).map((x) => `reading ${i + 1}: ${x}`))];
       out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: scorecardNotes(interview, chat), diagnostics: scorecardDiagnostics(interview, [chat]) } : {}) });
     }
     record("screen.assess", out);

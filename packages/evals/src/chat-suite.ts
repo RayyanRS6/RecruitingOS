@@ -1,6 +1,6 @@
-import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
+import { CHAT_WRAP_KEY, CHAT_WRAP_QUESTION, type EvidenceAssessment, type RolePacket, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, chatPlanFor, chatPromptOf, enforceChatTurn, unfairQuestion, type ChatTurn } from "@ros/agents";
+import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, chatPlanFor, chatPromptOf, enforceChatTurn, readingsOutcome, unfairQuestion, yesNoFormAnswers, type ChatTurn } from "@ros/agents";
 import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
@@ -11,14 +11,15 @@ type ChatStep = ReturnType<typeof enforceChatTurn>["move"];
  * as the app holds it
  * (`enforceChatTurn`). Each case checks two things: what the model did on its own (it read the reply, it followed the
  * ladder, it moved on when it should), and what the candidate is shown after the code's checks (one restatement and one
- * question, no praise in "About your experience", no inference, nothing the form already asked, no private note, no
- * protected trait, a close that promises no time). Pure: `runChatSuite` takes a function that runs the prompt, so the
- * runner (runner.ts) passes the configured model and the unit test the stand-in.
+ * question, no praise in "About your experience", no inference, nothing outside the plan, no private note, no protected
+ * trait, a close that promises no time). Pure: `runChatSuite` takes a function that runs the prompt, so the runner
+ * (runner.ts) passes the configured model and the unit test the stand-in.
  *
  * Suites: chat.shape (one restatement, one question), chat.ladder (one push, the analog, the smaller version, then not
- * known, and the push a thin must-have reply still gets), chat.no_inference, chat.no_reask (the form's answers, what the
- * candidate just said, and an item their earlier reply already answered), chat.private_note,
- * chat.fairness, chat.close.
+ * known, the push a thin must-have reply still gets, and a certificate, which has no ladder: asked once as yes or no,
+ * "No" taken), chat.no_inference, chat.no_reask (what the form settled, which the plan leaves out and the model is not
+ * told; what the candidate just said; an item their earlier reply already answered), chat.private_note, chat.fairness,
+ * chat.close (the close, and the closing question only once every item of the plan is asked: the plan is the code's).
  */
 
 export type ChatSuite = "chat.shape" | "chat.ladder" | "chat.no_inference" | "chat.no_reask" | "chat.private_note" | "chat.fairness" | "chat.close";
@@ -28,11 +29,22 @@ export type ChatCase = {
   suite: ChatSuite;
   /** The must-haves of `CHAT_PACKET` the resume reading did not find shown when the chat started: the plan asks about them after the job's own questions. */
   gaps: string[];
+  /**
+   * The candidate answered "No" on the application form to the question about the certificate, and their resume says
+   * nothing of one. The reading the plan is built from is then what the app's own rules make of that answer
+   * (`readingsOutcome`), and the plan leaves the certificate out (`chatPlanFor`): the form asked, so the chat does not.
+   */
+  formNo?: boolean;
   /** The item being asked (everything before it in the plan was asked), and its ladder so far. */
   asking: string;
   item?: { step?: "direct" | "analog" | "smaller"; pushes?: number };
   /** The chat so far (the ask of `asking` first), ending with the candidate's latest reply. */
   transcript: Array<{ role: "assistant" | "candidate"; content: string; questionKey?: string }>;
+  /**
+   * A turn written here in place of the model's, for what only the code decides (where the chat goes): the case checks
+   * what the code makes of it, and no model is called.
+   */
+  scripted?: ScreenTurn;
   /**
    * What the model must have done on its own (`raw`, its turn as it wrote it), and what the code made of it (`turn`, with
    * the answer the code recorded from the candidate's own replies; `move`; the `plan` after it): failures in plain words.
@@ -40,7 +52,11 @@ export type ChatCase = {
   expect: (r: { raw: ScreenTurn; turn: ChatTurn; move: ChatStep; plan: ScreenProgress["chat"] }) => string[];
 };
 
-/** The job the cases ask about: a robotics trainer. */
+/**
+ * The job the cases ask about: a robotics trainer. Two of its must-haves are skills, which the chat asks about from the
+ * candidate's own work; the third is a certificate, which is held or is not: the chat asks about it once, as yes or no,
+ * and the application form asks about it too.
+ */
 export const CHAT_PACKET = {
   identity: { title: "Robotics and AI Trainer", employmentType: "full_time", locations: [{ city: "Lahore", region: "PB" }] },
   compensation: { basis: "salary", min: 60000, max: 90000, currency: "USD", discloseRange: false },
@@ -48,11 +64,12 @@ export const CHAT_PACKET = {
     mustHaves: [
       { key: "arduino", text: "Hands-on Arduino or robotics hardware work", rationale: "The classes build robots." },
       { key: "english", text: "Explaining technical ideas in English", rationale: "Classes are taught in English." },
+      { key: "first_aid", text: "Current first-aid certificate", rationale: "The classes are with children." },
     ],
     niceToHaves: [],
   },
   description: { publicJobDescription: "You teach robotics and AI classes to children of six to twelve in schools across Lahore: building small robots with Arduino kits, and explaining how each part works in plain English." },
-  formQuestions: [{ kind: "yes_no", key: "laptop", question: "Do you have your own laptop for teaching?", required: true }],
+  formQuestions: [{ kind: "yes_no", key: "fq_first_aid", question: "Do you hold a current first-aid certificate?", required: true }],
   screening: {
     questions: [
       { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", kind: "behavioral", required: true, modelAnswer: "uses a concrete everyday analogy and checks understanding with the children" },
@@ -101,13 +118,51 @@ function shownFailures(turn: ScreenTurn, experience: boolean): string[] {
   return out;
 }
 
+const AT = "2026-10-15T10:00:00.000Z";
+/** The must-have of `CHAT_PACKET` that names a certificate. */
+const CERTIFICATE = "first_aid";
+/**
+ * The application of a case with `formNo`: a resume that shows the two skills and says nothing of a certificate, and
+ * "No" to the form's question about one.
+ */
+const FORM_NO = {
+  resumeText: ["Software engineer at CallsFlow 2023 - present", "Built and wired Arduino line-following robots for a school club", "Taught weekly technical workshops in English to first-year students"].join("\n"),
+  formAnswers: { fq_first_aid: "no" },
+  shown: { arduino: "Built and wired Arduino line-following robots for a school club", english: "Taught weekly technical workshops in English to first-year students" } as Record<string, string>,
+};
+
+/**
+ * The resume reading a case's plan is built from. Every must-have the case does not list as a gap is shown on the
+ * resume. With `formNo` the reading is what the app makes of three readings that found the certificate not met on the
+ * form's answer (`readingsOutcome`: the quote check and the licence rule, which reads "No" to holding a *current*
+ * certificate as not known), so the plan rests on what those rules really give, not on a finding written by hand.
+ */
+export function chatCaseReading(c: ChatCase): Pick<EvidenceAssessment, "requirementFindings"> {
+  if (!c.formNo) return { requirementFindings: CHAT_PACKET.requirements.mustHaves.filter((m) => !c.gaps.includes(m.key)).map((m) => ({ requirementKey: m.key, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } })) };
+  const answered = yesNoFormAnswers(CHAT_PACKET, { answers: { form: FORM_NO.formAnswers } })[0] ?? "";
+  const read: EvidenceAssessment = {
+    summary: "The resume shows the two skills. On the form the candidate says they hold no current first-aid certificate.",
+    strengths: [],
+    concerns: [],
+    unknowns: [],
+    competencyFindings: [],
+    requirementFindings: [
+      ...Object.entries(FORM_NO.shown).filter(([key]) => !c.gaps.includes(key)).map(([requirementKey, quote]) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote } })),
+      { requirementKey: CERTIFICATE, met: "no" as const, evidence: { source: "application" as const, quote: answered } },
+    ],
+  };
+  const out = readingsOutcome([1, 2, 3].map((n) => ({ ok: true as const, output: read, runId: `scripted_${n}`, model: "scripted" })), { restore: (s: string) => s }, { resumeText: FORM_NO.resumeText, formAnswers: FORM_NO.formAnswers, packet: CHAT_PACKET });
+  if (!out.ok) throw new Error(`case ${c.id}: the scripted resume reading failed`);
+  return out.output;
+}
+
 /**
  * The progress of a case: the plan as the app builds it (the job's questions, then the case's gaps: every other
- * must-have is shown on the resume), everything before the case's item asked and passed, and its item being asked.
+ * must-have is shown on the resume, or, with `formNo`, settled by the form's answer), everything before the case's item
+ * asked and passed, and its item being asked.
  */
 export function chatCaseProgress(c: ChatCase): ScreenProgress {
-  const shown = CHAT_PACKET.requirements.mustHaves.filter((m) => !c.gaps.includes(m.key)).map((m) => ({ requirementKey: m.key, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
-  const plan = chatPlanFor(CHAT_PACKET, { requirementFindings: shown }, "2026-10-15T10:00:00.000Z");
+  const plan = chatPlanFor(CHAT_PACKET, chatCaseReading(c), AT, c.formNo ? yesNoFormAnswers(CHAT_PACKET, { answers: { form: FORM_NO.formAnswers } }) : []);
   const order = plan.items.map((i) => i.key);
   const before = order.includes(c.asking) ? order.slice(0, order.indexOf(c.asking)) : order;
   const p = advanceProgress({ ...EMPTY_SCREEN_PROGRESS, chat: plan, askedKeys: before }, { messageToCandidate: " ", questionKey: c.asking, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false });
@@ -115,7 +170,7 @@ export function chatCaseProgress(c: ChatCase): ScreenProgress {
 }
 
 function transcriptOf(c: ChatCase): ScreenTranscriptEntry[] {
-  return c.transcript.map((t) => ({ ...t, at: "2026-10-15T10:00:00.000Z" }));
+  return c.transcript.map((t) => ({ ...t, at: AT }));
 }
 
 /** What the model is given for a case: the job, the chat's plan and the CV's lines, as the app gives them. */
@@ -149,7 +204,15 @@ export function shownAfterAnUnfairFollowUp(): string {
 
 const GAP_ASK = "This is one of the things the job needs: Hands-on Arduino or robotics hardware work. What can you tell me about it from your own work?";
 const ENGLISH_ASK = "This is one of the things the job needs: Explaining technical ideas in English. What can you tell me about it from your own work?";
+/** How the chat asks about the certificate: held or not, so a plain yes or no (`gapQuestion` in packages/agents). */
+const CERTIFICATE_ASK = "This is one of the things the job needs: Current first-aid certificate. Do you have it?";
+const TRANSPORT_ASK = "How would you get to schools across the city for classes?";
+const TRANSPORT_REPLY = "I ride a motorbike, so I can reach any school in the city in forty minutes.";
 const followedUp = (raw: ScreenTurn) => !!raw.followUpReason && !raw.questionKey && !raw.done;
+/** Asking for something like a certificate, or for a story about one: it is held or it is not. */
+const ASKS_FOR_SOMETHING_LIKE_IT = /\b(?:similar|closest|like it|small moment|from your own work|one specific time)\b/i;
+/** Asking about the certificate, in any words. */
+const ASKS_ABOUT_THE_CERTIFICATE = /\bfirst[- ]aid\b|\bcertificat\w*/i;
 /**
  * The question a candidate is shown, without the restatement before it (which never asks: `shapeChatMessage`), so a
  * restatement that names what they said ("You traced the dropouts to a loose ground wire") is never read as asking it.
@@ -244,6 +307,23 @@ export const chatCases: ChatCase[] = [
     ],
   },
   {
+    // A certificate is held or it is not (the code check of 25 November 2026): the chat asks about it once, as yes or no,
+    // and "No" is the answer. Nothing "similar from your own work", no "small moment", and the "No" is on record.
+    id: "certificate_no_is_taken",
+    suite: "chat.ladder",
+    gaps: ["first_aid"],
+    asking: "first_aid",
+    transcript: [{ role: "assistant", content: CERTIFICATE_ASK, questionKey: "first_aid" }, { role: "candidate", content: "No" }],
+    expect: ({ raw, move, turn, plan }) => [
+      ...(followedUp(raw) ? [`the model kept asking after a plain "No" about a certificate: ${raw.messageToCandidate}`] : []),
+      ...(move?.move === "covered" ? [] : [`a "No" about a certificate is its answer, got ${move?.move ?? "no move"}`]),
+      ...(turn.answerRecorded?.answer === "No" ? [] : [`the "No" is not on record: ${turn.answerRecorded?.answer ?? "nothing recorded"}`]),
+      ...(turn.questionKey === CHAT_WRAP_KEY ? [] : [`moved to ${turn.questionKey ?? "nothing"}, not to the closing question`]),
+      ...(ASKS_FOR_SOMETHING_LIKE_IT.test(turn.messageToCandidate) ? [`asks for something like a certificate: ${turn.messageToCandidate}`] : []),
+      ...(plan?.items.find((i) => i.key === "first_aid")?.state === "covered" ? [] : ["the plan does not say the certificate was answered"]),
+    ],
+  },
+  {
     id: "vague_close_without_inference",
     suite: "chat.no_inference",
     gaps: [],
@@ -253,12 +333,22 @@ export const chatCases: ChatCase[] = [
     expect: ({ turn }) => (/\b(?:straightforward|easy|smooth|without (?:any )?(?:major )?(?:issues|hurdles|problems))\b/i.test(turn.messageToCandidate) ? [`a guess about how it went: ${turn.messageToCandidate}`] : []),
   },
   {
+    // The form asked about the certificate and the candidate answered "No". The plan leaves it out, in code (`formNo`),
+    // and the model is not told what the form asked. The job's must-haves still name the certificate, so the turn after
+    // the last item shows whether the model asks about something outside the plan: the closing question comes, and
+    // nothing about the certificate.
     id: "form_answer_not_asked_again",
     suite: "chat.no_reask",
     gaps: [],
-    asking: "wq_room",
-    transcript: [{ role: "assistant", content: "Several robot kits fail at once in a class of twenty. How do you handle the room?", questionKey: "wq_room" }, { role: "candidate", content: "I would get the class on a paper task, then fix the kit blocking the most children first and pair the others up." }],
-    expect: ({ turn }) => (/\blaptop\b/i.test(turn.messageToCandidate) ? [`asks again what the form asked: ${turn.messageToCandidate}`] : []),
+    formNo: true,
+    asking: "wq_transport",
+    transcript: [{ role: "assistant", content: TRANSPORT_ASK, questionKey: "wq_transport" }, { role: "candidate", content: TRANSPORT_REPLY }],
+    expect: ({ raw, turn, plan }) => [
+      ...(plan?.items.some((i) => i.key === "first_aid") ? ["the plan holds the certificate the form already asked about"] : []),
+      ...(turn.questionKey === CHAT_WRAP_KEY ? [] : [`moved to ${turn.questionKey ?? "nothing"}, not to the closing question`]),
+      ...(ASKS_ABOUT_THE_CERTIFICATE.test(raw.messageToCandidate) ? [`the model asks about the certificate, which is outside the plan: ${raw.messageToCandidate}`] : []),
+      ...(ASKS_ABOUT_THE_CERTIFICATE.test(turn.messageToCandidate) ? [`asks again what the form asked: ${turn.messageToCandidate}`] : []),
+    ],
   },
   {
     // The candidate describes the fault, how they found it and the fix: the next message must not ask "How did you find
@@ -321,6 +411,24 @@ export const chatCases: ChatCase[] = [
       ...(turn.messageToCandidate.trim() ? [] : ["the close is empty"]),
     ],
   },
+  {
+    // The plan is the code's. On the live site on 25 November 2026 the model went past a certificate still in the plan to
+    // the closing question, and the code let it. A turn that goes to the closing question while an item is open asks
+    // that item instead: the model's restatement, then the item's question in the job's own words. Where the chat goes
+    // is the code's alone to hold, so the turn is written here (`scripted`) and no model is called.
+    id: "closing_question_only_after_every_item",
+    suite: "chat.close",
+    gaps: ["first_aid"],
+    asking: "wq_transport",
+    transcript: [{ role: "assistant", content: TRANSPORT_ASK, questionKey: "wq_transport" }, { role: "candidate", content: TRANSPORT_REPLY }],
+    scripted: { messageToCandidate: `You ride a motorbike and can reach any school in the city.\n\nMeerub, ${CHAT_WRAP_QUESTION[0]?.toLowerCase()}${CHAT_WRAP_QUESTION.slice(1)}`, questionKey: CHAT_WRAP_KEY, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" },
+    expect: ({ turn, move, plan }) => [
+      ...(move?.move === "covered" ? [] : [`the reply settles the question it answers, got ${move?.move ?? "no move"}`]),
+      ...(turn.questionKey === "first_aid" ? [] : [`went to ${turn.questionKey ?? "nothing"} with the certificate still open`]),
+      ...(turn.messageToCandidate === `You ride a motorbike and can reach any school in the city.\n\n${CERTIFICATE_ASK}` ? [] : [`not the restatement and then the open item's question in the job's words: ${turn.messageToCandidate}`]),
+      ...(plan?.items.find((i) => i.key === "first_aid")?.state === "asking" ? [] : ["the plan does not say the certificate is being asked"]),
+    ],
+  },
 ];
 
 /**
@@ -336,7 +444,7 @@ export function chatCaseNotes(c: ChatCase, raw: ScreenTurn): string[] {
   return [
     `item: ${c.asking}${item ? ` (${item.kind}, step ${item.step}, pushes ${item.pushes})` : ""}; prompt ${screenTurnPrompt.key} v${screenTurnPrompt.version}`,
     ...c.transcript.map((t) => `${t.role}: ${cut(t.content, 200)}`),
-    `model: ${cut(JSON.stringify(raw), 500)}`,
+    `${c.scripted ? "scripted turn (no model call)" : "model"}: ${cut(JSON.stringify(raw), 500)}`,
     `turn: move=${move?.move ?? "-"} questionKey=${turn.questionKey ?? "-"} recorded=${turn.answerRecorded ? `${turn.answerRecorded.questionKey}: ${cut(turn.answerRecorded.answer, 120)}` : "-"} done=${turn.done} | ${cut(turn.messageToCandidate, 300)}`,
   ];
 }
@@ -354,12 +462,15 @@ export function chatCaseDiagnostics(c: ChatCase, raw: ScreenTurn | null): CaseDi
   return { transcript, turns: [{ model: traceTurn(raw), afterRules: traceTurn(turn), move: move?.move ?? null }] };
 }
 
-/** The cases of each suite run with `run` (the prompt against a model); null from `run` is a failed call, and a string why it failed. */
+/**
+ * The cases of each suite run with `run` (the prompt against a model); null from `run` is a failed call, and a string why
+ * it failed. A case with a turn of its own (`scripted`) calls no model: it checks what the code makes of that turn.
+ */
 export async function runChatSuite(run: (ctx: ScreenContext, c: ChatCase) => Promise<ScreenTurn | string | null>, only?: (suite: string) => boolean): Promise<Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }>> {
   const out: Record<string, { cases: Array<{ id: string; pass: boolean; failures: string[]; notes?: string[]; diagnostics?: CaseDiagnostics }>; passRate: number }> = {};
   for (const c of chatCases) {
     if (only && !only(c.suite)) continue;
-    const got = await run(chatCaseContext(c), c);
+    const got = c.scripted ?? (await run(chatCaseContext(c), c));
     const raw = typeof got === "string" ? null : got;
     const failures = raw ? chatCaseFailures(c, raw) : [typeof got === "string" ? `the model call failed: ${got}` : "the model call failed"];
     const suite = out[c.suite] ?? { cases: [], passRate: 0 };

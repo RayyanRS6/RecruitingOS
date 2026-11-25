@@ -11,7 +11,8 @@ import { COOPERATIVE_PAY, cooperativeReply } from "./suites";
  * (`enforceChatTurn`, then the plan moved on by `advanceProgress`), so a case checks what the model did and what the
  * candidate was shown over a conversation, where the chat.* suites check one turn. The chat starts as the app starts it:
  * the plan is the job's interview questions, then the must-haves the CV reading did not find shown, then the closing
- * question, and the first question is asked in code. Pure: `runConversationSuite` takes a function that runs the prompt.
+ * question, and the first question is asked in code. One persona's resume does not show the job's licence, so their chat
+ * asks about it: once, as yes or no, and "No" is taken. Pure: `runConversationSuite` takes a function that runs the prompt.
  *
  * No persona sends a keyword command ("person", "withdraw"): the app answers those in code, without the model.
  */
@@ -29,6 +30,11 @@ export type Persona = {
   expect: (c: Conversation) => string[];
   /** The job this persona's chat is about, when it needs more than the job as written (`withPayQuestion`). */
   job?: (job: RolePacket) => RolePacket;
+  /**
+   * False: their resume does not show the job's licence, so the chat's plan asks about it (after the job's own questions,
+   * with every other must-have). Left out: the resume reading found the licence shown, and the chat does not ask.
+   */
+  licenceOnResume?: false;
 };
 
 /** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules (with the answer the code recorded), and the message they were shown. */
@@ -57,11 +63,12 @@ const CV = ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skill
 /**
  * One conversation, driven as the app drives a chat: Start asks the first question in code; then, for each reply, the
  * model's turn, the code's rules, the answer recorded (never a personal sentence), the plan moved on, and the message
- * shown. The CV reading found the job's licence shown and nothing else, so the chat asks about every other must-have.
- * `failed`: why a model call gave no turn.
+ * shown. The CV reading found the job's licence shown and nothing else, so the chat asks about every other must-have;
+ * for a persona whose resume does not show the licence (`licenceOnResume` false) it found nothing shown, and the chat
+ * asks about the licence too. `failed`: why a model call gave no turn.
  */
 export async function runConversation(persona: Persona, job: RolePacket, run: (ctx: ScreenContext) => Promise<ScreenTurn | string>): Promise<{ conversation: Conversation; failed: string | null }> {
-  const shownOnCv = [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
+  const shownOnCv = persona.licenceOnResume === false ? [] : [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
   let progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(job, { requirementFindings: shownOnCv }, AT) };
   const asked = () => chatPacket(job, progress);
   let answers: Record<string, string> = {};
@@ -115,6 +122,18 @@ const questionMarks = (message: string): number => (message.match(/\?/g) ?? []).
 /** A message without what it quotes of the candidate's own words. */
 const withoutQuotes = (message: string): string => message.replace(/"[^"]*"/g, "");
 const cooperative: Persona["reply"] = ({ asking, kind, followUp }) => (kind === "closing" ? "No, that is everything, thank you." : cooperativeReply(asking, followUp));
+/** The chat's question about a licence or certificate the resume does not show, in the code's words: held or not (`gapQuestion` in packages/agents). */
+const asksIfTheyHoldIt = (q: Pick<ScreeningQuestion, "question">): boolean => /Do you have it\?$/.test(q.question);
+/** Asking for an account of something, which a licence does not have: it is held or it is not. */
+const ASKS_FOR_AN_ACCOUNT = /\b(?:tell (?:me|us)|describe|walk (?:me|us) through|from your own work|an example|what can you tell)\b/i;
+/** The ladder's own words for someone who said "No" about a skill: never said about a licence. */
+const SOMETHING_LIKE_IT = /\b(?:not done that exactly|something similar|small moment|something like it)\b/i;
+/** The question a message asks, without the restatement before it (which may quote anything the candidate said). */
+function questionOf(message: string): string {
+  const parts = message.split(/\n\n/);
+  const at = parts.findIndex((p) => /\?/.test(p));
+  return at < 0 ? message : parts.slice(at).join("\n\n");
+}
 
 /** What every persona who was shown how to choose a person expects of that turn: nothing closed, nothing recorded, the same question still open. */
 function shownAPerson(c: Conversation): string[] {
@@ -256,6 +275,41 @@ export const personas: Persona[] = [
       if (!last.stayed) f.push("the chat did not stay on the question they did not follow");
       if (last.turn.answerRecorded) f.push("a confused reply was recorded as an answer");
       if (c.done) f.push("the chat closed on a confused candidate");
+      return f;
+    },
+  },
+  {
+    // A licence the resume does not show (the code check of 25 November 2026, with no evaluation until now): the chat asks
+    // about it once, as yes or no, and takes "No" as the answer. Nothing "similar from your own work" and no "small
+    // moment" follows; the "No" is the answer on record, and the chat goes on to the next thing in its plan. They answer
+    // the job's own questions first (the plan asks those before a must-have), and stop after the turn that takes the "No".
+    id: "licence_not_on_the_resume",
+    provenance: "synthetic",
+    licenceOnResume: false,
+    reply: (at) => {
+      if (at.replied.some(asksIfTheyHoldIt)) return null;
+      if (at.kind === "gap" && asksIfTheyHoldIt(at.asking)) return "No";
+      // one of the job's own questions about the licence: the same person, who does not hold it
+      if (/licen[cs]e|certif|\bpermit\b/i.test(at.asking.question)) return at.followUp ? "I assist chairside every day and I am studying for the hygiene board exam." : "I am not licensed as a hygienist yet. I have assisted chairside for six years.";
+      return cooperative(at);
+    },
+    expect: (c) => {
+      const licence = [...credentialMustHaves(c.job)][0];
+      if (!licence) return ["the job has no licence must-have to ask about"];
+      if (!c.questions.some((q) => q.key === licence)) return ["the chat's plan does not ask about the licence the resume does not show"];
+      const f: string[] = [];
+      // the message that moved on to it, and their one reply about it
+      const asked = c.transcript.filter((t) => t.role === "assistant" && t.questionKey === licence).map((t) => questionOf(t.content));
+      if (asked.length !== 1) f.push(`the licence was asked about ${asked.length} times, not once`);
+      else if (questionMarks(asked[0] ?? "") !== 1 || ASKS_FOR_AN_ACCOUNT.test(asked[0] ?? "")) f.push(`the licence was not asked as one yes-or-no question: ${asked[0]}`);
+      const replies = c.turns.filter((t) => t.asking === licence);
+      const [turn] = replies;
+      if (!turn || replies.length !== 1) return [...f, `they replied about the licence ${replies.length} times, not once`];
+      if (turn.raw.followUpReason && !turn.raw.questionKey && !turn.raw.done) f.push(`the model kept asking after a plain "No" about the licence: ${turn.raw.messageToCandidate}`);
+      if (turn.stayed) f.push("the chat stayed on the licence after a plain No");
+      if (SOMETHING_LIKE_IT.test(questionOf(turn.shown))) f.push(`asks for something like a licence: ${turn.shown}`);
+      if (c.answers[licence] !== "No") f.push(`the "No" is not the answer on record: ${c.answers[licence] ?? "nothing recorded"}`);
+      if (c.progress.chat?.items.find((i) => i.key === licence)?.state !== "covered") f.push("the plan does not say the licence was answered");
       return f;
     },
   },

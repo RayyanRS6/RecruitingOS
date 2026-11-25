@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { PROTECTED_TRAITS_RULE, screenTurnPrompt, type ScreenContext } from "@ros/ai";
+import { PROTECTED_TRAITS_RULE, screenAssessPrompt, screenTurnPrompt, type ScreenContext } from "@ros/ai";
+import { ScreenAssessment, ScreenTurn } from "@ros/contracts";
+import { fakeScreenAssess, fakeScreenTurn } from "./fake-candidate";
 import { verifyQuotes } from "./triage";
 
 describe("the AI interviewer is given the job and states pay as the job page does", () => {
@@ -112,6 +114,57 @@ describe("the AI interviewer is given the job and states pay as the job page doe
     expect(text).toContain("set sentiment=confused and ask the same question again in plainer words (questionKey null, followUpReason set).");
     // and it still says how the model reads a reply, which the code uses
     expect(text).toContain('- reading: how the candidate\'s latest reply answers the current item: "concrete"');
+  });
+});
+
+/**
+ * The stand-ins read the prompts as the real models are given them, and write what the prompts ask for and no more. They
+ * are called here as they are, before the provider checks a reply against the prompt's shape (that check drops what the
+ * shape does not have, so it would hide a stand-in that still wrote it).
+ */
+describe("the AI interview's stand-ins write what the prompts ask for, and no more", () => {
+  const at = "2026-11-25T10:00:00.000Z";
+  const packet = {
+    identity: { title: "Registered Dental Hygienist", employmentType: "full_time", locations: [{ city: "Irvine", region: "CA" }] },
+    compensation: { basis: "hourly", min: 45, max: 55, currency: "USD", discloseRange: true },
+    description: { publicJobDescription: "You will see about nine patients a day and chart in Dentrix." },
+    screening: { questions: [{ key: "recent", question: "Tell me about your most recent work.", kind: "skills" }, { key: "pay", question: "What hourly range are you looking for?", kind: "compensation" }], maxMinutes: 10 },
+    competencies: [],
+    requirements: { mustHaves: [] },
+    communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply to reach a person." },
+  } as unknown as ScreenContext["packet"];
+  const transcript = [{ role: "assistant" as const, content: "Tell me about your most recent work.", at, questionKey: "recent" }, { role: "candidate" as const, content: "I see nine patients a day and chart in Dentrix.", at }];
+  const item = (key: string, state: "asking" | "open", question: string) => ({ key, kind: "question" as const, required: true, state, step: "direct" as const, pushes: 0, question, ladder: key === "recent" });
+
+  it("a turn carries the message and what the code reads of it, and no record of the answer", () => {
+    const chat: ScreenContext = {
+      company: { name: "Harbor Dental" },
+      packet,
+      candidate: { firstName: "Dana" },
+      progress: { askedKeys: ["recent"], currentQuestionKey: "recent", followUps: {}, confusedTurns: 0, failures: 0 },
+      answers: {},
+      transcript,
+      latestCandidateMessage: "I see nine patients a day and chart in Dentrix.",
+      payShown: true,
+      chat: { section: "required", sectionLabel: "Required questions", current: "recent", items: [item("recent", "asking", "Tell me about your most recent work."), item("pay", "open", "What hourly range are you looking for?")], wrap: { key: "wrap_up", question: "Is there anything else you would like the hiring team to know before we finish?" }, cv: [] },
+    };
+    const turn = fakeScreenTurn({ system: screenTurnPrompt.system(chat), messages: screenTurnPrompt.messages(chat) } as never);
+    expect(turn).toEqual({ messageToCandidate: 'You said "I see nine patients a day and chart in Dentrix".', questionKey: "pay", followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" });
+    // every part of it is a part of the shape the prompt sends
+    expect(Object.keys(turn).filter((key) => !(key in ScreenTurn.shape))).toEqual([]);
+    expect(turn).not.toHaveProperty("answerRecorded");
+  });
+
+  it("a scorecard carries one finding for each question asked, and no word on whether it was answered", () => {
+    const sent = { company: { name: "Harbor Dental" }, packet, asked: [{ key: "recent", question: "Tell me about your most recent work.", skipped: false }, { key: "pay", question: "What hourly range are you looking for?", skipped: true }], transcript, answers: { recent: "I see nine patients a day and chart in Dentrix." } };
+    const card = fakeScreenAssess({ system: screenAssessPrompt.system(sent), messages: screenAssessPrompt.messages(sent) } as never);
+    expect(card.questionFindings).toEqual([
+      { questionKey: "recent", finding: 'Answered: "I see nine patients a day and chart in Dentrix."', evidence: { source: "screen", quote: "I see nine patients a day and chart in Dentrix." }, meetsModelAnswer: "partially" },
+      { questionKey: "pay", finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" },
+    ]);
+    expect(Object.keys(card).filter((key) => !(key in ScreenAssessment.shape))).toEqual([]);
+    expect(card.summary).toBe("1 of 2 questions answered.");
+    expect(card.unknowns).toEqual([{ question: "What hourly range are you looking for?", whyItMatters: "Not answered in the AI interview." }]);
   });
 });
 
