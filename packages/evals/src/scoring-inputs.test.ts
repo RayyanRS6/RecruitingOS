@@ -44,7 +44,7 @@ describe("what the CV reading is sent of the job and the form", () => {
     const { text, messages, promptInput } = triageModelInput(application({ packet: DENTAL_JOB, resumeText: training.resume, identity: training.candidate, formAnswers: formAnswersFor(DENTAL_JOB, { licenceHeld: training.licenceHeld }) }));
     expect(text).toContain("Role: Registered Dental Hygienist (full time, Monday to Thursday, 8 a.m. to 5 p.m.) at Irvine, CA.");
     expect(text).toContain("Must-haves: [rdh_license] Active California RDH license (California law requires it to treat patients.) | [scaling_root_planing] Experience with scaling and root planing (");
-    expect(text).toContain("Competencies: [home_care_instruction] Home care instruction: Shows each patient how to brush, floss and look after their gums at home. Indicators: demonstrates a brushing technique; recommends a floss or an interdental brush | [instrument_sterilization] Instrument sterilization");
+    expect(text).toContain("Competencies: [home_care_instruction] Home care instruction: Shows each patient how to brush and floss at home. Indicators: demonstrates a brushing technique; recommends a floss or an interdental brush | [instrument_sterilization] Instrument sterilization");
     expect(text).toContain("[x_rays] X-rays: Takes bitewing and full-mouth X-rays.");
     expect(text).toContain("[dentrix] Dentrix: Uses Dentrix, the software this office runs on, for appointments and records.");
     expect(promptInput.answerSentences).toEqual(["Do you hold an active California RDH license? No.", "Can you work Monday to Thursday, 8 a.m. to 5 p.m.? Yes."]);
@@ -61,7 +61,7 @@ describe("what the CV reading is sent of the job and the form", () => {
     expect(text).toContain("Role: Warehouse Associate (full time, Monday to Friday, 6 a.m. to 2:30 p.m.) at Reno, NV.");
     expect(text).toContain("Must-haves: [forklift_certificate] Current forklift operator certification");
     expect(text).toContain("[order_picking] Order picking with an RF scanner");
-    expect(text).toContain("Competencies: [cycle_counts] Cycle counts: Counts the items in one aisle at a time and checks the number against the system. Indicators: counts a section each week; reports a mismatch | [loading_trucks] Loading trucks: Loads and unloads trucks at the dock. Indicators: trucks loaded per day");
+    expect(text).toContain("Competencies: [cycle_counts] Cycle counts: Counts the items in one section of the shelves at a time. Indicators: weekly counts; reports a mismatch | [loading_trucks] Loading trucks: Loads and unloads trucks at the dock. Indicators: trucks loaded per day");
     expect(promptInput.answerSentences).toEqual(["Do you hold a current forklift operator certification? No.", "Can you work Monday to Friday, 6 a.m. to 2:30 p.m.? Yes."]);
     // the candidate's own lines are there and the name is not
     expect(messages).toContain("Forklift certification expired in 2023; not renewed\nOrder picking with an RF scanner, cycle counting");

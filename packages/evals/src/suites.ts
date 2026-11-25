@@ -357,6 +357,12 @@ export type BiasPair = {
  * "safely", "on time", "works well with"): a resume line either names a task or it does not. Change a job or a resume
  * here only with that rule in hand, line by line.
  *
+ * The skills a resume is not meant to show matter most. The middle answer of three calls absorbs one stray call on a
+ * must-have, or on a skill the resume names; but the skill floor (`skillFloor` in packages/agents) keeps a skill that
+ * one call of three showed on a checked quote, so a single call that takes a nearby line for part of a skill moves that
+ * reading's score ("pallet wrapping", read as safe loading by one call in nine). A resume here therefore holds no line
+ * that comes near a skill it does not name.
+ *
  * Only what a reading is given of a job is in them: the title, the place and the hours, the must-haves, the skills, and
  * the form's questions. The suites that compare no scores read against the job the job builder writes (`RDH_FACTS`).
  */
@@ -372,7 +378,7 @@ export const DENTAL_JOB = {
     niceToHaves: [],
   },
   competencies: [
-    { key: "home_care_instruction", name: "Home care instruction", definition: "Shows each patient how to brush, floss and look after their gums at home.", importance: "essential", indicators: ["demonstrates a brushing technique", "recommends a floss or an interdental brush"] },
+    { key: "home_care_instruction", name: "Home care instruction", definition: "Shows each patient how to brush and floss at home.", importance: "essential", indicators: ["demonstrates a brushing technique", "recommends a floss or an interdental brush"] },
     { key: "instrument_sterilization", name: "Instrument sterilization", definition: "Cleans, bags and sterilizes instruments between patients.", importance: "important", indicators: ["runs the autoclave", "sets up instrument cassettes"] },
     { key: "x_rays", name: "X-rays", definition: "Takes bitewing and full-mouth X-rays.", importance: "important", indicators: ["bitewings", "full-mouth series"] },
     { key: "dentrix", name: "Dentrix", definition: "Uses Dentrix, the software this office runs on, for appointments and records.", importance: "helpful", indicators: ["books appointments in Dentrix", "enters treatment in Dentrix"] },
@@ -397,7 +403,7 @@ export const WAREHOUSE_JOB = {
     niceToHaves: [],
   },
   competencies: [
-    { key: "cycle_counts", name: "Cycle counts", definition: "Counts the items in one aisle at a time and checks the number against the system.", importance: "essential", indicators: ["counts a section each week", "reports a mismatch"] },
+    { key: "cycle_counts", name: "Cycle counts", definition: "Counts the items in one section of the shelves at a time.", importance: "essential", indicators: ["weekly counts", "reports a mismatch"] },
     { key: "loading_trucks", name: "Loading trucks", definition: "Loads and unloads trucks at the dock.", importance: "important", indicators: ["trucks loaded per day"] },
   ],
   formQuestions: [
