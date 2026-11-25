@@ -13,9 +13,9 @@ import { jobUrls } from "./job-urls";
  *
  * The posts are written by a queued job, never inside a request: when the job is published, when a saved edit changes
  * what the job page says, and when a person presses "Write again" on one post, which replaces that post alone. A post a
- * person edited is theirs: only that post's own "Write again" replaces it. What the model wrote is finished by rule before it is stored: a line the
- * fairness guard would flag in a job description is taken out, and each post carries the pay the job page shows and its
- * own Apply link (`finishPost`).
+ * person edited is theirs: only that post's own "Write again" replaces it. What the model wrote is finished by rule
+ * before it is stored: a line the fairness guard would flag in a job description is taken out, and each post carries
+ * the pay the job page shows and its own Apply link (`finishPost`).
  */
 
 export const POSTS_JOB_KIND = "job.write_posts";

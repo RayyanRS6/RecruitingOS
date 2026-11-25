@@ -12,9 +12,10 @@ import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, hiringTeamSignatu
  * whatever was there (a model wrote these three with the job until 25 November 2026 and is no longer asked for them; a
  * record from before may still hold its words, and no page shows them to anyone before a candidate would read them); at
  * most six must-haves; anything the owner was told could not be used taken out of the lists it appears in; and a key of
- * its own for every must-have, nice-to-have, skill, AI interview question and form question (`uniqueKeys`). Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
- * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
- * pay figure in the job description that nobody set or that is not the advertised range.
+ * its own for every must-have, nice-to-have, skill, AI interview question and form question (`uniqueKeys`). Flagged:
+ * wording that stands in for a protected trait, anywhere a candidate or a reader of applications would meet it (the
+ * phrase list below), what the owner was told could not be used, reworded or not, and a pay figure in the job
+ * description that nobody set or that is not the advertised range.
  *
  * The application form's questions (`formQuestions`) are read like every other words, and for the protected-question
  * list too (`PROTECTED_QUESTION_RULES`); a question that asks about a protected characteristic is refused where it is
