@@ -12,6 +12,7 @@ import { runChatSuite, shownAfterAnUnfairFollowUp } from "./chat-suite";
 import { runConversationSuite } from "./conversation-suite";
 import { clipText, traceOutcome, traceTranscript, type CaseDiagnostics } from "./diagnostics";
 import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intake-run";
+import { postsCaseResult, postsCases } from "./posts-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication, type EvalInterview } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
 import {
@@ -75,6 +76,14 @@ async function main() {
   await runIntakeSuite("intake.illegal_criteria", intakeIllegal, true);
   await runIntakeSuite("intake.job_ad", intakeJobAd, false);
   await runIntakeSuite("intake.proxy_refusal", intakeProxyRefusal, false);
+
+  // The two posts on a job's Share tab: each post judged as the model wrote it, before the Share service finishes it by
+  // rule (posts-suite.ts). One model call per case writes both posts.
+  if (runs("job.posts")) {
+    const out: CaseResult[] = [];
+    for (const c of postsCases) out.push(await postsCaseResult(intakeCall, c));
+    record("job.posts", out);
+  }
 
   if (familyRuns("resume")) {
     const ext: CaseResult[] = [];

@@ -59,6 +59,9 @@
   "company.about": {
     "minPassRate": 1
   },
+  "job.posts": {
+    "minPassRate": 1
+  },
   "chat.shape": {
     "minPassRate": 1
   },
