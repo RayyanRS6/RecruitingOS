@@ -1311,6 +1311,8 @@ describe("what each turn of the chat is held to", () => {
       expect(shown(`You called it a long week. "Never again" were your words.\n\n${NEXT}`)).toBe(`You called it a long week.\n\n${NEXT}`);
       // and the question is still told from a restatement in the same paragraph
       expect(shown(`You have worked in the U.S. for five years. ${NEXT}`)).toBe(`You have worked in the U.S. for five years.\n\n${NEXT}`);
+      // two spaces after the abbreviation's full stop change nothing: the sentence is neither cut nor left out
+      expect(shown(`You have charted for approx.  two years in Dentrix.\n\n${NEXT}`)).toBe(`You have charted for approx.  two years in Dentrix.\n\n${NEXT}`);
     });
 
     it("a candidate's reply is read as people type: a full stop ends a sentence before a small letter, so their question is told from their answer", () => {
@@ -1370,6 +1372,31 @@ describe("what each turn of the chat is held to", () => {
     // work stays: a move between practices, and talking about patients' parents
     expect(redactProtected("I moved from Smile Bright to Coastal Dental last year.")).toBe("I moved from Smile Bright to Coastal Dental last year.");
     expect(redactProtected("I calm the parents of a nervous child.")).toBe("I calm the parents of a nervous child.");
+  });
+
+  // The cut at an abbreviation (the code check of 25 November 2026) reached the answer on record too. "I moved to the
+  // U.S. from Mexico in 2019." was read as two pieces, "I moved to the U.S." and "from Mexico in 2019.": neither says
+  // where they come from by itself, so both stayed in what the team reads and the scorecard scores.
+  it("leaves a personal sentence out whole when it holds an abbreviation: none of it stays in the answer on record", () => {
+    for (const [reply, kept] of [
+      ["I moved to the U.S. from Mexico in 2019. I have charted in Dentrix since then.", "I have charted in Dentrix since then."],
+      ["I came to the U.S. from Mexico five years ago. I chart in Dentrix.", "I chart in Dentrix."],
+      ["We immigrated to the U.S. from Poland. I assist chairside.", "I assist chairside."],
+      ["i came to the u.s. from mexico five years ago. i chart in dentrix.", "i chart in dentrix."],
+      ["My son goes to St. Mary's school, so mornings suit me. I chart in Dentrix.", "I chart in Dentrix."],
+      ["I have two kids so I can only work 8 a.m. to 2 p.m. on weekdays. I chart in Dentrix.", "I chart in Dentrix."],
+    ] as const) expect(redactProtected(reply), reply).toBe(kept);
+    // what is about the work stays as they wrote it: times, a title, initials, a list on lines of its own, no capitals
+    for (const work of ["I can work 8 a.m. to 5 p.m. on weekdays. I chart in Dentrix.", "I assisted Dr. Lee in the U.S. for five years.", "I can do:\n- mornings\n- weekends", "yes. mornings mostly. i chart in dentrix"]) expect(redactProtected(work), work).toBe(work);
+    // and a sentence about the work beside a personal one is still kept, typed with capitals or without
+    expect(redactProtected("I can work 8 a.m. to 2 p.m. I have two kids.")).toBe("I can work 8 a.m. to 2 p.m.");
+    expect(redactProtected("i have two kids. i chart in dentrix.")).toBe("i chart in dentrix.");
+    // through a turn: the answer on record for the question
+    const job = jobWith([{ key: "wq_hours", question: "Which hours can you work?" }, { key: "wq_tools", question: "Which software have you used?" }]);
+    const p = askingNow(planOf(job, []), "wq_hours", ["wq_hours"]);
+    const reply = "I moved to the U.S. from Mexico in 2019. I can work weekdays from 8 a.m. to 5 p.m.";
+    const r = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_tools", messageToCandidate: "You can work weekdays from 8 a.m. to 5 p.m.\n\nWhich software have you used?" }), chatPacket(job, p), p, {}, { transcript: said("Q", reply), latest: reply });
+    expect(r.turn.answerRecorded).toEqual({ questionKey: "wq_hours", answer: "I can work weekdays from 8 a.m. to 5 p.m.", complete: true });
   });
 });
 

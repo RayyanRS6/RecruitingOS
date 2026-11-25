@@ -144,9 +144,15 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
 }
 export type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
 
-/** Screening stays within the job. Anything about a protected characteristic the candidate volunteers is kept out of recorded answers (the transcript itself is the record). */
+/**
+ * Screening stays within the job. Anything about a protected characteristic the candidate volunteers is kept out of
+ * recorded answers (the transcript itself is the record): each sentence that touches one is left out whole. A sentence
+ * is not cut at an abbreviation's full stop (`cutAtSentenceEnds`): cut after "U.S.", "I moved to the U.S. from Mexico"
+ * was two pieces that each matched nothing, and stayed in the answer; cut after "St.", "My son goes to St. Mary's
+ * school, so mornings suit me" kept its second half.
+ */
 export function redactProtected(text: string): string {
-  const sentences = text.split(/(?<=[.!?])\s+/);
+  const sentences = cutAtSentenceEnds(text, true);
   const protectedPattern = /\b(i am|i'm|im)\s+\d{2}\b|\b\d{2}\s+years? old\b|\bmy (kids?|children|son|daughter|husband|wife|spouse)\b|\bi(?: have|'ve) (?:a |an |one |two |three |four |five |\d+ )?(?:little |young |small )?(kids?|children|sons?|daughters?|baby|toddlers?)\b|\bpregnan|\bmaternity\b|\bpaternity\b|\bchurch\b|\bmosque\b|\bsynagogue\b|\breligio|\bdisabilit|\bwheelchair\b|\bmy (illness|condition|diagnosis)\b|\bimmigra|\bcitizen(ship)?\b|\bvisa\b|\bnational(ity)?\b|\bdivorc|\bmarried\b|\bsingle (?:mom|mum|dad|mother|father|parent)\b/i;
   // Parenthood, military service, national origin and faith in the ways people mention them ("As a mom of three", "I'm
   // a veteran", "I moved here from Mexico"), kept apart so each list stays readable.
@@ -423,6 +429,8 @@ const A_TIME = /(?:^|[^\p{L}])[ap]\.m\.$/iu;
 const AND_SO_ON = /(?:^|[^\p{L}])etc\.$/iu;
 /** "No." before a number ("licence No. 4821"): the number goes with it. */
 const A_NUMBER_SIGN = /(?:^|[^\p{L}])no\.$/iu;
+/** Initials with full stops ("U.S.", "D.D.S."): like a time, a sentence may end with them, or go on after them. */
+const INITIALS = /(?:^|[^\p{L}\p{N}])(?:\p{L}\.){2,}$/u;
 /** How a new sentence opens after one of those: with a capital letter, with or without an opening quote. */
 const OPENS_A_SENTENCE = /^["“'‘(]?\p{Lu}/u;
 /**
@@ -437,17 +445,33 @@ const WRITTEN_OPENING = /^(?:["“'‘(]|\p{Lu}|\p{N})/u;
  * Whether the sentence goes on after a full stop: `head` is the text up to and with it, `rest` what follows the space.
  * After a title or "e.g." always. After a time, unless a new sentence opens ("… to 5 p.m. What does it pay?"), which a
  * day of the week or a time zone does not ("… 5 p.m. Monday to Friday"); so before a small letter or a digit it goes on
- * ("8 a.m. to 5 p.m."). After "etc." unless a new sentence opens, and after "No." before a number. Anywhere else, in
- * words a model wrote (`typed` false), it goes on before a small letter: the full stop was an abbreviation's ("in the
- * U.S. for five years", "approx. two years").
+ * ("8 a.m. to 5 p.m."). After "etc." or initials ("in the U.S. for five years") unless a new sentence opens, and after
+ * "No." before a number. Anywhere else, in words a model wrote (`typed` false), it goes on before a small letter: the
+ * full stop was an abbreviation's ("approx. two years", "at Smile Dental Inc. as a hygienist").
  */
 function goesOnAfter(head: string, rest: string, typed: boolean): boolean {
   if (!head.endsWith(".")) return false;
   if (NEVER_ENDS_A_SENTENCE.test(head)) return true;
   if (A_TIME.test(head)) return !OPENS_A_SENTENCE.test(rest) || AFTER_A_TIME.test(rest);
-  if (AND_SO_ON.test(head)) return !OPENS_A_SENTENCE.test(rest);
+  if (AND_SO_ON.test(head) || INITIALS.test(head)) return !OPENS_A_SENTENCE.test(rest);
   if (A_NUMBER_SIGN.test(head) && /^\p{N}/u.test(rest)) return true;
   return !typed && !WRITTEN_OPENING.test(rest);
+}
+
+/**
+ * A text cut where its sentences end: at "!" or "?" followed by a space, and at a full stop that is not an
+ * abbreviation's (`goesOnAfter`). Each piece as it stands, with nothing trimmed and its line breaks kept.
+ */
+function cutAtSentenceEnds(text: string, typed: boolean): string[] {
+  const out: string[] = [];
+  let from = 0;
+  for (const gap of text.matchAll(/(?<=[.!?])\s+/g)) {
+    if (goesOnAfter(text.slice(from, gap.index), text.slice(gap.index + gap[0].length), typed)) continue;
+    out.push(text.slice(from, gap.index));
+    from = gap.index + gap[0].length;
+  }
+  out.push(text.slice(from));
+  return out;
 }
 
 /**
@@ -461,17 +485,7 @@ function goesOnAfter(head: string, rest: string, typed: boolean): boolean {
  *   before a small letter too, as it always did; only the known abbreviations hold it together.
  */
 function sentencesOf(text: string, typed = false): string[] {
-  const out: string[] = [];
-  for (const line of text.split(/\n+/)) {
-    let from = 0;
-    for (const gap of line.matchAll(/(?<=[.!?])\s+/g)) {
-      if (goesOnAfter(line.slice(from, gap.index), line.slice(gap.index + gap[0].length), typed)) continue;
-      out.push(line.slice(from, gap.index));
-      from = gap.index + gap[0].length;
-    }
-    out.push(line.slice(from));
-  }
-  return out.map((s) => s.trim()).filter(Boolean);
+  return text.split(/\n+/).flatMap((line) => cutAtSentenceEnds(line, typed)).map((s) => s.trim()).filter(Boolean);
 }
 
 /**
@@ -481,10 +495,12 @@ function sentencesOf(text: string, typed = false): string[] {
  * are the candidate's.
  */
 function personal(s: string): boolean {
-  if (redactProtected(s) !== s) return true;
+  // spacing aside: what the redaction keeps is joined by single spaces, and a sentence can hold a full stop of its own
+  const redacted = (x: string) => redactProtected(x).replace(/\s+/g, " ") !== x.replace(/\s+/g, " ");
+  if (redacted(s)) return true;
   if (!/\b(?:so|since|because|given)\b/i.test(s)) return false;
   const asTheirs = s.replace(/\byou(?:['’]re| are)\b/gi, "I am").replace(/\byou(?:['’]ve| have)\b/gi, "I have").replace(/\byour\b/gi, "my");
-  return redactProtected(asTheirs) !== asTheirs;
+  return redacted(asTheirs);
 }
 
 /**
