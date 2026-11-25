@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket } from "@ros/contracts";
-import { tapFormatFor } from "@ros/core";
+import { cvScoreFromReading, guardPacket, tapFormatFor } from "@ros/core";
 import { applyFieldEdit } from "./services/packet-fields";
 
 /**
@@ -116,5 +116,70 @@ describe("the one editor: an edit works out again what the edit changes", () => 
     // a pay question rewritten into another question is no pay question: an open one, with no pay range under it
     const replaced = applyFieldEdit(job(), { screening: { questions: [{ key: "pay", question: "Tell me about a time you stayed late to finish the day's work." }, { key: "recent", question: "Tell me about your most recent dental assisting work." }, { key: "nervous", question: "Tell me about a nervous patient and what you did." }] } }).packet;
     expect(replaced.screening.questions.map((q) => [q.key, q.kind])).toEqual([["pay", "skills"], ["recent", "skills"], ["nervous", "behavioral"]]);
+  });
+});
+
+/**
+ * A stored reading's findings are matched to a job's must-haves and skills by key, a scorecard's to the AI interview's
+ * questions and a candidate's answers to the form's questions, and nothing held a record's keys apart (code check of 25
+ * November 2026). The editor's save leaves every item with a key no other of its kind has: here for the lists it is
+ * sent, and through the fairness guard, which every save goes on to, for the rest.
+ */
+describe("the one editor: every item is saved with a key of its own", () => {
+  /** A record from before keys were held unique: two must-haves, two skills and two form questions under one key each. */
+  const twins = (): RolePacket => {
+    const p = job();
+    p.requirements.mustHaves[1].key = "mh_xray";
+    p.competencies[2].key = "chairside";
+    p.formQuestions = [{ kind: "yes_no", key: "fq", question: "Can you work Saturdays?", required: true }, { kind: "yes_no", key: "fq", question: "Do you hold a current CPR card?", required: true }];
+    return p;
+  };
+  const guardCtx = { companyName: "Harbor Dental", companyLocations: [{ city: "Irvine", region: "CA", country: "US" }] };
+  /** A resume reading that shows the first must-have and says nothing of the second. */
+  const reading = { requirementFindings: [{ requirementKey: "mh_xray", met: "yes" as const, evidence: { source: "resume" as const, quote: "California radiography certificate, 2021" } }], competencyFindings: [] };
+
+  it("saves a list whose stored keys repeat: the first item keeps the key that stored readings point at, the next gets its own", () => {
+    // the editor shows no keys, so it sends back the two it was given; this used to be refused as "in the list twice"
+    const sent = { requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }, { key: "mh_xray", text: "Two years of chairside assisting" }] } };
+    const { packet: p } = applyFieldEdit(twins(), sent);
+    expect(p.requirements.mustHaves).toEqual([
+      { key: "mh_xray", text: "Radiography certificate", rationale: "State law asks for it." },
+      { key: "mh_xray_2", text: "Two years of chairside assisting", rationale: "The dentist works four-handed." },
+    ]);
+    // each must-have is now read on its own finding: one shown of two, where the record as it was showed both on one finding
+    expect(cvScoreFromReading(reading, twins()).mustHaves).toEqual({ shown: 2, total: 2 });
+    expect(cvScoreFromReading(reading, p).mustHaves).toEqual({ shown: 1, total: 2 });
+    // the same for the form's questions, whose answers are kept by key, with a new question beside them
+    const form = applyFieldEdit(twins(), { formQuestions: [{ kind: "yes_no", key: "fq", question: "Can you work Saturdays?" }, { kind: "yes_no", key: "fq", question: "Do you hold a current CPR card?" }, { kind: "yes_no", question: "Can you start within 30 days?" }] }).packet;
+    expect(form.formQuestions.map((q) => q.key)).toEqual(["fq", "fq_2", "fq_can_you_start_within_30_days"]);
+  });
+
+  it("holds the lists an edit did not send the same way when the record is saved, and changes no key that is already its own", () => {
+    // the guard is what both saves go on to: a draft's (`saveDraftEdit`) and a published job's (`guardPacketVersion`)
+    const saved = guardPacket(applyFieldEdit(twins(), { identity: { title: "Lead Dental Assistant" } }).packet, guardCtx).packet;
+    expect(saved.requirements.mustHaves.map((m) => m.key)).toEqual(["mh_xray", "mh_xray_2"]);
+    expect(saved.competencies.map((c) => c.key)).toEqual(["chairside", "patients", "chairside_2"]);
+    expect(saved.formQuestions.map((q) => q.key)).toEqual(["fq", "fq_2"]);
+    expect(saved.requirements.niceToHaves.map((m) => m.key)).toEqual(["nh_dentrix", "nh_spanish"]);
+    expect(saved.screening.questions.map((q) => q.key)).toEqual(["recent", "nervous", "available", "pay", "licence"]);
+    // a record whose keys are already unique comes back with every one of them, edited or not
+    const plain = guardPacket(applyFieldEdit(job(), { requirements: { mustHaves: [{ key: "mh_chairside", text: "Two years of chairside assisting" }, { key: "mh_xray", text: "Radiography certificate" }] } }).packet, guardCtx).packet;
+    expect(plain.requirements.mustHaves.map((m) => m.key)).toEqual(["mh_chairside", "mh_xray"]);
+    expect(plain.competencies.map((c) => c.key)).toEqual(["chairside", "patients", "infection"]);
+  });
+
+  it("still refuses a key sent more often than the job holds it, and a key the job does not hold", () => {
+    expect(() => applyFieldEdit(job(), { requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }, { key: "mh_xray", text: "Coronal polishing certificate" }] } })).toThrow("Must-have 2 is in the list twice.");
+    expect(() => applyFieldEdit(twins(), { requirements: { mustHaves: [{ key: "mh_xray", text: "One" }, { key: "mh_xray", text: "Two" }, { key: "mh_xray", text: "Three" }] } })).toThrow("Must-have 3 is in the list twice.");
+    expect(() => applyFieldEdit(job(), { requirements: { mustHaves: [{ key: "mh_gone", text: "Radiography certificate" }] } })).toThrow("One of these items is no longer on this job. Reload the page and try again.");
+  });
+
+  it("gives a new item a key unlike every key the list has, the own key of a repeat included", () => {
+    // "Xray" as a new must-have would be keyed mh_xray, which this job holds twice: the repeat takes mh_xray_2, the new one the next
+    const { packet: p } = applyFieldEdit(twins(), { requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }, { key: "mh_xray", text: "Two years of chairside assisting" }, { text: "Xray" }] } });
+    expect(p.requirements.mustHaves.map((m) => [m.key, m.text])).toEqual([["mh_xray", "Radiography certificate"], ["mh_xray_2", "Two years of chairside assisting"], ["mh_xray_3", "Xray"]]);
+    // and in a job whose keys are its own, it takes the first free one, as before
+    const again = applyFieldEdit(job(), { requirements: { mustHaves: [{ key: "mh_xray", text: "Radiography certificate" }, { key: "mh_chairside", text: "Two years of chairside assisting" }, { text: "Xray" }] } }).packet;
+    expect(again.requirements.mustHaves.map((m) => m.key)).toEqual(["mh_xray", "mh_chairside", "mh_xray_2"]);
   });
 });

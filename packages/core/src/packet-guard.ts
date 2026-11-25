@@ -11,8 +11,8 @@ import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, hiringTeamSignatu
  * right way round; the AI disclosure, how to reach a person and the signature, each written from the code's own wording
  * whatever was there (a model wrote these three with the job until 25 November 2026 and is no longer asked for them; a
  * record from before may still hold its words, and no page shows them to anyone before a candidate would read them); at
- * most six must-haves; anything the owner was told could not be used taken out of the
- * lists it appears in. Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
+ * most six must-haves; anything the owner was told could not be used taken out of the lists it appears in; and a key of
+ * its own for every must-have, nice-to-have, skill, AI interview question and form question (`uniqueKeys`). Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
  * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
  * pay figure in the job description that nobody set or that is not the advertised range.
  *
@@ -473,6 +473,30 @@ export type GuardContext = {
 
 export type GuardResult<T> = { packet: T; flags: PacketFlag[]; changes: string[] };
 
+/**
+ * A list with a key of its own for every item. A stored reading's findings are matched to a job's must-haves and skills
+ * by key, a scorecard's to the AI interview's questions, and a candidate's answers to the form's questions
+ * (packages/core/src/match-score.ts), so two items under one key would share one finding or one answer. The first item
+ * with a key keeps it, and a key that is already the only one of its list never changes: stored readings point at it.
+ * A later item with the same key gets a short suffix ("_2", "_3"…) that no item of the list has. Nothing a person reads
+ * changes, so nobody is told.
+ */
+export function uniqueKeys<T extends { key: string }>(items: readonly T[]): T[] {
+  const taken = new Set(items.map((item) => item.key));
+  const seen = new Set<string>();
+  return items.map((item) => {
+    if (!seen.has(item.key)) {
+      seen.add(item.key);
+      return item;
+    }
+    let key = item.key;
+    for (let n = 2; taken.has(key); n += 1) key = `${item.key}_${n}`;
+    taken.add(key);
+    seen.add(key);
+    return { ...item, key };
+  });
+}
+
 /** Runs every guarantee above; returns the packet as it must be saved, its flags (also on `provenance.flags`) and what was changed. */
 export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardContext): GuardResult<T> {
   const packet = structuredClone(input) as T;
@@ -529,6 +553,13 @@ export function guardPacket<T extends DraftRolePacket>(input: T, ctx: GuardConte
   packet.requirements.niceToHaves = packet.requirements.niceToHaves.filter((m) => !mentionsDeclined(m.text));
   const removed = before - count();
   if (removed > 0) changes.push(`${removed} ${removed === 1 ? "item the owner was told could not be used was" : "items the owner was told could not be used were"} taken out.`);
+
+  // Every item gets a key of its own in its list (`uniqueKeys`), before a flag below is named by the key of its item.
+  packet.requirements.mustHaves = uniqueKeys(packet.requirements.mustHaves);
+  packet.requirements.niceToHaves = uniqueKeys(packet.requirements.niceToHaves);
+  packet.competencies = uniqueKeys(packet.competencies);
+  packet.screening.questions = uniqueKeys(packet.screening.questions);
+  packet.formQuestions = uniqueKeys(packet.formQuestions);
 
   const declinedRules = new Set(declined.map((d) => d.rule).filter((r): r is string => !!r));
   const flags: PacketFlag[] = [];

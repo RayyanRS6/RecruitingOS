@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "@ros/ai";
 import { IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
-import { unresolvedFlags } from "@ros/core";
+import { cvScoreFromReading, unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
 import { afterTurn, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
@@ -366,6 +366,25 @@ describe("the job as written and then finished by the server", () => {
     const done = finalizeDraft(await record(colorado), ctx([], colorado), { sessionId: "s1", aiRunId: "r1", state: payState() });
     expect(done.compliance.jurisdictions).toEqual(["US-CO", "US-CA"]);
     expect(done.compliance.notices).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
+  });
+
+  // The model is asked for keys that are unique in their list, and nothing held it to that. A reading's findings are
+  // matched to a job's must-haves and skills by key, so two must-haves written under one key shared one finding.
+  it("gives every item of a job the model wrote a key of its own, so each must-have is read on its own finding", async () => {
+    const job = await written(ctx([said(HYGIENIST)], answered));
+    const twins = { ...job, requirements: { ...job.requirements, mustHaves: job.requirements.mustHaves.map((m) => ({ ...m, key: "must_have" })) }, competencies: job.competencies.map((c) => ({ ...c, key: "skill" })) };
+    const done = finalizeDraft(draftFromWritten(twins, answered, company.name), ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: payState() });
+    expect(done.requirements.mustHaves.map((m) => [m.key, m.text])).toEqual([["must_have", "Active CA RDH license"], ["must_have_2", "Periodontal charting"]]);
+    expect(done.competencies.map((c) => c.key)).toEqual(["skill", "skill_2", "skill_3"]);
+    // a reading that shows the licence and says nothing of the charting: one must-have shown of two, by the real score
+    const reading = { requirementFindings: [{ requirementKey: "must_have", met: "yes" as const, evidence: { source: "resume" as const, quote: "RDH license CA active" } }], competencyFindings: [] };
+    expect(cvScoreFromReading(reading, done).mustHaves).toEqual({ shown: 1, total: 2 });
+    // the same reading against the job as the model keyed it would have shown both
+    expect(cvScoreFromReading(reading, twins).mustHaves).toEqual({ shown: 2, total: 2 });
+    // a job whose keys are already its own keeps every one of them
+    const own = finalizeDraft(await record(), ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: payState() });
+    expect(own.requirements.mustHaves.map((m) => m.key)).toEqual(job.requirements.mustHaves.map((m) => m.key));
+    expect(own.screening.questions.map((q) => q.key)).toEqual(job.screening.questions.map((q) => q.key));
   });
 
   it("leaves the pay out when nobody confirmed one", async () => {
