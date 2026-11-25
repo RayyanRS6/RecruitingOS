@@ -1,10 +1,8 @@
 import { and, asc, count, eq, isNull, notInArray, sql } from "drizzle-orm";
 import type { Actor } from "@ros/contracts";
-import { audit, emit, lockApplicants, lockedAndWaiting } from "@ros/core";
+import { ENDED_RUN, audit, emit, lockApplicants, lockedAndWaiting } from "@ros/core";
 import { applications, roles, workflowRuns, type Tx } from "@ros/db";
 import type { WorkflowEngine } from "./engine";
-
-const ENDED_RUN = ["completed", "failed", "cancelled"];
 
 /**
  * A change of plan opens the people past the old plan's candidates per job, on each job oldest first, up to the new
@@ -48,7 +46,7 @@ export async function unlockApplicants(q: Tx, engine: Pick<WorkflowEngine, "star
       if (!reads) continue;
       reading += 1;
       // Its first intake is still on (a scan that waits): it reads the row again where it would have stopped, and goes on.
-      const [on] = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "application_intake"), notInArray(workflowRuns.status, ENDED_RUN), sql`${workflowRuns.subject}->>'id' = ${app.id}`)).limit(1);
+      const [on] = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, "application_intake"), notInArray(workflowRuns.status, [...ENDED_RUN]), sql`${workflowRuns.subject}->>'id' = ${app.id}`)).limit(1);
       if (!on) await engine.start(q, { workflowKey: "application_intake", companyId, subject: { type: "application", id: app.id }, state: { applicationId: app.id, roleId }, idempotencyKey: `application_intake:${app.id}:unlocked`, actor });
     }
   }

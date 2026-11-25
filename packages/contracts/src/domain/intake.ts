@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { FormQuestion } from "./apply-questions";
 import { Actor } from "./common";
 import type { LegalCheck, PublishCheck } from "./publishing";
-import { CompensationBasis, PayOrigin, type DraftRolePacket, type PacketFlag } from "./role-packet";
+import { COMPETENCIES_MAX, CommunicationPolicy, Competency, CompensationBasis, EmploymentType, PacketDescription, PacketRequirements, PacketScreening, PayOrigin, type DraftRolePacket, type PacketFlag } from "./role-packet";
 
 /**
  * The job builder ("intake" in code). One way in: the company types a short idea or pastes an ad. The AI works out what
@@ -201,10 +202,6 @@ export function askedKind(question: string): "schedule_availability" | "work_aut
   return null;
 }
 
-/** What the assistant thinks is still missing after a turn. The server decides with `IntakeReadiness`; this only steers the next cards. */
-export const IntakeMissingFact = z.enum(["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation_range", "must_haves"]);
-export type IntakeMissingFact = z.infer<typeof IntakeMissingFact>;
-
 /** Which fact a card's answer sets. Cards ask only for what a job cannot be written without, and for the benefits line the law may ask for. */
 export const IntakeQuestionField = z.enum(["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation", "must_haves", "deal_breakers", "benefits"]);
 export type IntakeQuestionField = z.infer<typeof IntakeQuestionField>;
@@ -233,21 +230,51 @@ export const IntakeQuestion = z.object({
 });
 export type IntakeQuestion = z.infer<typeof IntakeQuestion>;
 
-/** One assistant turn of the builder's conversation (AI task `intake.turn`). */
+/**
+ * One assistant turn of the builder's conversation (AI task `intake.turn`): everything here is asked of the model, and
+ * everything here is used. What is still missing, and whether the job can be written, are not here: the server works
+ * them out from the facts (`IntakeReadiness`), and the page shows only that.
+ */
 export const IntakeTurn = z.object({
   assistantMessage: z.string().min(1),
   factsExtracted: IntakeFacts,
-  missingFacts: z.array(IntakeMissingFact),
   /** Up to three question cards, the most important first. The owner can always ignore them and type. */
   questions: z.array(IntakeQuestion).max(3).default([]),
-  /** The assistant's view that there is enough to write the job. The server decides with `readiness`. */
-  readyToCompile: z.boolean(),
   /** The first message is not about hiring someone (a question about the day, say): the session is not kept as a draft. */
   notARole: z.boolean().default(false),
   /** What was taken from a pasted job ad, one plain line each ("Title: Front desk coordinator"). */
   takenFromAd: z.array(z.string().max(300)).max(20).default([]),
 });
 export type IntakeTurn = z.infer<typeof IntakeTurn>;
+
+/**
+ * The job as the assistant writes it (AI task `intake.compile`): the parts of the job record that are words to write,
+ * each in the record's own shape and under the record's own limits. This shape is what the model is asked for, so
+ * nothing the server sets by rule is in it: the work arrangement (the owner's answer), the state of each place (read
+ * from the owner's words by the code, `stateOfPlace` in packages/core), the pay (what a person set or confirmed), the
+ * notices and the places they follow from, the three lines under a candidate email (packages/core/src/compliance.ts),
+ * and the record of who did what. The server builds the job record from this and the answers (`draftFromWritten` in
+ * packages/agents); the record itself, and every stored version of it, parses as before (`DraftRolePacket`).
+ */
+export const WrittenJob = z.object({
+  identity: z.object({
+    title: z.string().min(2),
+    department: z.string().optional(),
+    /** The city of each place the job is in, by its name alone ("Tustin"). */
+    cities: z.array(z.string().trim().min(1)).max(20).default([]),
+    employmentType: EmploymentType,
+    schedule: z.string().optional(),
+  }),
+  description: PacketDescription,
+  requirements: PacketRequirements,
+  competencies: z.array(Competency).max(COMPETENCIES_MAX).default([]),
+  screening: PacketScreening,
+  formQuestions: z.array(FormQuestion).max(40).default([]),
+  communication: CommunicationPolicy.pick({ tone: true, companyBlurb: true, candidateMayBeTold: true }),
+  /** What the assistant assumed, in plain sentences for the owner. */
+  assumptions: z.array(z.string()).default([]),
+});
+export type WrittenJob = z.infer<typeof WrittenJob>;
 
 /** The cheap read of a long first message (AI task `intake.extract`): only what the text states, nothing guessed. */
 export const IntakeExtraction = z.object({

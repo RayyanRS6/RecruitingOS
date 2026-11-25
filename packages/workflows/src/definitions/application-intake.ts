@@ -94,7 +94,7 @@ export const applicationIntake: WorkflowDefinition<State> = {
           return readableCv(q, loaded.app);
         });
         if (!doc) return null;
-        return { documentId: doc.id, out: await extractResume(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, text: doc.text, filename: doc.filename, documentId: doc.id }) };
+        return { documentId: doc.id, out: await extractResume(ctx.db, ctx.services.ai, { companyId: ctx.companyId, workflowRunId: ctx.run.id, text: doc.text, documentId: doc.id }) };
       },
       async run(ctx, prepared) {
         const loaded = await load(ctx.q, ctx.state.applicationId);

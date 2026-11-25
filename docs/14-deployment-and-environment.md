@@ -88,8 +88,8 @@ The setup scripts pass a few values of their own to the database tools (`ROS_PRO
 |---|---|---|---|---|
 | `AI_PROVIDER` | `anthropic`, or `fake`: a deterministic stand-in | `fake` | **must** (hosted) `anthropic` | the same |
 | `ANTHROPIC_API_KEY` | The key | unset | **must** (production) | the same key |
-| `AI_MODEL_JUDGMENT` / `AI_MODEL_STANDARD` / `AI_MODEL_FAST` | The model of each tier. Only `claude-haiku-5-5` and `claude-sonnet-5-5` are accepted | Sonnet 5.5 / Haiku 5.5 / Haiku 5.5 | unset | unset |
-| `AI_EFFORT_JUDGMENT` / `AI_EFFORT_STANDARD` / `AI_EFFORT_FAST` | How hard a tier thinks: `low`, `medium` or `high`. The fairness run sets one to compare | the app's own (`packages/ai/src/routing.ts`) | unset | unset |
+| `AI_MODEL_JUDGMENT` / `AI_MODEL_STANDARD` / `AI_MODEL_FAST` | The model of each tier. Only `claude-haiku-5-5` and `claude-sonnet-5-5` are accepted; any other stops the start. In the app and the worker, Sonnet 5.5 named for the standard or the fast tier is ignored, with a line in the log: it writes the job and nothing else. The fairness run may name it, to compare | Sonnet 5.5 / Haiku 5.5 / Haiku 5.5 | unset | unset |
+| `AI_EFFORT_JUDGMENT` / `AI_EFFORT_STANDARD` / `AI_EFFORT_FAST` | How hard a tier thinks: `low`, `medium` or `high`. The fairness run sets one to compare. In the app and the worker, an effort for the standard tier below `high` is ignored, with a line in the log: both scoring readings run there at high | the app's own (`packages/ai/src/routing.ts`) | unset | unset |
 
 ### Email
 

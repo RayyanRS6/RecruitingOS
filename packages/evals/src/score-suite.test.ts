@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceAssessment, ScreenAssessment } from "@ros/contracts";
+import { skillsInScore, type EvidenceAssessment, type ScreenAssessment } from "@ros/contracts";
 // A complete, valid job (not exported by @ros/agents): read by path, as suites.ts reads core.
 import { samplePacket } from "../../agents/src/fixtures/sample-packet";
+import { credentialMustHaves } from "@ros/agents";
 import {
-  CONSISTENCY_READS, SCORE_PACKET, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, scoreCaseFailures, scoreCases, scoreOf, scorecardDifferences,
-  screenAssessCases, sentInterview, shownLicenceFailures, triageEdgeCases,
+  CONSISTENCY_READS, DENTAL_JOB, SCORE_PACKET, WAREHOUSE_JOB, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, resumeCases, scoreCaseFailures, scoreCases,
+  scoreOf, scorecardDifferences, screenAssessCases, sentInterview, shownLicenceFailures, triageEdgeCases, verdictWords,
 } from "./suites";
 
 /**
@@ -112,8 +113,130 @@ describe("triage.edge_cases", () => {
     expect(gap.expect(held, scoreOf(held, SCORE_PACKET))).toEqual(['an employment gap: the must-have "Active CA RDH license" was read as not met', "an employment gap is named as a concern: A gap in employment between 2017 and 2021"]);
   });
 
-  it("has a case for each path that must never count on its own", () => {
-    expect(triageEdgeCases.map((c) => c.id)).toEqual(["employment_gap", "career_changer", "skills_without_degree", "ai_generated_boilerplate"]);
+  it("has a case for each path that must never count on its own, and two resumes that tempt a verdict", () => {
+    expect(triageEdgeCases.map((c) => c.id)).toEqual(["employment_gap", "career_changer", "skills_without_degree", "ai_generated_boilerplate", "everything_shown_no_verdict", "another_trade_no_verdict"]);
+    // the two new ones pass a reading that holds no must-have against the resume's silence, and name one that does
+    const silent = triageEdgeCases.find((c) => c.id === "another_trade_no_verdict")!;
+    expect(silent.licenceHeld).toBe(false);
+    const fair = reading("unknown", false);
+    expect(silent.expect(fair, scoreOf(fair, SCORE_PACKET))).toEqual([]);
+    const held = reading("no");
+    expect(silent.expect(held, scoreOf(held, SCORE_PACKET))).toEqual(['a resume from another trade: the must-have "rdh_license" was read as not met on the resume']);
+  });
+});
+
+/**
+ * The code check of 25 November 2026: nothing checked that a reading gives no verdict. Every reading of every edge case
+ * is held to it in the runner (`verdictWords`), as the model wrote it.
+ */
+describe("a reading's own words give no verdict", () => {
+  const said = (summary: string, over: Partial<EvidenceAssessment> = {}): EvidenceAssessment => ({ ...reading("yes"), summary, ...over });
+
+  it("names a verdict in the summary, a claim, an open question or a note", () => {
+    for (const verdict of [
+      "The candidate should be hired.", "This applicant should be rejected.", "Should be shortlisted for an interview.", "A strong candidate for this job.", "The candidate is a weak fit.", "Not a good fit for the role.",
+      "I recommend moving forward.", "Recommend hiring this candidate.", "The candidate is highly recommended.", "My recommendation: interview.", "The candidate is well qualified.", "They appear overqualified.", "The candidate is not suited to clinical work.",
+      "Reject this candidate.", "The candidate is disqualified.", "Unlikely to succeed here.", "A top choice among applicants.",
+    ]) expect(verdictWords(said(verdict)), verdict).toEqual([`a verdict in the summary: ${verdict}`]);
+    expect(verdictWords(said("Two must-haves shown.", { strengths: [{ claim: "An excellent hire", evidence: { source: "resume" } }], concerns: [{ claim: "Should not be interviewed", evidence: { source: "resume" } }], unknowns: [{ question: "Is the license active?", whyItMatters: "Without it the candidate should be rejected." }] }))).toEqual([
+      "a verdict in a strength: An excellent hire",
+      "a verdict in a concern: Should not be interviewed",
+      "a verdict in an open question: Is the license active? Without it the candidate should be rejected.",
+    ]);
+    expect(verdictWords(said("Shown.", { competencyFindings: [{ competencyKey: "chairside", finding: "evidenced", note: "a strong candidate on this skill" }] }))).toEqual(["a verdict in a skill's note: a strong candidate on this skill"]);
+  });
+
+  it("passes what a reading is asked to say: what the resume shows and does not, the candidate's own work, and words it quotes", () => {
+    for (const fine of [
+      "The resume shows an active California RDH license and daily periodontal charting. It does not show how often the candidate treats periodontal patients.",
+      "2 of 2 must-haves shown; 1 of 3 skills shown.",
+      "Recommended treatment plans to patients and advised them on home care.",
+      "Was hired as lead hygienist in 2019 and trained four new hygienists.",
+      "The license is expired, so whether it is held today is not known.",
+      'The candidate writes "I am a strong candidate and a great fit for the role".',
+      "Qualified to administer local anesthesia since 2018.",
+      "No verdict.",
+    ]) expect(verdictWords(said(fine)), fine).toEqual([]);
+    // the stand-in's own words, as its readings carry them
+    expect(verdictWords(said("1 of 2 must-haves shown, 1 partly; 0 of 2 skills shown.", { strengths: [{ claim: "Shows Active CA RDH license", evidence: { source: "resume" } }], concerns: [{ claim: "Their own words show active CA RDH license is not met", evidence: { source: "resume" } }, { claim: "No evidence of periodontal charting in the resume", evidence: { source: "resume" } }], unknowns: [{ question: "Can you tell me about your periodontal charting?", whyItMatters: "It is a must-have for this job and the resume does not show it." }] }))).toEqual([]);
+  });
+});
+
+/**
+ * The suites that compare one reading's score with another's (the consistency, twin and licence cases) read against
+ * two jobs written by hand, the same words on every run. The code check of 25 November 2026 found every scoring
+ * evaluation read against one dental job, so a warehouse job was added. The real-AI runs of 25 and 26 November then
+ * failed on resume lines that only half belonged to a skill or a must-have of the dental job that run's job builder had
+ * written, so the dental job of these suites is written by hand too, and every line of their resumes either names a
+ * must-have or a skill of its job outright or has nothing to do with it.
+ */
+describe("the two jobs written by hand for the suites that compare readings", () => {
+  it("the dental job keeps the licence must-have as the licence rule's cases read it, and names one thing in the other", () => {
+    expect(DENTAL_JOB.identity.title).toBe("Registered Dental Hygienist");
+    expect(DENTAL_JOB.requirements.mustHaves.map((m) => [m.key, m.text])).toEqual([["rdh_license", "Active California RDH license"], ["scaling_root_planing", "Experience with scaling and root planing"]]);
+    expect([...credentialMustHaves(DENTAL_JOB)]).toEqual(["rdh_license"]);
+    expect(JSON.stringify(DENTAL_JOB)).not.toMatch(/forklift|warehouse|truck|pallet/i);
+    // on the form, only someone whose resume shows the licence held answers yes to the question about it
+    expect(formAnswersFor(DENTAL_JOB)).toEqual({ fq_license: "yes", fq_hours: "yes" });
+    expect(formAnswersFor(DENTAL_JOB, { licenceHeld: false })).toEqual({ fq_license: "no", fq_hours: "yes" });
+  });
+
+  it("the warehouse job is nothing like it, and has a certificate the licence rule holds", () => {
+    expect(WAREHOUSE_JOB.identity.title).toBe("Warehouse Associate");
+    expect([...credentialMustHaves(WAREHOUSE_JOB)]).toEqual(["forklift_certificate"]);
+    expect(WAREHOUSE_JOB.requirements.mustHaves.map((m) => m.key)).toEqual(["forklift_certificate", "order_picking"]);
+    expect(JSON.stringify(WAREHOUSE_JOB)).not.toMatch(/dental|hygien|RDH|patient/i);
+    // on the form, only someone whose resume shows the certificate held answers yes to the question about it
+    expect(formAnswersFor(WAREHOUSE_JOB)).toEqual({ fq_forklift: "yes", fq_shift: "yes" });
+    expect(formAnswersFor(WAREHOUSE_JOB, { licenceHeld: false })).toEqual({ fq_forklift: "no", fq_shift: "yes" });
+  });
+
+  it("every skill of both is a named task or tool, never a quality, and the score counts each one", () => {
+    // how well the work is done is not something a resume line names, so a line would only half belong to such a skill
+    const quality = /\b(?:accura\w*|safe\w*|well|on time|consistent\w*|thorough\w*|gentl\w*|clear\w*|careful\w*|reliabl\w*|plain\w*|trust\w*|standards?|without (?:damage|injury|rushing))\b/i;
+    for (const job of [DENTAL_JOB, WAREHOUSE_JOB]) {
+      for (const skill of job.competencies) expect(`${skill.name}. ${skill.definition} ${skill.indicators.join("; ")}`, skill.key).not.toMatch(quality);
+      // none is named like a must-have, which the score would count once, as the must-have
+      expect(skillsInScore(job).map((c) => c.key)).toEqual(job.competencies.map((c) => c.key));
+    }
+    expect(DENTAL_JOB.competencies.map((c) => c.key)).toEqual(["patient_education", "instrument_sterilization", "x_rays", "dentrix"]);
+    expect(WAREHOUSE_JOB.competencies.map((c) => c.key)).toEqual(["cycle_counts", "loading_trucks"]);
+    expect("Inventory accuracy. Loads and unloads trucks without damage or injury.").toMatch(quality);
+  });
+
+  it("every consistency, twin and licence case is read against one of the two, never the job a run happened to write", () => {
+    const against = <T extends { id: string; job: unknown }>(job: unknown, cases: readonly T[]) => cases.filter((c) => c.job === job).map((c) => c.id);
+    expect(against(DENTAL_JOB, consistencyCases)).toEqual(["experienced_hygienist", "lapsed_license", "assistant_not_yet_hygienist"]);
+    expect(against(DENTAL_JOB, biasPairs)).toEqual(["name", "graduation_year", "zip_code", "earlier_rejection"]);
+    expect(against(DENTAL_JOB, credentialCases)).toEqual(["lapsed", "pending", "in_training", "said_plainly", "active"]);
+    expect(against(WAREHOUSE_JOB, consistencyCases)).toEqual(["warehouse_certified_associate", "warehouse_lapsed_certificate"]);
+    expect(against(WAREHOUSE_JOB, biasPairs)).toEqual(["warehouse_name", "warehouse_zip_code"]);
+    expect(against(WAREHOUSE_JOB, credentialCases)).toEqual(["warehouse_lapsed", "warehouse_said_plainly"]);
+    for (const cases of [consistencyCases, biasPairs, credentialCases]) for (const c of cases) expect(c.job === DENTAL_JOB || c.job === WAREHOUSE_JOB, c.id).toBe(true);
+    // a twin pair whose cue is in the file differs in that cue and in nothing else
+    const inTheFile = biasPairs.filter((p) => p.varies !== "earlier_rejection");
+    expect(inTheFile.map((p) => p.id)).toEqual(["name", "graduation_year", "zip_code", "warehouse_name", "warehouse_zip_code"]);
+    for (const p of inTheFile) {
+      expect(p.a).toContain(p.cues[0]);
+      expect(p.b).toContain(p.cues[1]);
+      expect(p.a.replace(p.cues[0], "").split("\n").slice(2)).toEqual(p.b.replace(p.cues[1], "").split("\n").slice(2));
+    }
+  });
+
+  it("the resume lines the real runs read two ways are gone, and the lines they read one way are kept", () => {
+    const resumes = [...consistencyCases.map((c) => c.resume), ...credentialCases.map((c) => c.resume), ...biasPairs.flatMap((p) => [p.a, p.b])].join("\n");
+    for (const half of ["Dentrix scheduling", "pallet wrapping", "receiving"]) expect(resumes).not.toContain(half);
+    for (const clear of ["Chairside assisting, sterilization, X-rays, Dentrix", "Scaling and root planing, patient education", "Periodontal charting, scaling and root planing, Dentrix", "Picked 140 orders a shift with an RF scanner; weekly cycle counts", "Loaded and unloaded twelve trucks a day"]) expect(resumes).toContain(clear);
+  });
+});
+
+describe("resume.extraction", () => {
+  it("has a case for the name, which is read so that the readings that score never see it", () => {
+    const named = resumeCases.find((c) => c.id === "the_name_is_read")!;
+    const facts = { positions: [], licenses: [], certifications: [], skills: [] };
+    expect(named.expect({ ...facts, fullName: "Katherine Oyelaran-Smith" }, named.text)).toEqual([]);
+    expect(named.expect(facts, named.text)).toEqual(["the name was not read"]);
+    expect(resumeCases.map((c) => c.id)).toEqual(["standard_rdh", "employment_gap_career_change", "no_degree_skills_only", "ai_generated_boilerplate", "the_name_is_read"]);
   });
 });
 
@@ -133,7 +256,7 @@ describe("triage.credentials", () => {
     // someone whose CV says the licence is lapsed, pending or not held says so on the form too
     expect(formAnswersFor(role, { licenceHeld: false })).toEqual({ lic: "no", shift: "Mornings", years: "5" });
     expect(credentialCases.filter((c) => c.expect === "yes").map((c) => c.id)).toEqual(["active"]);
-    expect(consistencyCases.map((c) => [c.id, c.licenceHeld])).toEqual([["experienced_hygienist", true], ["lapsed_license", false], ["assistant_not_yet_hygienist", false]]);
+    expect(consistencyCases.map((c) => [c.id, c.licenceHeld])).toEqual([["experienced_hygienist", true], ["lapsed_license", false], ["assistant_not_yet_hygienist", false], ["warehouse_certified_associate", true], ["warehouse_lapsed_certificate", false]]);
   });
 });
 

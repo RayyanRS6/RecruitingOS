@@ -38,6 +38,8 @@ const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(create
 
 const plans = {
   requestedAt: null,
+  // the server's own answer to "is this company offered an upgrade" (`mayOfferUpgrade`): the sheet's words follow it
+  mayUpgrade: true,
   plans: [
     { key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit", current: true },
     { key: "basic", name: "Basic", monthlyUsd: 49, activeRoles: 3, jobsTotal: null, candidatesPerJob: 25, seats: 3, aiHelp: "About 600 candidates a month", current: false },
@@ -83,7 +85,7 @@ describe("the one Upgrade and its sheet", () => {
   });
 
   it("on the last plan nothing below is chosen for them, and they can still talk with ITS, in words that do not send them to a plan that is not there", () => {
-    const html = sheet({ requestedAt: null, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
+    const html = sheet({ requestedAt: null, mayUpgrade: false, plans: plans.plans.map((p) => ({ ...p, current: p.key === "ultra" })) });
     expect(html.match(/type="radio"/g)).toHaveLength(3);
     expect(html).not.toContain('checked=""');
     expect(html).toContain('aria-label="Your plan"');
@@ -92,11 +94,28 @@ describe("the one Upgrade and its sheet", () => {
     expect(text(html)).not.toContain("Ask ITS to upgrade");
   });
 
-  it("on a plan not in the list (the pilot, Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
-    const html = sheet({ requestedAt: null, plans: plans.plans.map((p) => ({ ...p, current: false })) });
+  it("on a plan not in the list that still has plans above it (Trial, a retired one) Free is not chosen for them: they pick one, or ask with none picked", () => {
+    const html = sheet({ requestedAt: null, mayUpgrade: true, plans: plans.plans.map((p) => ({ ...p, current: false })) });
     expect(html.match(/type="radio"/g)).toHaveLength(4);
     expect(html).not.toContain('checked=""');
+    expect(html).toContain('aria-label="Upgrade"');
     expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS to upgrade<\/button>/);
+  });
+
+  it("on the private pilot, whose button said Talk to ITS, the sheet says the same: its plan is in no list and nothing is above it, so it asks about the plan", () => {
+    const html = sheet({ requestedAt: null, mayUpgrade: false, plans: plans.plans.map((p) => ({ ...p, current: false })) });
+    expect(html.match(/type="radio"/g)).toHaveLength(4);
+    expect(html).not.toContain('checked=""');
+    expect(html).toContain('aria-label="Your plan"');
+    expect(html).not.toContain('aria-label="Upgrade"');
+    expect(html).toMatch(/<button type="button" class="btn primary"[^>]*>Ask ITS about our plan<\/button>/);
+    expect(text(html)).not.toContain("Ask ITS to upgrade");
+  });
+
+  it("follows the server's answer alone: the same list says Upgrade or Your plan as the answer says, whichever plan is marked", () => {
+    const onUltra = plans.plans.map((p) => ({ ...p, current: p.key === "ultra" }));
+    expect(sheet({ requestedAt: null, mayUpgrade: true, plans: onUltra })).toContain('aria-label="Upgrade"');
+    expect(sheet({ requestedAt: null, mayUpgrade: false, plans: plans.plans })).toContain('aria-label="Your plan"');
   });
 
   it("with a request already sent: says the day it went, and asks nothing more", () => {

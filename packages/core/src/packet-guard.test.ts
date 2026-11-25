@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RolePacket, type Actor, type DraftRolePacket } from "@ros/contracts";
-import { PROXY_RULES, formQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, unresolvedFlags, wordingProblems } from "./packet-guard";
+import { PROXY_RULES, formQuestionProblems, guardPacket, normalizeCriterion, questionCheck, screenCriterion, screenDealBreaker, uniqueKeys, unresolvedFlags, wordingProblems } from "./packet-guard";
 
 /** A small valid job record; each test changes what it is about. */
 function packet(over: (p: RolePacket) => void = () => {}): RolePacket {
@@ -55,6 +55,47 @@ describe("the guard's fixed rules", () => {
     // saving it again changes nothing
     expect(guardPacket(saved.packet, ctx).packet.communication).toEqual(saved.packet.communication);
     expect(p.requirements.mustHaves).toHaveLength(6);
+  });
+
+  // A reading's findings are matched to a job's must-haves and skills by key, a scorecard's to the AI interview's
+  // questions and a candidate's answers to the form's questions, and nothing held the keys of a record apart: the model
+  // is only asked for unique ones. Two items under one key shared one finding (code check of 25 November 2026).
+  it("leaves every must-have, nice-to-have, skill, AI interview question and form question with a key no other of its kind has", () => {
+    const { packet: p, changes } = guardPacket(packet((x) => {
+      x.requirements.mustHaves = [{ key: "license", text: "Active CA RDH license", rationale: "Required by law." }, { key: "license", text: "Local anesthesia permit" }, { key: "perio", text: "Periodontal charting" }, { key: "license", text: "Nitrous monitoring permit" }];
+      x.requirements.niceToHaves = [{ key: "license", text: "Laser certification" }, { key: "n", text: "Dentrix" }, { key: "n", text: "Spanish" }];
+      x.competencies = [...x.competencies, { ...x.competencies[0], name: "Another skill" }];
+      x.screening.questions = [...x.screening.questions, { key: "q0", question: "How do you calm an anxious patient?", kind: "behavioral" }];
+      x.formQuestions = [{ kind: "yes_no", key: "fq", question: "Can you work Saturdays?", required: true }, { kind: "yes_no", key: "fq", question: "Do you hold a current CPR card?", required: true }, { kind: "yes_no", key: "fq_2", question: "Can you start within 30 days?", required: true }];
+    }), ctx);
+    // the first item with a key keeps it; a repeat gets a short suffix that no item of its list has
+    expect(p.requirements.mustHaves.map((m) => [m.key, m.text])).toEqual([["license", "Active CA RDH license"], ["license_2", "Local anesthesia permit"], ["perio", "Periodontal charting"], ["license_3", "Nitrous monitoring permit"]]);
+    // each list is its own: a nice-to-have may carry a must-have's key, as nothing matches across the two
+    expect(p.requirements.niceToHaves.map((m) => m.key)).toEqual(["license", "n", "n_2"]);
+    expect(p.competencies.map((c) => [c.key, c.name])).toEqual([["c1", "Competency 1"], ["c2", "Competency 2"], ["c3", "Competency 3"], ["c1_2", "Another skill"]]);
+    expect(p.screening.questions.map((q) => q.key)).toEqual(["q0", "q1", "q2", "q0_2"]);
+    expect(p.formQuestions.map((q) => q.key)).toEqual(["fq", "fq_3", "fq_2"]);
+    // nothing else of an item changes, and the owner is told of nothing: a key is never on a screen
+    expect(p.requirements.mustHaves[0]).toEqual({ key: "license", text: "Active CA RDH license", rationale: "Required by law." });
+    expect(p.competencies[3]).toEqual({ ...p.competencies[0], key: "c1_2", name: "Another skill" });
+    expect(changes).toEqual([]);
+    // saved again, every key stays: an existing unique key never changes, because stored readings point at it
+    const again = guardPacket(p, ctx).packet;
+    for (const list of ["mustHaves", "niceToHaves"] as const) expect(again.requirements[list].map((m) => m.key)).toEqual(p.requirements[list].map((m) => m.key));
+    expect([again.competencies, again.screening.questions, again.formQuestions].map((l) => l.map((i) => i.key))).toEqual([p.competencies, p.screening.questions, p.formQuestions].map((l) => l.map((i) => i.key)));
+    const untouched = packet();
+    const kept = guardPacket(untouched, ctx).packet;
+    expect([kept.requirements.mustHaves, kept.competencies, kept.screening.questions].map((l) => l.map((i) => i.key))).toEqual([["license"], ["c1", "c2", "c3"], ["q0", "q1", "q2"]]);
+    expect(uniqueKeys([{ key: "a" }, { key: "a_2" }, { key: "a" }, { key: "a" }]).map((i) => i.key)).toEqual(["a", "a_2", "a_3", "a_4"]);
+    expect(uniqueKeys([])).toEqual([]);
+  });
+
+  it("names a flag by its item's own key, so a phrase in each of two items that came with one key is flagged in both", () => {
+    const { packet: p, flags } = guardPacket(packet((x) => {
+      x.requirements.mustHaves = [{ key: "m", text: "Native English speaker" }, { key: "m", text: "Native Spanish speaker" }];
+    }), ctx);
+    expect(p.requirements.mustHaves.map((m) => m.key)).toEqual(["m", "m_2"]);
+    expect(flags.map((f) => [f.path, f.id])).toEqual([["requirements.mustHaves[0].text", "language_origin:requirements.mustHaves[m].text:native_english_speaker"], ["requirements.mustHaves[1].text", "language_origin:requirements.mustHaves[m_2].text:native_spanish_speaker"]]);
   });
 
   it("guards a draft that has no pay yet, and flags a pay figure nobody confirmed", () => {

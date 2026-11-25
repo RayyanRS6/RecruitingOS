@@ -2,8 +2,9 @@ import { formAnswerViews, type FormQuestion } from "@ros/contracts";
 
 /**
  * The answers a candidate gave on the application form, as stored and as plain sentences. The CV reading is given the
- * sentences as evidence, the evidence rules accept a quote of one as the candidate's own words, and the AI interview is
- * given them so it never asks again what the form asked. One wording for all three, so a quote is always found again.
+ * sentences as evidence, the evidence rules accept a quote of one as the candidate's own words, and the AI interview
+ * lists them on "Check your answers" and builds its plan from the yes-or-no ones (a "No" leaves that must-have out). One
+ * wording for all three, so a quote is always found again.
  */
 
 /** What an application stores of its form: the answers by question key, and for an application from an older form the two places it kept them. */

@@ -21,11 +21,12 @@ export function registerFakeHandlers(fake: FakeProvider): void {
 }
 
 /**
- * company.about v1 (D10): a few plain sentences built only from the facts in the request, the way the model is told to
- * write them. A sentence from the company's notes is kept when it reads as a fact about the company; one that stands in
- * for a protected trait ("young, energetic team") is left out, and so is one that tries to give instructions.
+ * company.about (D10): a few plain sentences built only from the facts in the request, the way the model is told to
+ * write them, and nothing but the text, which is all it is asked for. A sentence from the company's notes is kept when it
+ * reads as a fact about the company; one that stands in for a protected trait ("young, energetic team") is left out, and
+ * so is one that tries to give instructions.
  */
-function fakeCompanyAbout(req: StructuredRequest<unknown>): { text: string; basedOn: string[] } {
+function fakeCompanyAbout(req: StructuredRequest<unknown>): { text: string } {
   const text = req.messages.map((m) => m.content).join("\n");
   const fact = (label: string) => text.match(new RegExp(`^${label}: (.+?)\\.?$`, "m"))?.[1]?.trim() ?? "";
   const name = fact("Company") || "The company";
@@ -42,6 +43,5 @@ function fakeCompanyAbout(req: StructuredRequest<unknown>): { text: string; base
   const size = fact("Size");
   if (sentences.length < 2 && size) sentences.push(`It is a team of ${size}.`);
   if (sentences.length < 2) sentences.push("Its open jobs are listed on its careers page.");
-  const basedOn = [`a ${kind} business${where}`, ...(jobs.length ? [`hires for ${jobs[0].toLowerCase()}`] : []), ...(own.length ? ["what you wrote in the notes"] : [])];
-  return { text: sentences.join(" "), basedOn };
+  return { text: sentences.join(" ") };
 }

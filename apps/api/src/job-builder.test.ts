@@ -72,7 +72,9 @@ describe("the job builder", () => {
     expect(r0.status).toBe(201);
     const first = (await r0.json()) as IntakeStartResponse;
     expect(first.notARole).toBe(false);
-    expect(first.reply).toMatchObject({ readyToCompile: false, notARole: false, takenFromAd: [] });
+    expect(first.reply).toMatchObject({ notARole: false, takenFromAd: [] });
+    // whether the job can be written is the draft's readiness, the one place the page reads it: the reply carries no second copy
+    expect(first.reply).not.toHaveProperty("readyToCompile");
     let draft = first.session!;
     expect(draft.facts).toMatchObject({ title: "Software Engineer", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
     // nothing is assumed: not the company's own place, not "on site"
@@ -80,6 +82,10 @@ describe("the job builder", () => {
     expect(draft.facts.remotePolicy).toBeUndefined();
     expect(draft.readiness.essentials.map((e) => [e.label, e.done])).toEqual([["Job title", true], ["Where the job is", false], ["On site, hybrid or remote", false], ["Pay", false], ["Full time or part time", false], ["Schedule", false], ["At least one must-have", true]]);
     expect(draft.readiness).toMatchObject({ mayDraft: false, hasDraft: false, payConfirmed: false });
+    // what is still missing is worked out from the facts whenever it is read; the draft's row keeps no second copy of it
+    // (it was written there on every turn, read by nothing, and stale as soon as an answer was tapped)
+    expect(draft.readiness.missing).toEqual(["location", "remote_policy", "compensation_range", "employment_type", "schedule"]);
+    expect((await container.db.select({ missingFacts: intakeSessions.missingFacts }).from(intakeSessions).where(eq(intakeSessions.id, draft.id)))[0].missingFacts).toEqual([]);
     // the AI asks for the place, the work arrangement and the pay
     expect(draft.questions.map((q) => [q.field, q.mode])).toEqual([["location", "single"], ["remote_policy", "single"], ["compensation", "pay"]]);
     expect(draft.questions[1].options.map((o) => o.label)).toEqual(["On site", "Hybrid", "Remote"]);
@@ -118,8 +124,8 @@ describe("the job builder", () => {
     draft = two.session;
     expect(draft.readiness).toMatchObject({ missing: [], mayDraft: true, draftBlocker: null });
     expect(draft.questions).toEqual([]);
-    expect(two.reply).toMatchObject({ readyToCompile: true });
-    expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Austin, TX\nOn site, hybrid or remote: Hybrid\nPay: $120,000–$150,000 a year", "Full or part time: Full time\nSchedule: Monday to Friday, 9 to 5"]);
+    expect(two.reply).not.toHaveProperty("readyToCompile");
+    expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Austin, TX\nOn site, hybrid or remote: Hybrid\nPay: $120,000–$150,000 a year", "Full time or part time: Full time\nSchedule: Monday to Friday, 9 to 5"]);
 
     // written
     const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
@@ -311,10 +317,10 @@ describe("the job builder", () => {
     expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
   });
 
-  // Found by an audit in November 2026. The real model writes facts in plain words ("On site"); the stand-in writes
-  // codes and reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
+  // Found by an audit in November 2026. The real model writes facts in plain words ("On site", "Work from home", "per
+  // hour"); the stand-in reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
   it("knows the work arrangement when the assistant writes it in words and the owner said it as people do, and still asks when nobody said it", async () => {
-    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, missingFacts: [], questions: [], readyToCompile: true });
+    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions: [] });
     const arrangementOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "remote_policy");
     // "On site", as the model wrote it
     assistantAnswers({ title: "Front desk coordinator", locationText: "Tustin, CA", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26, mustHaves: ["Two years at a front desk"] });
@@ -338,6 +344,31 @@ describe("the job builder", () => {
     expect(guessed.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
   });
 
+  // Seen on the live site on 25 November 2026: the assistant's first message said "The job can be written now." while the
+  // page still asked for the work arrangement. The real model wrote it; the stand-in never does, so the turn is scripted.
+  it("never shows the assistant saying the job can be written: the page says it, from the draft's own readiness", async () => {
+    const says = (assistantMessage: string, read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage, factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions: [] });
+    const lastReply = (draft: IntakeSessionView) => draft.messages.filter((m) => m.role === "assistant").at(-1)?.content;
+    says("Got it: a software engineer who knows Python and Flask. The job can be written now.", { title: "Software Engineer", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
+    const r = await json(owner, "POST", sessions, { initialMessage: OWNERS_SENTENCE });
+    const first = (await r.json()) as IntakeStartResponse;
+    const draft = first.session!;
+    // the page: the job cannot be written yet, and a card asks for the work arrangement
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location", "remote_policy", "compensation_range", "employment_type", "schedule"] });
+    expect(draft.questions.map((q) => q.field)).toContain("remote_policy");
+    // the reply, as stored and as answered: what the assistant understood, and no word about whether the job can be written
+    expect(lastReply(draft)).toBe("Got it: a software engineer who knows Python and Flask.");
+    expect(first.reply).toMatchObject({ assistantMessage: "Got it: a software engineer who knows Python and Flask." });
+    // a reply that says nothing else is only "Noted.", and one that says what is still needed keeps it
+    says("Everything is in. You can press Write the job now.", {});
+    const two = ((await (await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "It is in Austin, TX." })).json()) as IntakeTurnResponse).session;
+    expect(lastReply(two)).toBe("Noted.");
+    expect(two.readiness.mayDraft).toBe(false);
+    says("Still needed before the job can be written: the pay and the schedule. You can type them here.", {});
+    const three = ((await (await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "Full time." })).json()) as IntakeTurnResponse).session;
+    expect(lastReply(three)).toBe("Still needed before the job can be written: the pay and the schedule. You can type them here.");
+  });
+
   // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so pay the owner had just typed was held as
   // unconfirmed, the pay card asked for it again, and "Write the job" waited.
   it("counts pay typed as '45-55k' as set by the owner: no pay card, and the job can be written", async () => {
@@ -350,7 +381,7 @@ describe("the job builder", () => {
     expect(draft.questions).toEqual([]);
     // without one the stand-in reads no pay at all, so this turn is scripted with what the real model answers
     container.fake!.scriptNext("intake.turn", {
-      assistantMessage: "Got it.", missingFacts: [], questions: [], readyToCompile: true,
+      assistantMessage: "Got it.", questions: [],
       factsExtracted: { title: "Office manager", locationText: "Irvine, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000, mustHaves: ["Two years running an office"], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] },
     });
     const plain = await start(owner, words("45-55k"));
@@ -436,6 +467,99 @@ describe("the job builder", () => {
     expect(rewritten.readiness).toMatchObject({ draftOutOfDate: false, draftEdits: 0, publish: { allowed: true } });
     expect(rewritten.draft?.requirements.niceToHaves.map((n) => n.text)).toEqual(["Dentrix"]);
     expect(rewritten.draft?.compensation).toMatchObject({ min: 48, max: 58 });
+  });
+
+  // Until 25 November 2026 the AI filled in the state of the place when it wrote the job, so an owner who typed "Denver"
+  // still got Colorado's notices. It is no longer asked. The place is answered only when the owner's own words say the
+  // state, and its card comes back until they do: a job's notices follow its state, and none may go missing.
+  it("asks for the place again while its state is missing, holds 'Write the job', and writes a Colorado job once the state is said", async () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    let draft = await start(owner, "Dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    // "Denver" stays on the checklist, still needed, with its card; nothing else is missing
+    expect(draft.facts.locationText).toBe("Denver");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"], draftBlocker: "Still needed before the job can be written: where the job is." });
+    expect(draft.readiness.essentials.find((e) => e.key === "location")).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver" });
+    expect(draft.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    // "Write the job" is refused, with the reason
+    const early = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(early.status).toBe(409);
+    expect(((await early.json()) as Refusal).error).toMatchObject({ code: "not_ready", message: "Still needed before the job can be written: where the job is." });
+    // answered with the city again: the card is there again
+    draft = (await answerCards(owner, draft, { location: "Denver" })).session;
+    expect(draft.readiness.missing).toEqual(["location"]);
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the state alone completes the place already given; Colorado's own rule now applies (its benefits card), and the job can be written
+    draft = (await answerCards(owner, draft, { location: "CO" })).session;
+    expect(draft.facts.locationText).toBe("Denver, CO");
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+    expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Denver", "Where the job is: CO"]);
+    const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    draft = ((await w.json()) as { session: IntakeSessionView }).session;
+    expect(draft.draft?.identity.locations).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+    expect(draft.draft?.compliance.jurisdictions).toContain("US-CO");
+    // and the legal check holds the job to Colorado's rules: the pay range, the benefits on the ad, a closing date
+    expect(draft.legalCheck?.jurisdictions).toEqual(["US-CO"]);
+    expect(draft.legalCheck?.items.map((i) => i.key)).toEqual(["pay_range", "benefits", "closing_date"]);
+  });
+
+  // A wrong state is worse than none: it would put another state's notices on the job and leave the right ones off.
+  // "LA" is Los Angeles as often as Louisiana, so without a comma it says no state, on the place and on its card.
+  it("reads no state from 'Downtown LA' or from 'LA' on the card, and writes a California job once the owner says Los Angeles and then CA", async () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    let draft = await start(owner, "Dental assistant in Downtown LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(draft.facts.locationText).toBe("Downtown LA");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // "LA" on the card, twice: the place is "LA", it still has no state, and the card is there again
+    for (let n = 0; n < 2; n += 1) {
+      draft = (await answerCards(owner, draft, { location: "LA" })).session;
+      expect(draft.facts.locationText).toBe("LA");
+      expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    }
+    draft = (await answerCards(owner, draft, { location: "Los Angeles" })).session;
+    expect(draft.readiness.missing).toEqual(["location"]);
+    draft = (await answerCards(owner, draft, { location: "CA" })).session;
+    expect(draft.facts.locationText).toBe("Los Angeles, CA");
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const job = ((await w.json()) as { session: IntakeSessionView }).session.draft;
+    expect(job?.identity.locations).toEqual([{ city: "Los Angeles", region: "CA", country: "US" }]);
+    expect(job?.compliance.jurisdictions).toEqual(["US-CA"]);
+    // with the owner's comma the same letters are Louisiana
+    const louisiana = await start(owner, "Dental assistant in Baton Rouge, LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(louisiana.facts.locationText).toBe("Baton Rouge, LA");
+    expect(louisiana.readiness).toMatchObject({ mayDraft: true, missing: [] });
+  });
+
+  // The same principle for a state's name: Fort Washington is in Maryland and in Pennsylvania, never in Washington
+  // state, and "Washington" by itself is the state or the capital. Neither says a state; asking again costs one tap.
+  it("reads no state from 'Fort Washington' or from 'Washington' on the card, and writes a Maryland job once the owner says Maryland", async () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    let draft = await start(owner, "Dental assistant in Fort Washington, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(draft.facts.locationText).toBe("Fort Washington");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // "Washington" on the card completes nothing: the place is "Washington", with no state, and the card is there again
+    draft = (await answerCards(owner, draft, { location: "Washington" })).session;
+    expect(draft.facts.locationText).toBe("Washington");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the city again, then the state by its name: Maryland, whose own rule brings the benefits card
+    draft = (await answerCards(owner, draft, { location: "Fort Washington" })).session;
+    expect(draft.readiness.missing).toEqual(["location"]);
+    draft = (await answerCards(owner, draft, { location: "Maryland" })).session;
+    expect(draft.facts.locationText).toBe("Fort Washington, Maryland");
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+    const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const session = ((await w.json()) as { session: IntakeSessionView }).session;
+    expect(session.draft?.identity.locations).toEqual([{ city: "Fort Washington", region: "MD", country: "US" }]);
+    expect(session.legalCheck?.jurisdictions).toEqual(["US-MD"]);
   });
 
   it("holds a Colorado job until the ad describes the benefits, and gives it a closing date when it is published", async () => {

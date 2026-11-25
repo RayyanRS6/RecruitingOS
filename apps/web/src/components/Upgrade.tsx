@@ -27,7 +27,8 @@ function PlanWords({ plan }: { plan: PublicPlan }) {
  * The short sheet behind every Upgrade: the plans side by side with the company's own marked, an optional note, one
  * button and the one plain line that nothing is charged. It sends one request to ITS (POST /api/v1/plans/request),
  * which stays open until ITS changes the plan. With a request already open it says when it was sent and asks nothing
- * more.
+ * more. For a company with nothing above its plan (the answer's `mayUpgrade` is false: the last plan, or the private
+ * pilot) the title and the button ask about the plan, as the "Talk to ITS" button that opened the sheet did.
  */
 export function UpgradeSheet(props: { reason?: string; onClose: () => void }) {
   const qc = useQueryClient();
@@ -38,8 +39,9 @@ export function UpgradeSheet(props: { reason?: string; onClose: () => void }) {
   const q = useQuery({ queryKey: ["plans"], queryFn: () => api.get<PublicPlans>("/api/v1/plans") });
   const plans = q.data?.plans ?? [];
   const choice = plans.find((p) => p.key === picked && !p.current) ?? firstChoice(plans);
-  // On the last plan nothing is above theirs: the same sheet, and the same request, in words that say so.
-  const nothingAbove = !!plans[plans.length - 1]?.current;
+  // Nothing is above their plan (the last plan, or the private pilot): the same sheet, and the same request, in words
+  // that say so. The server's answer (`mayOfferUpgrade`, the rule its "Talk to ITS" buttons follow), never worked out here.
+  const nothingAbove = q.data?.mayUpgrade === false;
   const send = useMutation({
     mutationFn: (plan: PublicPlan | null) => {
       const body: PlanRequest = { ...(plan ? { planKey: plan.key } : {}), ...(props.reason ? { reason: props.reason } : {}), ...(note.trim() ? { note: note.trim() } : {}) };

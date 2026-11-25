@@ -100,7 +100,7 @@ candidatePages.get("/careers/:slug", async (c) => {
           <ul class="roles">
             {open.map(({ role: r, packet }) => {
               const title = packet.identity.title;
-              const accepting = r.acceptingApplications && !paused;
+              const accepting = acceptingApplications(r) && !paused;
               return (
                 <li class="card role">
                   <span class="role-icon" aria-hidden="true"><Icon name="briefcase" /></span>

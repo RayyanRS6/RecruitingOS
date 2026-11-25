@@ -1,5 +1,5 @@
 import { SCREEN_LINK_OPEN_DAYS, type Actor, type RolePacket } from "@ros/contracts";
-import { ADVERSE_DECISION_LINE, REACH_A_PERSON_LINE, closeOutNoteLine, disclosureLine, emit, hiringTeamSignature, onFileReceiptLine } from "@ros/core";
+import { ADVERSE_DECISION_LINE, DECISION_TEMPLATE, REACH_A_PERSON_LINE, closeOutNoteLine, disclosureLine, emit, hiringTeamSignature, onFileReceiptLine } from "@ros/core";
 import { communications, type Queryable, type applications, type candidates, type companies, type roles } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 import { queueCommunication } from "./outbox";
@@ -120,9 +120,6 @@ You can check where things stand at any time: ${statusUrl}`;
     to: candidate.email,
   });
 }
-
-/** The key the decision message is recorded under. */
-export const DECISION_TEMPLATE = "disposition";
 
 /**
  * The decision message for someone marked Not selected: one standard wording, ours and never the AI's, with no reason

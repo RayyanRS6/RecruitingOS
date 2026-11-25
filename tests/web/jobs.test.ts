@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROLE_ACTION_BLOCKED, roleActions, type ClosingDateView, type FormQuestion, type IntakeSessionSummary } from "../../packages/contracts/src/index";
+import { ROLE_ACTION_BLOCKED, draftStillNeeds, roleActions, type ClosingDateView, type FormQuestion, type IntakeDraftSummary } from "../../packages/contracts/src/index";
 import {
   applyByOf, closingDateLine, closingDateProblem, countWords, draftRow, formQuestionFacts, headerActions, jobFacts, jobHref, jobRow, jobTabFrom, jobTabs, placeWords, postBox, postPlaceholder,
   recordFacts, shareRefresh, statusTone,
@@ -60,13 +60,27 @@ describe("a row of the Jobs page", () => {
 });
 
 describe("a draft's row", () => {
-  const draft = (over: Partial<IntakeSessionSummary> = {}): IntakeSessionSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "A Teammate" }, mine: true, createdAt: "", updatedAt: new Date(2026, 10, 16, 9).toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range", "must_haves"], ...over });
+  /** A draft with no pay yet and no must-have: two essentials missing, and nothing to confirm. */
+  const draft = (over: Partial<IntakeDraftSummary> = {}): IntakeDraftSummary => ({ id: "s1", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "A Teammate" }, mine: true, createdAt: "", updatedAt: new Date(2026, 10, 16, 9).toISOString(), ownerMessages: 2, hasDraft: false, missing: ["compensation_range", "must_haves"], payConfirmed: false, ...over });
 
   it("continues in the job builder, says when it last changed and how much is still needed", () => {
     expect(draftRow(draft(), now)).toEqual({ id: "s1", title: "Front Desk Lead", href: "/roles/new?session=s1", facts: ["Last changed Nov 16", "2 things still needed"] });
-    expect(draftRow(draft({ missing: ["must_haves"] }), now).facts.at(-1)).toBe("1 thing still needed");
-    expect(draftRow(draft({ missing: [], hasDraft: true }), now).facts.at(-1)).toBe("Written");
-    expect(draftRow(draft({ missing: [], hasDraft: false }), now).facts).toEqual(["Last changed Nov 16"]);
+    expect(draftRow(draft({ missing: ["must_haves"], payConfirmed: true }), now).facts.at(-1)).toBe("1 thing still needed");
+    expect(draftRow(draft({ missing: [], payConfirmed: true, hasDraft: true }), now).facts.at(-1)).toBe("Written");
+    expect(draftRow(draft({ missing: [], payConfirmed: true, hasDraft: false }), now).facts).toEqual(["Last changed Nov 16"]);
+  });
+
+  it("counts pay that is stated and that nobody has confirmed as still needed, as the builder lists it when the draft is opened", () => {
+    // a pasted ad stated the pay, and every essential is in: the row no longer reads as ready while the builder asks for the pay to be confirmed
+    expect(draftRow(draft({ missing: [], payConfirmed: false }), now).facts).toEqual(["Last changed Nov 16", "1 thing still needed"]);
+    expect(draftRow(draft({ missing: ["must_haves"], payConfirmed: false }), now).facts.at(-1)).toBe("2 things still needed");
+    // pay that is missing altogether is one thing, not two
+    expect(draftRow(draft({ missing: ["compensation_range"], payConfirmed: false }), now).facts.at(-1)).toBe("1 thing still needed");
+    // the row counts what the contracts' one answer lists, whatever the draft
+    for (const d of [draft(), draft({ missing: [], payConfirmed: false }), draft({ missing: ["schedule"], payConfirmed: true })]) {
+      const n = draftStillNeeds(d).length;
+      expect(draftRow(d, now).facts.at(-1)).toBe(`${n} ${n === 1 ? "thing" : "things"} still needed`);
+    }
   });
 
   it("names who started a teammate's draft, and calls a draft with no title yet Untitled job", () => {
@@ -186,10 +200,16 @@ describe("the closing date", () => {
   });
 
   it("takes today or a later day, on the company's calendar", () => {
-    expect(closingDateProblem("2026-11-18", "2026-11-18")).toBeNull();
-    expect(closingDateProblem("2026-12-01", "2026-11-18")).toBeNull();
-    expect(closingDateProblem("2026-11-17", "2026-11-18")).toBe("Choose today or a later date.");
-    expect(closingDateProblem("", "2026-11-18")).toBe("Choose a date.");
+    // 9:30 in the evening of 18 November in Los Angeles, already the 19th in New York and on a device set to UTC
+    const lateEvening = new Date("2026-11-19T05:30:00.000Z");
+    const pacific = "America/Los_Angeles";
+    expect(closingDateProblem("2026-11-18", pacific, lateEvening)).toBeNull();
+    expect(closingDateProblem("2026-12-01", pacific, lateEvening)).toBeNull();
+    expect(closingDateProblem("2026-11-17", pacific, lateEvening)).toBe("Choose today or a later date.");
+    expect(closingDateProblem("", pacific, lateEvening)).toBe("Choose a date.");
+    // the company's zone decides what "today" is, never the device's: the same moment, a company in New York
+    expect(closingDateProblem("2026-11-18", "America/New_York", lateEvening)).toBe("Choose today or a later date.");
+    expect(closingDateProblem("2026-11-19", "America/New_York", lateEvening)).toBeNull();
   });
 });
 

@@ -2,45 +2,17 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { AuthConfig } from "@ros/contracts";
+import { signInRefusalLine, type AuthConfig } from "@ros/contracts";
 import { useNavigate, useSearchParams } from "../nav";
 import { Alert, Button, ErrorState, Field, Icon, Skeleton } from "@ros/ui";
 import { api, ApiError } from "../api/client";
-
-/** The product's name, as the heading below writes it, for the sentences that name it. A rename changes this line and the heading. */
-const PRODUCT = "Recruiting OS";
-
-const ERRORS: Record<string, string> = {
-  invite_email_mismatch: "That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.",
-  invite_expired: "That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.",
-  // The company's plan has all its people.
-  invite_seats_full: "This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again.",
-  mfa_expired: "The second-factor step timed out. Sign in again.",
-  mfa_failed: "The code was wrong too many times. Sign in again.",
-  mfa_unavailable: "The second-factor service is not available right now. Try again in a few minutes.",
-  expired: "That sign-in link is invalid or has expired. Request a new one.",
-  signin_incomplete: "The sign-in did not complete. Start again.",
-  // The identity checks before any account is looked at (identityForSignIn in packages/core): the server's own words.
-  provider_not_allowed: "Sign in with Microsoft or Google.",
-  provider_mismatch: "That sign-in did not match the provider you chose. Start again.",
-  email_invalid: "Your sign-in account has no usable email address. Sign in with Microsoft or Google.",
-  staff_provider_required: "ITS staff sign in with their Microsoft 365 account.",
-  staff_provider_linked: "This ITS account is also linked to another sign-in method. Ask an ITS administrator to remove that link, then sign in with Microsoft 365.",
-  mfa_required: "ITS staff need a second factor. Finish multi-factor sign-in with Microsoft and try again.",
-  email_unverified: "Your email address is not verified with the sign-in provider. Ask your IT to check the email address on your account, or use the other sign-in button.",
-  exchange_failed: "The sign-in could not be completed. Try again.",
-  identity_mismatch: "This email address is already linked to a different Google or Microsoft account. Sign in with the account you used before, or contact ITS support to change it.",
-  // Microsoft's refusals, as the sign-in callback names them (apps/api/src/routes/auth.ts).
-  microsoft_needs_approval: `Your company's IT has to approve ${PRODUCT} once before you can sign in with Microsoft. Ask them, or continue with Google.`,
-  microsoft_declined: `The Microsoft sign-in did not finish. Start again and press Accept. If your IT has to approve ${PRODUCT} first, try again once they have.`,
-  microsoft_no_email: "Microsoft did not share an email address for this account. Ask your IT to check it, or continue with Google.",
-};
 
 /**
  * Sign-in is delegated to the managed identity service: Google or Microsoft through a PKCE flow that starts and ends
  * on the API, so no token ever touches this page. Someone new signs in the same way and is asked for their company's
  * details next. The email link stays only where the deployment enables it (never in production); the link itself opens
- * a one-button page on the API, so this page has nothing to consume.
+ * a one-button page on the API, so this page has nothing to consume. A refused sign-in comes back as `?error=<code>`;
+ * what the page says for each code is the contracts' one table (`SIGN_IN_REFUSAL`), which the server's refusals read too.
  */
 export function Login() {
   const [params] = useSearchParams();
@@ -58,7 +30,7 @@ export function Login() {
   });
   // A failed "Continue without the invitation" says so in the same alert, instead of leaving the person stuck with no answer.
   const forgetError = forgetInvite.error ? (forgetInvite.error instanceof ApiError ? forgetInvite.error.message : "Could not clear the invitation. Try again.") : null;
-  const base = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? ERRORS[errParam] ?? "Sign-in failed. Try again." : null;
+  const base = send.error ? (send.error instanceof ApiError ? send.error.message : "Could not send the link.") : errParam ? signInRefusalLine(errParam) : null;
   const error = forgetError ? (base ? `${base} ${forgetError}` : forgetError) : base;
   return (
     // One card on the page's glow (screenshots 2 and 5): the mark, what this is, then the ways in.

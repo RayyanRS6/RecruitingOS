@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
-import { ROLE_ACTION_BLOCKED, RolePacket, type Actor, type ApplicationStage, type ClosingDateAnswer, type PacketFlag, type PacketSaved, type RoleDetail, type RoleSummary } from "@ros/contracts";
+import { ROLE_ACTION_BLOCKED, RolePacket, type Actor, type ApplicationStage, type CandidateList, type ClosingDateAnswer, type HomeView, type PacketFlag, type PacketSaved, type RoleDetail, type RoleSummary } from "@ros/contracts";
 import { addCalendarDays, companyToday, entitlements } from "@ros/core";
 import { applications, candidates, companies, events, randomToken, rolePackets, roles, withTenant, workflowRuns } from "@ros/db";
 import { createApp } from "./app";
@@ -88,6 +88,11 @@ describe("jobs", () => {
     for (const at of [counted.createdAt, counted.openedAt, counted.lastActivityAt]) expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(Date.parse(counted.lastActivityAt)).toBeGreaterThanOrEqual(Date.parse(counted.createdAt));
     expect(mine[0]).toMatchObject({ acceptingApplications: false, counts: { total: 0, locked: 0 } });
+    // the same figures on the job's own page, on its Candidates list and on Home: one count is behind all four
+    expect((await detailOf(member, first)).counts).toEqual(counted.counts);
+    expect(((await (await json(member, "GET", `/api/v1/roles/${first}/applications?tab=new`)).json()) as CandidateList).counts).toEqual(counted.counts);
+    const onHome = ((await (await json(member, "GET", "/api/v1/home")).json()) as HomeView).jobs.find((j) => j.id === first);
+    expect(onHome).toMatchObject({ toReview: counted.counts.byTab.new, interviewed: counted.counts.byTab.interviewed, applicants: counted.counts.total });
     // one status at a time, and nothing for a word that is no status
     expect(((await (await json(owner, "GET", "/api/v1/roles?status=paused")).json()) as RoleSummary[]).every((j) => j.status === "paused")).toBe(true);
     expect((await json(owner, "GET", "/api/v1/roles?status=pending_approval")).status).toBe(400);

@@ -328,7 +328,8 @@ describe("the Free plan's one job", () => {
   });
 
   describe("people, in the plan's words", () => {
-    const seatWords = { full: "Your plan includes 2 people. Upgrade to add more.", signIn: "This company's plan includes 2 people. Ask the person who invited you to upgrade." };
+    // `signIn`: what the person invited reads, the sign-in page's one sentence for this refusal (SIGN_IN_REFUSAL in packages/contracts).
+    const seatWords = { full: "Your plan includes 2 people. Upgrade to add more.", signIn: "This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again." };
     const invite = (cookie: string, email: string) => json(cookie, "POST", "/api/v1/companies/current/members/invite", { email, role: "hiring_manager" });
 
     it("Free has two: the owner and one invitation; the next is refused in the plan's words, and nothing says trial", async () => {

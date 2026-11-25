@@ -100,9 +100,9 @@ describe("the interview score of one scorecard", () => {
   const asked = [{ key: "q_nervous", question: "How do you settle a nervous patient?" }, { key: "q_room", question: "How do you turn a room over?" }, { key: "mh_xray", question: "X-ray certification" }, { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION }];
   const card: Pick<ScreenAssessment, "questionFindings"> = {
     questionFindings: [
-      { questionKey: "q_room", answered: true, finding: " Names the steps but not the order. ", meetsModelAnswer: "partially", evidence: { source: "screen", quote: "I wipe everything down", unquoted: true } },
-      { questionKey: "q_nervous", answered: true, finding: "Gives a real example with what they said.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: " I tell them what each sound is before it starts " } },
-      { questionKey: CHAT_WRAP_KEY, answered: true, finding: "Says they can start Monday.", meetsModelAnswer: "yes" },
+      { questionKey: "q_room", finding: " Names the steps but not the order. ", meetsModelAnswer: "partially", evidence: { source: "screen", quote: "I wipe everything down", unquoted: true } },
+      { questionKey: "q_nervous", finding: "Gives a real example with what they said.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: " I tell them what each sound is before it starts " } },
+      { questionKey: CHAT_WRAP_KEY, finding: "Says they can start Monday.", meetsModelAnswer: "yes" },
     ],
   };
 

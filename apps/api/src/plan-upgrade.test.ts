@@ -5,6 +5,7 @@ import { adminAlerts, auditRecords, notifications } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
+import { askForAiHelpOn } from "./services/ai-credit";
 import { plantApplicant, plantJob, signInAdmin, signInAs, usePlan } from "./test-helpers";
 
 const WHY = "They asked to upgrade.";
@@ -63,8 +64,10 @@ describe("asking for a bigger plan", () => {
       const r = await json(co.cookie, "GET", "/api/v1/plans");
       expect(r.status).toBe(200);
       const text = await r.clone().text();
-      const { plans, requestedAt } = await read<PublicPlans>(r);
+      const { plans, requestedAt, mayUpgrade } = await read<PublicPlans>(r);
       expect(requestedAt).toBeNull();
+      // Free has plans above it: the sheet says Upgrade
+      expect(mayUpgrade).toBe(true);
       expect(plans.map((p) => p.key)).toEqual(["free", "basic", "pro", "ultra"]);
       expect(plans.filter((p) => p.current).map((p) => p.key)).toEqual(["free"]);
       expect(plans[0]).toEqual({ key: "free", name: "Free", monthlyUsd: 0, activeRoles: 1, jobsTotal: 1, candidatesPerJob: 5, seats: 2, aiHelp: "Included, up to a limit", current: true });
@@ -83,6 +86,26 @@ describe("asking for a bigger plan", () => {
       expect((await plansOf(co.cookie)).plans.filter((p) => p.current)).toEqual([]);
       await usePlan(container, co.id, "growth");
       expect((await plansOf(co.cookie)).plans.filter((p) => p.current)).toEqual([]);
+    });
+
+    it("says whether the company is offered an upgrade at all, by the one rule its Talk to ITS buttons follow: not on the last plan, and not on the private pilot, which it never names", async () => {
+      const co = await newCompany();
+      const offered = async () => {
+        const r = await json(co.cookie, "GET", "/api/v1/plans");
+        const text = await r.clone().text();
+        for (const word of ["design_partner", "Design Partner"]) expect(text, word).not.toContain(word);
+        return (await read<PublicPlans>(r)).mayUpgrade;
+      };
+      expect(await offered()).toBe(true);
+      for (const [planKey, expected] of [["basic", true], ["pro", true], ["ultra", false], ["design_partner", false]] as const) {
+        await changePlan(co.id, planKey);
+        expect(await offered(), planKey).toBe(expected);
+        // the button a refusal by the plan carries is worded by the same rule, so the button and the sheet cannot disagree
+        expect(askForAiHelpOn(planKey).label, planKey).toBe(expected ? "Upgrade" : "Talk to ITS");
+      }
+      // a retired plan still has the public plans above it
+      await usePlan(container, co.id, "growth");
+      expect(await offered()).toBe(true);
     });
   });
 

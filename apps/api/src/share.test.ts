@@ -138,6 +138,30 @@ describe("a job's Share tab", () => {
     expect((await json(other.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(404);
   });
 
+  // The model writes both posts in its one call. What it wrote for the post nobody pressed is not stored: that post
+  // has words, and they stay (a post with no words yet is the one exception; the failed-writing case below has it).
+  it("Write again on one post leaves the other exactly as it is, words, time and all, though the model wrote both", async () => {
+    const co = await newCompany("ultra");
+    const roleId = await publishedJob(co.cookie);
+    const before = await share(co.cookie, roleId);
+    const calls = postsWritten();
+    container.fake!.scriptNext("job.posts", { linkedin: "We are hiring again: a hygienist for our Tustin office.", indeed: "About the job\nA second Indeed listing, which nobody asked for." });
+    expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(202);
+    const after = await share(co.cookie, roleId);
+    expect(postsWritten()).toBe(calls + 1);
+    expect(after.state).toBe("ready");
+    expect(after.posts[0].text).toContain("We are hiring again: a hygienist for our Tustin office.");
+    expect(after.posts[0].text).toContain(after.posts[0].applyUrl);
+    expect(after.posts[1]).toEqual(before.posts[1]);
+    expect(after.posts[1].text).not.toContain("nobody asked for");
+    // and the other way round
+    container.fake!.scriptNext("job.posts", { linkedin: "A third LinkedIn post, which nobody asked for.", indeed: "About the job\nThe Indeed listing, written again." });
+    expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/indeed/rewrite`)).status).toBe(202);
+    const last = await share(co.cookie, roleId);
+    expect(last.posts[0]).toEqual(after.posts[0]);
+    expect(last.posts[1].text).toContain("The Indeed listing, written again.");
+  });
+
   it("says why a job has nothing to share: a closed job, whose page stays up and says so, and a job not published yet", async () => {
     const co = await newCompany("ultra");
     const roleId = await publishedJob(co.cookie);
@@ -193,11 +217,15 @@ describe("a job's Share tab", () => {
       const failed = await share(co.cookie, roleId);
       expect(failed).toMatchObject({ state: "failed", stateLine: SHARE_LINE.failed });
       expect(failed.posts.map((p) => p.text)).toEqual([null, null]);
-      // Write again tries once more and writes both posts, since neither has words yet
+      // Write again on one post tries once more and writes both posts, since neither has words yet: the tab said
+      // "Press Write again", and shows "Being written…" in both empty boxes while it runs
       expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/indeed/rewrite`)).status).toBe(202);
       const view = await share(co.cookie, roleId);
       expect(view.state).toBe("ready");
       expect(view.posts.every((p) => !!p.text && p.text.includes(p.applyUrl))).toBe(true);
+      // from here each post has words, so a Write again on one leaves the other exactly as it is
+      expect((await json(co.cookie, "POST", `/api/v1/roles/${roleId}/share/linkedin/rewrite`)).status).toBe(202);
+      expect((await share(co.cookie, roleId)).posts[1]).toEqual(view.posts[1]);
     } finally {
       moveClock(null);
       container.fake!.clearScripts();

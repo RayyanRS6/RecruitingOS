@@ -3,7 +3,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, type IntakeQuestion, type IntakeReadiness, type IntakeSessionSummary, type IntakeSessionView, type MembershipRole, type PlanRoom } from "@ros/contracts";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, type IntakeDraftSummary, type IntakeQuestion, type IntakeReadiness, type IntakeSessionView, type MembershipRole, type PlanRoom } from "@ros/contracts";
 import { jobPacket } from "../../../tests/web/job-fixture";
 
 /**
@@ -59,21 +59,22 @@ function client(role: MembershipRole, seed: Array<[unknown[], unknown]> = []): Q
   return qc;
 }
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
-const builder = (view: IntakeSessionView, role: MembershipRole = "owner") => {
+/** The builder on a draft, as the API answers it: the draft, and the company's time zone beside it. */
+const builder = (view: IntakeSessionView, role: MembershipRole = "owner", timeZone = "America/Los_Angeles") => {
   nav.search = `session=${view.id}`;
-  return render(client(role, [[["intake", "session", view.id], { session: view }]]), createElement(JobBuilder));
+  return render(client(role, [[["intake", "session", view.id], { session: view, timeZone }]]), createElement(JobBuilder));
 };
 /** The page's one main button, as drawn. */
 const mainButton = (html: string) => /<button type="button" class="btn primary"([^>]*)>(Write the job|Publish job)<\/button>/.exec(html);
 
 describe("the builder's first page", () => {
-  const drafts = (sessions: IntakeSessionSummary[], r: PlanRoom = room) => {
+  const drafts = (sessions: IntakeDraftSummary[], r: PlanRoom = room) => {
     nav.search = "";
     return render(client("owner", [[["intake", "sessions", "mine"], { sessions, room: r }]]), createElement(JobBuilder));
   };
 
   it("is one way in: a box for a sentence or a pasted job ad, the line that an AI assistant drafts and a person decides, and this person's drafts", () => {
-    const html = drafts([{ id: "s9", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: "", updatedAt: new Date().toISOString(), ownerMessages: 1, hasDraft: false, missing: ["must_haves"] }]);
+    const html = drafts([{ id: "s9", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: "", updatedAt: new Date().toISOString(), ownerMessages: 1, hasDraft: false, missing: ["must_haves"], payConfirmed: true }]);
     expect(html).toContain("<h1>Who are you hiring?</h1>");
     expect(html).toMatch(/<textarea[^>]*placeholder="For example: a dental assistant for our Irvine office, full time, \$24 to \$28 an hour"[^>]*aria-label="Describe the job, or paste a job ad"|<textarea[^>]*aria-label="Describe the job, or paste a job ad"[^>]*placeholder="For example: a dental assistant for our Irvine office, full time, \$24 to \$28 an hour"/);
     expect(text(html)).toContain(AI_LINE);
@@ -248,6 +249,18 @@ describe("a written job, before it is published", () => {
     const member = builder(written({ closesOn: "2026-11-30" }), "hiring_manager");
     expect(member).not.toContain('id="draft-closes-on"');
     expect(text(member)).toContain("Last day to apply: November 30, 2026");
+  });
+
+  it("counts the earliest day that may be chosen in the company's time zone, as the server checks it, never in the device's", () => {
+    // 9:30 in the evening of 18 November in Los Angeles: already the 19th in New York, and on a device set to UTC
+    vi.useFakeTimers({ now: new Date("2026-11-19T05:30:00.000Z") });
+    try {
+      const earliest = (timeZone: string) => /<input id="draft-closes-on"[^>]* min="([^"]+)"/.exec(builder(written(), "owner", timeZone))?.[1];
+      expect(earliest("America/Los_Angeles")).toBe("2026-11-18");
+      expect(earliest("America/New_York")).toBe("2026-11-19");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows what the law of the job's places asks of the ad, item by item, as the server checked it", () => {

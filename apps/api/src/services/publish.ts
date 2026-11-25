@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { ROLE_ACTION_BLOCKED, type Actor, type LegalCheck, type LegalCheckItem, type PacketFlag, type PublishBlocker, type PublishCheck, type PublishResult, type RolePacket } from "@ros/contracts";
-import { assertCan, closingDateProblem, closingDateRequired, companyToday, defaultClosingDate, emit, openFlagsMessage, postingLegalCheck, unresolvedFlags } from "@ros/core";
+import { assertCan, closingDateProblem, closingDateRequired, companyTimeZone, companyToday, defaultClosingDate, emit, openFlagsMessage, postingLegalCheck, unresolvedFlags } from "@ros/core";
 import { companies, events, intakeSessions, rolePackets, roles, type Tx } from "@ros/db";
 import { armClosingDate } from "@ros/workflows";
 import type { Container } from "../container";
@@ -87,12 +87,14 @@ export async function draftClosingDate(tx: Tx, sessionId: string): Promise<strin
 /**
  * What a draft in the job builder needs from the company, the plan and the calendar before it can be published: the
  * legal check of the written job (null until it is written) with one blocker for each missing item, the plan's blockers,
- * and the closing date chosen for it. A draft that already became a job, or was set aside, holds no place to check.
+ * the closing date chosen for it, and the company's time zone, in which that date's "today" is counted. A draft that
+ * already became a job, or was set aside, holds no place to check.
  */
-export async function draftChecks(tx: Tx, input: { companyId: string; sessionId: string; active: boolean; draft: Pick<CheckedPacket, "identity" | "compensation"> | null; now: Date }): Promise<{ legalCheck: LegalCheck | null; legalBlockers: PublishBlocker[]; planBlockers: PublishBlocker[]; closesOn: string | null }> {
+export async function draftChecks(tx: Tx, input: { companyId: string; sessionId: string; active: boolean; draft: Pick<CheckedPacket, "identity" | "compensation"> | null; now: Date }): Promise<{ legalCheck: LegalCheck | null; legalBlockers: PublishBlocker[]; planBlockers: PublishBlocker[]; closesOn: string | null; timeZone: string }> {
   const closesOn = await draftClosingDate(tx, input.sessionId);
   const legalCheck = input.draft ? await legalCheckFor(tx, { role: { companyId: input.companyId, applicationsCloseOn: closesOn }, packet: input.draft, now: input.now }) : null;
-  return { legalCheck, legalBlockers: (legalCheck?.missing ?? []).map(legalBlocker), planBlockers: input.active ? await planBlockersFor(tx, input.companyId, { now: input.now }) : [], closesOn };
+  const [company] = await tx.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
+  return { legalCheck, legalBlockers: (legalCheck?.missing ?? []).map(legalBlocker), planBlockers: input.active ? await planBlockersFor(tx, input.companyId, { now: input.now }) : [], closesOn, timeZone: companyTimeZone(company?.timezone) };
 }
 
 /** The date chosen in the job builder for the draft a job was made from. */

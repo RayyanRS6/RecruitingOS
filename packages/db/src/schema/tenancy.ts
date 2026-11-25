@@ -14,8 +14,12 @@ export type CompanySettings = {
   logo?: { file: string; key: string; contentType: string; sizeBytes: number; width: number | null; height: number | null; uploadedAt: string; uploadedBy: Actor };
   /** The text about the company a person approved in Setup (founder decision Q13); the only one candidates ever see. */
   about?: { text: string; approvedAt: string; approvedBy: Actor; aiAssisted: boolean };
-  /** The assistant's draft of that text, waiting for a person; never shown to candidates. */
-  aboutDraft?: { text: string; draftedAt: string; draftedBy: Actor; aiRunId: string | null; basedOn: string[] };
+  /**
+   * The assistant's draft of that text, waiting for a person; never shown to candidates. `basedOn`: only on a draft
+   * stored before 25 November 2026, when the assistant was also asked for the facts it used; nothing ever read it, and
+   * it is no longer asked for or written.
+   */
+  aboutDraft?: { text: string; draftedAt: string; draftedBy: Actor; aiRunId: string | null; basedOn?: string[] };
   /** Who candidates may write to before applying (plan D10); without it, the ITS inbox that answers for the company. */
   hiringContact?: { email: string; name: string | null; setAt: string; setBy: Actor };
   benefitsSummary?: string;

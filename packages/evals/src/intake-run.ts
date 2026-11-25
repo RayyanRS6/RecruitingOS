@@ -1,34 +1,49 @@
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext, type PromptDef, type RunOutcome } from "@ros/ai";
-import { INTAKE_COMPILE_MAX_TOKENS, factsFromExtraction, finalizePacket, mergeFacts } from "@ros/agents";
-import type { IntakeFacts, IntakeMessage, IntakeTurn, RolePacket } from "@ros/contracts";
-import { EMPTY_FACTS, draftFailures, draftSkillsNote, type IntakeCase } from "./intake-suite";
+import { INTAKE_COMPILE_MAX_TOKENS, afterAnswers, afterTurn, alreadyAskedOf, cardField, factsFromExtraction, finalizePacket, mergeFacts, type AfterTurn } from "@ros/agents";
+import { IntakeServerState, type Actor, type IntakeAnswer, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeTurn, type RolePacket } from "@ros/contracts";
+import { EMPTY_FACTS, cardLoopFailures, draftFailures, draftSkillsNote, type IntakeCase, type IntakeTap } from "./intake-suite";
 
 /**
  * One case of the job builder's suites (intake.*), driven as the runner drives it (runner.ts, which runs on import). Kept
  * here so a test can drive it with a scripted stand-in and pin the steps a run on the real models rests on: the check of
  * the job as the model wrote it, each job written afresh, a case set from its answers asking no turn, and the check of
- * every written job's skills, with the notes the result file keeps of them (`intakeCaseResult`).
+ * every written job's skills, with the notes the result file keeps of them (`intakeCaseResult`). After each turn, and
+ * after each round of tapped answers, the server's own work is done by the app's own code (`afterTurn`, `afterAnswers`
+ * in packages/agents), so a case judges what the page would show and the model is told what the app would tell it.
  */
+
+/** Who the case's owner is, for pay they typed or set (counted as set by them, as in the app). */
+const EVAL_OWNER: Actor = { kind: "system", id: "eval" };
 
 /** One model call, as the runner makes and records it (`runPrompt`); `meta` says what the call is for. */
 export type IntakeModelCall = <TInput, TOutput>(prompt: PromptDef<TInput, TOutput>, input: TInput, meta: { inputRef: Record<string, unknown>; maxTokens?: number }) => Promise<RunOutcome<TOutput>>;
 
 /**
- * The job builder's input for a case's answers and conversation so far. The pay in the answers counts as set by the
- * owner, as pay they typed does in the app; pay read from a pasted ad does not, until they confirm it.
+ * The job builder's input for a case's answers and conversation so far. No pay is among it: no prompt is asked for the
+ * pay any more, and a written job carries the pay in the case's answers (`finalizePacket`). `alreadyAsked`: what the
+ * draft's notes tell the assistant never to ask again (`alreadyAskedOf`), in a case that keeps the server's record.
  */
-export function intakeContextOf(c: Pick<IntakeCase, "vertical">, facts: IntakeFacts, messages: IntakeMessage[]): { ctx: IntakeContext } {
+export function intakeContextOf(c: Pick<IntakeCase, "vertical">, facts: IntakeFacts, messages: IntakeMessage[], alreadyAsked?: string[]): { ctx: IntakeContext } {
   const ad = messages.find((m) => m.kind === "pasted_ad");
-  const pay = facts.compensationBasis && facts.compensationMin !== undefined && facts.compensationMax !== undefined && !ad ? { basis: facts.compensationBasis, min: facts.compensationMin, max: facts.compensationMax } : null;
   return {
     ctx: {
       company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
       facts,
       messages,
       ad: ad ? { text: ad.content } : null,
-      confirmedPay: pay,
+      ...(alreadyAsked ? { alreadyAsked } : {}),
     },
   };
+}
+
+/** A card as the round answers it: the offered answer its words pick, else the owner's own words where the card takes them, else skipped. */
+function tapped(q: IntakeQuestion, tap: IntakeTap | undefined): IntakeAnswer {
+  const answer: IntakeAnswer = { questionId: q.id, selected: [], own: [], skipped: false };
+  if (q.mode === "pay") return tap?.pay ? { ...answer, pay: tap.pay } : { ...answer, skipped: true };
+  const option = tap?.pick ? q.options.find((o) => tap.pick?.test(o.label) || tap.pick?.test(o.value)) : undefined;
+  if (option) return { ...answer, selected: [option.value] };
+  if (tap?.own && q.allowOwn) return { ...answer, own: [tap.own] };
+  return { ...answer, skipped: true };
 }
 
 /**
@@ -41,6 +56,9 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
   let facts: IntakeFacts = { ...EMPTY_FACTS, ...c.facts };
   const messages: IntakeMessage[] = [];
   let lastTurn: IntakeTurn | null = null;
+  // The server's own record of the draft, and what it made of the last turn.
+  let state = IntakeServerState.parse({});
+  let after: AfterTurn | null = null;
   // A case with its answers set is written straight from them: its messages are the conversation and no intake.turn
   // call reads them, so the job is given exactly those answers. It has no turn, so nothing of a turn can be checked.
   if (c.facts) {
@@ -60,21 +78,57 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
       }
       if (x.output.isJobDescription) facts = factsFromExtraction(facts, x.output);
     }
-    const r = await call(intakeTurnPrompt, intakeContextOf(c, facts, messages).ctx, { inputRef: { eval: c.id } });
+    // The assistant is told what the draft's notes would tell it: what was already asked or answered.
+    const asked = alreadyAskedOf(facts, state);
+    const r = await call(intakeTurnPrompt, intakeContextOf(c, facts, messages, asked).ctx, { inputRef: { eval: c.id } });
     if (!r.ok) {
       failures.push(`turn failed: ${r.error}`);
       break;
     }
-    // The facts as the builder keeps them: a place or a work arrangement the owner did not say is not kept.
+    // What the server makes of the turn, by the app's own code: what is still needed, whether the job can be written,
+    // the cards and the reply as stored. Then the facts as the builder keeps them from the model's reading: a place or a
+    // work arrangement the owner did not say is not kept (and nothing the server declined by itself is added, so a case
+    // that checks a refusal checks the model's).
+    after = afterTurn({ turn: r.output, messages, facts, state, actor: EVAL_OWNER, at: new Date().toISOString() });
+    state = after.state;
     facts = mergeFacts(facts, r.output.factsExtracted, messages);
-    messages.push({ role: "assistant", content: r.output.assistantMessage, at: new Date().toISOString() });
+    messages.push({ role: "assistant", content: after.message, at: new Date().toISOString() });
     lastTurn = r.output;
+    if (c.taps) failures.push(...cardLoopFailures({ turn: r.output, after, asked }).map((x) => `before any tap: ${x}`));
   }
-  if (lastTurn && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn, factsExtracted: facts }));
+  if (lastTurn && after && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn, factsExtracted: facts }, after));
+  // The card loop: each round answers the cards the page shows, as the page sends them, and the assistant takes its next
+  // turn with no new words typed. The draft is the server's own record throughout (`afterAnswers`, `afterTurn`).
+  if (c.taps && after && failures.length === 0) {
+    let draft = { facts: after.facts, state, messages: [...messages] };
+    for (const [n, round] of c.taps.entries()) {
+      const open = draft.state.openQuestions;
+      if (!open.length) break;
+      const at = new Date().toISOString();
+      const answers = open.map((q) => tapped(q, round[cardField(q)]));
+      const answered = afterAnswers({ answers, messages: draft.messages, facts: draft.facts, state: draft.state, actor: EVAL_OWNER, at });
+      const asked = alreadyAskedOf(answered.facts, answered.state);
+      const r = await call(intakeTurnPrompt, intakeContextOf(c, answered.facts, answered.messages, asked).ctx, { inputRef: { eval: c.id, round: n + 1 } });
+      if (!r.ok) {
+        failures.push(`round ${n + 1}: turn failed: ${r.error}`);
+        break;
+      }
+      after = afterTurn({ turn: r.output, messages: answered.messages, facts: answered.facts, state: answered.state, actor: EVAL_OWNER, at });
+      draft = { facts: after.facts, state: after.state, messages: [...answered.messages, { role: "assistant", content: after.message, at }] };
+      const loop = cardLoopFailures({ turn: r.output, after, asked });
+      failures.push(...loop.map((x) => `round ${n + 1}: ${x}`));
+      // A failed round keeps what the assistant wrote and what the page stored, so the failure can be traced from the result file.
+      if (loop.length) notes.push(`round ${n + 1}, as the assistant wrote it: cards ${r.output.questions.map((q) => `${cardField(q)} ("${q.prompt}")`).join("; ") || "none"}; message "${r.output.assistantMessage.slice(0, 300)}"; as stored: "${after.message.slice(0, 300)}"`);
+      const fields = (qs: readonly IntakeQuestion[]) => qs.map(cardField).join(", ") || "none";
+      notes.push(`round ${n + 1}: answered ${fields(open.filter((_, i) => !answers[i]?.skipped))}; skipped ${fields(open.filter((_, i) => answers[i]?.skipped))}; cards after it: ${fields(after.questions)}`);
+    }
+    if (c.expectAfterTaps) failures.push(...c.expectAfterTaps(after));
+  }
   if (compile && (c.expectPacket || c.expectDraft) && failures.length === 0) {
     const { ctx } = intakeContextOf(c, facts, messages);
     // As many jobs as the case asks for, each written afresh from the same answers and judged on its own: first as
-    // the model wrote it, then as the server finishes it (the pay, the rules set in code, the fairness guard).
+    // the model wrote it, then as the server builds the job record from it (the work arrangement, the state, the pay,
+    // the notices and their lines, the fairness guard).
     const drafts = Math.max(1, c.compiles ?? 1);
     for (let n = 1; n <= drafts; n++) {
       const which = drafts > 1 ? `draft ${n}: ` : "";
@@ -85,12 +139,12 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
       }
       failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
       // A job that cannot be published as it stands (no pay in the answers, say, so none is on the job) fails its case
-      // with the reason. It never stops the run: the stand-in always writes a pay, so only the real models show this.
+      // with the reason. It never stops the run.
       let packet: RolePacket;
       try {
         packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
       } catch (e) {
-        failures.push(`${which}the job as written cannot be published: ${problemOf(e)} (pay in the answers: ${payOf(facts)}; pay as written: ${payOf({ compensationBasis: r.output.compensation?.basis, compensationMin: r.output.compensation?.min, compensationMax: r.output.compensation?.max })})`);
+        failures.push(`${which}the job as written cannot be published: ${problemOf(e)} (pay in the answers: ${payOf(facts)})`);
         continue;
       }
       // The case's checks and, on every written job, a skill that repeats a must-have; the note keeps the job's

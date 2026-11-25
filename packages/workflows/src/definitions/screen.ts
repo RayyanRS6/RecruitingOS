@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, appPaths, readStoredPacket, type Actor, type ScreenAssessment } from "@ros/contracts";
 import { outOfCredit, type RunOutcome } from "@ros/ai";
-import { emit, notify, remindedRecently } from "@ros/core";
+import { ENDED_RUN, emit, notify, remindedRecently } from "@ros/core";
 import { applications, assessments, candidates, companies, rolePackets, roles, screens, workflowRuns, type Tx } from "@ros/db";
 import { assessScreen, createScreen, screenPacketVersion, screenSignalKey, sendScreenExpiredNote, sendScreenInvite, sendScreenReminder, type ScreenRow } from "@ros/agents";
 import { twoPhase, type StepResult, type WorkflowDefinition } from "../types";
@@ -182,8 +182,6 @@ async function load(q: Tx, applicationId: string, version: number | null) {
   return { app, candidate, role, company, packet: readStoredPacket(pv.packet), version: pv.version };
 }
 
-const ENDED_RUN = ["completed", "failed", "cancelled"];
-
 /**
  * Starts the run of a new AI interview for an application: the first one when a person shortlists them, another when a
  * person sends a new link. One run per interview: the key counts the interviews the application has had, so two presses
@@ -205,7 +203,7 @@ export async function cancelAiInterview(q: Tx, engine: Pick<WorkflowEngine, "can
   for (const scr of open) await emit(q, { type: "screen.cancelled", companyId: scr.companyId, actor: input.actor, subject: { type: "screen", id: scr.id }, payload: { applicationId: input.applicationId, reason: input.reason } });
   // A run that made no interview yet (shortlisted a moment ago), and the run of each one closed here: neither has anything left to do.
   const sentIds = (await q.select({ runId: screens.workflowRunId }).from(screens).where(and(eq(screens.applicationId, input.applicationId), eq(screens.status, "completed")))).map((s) => s.runId).filter((id): id is string => !!id);
-  const runs = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, SCREEN_WORKFLOW_KEY), notInArray(workflowRuns.status, ENDED_RUN), sql`${workflowRuns.subject}->>'id' = ${input.applicationId}`));
+  const runs = await q.select({ id: workflowRuns.id }).from(workflowRuns).where(and(eq(workflowRuns.workflowKey, SCREEN_WORKFLOW_KEY), notInArray(workflowRuns.status, [...ENDED_RUN]), sql`${workflowRuns.subject}->>'id' = ${input.applicationId}`));
   for (const run of runs) if (!sentIds.includes(run.id)) await engine.cancel(q, run.id, input.actor, input.reason);
   return open.length;
 }

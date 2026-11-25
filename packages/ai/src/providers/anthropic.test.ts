@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { DraftRolePacket } from "@ros/contracts";
+import { WrittenJob } from "@ros/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { StructuredRequest } from "../types";
@@ -132,12 +132,17 @@ describe("the Anthropic adapter", () => {
     expect(JSON.stringify(sent[0]!.output_config?.format)).toContain('"expectation":{"type":"object","properties":{},"additionalProperties":false');
   });
 
-  it("writes the whole job record into the instructions for intake.compile: every object names its keys, and the must-haves keep their maximum", () => {
-    const schema = instructionSchema(DraftRolePacket);
-    expect(Object.keys((JSON.parse(schema) as { properties: Record<string, unknown> }).properties)).toEqual(["schemaVersion", "identity", "compensation", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "compliance", "provenance"]);
+  it("writes the job as intake.compile is asked for it into the instructions: every object names its keys, the must-haves keep their maximum, and nothing the server sets is there", () => {
+    const schema = instructionSchema(WrittenJob);
+    const { properties } = JSON.parse(schema) as { properties: Record<string, { properties?: Record<string, unknown> }> };
+    expect(Object.keys(properties)).toEqual(["identity", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "assumptions"]);
     expect(schema).not.toContain('"additionalProperties":{}');
     expect(schema).not.toContain('"properties":{},"additionalProperties":false');
     expect(schema).toContain('"maxItems":6');
+    // the shape is what the model is asked for: no pay, no notices, no work arrangement, no state, none of the three lines under an email
+    expect(Object.keys(properties.identity.properties ?? {})).toEqual(["title", "department", "cities", "employmentType", "schedule"]);
+    expect(Object.keys(properties.communication.properties ?? {})).toEqual(["tone", "companyBlurb", "candidateMayBeTold"]);
+    expect(schema).not.toMatch(/compliance|jurisdictions|remotePolicy|"region"|signature|disclosureText|humanAlternativeText|provenance|discloseRange/);
   });
 
   it("falls back the same way for the too-many-optional-parameters refusal (intake.compile on staging)", async () => {

@@ -1,6 +1,6 @@
 import { CHAT_WRAP_KEY, type RolePacket, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
 import type { ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate, type ChatFacts } from "@ros/agents";
+import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate, type ChatTurn } from "@ros/agents";
 import { promisesATime } from "./chat-suite";
 import { clipText, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 import { COOPERATIVE_PAY, cooperativeReply } from "./suites";
@@ -11,7 +11,8 @@ import { COOPERATIVE_PAY, cooperativeReply } from "./suites";
  * (`enforceChatTurn`, then the plan moved on by `advanceProgress`), so a case checks what the model did and what the
  * candidate was shown over a conversation, where the chat.* suites check one turn. The chat starts as the app starts it:
  * the plan is the job's interview questions, then the must-haves the CV reading did not find shown, then the closing
- * question, and the first question is asked in code. Pure: `runConversationSuite` takes a function that runs the prompt.
+ * question, and the first question is asked in code. One persona's resume does not show the job's licence, so their chat
+ * asks about it: once, as yes or no, and "No" is taken. Pure: `runConversationSuite` takes a function that runs the prompt.
  *
  * No persona sends a keyword command ("person", "withdraw"): the app answers those in code, without the model.
  */
@@ -29,10 +30,15 @@ export type Persona = {
   expect: (c: Conversation) => string[];
   /** The job this persona's chat is about, when it needs more than the job as written (`withPayQuestion`). */
   job?: (job: RolePacket) => RolePacket;
+  /**
+   * False: their resume does not show the job's licence, so the chat's plan asks about it (after the job's own questions,
+   * with every other must-have). Left out: the resume reading found the licence shown, and the chat does not ask.
+   */
+  licenceOnResume?: false;
 };
 
-/** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules, and the message they were shown. */
-export type ConversationTurn = { said: string; asking: string; raw: ScreenTurn; turn: ScreenTurn; shown: string; stayed: boolean };
+/** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules (with the answer the code recorded), and the message they were shown. */
+export type ConversationTurn = { said: string; asking: string; raw: ScreenTurn; turn: ChatTurn; shown: string; stayed: boolean };
 
 export type Conversation = {
   job: RolePacket;
@@ -49,22 +55,27 @@ export type Conversation = {
 const AT = "2026-11-18T10:00:00.000Z";
 const COMPANY = "Eval Dental";
 const FIRST_NAME = "Alex";
-const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
-/** What the chat may know of the candidate: a few lines of their CV, and their answers on the form as sentences. */
-function factsFor(job: RolePacket): ChatFacts {
-  return { cv: ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"], formAnswers: job.formQuestions.filter((q) => q.kind === "yes_no").map((q) => `${q.question} Yes.`) };
-}
+/** What the chat may know of the candidate: a few lines of their CV. */
+const CV = ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"];
+/**
+ * The same for a candidate whose resume does not show the job's licence (`licenceOnResume` false): no line names the
+ * licence or a licensed title, so their "No" about it contradicts nothing the model was told of them.
+ */
+const CV_WITHOUT_LICENCE = ["Dental assistant at Harbor Dental (2019 to now)", "Skills: Dentrix, chairside assisting"];
 
 /**
  * One conversation, driven as the app drives a chat: Start asks the first question in code; then, for each reply, the
  * model's turn, the code's rules, the answer recorded (never a personal sentence), the plan moved on, and the message
- * shown. The CV reading found the job's licence shown and nothing else, so the chat asks about every other must-have.
- * `failed`: why a model call gave no turn.
+ * shown. The CV reading found the job's licence shown and nothing else, so the chat asks about every other must-have;
+ * for a persona whose resume does not show the licence (`licenceOnResume` false) it found nothing shown, the chat asks
+ * about the licence too, and the CV lines the model is given name none (`CV_WITHOUT_LICENCE`). `failed`: why a model
+ * call gave no turn.
  */
 export async function runConversation(persona: Persona, job: RolePacket, run: (ctx: ScreenContext) => Promise<ScreenTurn | string>): Promise<{ conversation: Conversation; failed: string | null }> {
-  const facts = factsFor(job);
-  const shownOnCv = [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
+  const shownOnCv = persona.licenceOnResume === false ? [] : [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
+  const cv = persona.licenceOnResume === false ? CV_WITHOUT_LICENCE : CV;
   let progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(job, { requirementFindings: shownOnCv }, AT) };
   const asked = () => chatPacket(job, progress);
   let answers: Record<string, string> = {};
@@ -74,7 +85,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
   const conversation = (done: boolean): Conversation => ({ job, questions: asked().screening.questions, turns, answers, done, progress, transcript });
   const first = nextQuestion(asked(), progress, answers);
   if (!first) return { conversation: conversation(false), failed: "the job asks nothing" };
-  const opening = chatOpening({ firstName: FIRST_NAME, cv: facts.cv, question: first.question });
+  const opening = chatOpening({ firstName: FIRST_NAME, cv, question: first.question });
   transcript.push({ role: "assistant", content: opening, at: AT, questionKey: first.key, source: "system" });
   progress = advanceProgress(progress, { ...SILENT, messageToCandidate: opening, questionKey: first.key });
   let stayed = false;
@@ -89,7 +100,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
     if (said === null) break;
     replied.push(asking);
     transcript.push({ role: "candidate", content: said, at: AT, source: "chat" });
-    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, facts) });
+    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, cv) });
     if (typeof raw === "string") return { conversation: conversation(false), failed: raw };
     const { turn, move } = enforceChatTurn(raw, asked(), progress, answers, { transcript, latest: said });
     if (turn.answerRecorded) answers = { ...answers, [turn.answerRecorded.questionKey]: redactProtected(turn.answerRecorded.answer) };
@@ -114,10 +125,40 @@ export function withPayQuestion(job: RolePacket): RolePacket {
   return { ...job, screening: { ...job.screening, questions: [pay, ...job.screening.questions] } };
 }
 
+/** A question that asks about a licence, a certificate or a permit, in any words. */
+const ABOUT_A_LICENCE = /licen[cs]e|certif|\bpermit\b/i;
+
+/**
+ * The job without those of its own interview questions that ask about a licence, for the persona whose resume does not
+ * show one: their chat then asks about the licence in one place only, the must-have, which is what that persona checks.
+ * A job that asks about it in a question of its own as well (the stand-in's job does) has the model word the second ask
+ * as a check on the first answer (the chat never asks again what they already said), and a "No" to such a check can be
+ * read either way. A job with no such question comes back as it is.
+ */
+export function withoutLicenceQuestions(job: RolePacket): RolePacket {
+  const questions = job.screening.questions.filter((q) => !ABOUT_A_LICENCE.test(q.question));
+  return questions.length === job.screening.questions.length ? job : { ...job, screening: { ...job.screening, questions } };
+}
+
 const questionMarks = (message: string): number => (message.match(/\?/g) ?? []).length;
 /** A message without what it quotes of the candidate's own words. */
 const withoutQuotes = (message: string): string => message.replace(/"[^"]*"/g, "");
 const cooperative: Persona["reply"] = ({ asking, kind, followUp }) => (kind === "closing" ? "No, that is everything, thank you." : cooperativeReply(asking, followUp));
+/** The chat's question about a licence or certificate the resume does not show, in the code's words: held or not (`gapQuestion` in packages/agents). */
+const asksIfTheyHoldIt = (q: Pick<ScreeningQuestion, "question">): boolean => /Do you have it\?$/.test(q.question);
+/**
+ * Asking for an account of something, which a licence does not have: it is held or it is not. "Can you tell me whether
+ * you hold one?" still asks yes or no, so "tell me whether" and "tell me if" are not read as asking for an account.
+ */
+const ASKS_FOR_AN_ACCOUNT = /\b(?:tell (?:me|us)(?!\s+(?:whether|if)\b)|describe|walk (?:me|us) through|from your own work|an example|what can you tell)\b/i;
+/** The ladder's own words for someone who said "No" about a skill: never said about a licence. */
+const SOMETHING_LIKE_IT = /\b(?:not done that exactly|something similar|small moment|something like it)\b/i;
+/** The question a message asks, without the restatement before it (which may quote anything the candidate said). */
+function questionOf(message: string): string {
+  const parts = message.split(/\n\n/);
+  const at = parts.findIndex((p) => /\?/.test(p));
+  return at < 0 ? message : parts.slice(at).join("\n\n");
+}
 
 /** What every persona who was shown how to choose a person expects of that turn: nothing closed, nothing recorded, the same question still open. */
 function shownAPerson(c: Conversation): string[] {
@@ -259,6 +300,43 @@ export const personas: Persona[] = [
       if (!last.stayed) f.push("the chat did not stay on the question they did not follow");
       if (last.turn.answerRecorded) f.push("a confused reply was recorded as an answer");
       if (c.done) f.push("the chat closed on a confused candidate");
+      return f;
+    },
+  },
+  {
+    // A licence the resume does not show (the code check of 25 November 2026, with no evaluation until now): the chat asks
+    // about it once, as yes or no, and takes "No" as the answer. Nothing "similar from your own work" and no "small
+    // moment" follows; the "No" is the answer on record, and the chat goes on to the next thing in its plan. They answer
+    // the job's own questions first (the plan asks those before a must-have), and stop after the turn that takes the "No".
+    // Their job asks about the licence nowhere else (`withoutLicenceQuestions`), so the "No" answers one plain question.
+    id: "licence_not_on_the_resume",
+    provenance: "synthetic",
+    licenceOnResume: false,
+    job: withoutLicenceQuestions,
+    reply: (at) => {
+      if (at.replied.some(asksIfTheyHoldIt)) return null;
+      if (at.kind === "gap" && asksIfTheyHoldIt(at.asking)) return "No";
+      return cooperative(at);
+    },
+    expect: (c) => {
+      const licence = [...credentialMustHaves(c.job)][0];
+      if (!licence) return ["the job has no licence must-have to ask about"];
+      if (!c.questions.some((q) => q.key === licence)) return ["the chat's plan does not ask about the licence the resume does not show"];
+      const own = c.job.screening.questions.filter((q) => ABOUT_A_LICENCE.test(q.question));
+      if (own.length) return [`the job asks about the licence in a question of its own too, so this chat asks twice: ${own.map((q) => q.question).join(" | ")}`];
+      const f: string[] = [];
+      // the message that moved on to it, and their one reply about it
+      const asked = c.transcript.filter((t) => t.role === "assistant" && t.questionKey === licence).map((t) => questionOf(t.content));
+      if (asked.length !== 1) f.push(`the licence was asked about ${asked.length} times, not once`);
+      else if (questionMarks(asked[0] ?? "") !== 1 || ASKS_FOR_AN_ACCOUNT.test(asked[0] ?? "")) f.push(`the licence was not asked as one yes-or-no question: ${asked[0]}`);
+      const replies = c.turns.filter((t) => t.asking === licence);
+      const [turn] = replies;
+      if (!turn || replies.length !== 1) return [...f, `they replied about the licence ${replies.length} times, not once`];
+      if (turn.raw.followUpReason && !turn.raw.questionKey && !turn.raw.done) f.push(`the model kept asking after a plain "No" about the licence: ${turn.raw.messageToCandidate}`);
+      if (turn.stayed) f.push("the chat stayed on the licence after a plain No");
+      if (SOMETHING_LIKE_IT.test(questionOf(turn.shown))) f.push(`asks for something like a licence: ${turn.shown}`);
+      if (c.answers[licence] !== "No") f.push(`the "No" is not the answer on record: ${c.answers[licence] ?? "nothing recorded"}`);
+      if (c.progress.chat?.items.find((i) => i.key === licence)?.state !== "covered") f.push("the plan does not say the licence was answered");
       return f;
     },
   },

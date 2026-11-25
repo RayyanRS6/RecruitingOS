@@ -93,15 +93,20 @@ export function publicPlanView(row: PlanRowForView, currentPlanKey: string | nul
   };
 }
 
-/** GET /api/v1/plans: the public plans in their order, and when this company's open request about its plan was sent (null with none open). */
-export type PublicPlans = { plans: PublicPlan[]; requestedAt: string | null };
+/**
+ * GET /api/v1/plans: the public plans in their order, when this company's open request about its plan was sent (null
+ * with none open), and `mayUpgrade`: whether a company on its plan is offered an upgrade (`mayOfferUpgrade`, worked out
+ * on the server). False on the last plan and on the private pilot, where the sheet asks to talk about the plan instead.
+ */
+export type PublicPlans = { plans: PublicPlan[]; requestedAt: string | null; mayUpgrade: boolean };
 
 /** The private pilot: never listed for a customer, and ITS gives it, so it is never offered an upgrade. */
 const PRIVATE_PLAN_KEY = "design_partner";
 
 /**
  * Whether a company on this plan is offered an Upgrade where nothing has run out (Settings): every plan but the last public
- * one, which has nothing above it, and the private pilot. Read from the list, so no screen compares a plan's name.
+ * one, which has nothing above it, and the private pilot. Read from the list, so no screen compares a plan's name. The one
+ * rule for it: the words of every request about the plan ("Upgrade" or "Talk to ITS") and of the upgrade sheet follow it.
  */
 export function mayOfferUpgrade(planKey: string | null | undefined): boolean {
   return !!planKey && planKey !== PRIVATE_PLAN_KEY && planKey !== PUBLIC_PLAN_KEYS[PUBLIC_PLAN_KEYS.length - 1];

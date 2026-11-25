@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type ScreenStatus, type TapAnswer, type TapFormat } from "@ros/contracts";
 import { chatCounter, tapFormatFor } from "@ros/core";
-import { answerWithdrawPrompt, chatFactsOf, currentQuestion, editScreenAnswer, loadScreenBundle, optOutOfScreen, reviewItems, runScreenTurn, screenIntro, startScreenConversation, submitScreenAnswers, withdrawPending, type ScreenDeps, type ScreenIntro, type TurnResult } from "@ros/agents";
+import { answerWithdrawPrompt, currentQuestion, editScreenAnswer, formAnswersSent, loadScreenBundle, optOutOfScreen, reviewItems, runScreenTurn, screenIntro, startScreenConversation, submitScreenAnswers, withdrawPending, type ScreenDeps, type ScreenIntro, type TurnResult } from "@ros/agents";
 import { applications, screens, withTenant, type Db, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { recordWithdrawal, withdrawApplication } from "./applications";
@@ -49,7 +49,8 @@ export async function findConversation(db: Db, token: string): Promise<Conversat
  * - `current`: the question being asked, the tap answer it offers, and whether it already has an answer (the assistant is
  *   following up: skipping then moves on and keeps it). `review`: one line per question.
  * - `counter`: the line above the chat, "Question 2 of 6"; never the questions in advance.
- * - `formAnswers`: their answers on the application form, as the chat read them.
+ * - `formAnswers`: their answers on the application form as sentences, which "Check your answers" lists as sent with
+ *   their application (the chat's model is not given them).
  * There is deliberately no status link here, and never a score.
  */
 export type ConversationView = {
@@ -90,7 +91,7 @@ export async function conversationView(db: Db, ref: ConversationRef): Promise<Co
       review: phase === "review" ? reviewItems(screen, b.rolePacket) : null,
       withdrawPending: open && withdrawPending(screen.transcript),
       counter: chatCounter(screen.progress.chat),
-      formAnswers: chatFactsOf(b.appliedPacket, b.app).formAnswers,
+      formAnswers: formAnswersSent(b.appliedPacket, b.app),
     };
   });
 }

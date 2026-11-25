@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunOutcome } from "@ros/ai";
 import type { EvidenceAssessment } from "@ros/contracts";
-import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, liftableQuote, plainlyNotHeld, readingsOutcome, shownNotHeld, skillFloor, verifyAssessmentQuotes } from "./triage";
+import { DATED_JOB_LINE, applyEvidenceRules, assessmentSources, combineOutcomes, combineReadings, combineRunOutcomes, credentialFinding, credentialMustHaves, findingSubjects, formAnswerSaysNotHeld, liftableQuote, plainlyNotHeld, readingsOutcome, shownNotHeld, skillFloor, verifyAssessmentQuotes } from "./triage";
 
 /**
  * One resume read three times can come back three ways, and an expired licence was "unknown" in two readings of three
@@ -319,5 +319,145 @@ describe("a credential the candidate's own words show is not held", () => {
     if (!first.ok || !second.ok) throw new Error("expected readings");
     expect(metOf(first.output, "licence")).toBe("unknown");
     expect(metOf(second.output, "licence")).toBe("unknown");
+  });
+});
+
+/**
+ * The code check of 25 November 2026, in two halves. Any "do not have" or "do not hold" in a line cited for a credential
+ * read as plainly not holding it, whatever it was they did not have: "I do not have any restrictions on my license" gave
+ * "not met" even where the model had answered "yes". And "I do not hold a current CPR certificate", which is not plainly
+ * "not held" on purpose (a lapsed one is not current either), left a model's "yes" standing, because the word that says a
+ * credential is in force was read inside the sentence that denies it.
+ */
+describe("what the candidate says they do not have (the licence rule, 25 November 2026)", () => {
+  const RN = "Active RN license";
+  const CPR = "Current CPR certificate";
+  const ANSWERS = ["yes", "partially", "unknown", "no"] as const;
+
+  it("reads 'not held' only when what they do not have is the credential itself", () => {
+    // something about a licence, another licence, or something else: the finding stands as the model read it, and a "no"
+    // these words do not say is not known
+    const somethingElse: Array<[string, string]> = [
+      ["I do not have any restrictions on my license", RN],
+      ["I do not have any complaints against my RN license", RN],
+      ["I do not have experience with CPR", CPR],
+      ["I have no restrictions on my license", RN],
+      ["No restrictions on my RN license", RN],
+      ["I do not have any license restrictions", RN],
+      ["No license restrictions", RN],
+      ["I have never had a license suspended", RN],
+      ["I have never practiced without a license", RN],
+      ["I am licensed in Texas and do not hold a license in any other state", RN],
+    ];
+    for (const [line, subject] of somethingElse) {
+      expect(plainlyNotHeld(line, subject), line).toBe(false);
+      for (const met of ["yes", "partially", "unknown"] as const) expect(credentialFinding(met, line, subject), `${met}: ${line}`).toBe(met);
+      expect(credentialFinding("no", line, subject), line).toBe("unknown");
+    }
+    // the credential itself, named by its kind, by the must-have's own name for it, or as "it" in a reply to "Do you have
+    // it?": not met, whatever the model answered
+    const itself: Array<[string, string]> = [
+      ["I do not hold an RN license", RN],
+      ["I don't have an RN license, I work as a nursing assistant", RN],
+      ["No RN license", RN],
+      ["I hold no nursing license", RN],
+      ["I no longer hold an RN license", RN],
+      ["I have never held a nursing license", RN],
+      ["I do not have a CPR or BLS certification", CPR],
+      ["I do not have CPR", CPR],
+      ["No, I don't have it.", CPR],
+      ["I do not have one", "Radiography certificate"],
+      ["I do not have a driver's license or a car", "Valid driver's license"],
+    ];
+    for (const [line, subject] of itself) {
+      expect(plainlyNotHeld(line, subject), line).toBe(true);
+      for (const met of ANSWERS) expect(credentialFinding(met, line, subject), `${met}: ${line}`).toBe("no");
+    }
+  });
+
+  it("never reads 'yes' or 'partly' out of a sentence that says they do not hold the credential", () => {
+    const notInForce: Array<[string, string]> = [
+      ["I do not hold a current CPR certificate", CPR],
+      ["I do not hold an active RN license", RN],
+      ["I do not have a current, valid license", RN],
+      ["I do not have a valid driver's license at this time", "Valid driver's license"],
+      ["No current RN license", RN],
+      ["I hold no active licenses", RN],
+      ["Not currently certified in CPR", CPR],
+      ["No, I do not have a current one", CPR],
+      ["I do not have my license yet", RN],
+    ];
+    for (const [line, subject] of notInForce) {
+      // not plainly "not held": lapsed, pending or held but not in force all fit these words
+      expect(plainlyNotHeld(line, subject), line).toBe(false);
+      for (const met of ANSWERS) expect(credentialFinding(met, line, subject), `${met}: ${line}`).toBe("unknown");
+    }
+    // A line that says a credential is in force apart from what they say they do not have keeps the model's reading, as
+    // before: which of the two the job asks for is the reading's to say, and "no" is still only what the words say plainly.
+    const held: Array<[string, string]> = [
+      ["RN license TX #123456, active. I do not have any disciplinary actions on my license.", RN],
+      ["Active RN license, no restrictions", RN],
+      ["I have an active RN license but I do not hold a compact license", RN],
+      ["RN license TX (active), not licensed in Nevada", RN],
+      ["I hold a current RN license and do not hold any other state licenses", RN],
+      ["Licensed RN in Texas (active), not licensed in any other state", RN],
+      ["Never without an active RN license since 2010", RN],
+    ];
+    for (const [line, subject] of held) {
+      expect(credentialFinding("yes", line, subject), line).toBe("yes");
+      expect(credentialFinding("no", line, subject), line).toBe("unknown");
+    }
+  });
+
+  it("reads an answer on the form the same way, with its question", () => {
+    for (const line of ["Do you have a CPR or BLS certification? No.", "Do you hold a current CPR certificate? No.", "Are you licensed in Texas? No."]) expect(formAnswerSaysNotHeld(line), line).toBe(true);
+    for (const line of ["Do you have any license restrictions? No.", "Do you have any restrictions on your license? No.", "Do you hold a license in any other state? No."]) expect(formAnswerSaysNotHeld(line), line).toBe(false);
+  });
+
+  it("holds a whole reading to both halves, on a resume line and on an answer on the form", () => {
+    const RESTRICTIONS_LINE = "I do not have any restrictions on my license";
+    const CPR_LINE = "I do not hold a current CPR certificate";
+    const RESTRICTIONS_ANSWER = "Do you have any restrictions on your license? No.";
+    const CPR_ANSWER = "Do you hold a current CPR certificate? No.";
+    const input = {
+      packet: {
+        requirements: { mustHaves: [{ key: "licence", text: RN, rationale: "law" }, { key: "cpr", text: CPR, rationale: "safety" }], niceToHaves: [] },
+        competencies: [],
+        formQuestions: [
+          { kind: "yes_no", key: "fq_restrictions", question: "Do you have any restrictions on your license?", required: true },
+          { kind: "yes_no", key: "fq_cpr", question: "Do you hold a current CPR certificate?", required: true },
+        ],
+      } as never,
+      resumeText: `Registered Nurse at Lakeside Clinic 2018 - present\nRN license TX #123456\n${RESTRICTIONS_LINE}\n${CPR_LINE}`,
+      formAnswers: { fq_restrictions: "no", fq_cpr: "no" },
+    };
+    const sources = assessmentSources(input);
+    expect(sources.application).toBe(`${RESTRICTIONS_ANSWER}\n${CPR_ANSWER}`);
+    type Said = { met: Met; source: "resume" | "application"; quote: string };
+    const made = (licence: Said, cpr: Said): EvidenceAssessment =>
+      reading(null, "unknown", "not_evidenced", {
+        competencyFindings: [],
+        requirementFindings: [{ requirementKey: "licence", met: licence.met, evidence: { source: licence.source, quote: licence.quote } }, { requirementKey: "cpr", met: cpr.met, evidence: { source: cpr.source, quote: cpr.quote } }],
+      });
+    /** What the team sees of three readings that said the same, as the app works it out. */
+    const shown = (licence: Said, cpr: Said) => {
+      const out = readingsOutcome([1, 2, 3].map((n) => ({ ok: true as const, output: made(licence, cpr), runId: `r${n}`, model: "m" })), { restore: (s: string) => s }, input);
+      if (!out.ok) throw new Error("expected readings");
+      return { licence: metOf(out.output, "licence"), cpr: metOf(out.output, "cpr"), quotes: Object.fromEntries(out.output.requirementFindings.map((f) => [f.requirementKey, f.evidence?.quote])) };
+    };
+    for (const [restrictions, certificate, source] of [[RESTRICTIONS_LINE, CPR_LINE, "resume"], [RESTRICTIONS_ANSWER, CPR_ANSWER, "application"]] as const) {
+      // no restrictions on a licence is no word on holding it: the reading stands, and a "no" on it is not known
+      for (const met of ["yes", "partially", "unknown"] as const) expect(shown({ met, source, quote: restrictions }, { met: "unknown", source, quote: certificate }).licence, `${source} ${met}`).toBe(met);
+      expect(shown({ met: "no", source, quote: restrictions }, { met: "unknown", source, quote: certificate }).licence, source).toBe("unknown");
+      // "do not hold a current …" is never shown or partly shown, and never plainly not met; the checked quote is kept
+      for (const met of ANSWERS) {
+        const out = shown({ met: "yes", source, quote: restrictions }, { met, source, quote: certificate });
+        expect(out.cpr, `${source} ${met}`).toBe("unknown");
+        expect(out.quotes).toEqual({ licence: restrictions, cpr: certificate });
+      }
+    }
+    // one reading alone goes through the same rule
+    const one = verifyAssessmentQuotes(made({ met: "yes", source: "application", quote: RESTRICTIONS_ANSWER }, { met: "yes", source: "resume", quote: CPR_LINE }), sources, credentialMustHaves(input.packet), findingSubjects(input.packet));
+    expect([metOf(one, "licence"), metOf(one, "cpr")]).toEqual(["yes", "unknown"]);
   });
 });

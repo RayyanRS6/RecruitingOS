@@ -1,13 +1,13 @@
 "use client";
 
-import type { IntakeSessionSummary } from "@ros/contracts";
+import type { IntakeDraftSummary } from "@ros/contracts";
 import { Icon, IconChip, Pill } from "@ros/ui";
 import { draftRow } from "../jobs";
 import { Link } from "../nav";
 import { LINKED_ROW, ROW_TITLE } from "../pages/look";
 
 /** Unfinished drafts as rows, each opening the job builder on it: on Home, on the Jobs page and under the builder's first box. */
-export function DraftRows({ drafts, label }: { drafts: readonly IntakeSessionSummary[]; label: string }) {
+export function DraftRows({ drafts, label }: { drafts: readonly IntakeDraftSummary[]; label: string }) {
   if (!drafts.length) return null;
   return (
     <ul className="list-card" aria-label={label}>

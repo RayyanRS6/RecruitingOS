@@ -1,11 +1,22 @@
-import { HUMAN_KEYWORD, screenCriterion } from "@ros/agents";
-import { repeatsMustHave, rulesOut, type DraftRolePacket, type IntakeFacts, type IntakeTurn, type RolePacket } from "@ros/contracts";
+import { HUMAN_KEYWORD, cardField, essentialOfCard, screenCriterion, type AfterTurn } from "@ros/agents";
+import { INTAKE_ESSENTIALS, repeatsMustHave, rulesOut, type IntakeFacts, type IntakeQuestionField, type IntakeTurn, type RolePacket, type WrittenJob } from "@ros/contracts";
 
 /**
  * The job builder's evaluation cases (intake.*, docs/11): what the conversation reads from an owner's words and asks
- * for, and the job it writes. Fixtures are synthetic; provenance is recorded on each case. intake-run.ts drives a case
- * the way the app does; runner.ts runs the suites.
+ * for, the card loop, and the job it writes. Fixtures are synthetic; provenance is recorded on each case. intake-run.ts
+ * drives a case the way the app does; runner.ts runs the suites.
  */
+
+/**
+ * One answer tapped on a card: the offered answer to tick, found by its words (`pick`), the owner's own words where the
+ * card takes them (`own`, used when no offered answer matches), or the figures set on the pay card (`pay`).
+ */
+export type IntakeTap = { pick?: RegExp; own?: string; pay?: { basis: "hourly" | "salary"; min: number; max: number } };
+/**
+ * One press of Send on the open cards, by the field each card sets. A card whose field the round does not name is sent
+ * as skipped, as the page sends a card left alone when another is answered.
+ */
+export type IntakeTapRound = Partial<Record<IntakeQuestionField, IntakeTap>>;
 
 export type IntakeCase = {
   id: string;
@@ -22,13 +33,27 @@ export type IntakeCase = {
   facts?: Partial<IntakeFacts>;
   /** How many times the job is written from the same answers (once unless set): "Write the job" writes it afresh each time. */
   compiles?: number;
-  /** The model's reply to the last message, with the facts as the builder keeps them after it. Returns failure messages. */
-  expectTurn?: (turn: IntakeTurn) => string[];
   /**
-   * The job as the model wrote it, before the server's own rules (`finalizePacket`): measures a line of the prompt that
-   * code would make true anyway, such as no pay figure in the description.
+   * The model's reply to the last message, with the facts as the builder keeps them after it; and `after`, what the
+   * server itself makes of that turn (`afterTurn` in packages/agents, the code the app runs): what is still needed,
+   * whether the job can be written, the cards the page shows and the reply as stored. The model is asked for none of
+   * those, so a check of them judges the app, not a field the app ignores. Returns failure messages.
    */
-  expectDraft?: (draft: DraftRolePacket) => string[];
+  expectTurn?: (turn: IntakeTurn, after: AfterTurn) => string[];
+  /**
+   * The card loop, which no case ran before 25 November 2026. After the conversation's last message the owner answers
+   * the cards the page shows by tapping, one round after another, and the assistant takes its next turn after each
+   * round with no new words typed, as it does in the app. Every turn of such a case, the first included, is held to
+   * `cardLoopFailures`: nothing already asked or answered is asked again, and what is still needed has its card.
+   */
+  taps?: IntakeTapRound[];
+  /** The draft as the turn after the last round leaves it (`afterTurn`). */
+  expectAfterTaps?: (after: AfterTurn) => string[];
+  /**
+   * The job as the model wrote it (`WrittenJob`: only what it is asked for), before the server builds the job record
+   * from it (`finalizePacket`): measures the lines of the prompt, such as no pay figure in the description.
+   */
+  expectDraft?: (draft: WrittenJob) => string[];
   /** The job as it would be published, after the server's rules and the fairness guard. */
   expectPacket?: (packet: RolePacket) => string[];
   /**
@@ -40,6 +65,33 @@ export type IntakeCase = {
 };
 
 export const EMPTY_FACTS: IntakeFacts = { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] };
+
+/**
+ * What one turn of the card loop fails on. `turn` is the model's own reply, `asked` what its notes listed as already
+ * asked or answered, and `after` what the server made of the turn (`afterTurn`), cards as the page shows them:
+ * - the assistant wrote a card for something its notes said was already asked or answered (the server drops such a card,
+ *   so only the model's own reply can show it);
+ * - the page asks again for an essential that is answered;
+ * - an essential is still needed and has no card, though the page had room for one (three cards at most). This was the
+ *   dead end on the live site in November 2026: "Still needed: at least one must-have" and nothing to tap. The card the
+ *   server brings back for a skipped essential, and the pay card while the pay is stated and nobody confirmed it, are
+ *   what answers it.
+ */
+export function cardLoopFailures(x: { turn: Pick<IntakeTurn, "questions">; after: Pick<AfterTurn, "questions" | "toAsk">; asked: readonly string[] }): string[] {
+  const f: string[] = [];
+  const again = [...new Set(x.turn.questions.map(cardField).filter((field) => x.asked.includes(field)))];
+  if (again.length) f.push(`the assistant wrote a card for what was already asked or answered: ${again.join(", ")}`);
+  const shown = x.after.questions.map(essentialOfCard);
+  const answered = [...new Set(shown.filter((key): key is NonNullable<typeof key> => key !== null && !x.after.toAsk.includes(key)))];
+  if (answered.length) f.push(`the page asks again for what is answered: ${answered.join(", ")}`);
+  const needed = INTAKE_ESSENTIALS.filter((key) => x.after.toAsk.includes(key));
+  // With three cards shown the page is full, and the first thing still needed is among them; with fewer, each of the first three is.
+  const due = x.after.questions.length >= 3 ? needed.slice(0, 1) : needed.slice(0, 3);
+  // The server's deal-breaker card stands in for the must-haves card on its turn: it asks which of them count as must-haves.
+  const noCard = due.filter((key) => !shown.includes(key) && !(key === "must_haves" && x.after.questions.some((q) => q.field === "must_haves")));
+  if (noCard.length) f.push(`still needed, with no card to answer it on: ${noCard.join(", ")}`);
+  return f;
+}
 
 /** Must-haves whose words rule someone out ("No x-ray permit"): the job page and the resume reading would ask for the opposite. */
 export function ruleOutMustHaves(p: Pick<RolePacket, "requirements">): string[] {
@@ -105,11 +157,24 @@ export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "c
 }
 
 /**
+ * The two lines under every automatic message to a candidate, on the job as it would be published: the disclosure
+ * names the AI, and neither line asks for a reply with a keyword, which nothing reads. The code writes both
+ * (packages/core/src/compliance.ts) and no model is asked for them, so this holds whatever a model wrote.
+ */
+export function noticeLineFailures(p: Pick<RolePacket, "communication">): string[] {
+  const f: string[] = [];
+  if (!/\bAI\b|artificial intelligence/i.test(p.communication.disclosureText)) f.push("the disclosure line does not mention AI");
+  if ([p.communication.disclosureText, p.communication.humanAlternativeText].some((line) => HUMAN_KEYWORD.test(line))) f.push("a line under every message asks for a reply with a keyword, which nothing reads");
+  return f;
+}
+
+/**
  * What a written job fails on once the server has finished it: the case's own checks, then a skill that repeats a
- * must-have, the way the case is held to it (`skillRepeats`, the same name unless it says otherwise).
+ * must-have, the way the case is held to it (`skillRepeats`, the same name unless it says otherwise), then the two
+ * lines under every message (`noticeLineFailures`).
  */
 export function draftFailures(c: Pick<IntakeCase, "expectPacket" | "skillRepeats">, p: RolePacket): string[] {
-  return [...(c.expectPacket?.(p) ?? []), ...skillsRepeatingMustHaves(p, c.skillRepeats ?? "same name")];
+  return [...(c.expectPacket?.(p) ?? []), ...skillsRepeatingMustHaves(p, c.skillRepeats ?? "same name"), ...noticeLineFailures(p)];
 }
 
 /**
@@ -129,29 +194,46 @@ export function draftSkillsNote(p: Pick<RolePacket, "requirements" | "competenci
 
 /**
  * What intake.compile asks of every job, read on the job as the model wrote it: a description of about 120 words or
- * more with no pay figure in it, the AI named in the disclosure line, no reply keyword in the two lines under every
- * message, three to six skills each with a definition and something that shows it, an AI interview of at most twelve
- * questions advertised as about ten minutes, at most five questions on the application form, and at most five assumptions.
+ * more with no pay figure in it, each city by its name alone, three to six skills each with a definition and something
+ * that shows it, an AI interview of at most twelve questions advertised as about ten minutes, at most five questions on
+ * the application form, and at most five assumptions. (The two lines under every message are no longer the model's to
+ * write: `noticeLineFailures` reads them on the finished job.)
  */
-export function writtenJobFailures(d: DraftRolePacket): string[] {
+export function writtenJobFailures(d: WrittenJob): string[] {
   const f: string[] = [];
   const description = d.description.publicJobDescription;
   const words = description.trim().split(/\s+/).length;
   if (words < 100) f.push(`the job description has ${words} words; about 120 or more expected`);
   if (/\$\s?\d/.test(description)) f.push("a pay figure is written into the job description");
-  if (!/\bAI\b|artificial intelligence/i.test(d.communication.disclosureText)) f.push("the disclosure line does not mention AI");
-  if ([d.communication.disclosureText, d.communication.humanAlternativeText].some((line) => HUMAN_KEYWORD.test(line))) f.push("a line under every message asks for a reply with a keyword, which nothing reads");
+  const withState = d.identity.cities.filter((city) => /,/.test(city));
+  if (withState.length) f.push(`a city is written with more than its name: ${withState.join("; ")}`);
   if (d.competencies.length < 3 || d.competencies.length > 6) f.push(`${d.competencies.length} skills; three to six expected`);
   for (const c of d.competencies) if (!c.definition.trim() || !c.indicators.length) f.push(`the skill "${c.name}" has no definition or nothing that shows it`);
   if (d.screening.questions.length > 12) f.push(`${d.screening.questions.length} questions in the AI interview; at most twelve expected`);
   if (d.screening.maxMinutes > 10) f.push(`the AI interview is advertised as ${d.screening.maxMinutes} minutes; about ten expected`);
   if (d.formQuestions.length > 5) f.push(`${d.formQuestions.length} questions on the application form; at most five expected`);
-  if (d.provenance.assumptions.length > 5) f.push(`${d.provenance.assumptions.length} assumptions; at most five expected`);
+  if (d.assumptions.length > 5) f.push(`${d.assumptions.length} assumptions; at most five expected`);
   return f;
 }
 
 /** The essentials an owner's first sentence can give: when it gives them all, no card asks for one of them again. */
 const ESSENTIAL_FIELDS = ["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation", "must_haves"];
+
+/** What a card-loop case says when every card was answered and the job still cannot be written. */
+const readyAfterTaps = (after: AfterTurn): string[] => (after.mayDraft ? [] : [`every essential was answered on the cards, so the job should be ready to write; the page still asks for ${after.missing.join(", ") || "the pay to be confirmed"}`]);
+
+/** An answer for every card a round may meet (a model may ask in another order than the stand-in), the pay card aside. */
+const DENTAL_ASSISTANT_TAPS: IntakeTapRound = {
+  title: { own: "Dental Assistant" },
+  location: { pick: /irvine/i, own: "Irvine, CA" },
+  remote_policy: { pick: /on.?site/i },
+  employment_type: { pick: /full/i, own: "Full time" },
+  schedule: { own: "Monday to Friday, 8am to 5pm" },
+  must_haves: { own: "Radiography certificate" },
+};
+const PAY_24_TO_28: IntakeTapRound = { compensation: { pay: { basis: "hourly", min: 24, max: 28 } } };
+/** The state alone, on the card for the place: an offered answer that names Colorado, else the owner's own "CO". Every other card is left alone. */
+const PLACE_IN_COLORADO: IntakeTapRound = { location: { pick: /colorado|\bco\b/i, own: "CO" } };
 
 /** Writing a job: what the conversation reads and asks, and the job written from it. */
 export const intakeGolden: IntakeCase[] = [
@@ -162,7 +244,7 @@ export const intakeGolden: IntakeCase[] = [
     provenance: "synthetic",
     vertical: "dental",
     ownerMessages: ["I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting."],
-    expectTurn: (t) => {
+    expectTurn: (t, after) => {
       const f: string[] = [];
       const x = t.factsExtracted;
       if (!/hygienist/i.test(x.title ?? "")) f.push("the title was not read");
@@ -172,7 +254,7 @@ export const intakeGolden: IntakeCase[] = [
       if (!/monday/i.test(x.schedule ?? "")) f.push("the schedule was not read");
       if (x.compensationBasis !== "hourly" || x.compensationMin !== 45 || x.compensationMax !== 55) f.push("the pay was not read as $45 to $55 an hour");
       if (x.mustHaves.length < 2) f.push("the two must-haves were not read");
-      if (t.readyToCompile !== true) f.push("every essential was given, so the job should be ready to write");
+      if (!after.mayDraft) f.push(`every essential was given, so the job should be ready to write; the page still asks for ${after.missing.join(", ") || "the pay to be confirmed"}`);
       const again = t.questions.filter((q) => ESSENTIAL_FIELDS.includes(q.field));
       if (again.length) f.push(`asked again for what the owner already said: ${again.map((q) => q.field).join(", ")}`);
       return f;
@@ -197,13 +279,16 @@ export const intakeGolden: IntakeCase[] = [
     provenance: "synthetic",
     vertical: "dental",
     ownerMessages: ["Front office coordinator in Tustin, CA, $22 to $26 an hour, full time, Tuesday to Saturday. Must-haves: two years at a dental front desk."],
-    expectTurn: (t) => {
+    expectTurn: (t, after) => {
       const f: string[] = [];
       if (t.factsExtracted.remotePolicy) f.push(`the work arrangement was assumed (${t.factsExtracted.remotePolicy}); the owner did not say it`);
-      if (t.readyToCompile) f.push("the job is ready to write without the work arrangement");
+      if (after.mayDraft || !after.missing.includes("remote_policy")) f.push("the job is ready to write without the work arrangement");
+      if (!after.questions.some((q) => q.field === "remote_policy")) f.push("the page shows no card for the work arrangement");
       const card = t.questions.find((q) => q.field === "remote_policy");
       if (!card) f.push("no card asks whether the job is on site, hybrid or remote");
-      else if (card.allowOwn || card.options.map((o) => o.value).join(",") !== "onsite,hybrid,remote") f.push("the work arrangement card does not offer exactly On site, Hybrid and Remote");
+      // The three answers by their words, however they are spelled ("On site", "On-site", "Onsite"): the model is asked
+      // for words, not for codes, and the page draws this card's answers itself.
+      else if (card.allowOwn || card.options.map((o) => o.label.toLowerCase().replace(/[^a-z]/g, "")).join(",") !== "onsite,hybrid,remote") f.push("the work arrangement card does not offer exactly On site, Hybrid and Remote");
       return f;
     },
   },
@@ -281,6 +366,35 @@ export const intakeGolden: IntakeCase[] = [
       return f;
     },
   },
+  {
+    // The card loop: a short idea, and everything else answered by tapping. The pay card is left alone in the first
+    // round, so the turn after it must bring that card back and ask for nothing that was answered (`cardLoopFailures`,
+    // on every turn). Then the pay is set on its card, and the job can be written.
+    id: "cards_tapped_and_the_pay_card_skipped",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["We need a dental assistant."],
+    taps: [DENTAL_ASSISTANT_TAPS, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(after.state.pay?.via === "pay_card" ? [] : ["the pay set on the pay card is not recorded as set there"])],
+  },
+  {
+    // The owner names the city and not the state. Until 25 November 2026 the model filled the state in when it wrote the
+    // job, so the job still got its state's notices. It is no longer asked, and a state it adds to the place it reads is
+    // left off: the state is the owner's to say. So after this sentence the place is still needed, it has its card and
+    // the job cannot be written; the state given on that card completes the place, and then it can.
+    id: "city_alone_then_its_state_on_the_card",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["I need a dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate."],
+    expectTurn: (_t, after) => {
+      const f: string[] = [];
+      if (after.mayDraft || !after.missing.includes("location")) f.push(`the owner named a city and no state, so the place is still needed; the page takes "${after.facts.locationText ?? ""}" as answered`);
+      if (!after.questions.some((q) => q.field === "location")) f.push("the place is still needed and the page shows no card for it");
+      return f;
+    },
+    taps: [PLACE_IN_COLORADO, PLACE_IN_COLORADO, PLACE_IN_COLORADO],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(/denver/i.test(after.facts.locationText ?? "") ? [] : [`the state given on the card should complete the place the owner named; the place reads "${after.facts.locationText ?? ""}"`])],
+  },
 ];
 
 const HYGIENIST = "Hygienist in Irvine, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license.";
@@ -326,6 +440,18 @@ export const intakeJobAd: IntakeCase[] = [
       if (/\bapproved\b/i.test(t.assistantMessage)) f.push("followed an instruction inside the ad");
       return f;
     },
+  },
+  {
+    // The card loop after a pasted ad that states the pay. The owner answers the other cards and leaves the pay card:
+    // nobody confirmed the pay, so it has its card again on the next turn. Sent with the ad's own figures, it confirms
+    // them, and the job can be written.
+    id: "dental_assistant_ad_pay_card_left_then_confirmed",
+    provenance: "synthetic",
+    vertical: "dental",
+    pastedAd: true,
+    ownerMessages: [PASTED_AD],
+    taps: [DENTAL_ASSISTANT_TAPS, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(after.state.pay?.via === "confirmed" ? [] : [`the ad's pay, sent as it stood on the pay card, is not recorded as confirmed (${after.state.pay?.via ?? "no pay"})`])],
   },
 ];
 

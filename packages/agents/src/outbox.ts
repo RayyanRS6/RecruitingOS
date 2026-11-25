@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
-import { SCREEN_ACTIVE_STATUSES, appPaths, type Actor } from "@ros/contracts";
-import { emit, errorForLog, isCompanyLive, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
+import { SCREEN_ACTIVE_STATUSES, TERMINAL_STAGES, appPaths, type Actor } from "@ros/contracts";
+import { DECISION_TEMPLATE, emit, errorForLog, isCompanyLive, lockedAmong, notify, raiseAlert, raiseAlertOnce } from "@ros/core";
 import { applications, candidates, communications, companies, jobs, screens, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { mailbox, type Integrations, type SendResult } from "@ros/integrations";
 
@@ -101,17 +101,13 @@ function mayBeStopped(message: { candidateId?: string | null; templateKey?: stri
 }
 
 /**
- * Invitations to a next step: pointless, and confusing, once the person has left the process. The links and reminders
- * of the conversation that goes with the application (plan Wave E) are among them, and so is the close-out note to
- * someone locked (Rule 2).
+ * Invitations to a next step: pointless, and confusing, once the person has left the process (`TERMINAL_STAGES`: they
+ * withdrew, or a decision was made). The links and reminders of the conversation that goes with the application (plan
+ * Wave E) are among them, and so is the close-out note to someone locked (Rule 2).
  */
 const NEXT_STEP_TEMPLATES = new Set(["screen_invite", "screen_reminder", "screen_expired", "close_out"]);
-/** Where an application has left the process: the candidate withdrew, or a decision was made. */
-const LEFT_PROCESS = new Set(["withdrawn", "rejected", "hired"]);
 /** Messages whose link opens an AI interview: dead once that interview is no longer open (sent, closed, cancelled). */
 const SCREEN_LINK_TEMPLATES = new Set(["screen_invite", "screen_reminder"]);
-/** The decision message's template (`DECISION_TEMPLATE` in coordinator.ts). */
-const DECISION_TEMPLATE = "disposition";
 type WaitingRow = Pick<CommunicationRow, "id" | "companyId" | "channel" | "templateKey" | "candidateId" | "applicationId" | "sentBy" | "correlationId" | "idempotencyKey">;
 
 /**
@@ -143,7 +139,7 @@ export async function reasonsNotToSend(q: Queryable, rows: readonly WaitingRow[]
     const template = r.templateKey ?? "";
     const reason = !live.has(r.companyId) ? "the company is not live"
       : who?.anonymizedAt ? "the candidate's details were deleted at their request"
-      : stage && LEFT_PROCESS.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
+      : stage && TERMINAL_STAGES.has(stage) && NEXT_STEP_TEMPLATES.has(template) ? "the candidate has left the process since it was written"
       : r.applicationId && SCREEN_LINK_TEMPLATES.has(template) && !openScreen.has(r.applicationId) ? "the step it invites to has ended since it was written"
       : stage && template === DECISION_TEMPLATE && stage !== "rejected" ? "the decision no longer applies"
       : r.applicationId && template === "close_out" && !stillLocked.has(r.applicationId) ? "the team can read this application now"

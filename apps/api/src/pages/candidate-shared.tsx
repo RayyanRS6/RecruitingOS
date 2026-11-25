@@ -7,6 +7,7 @@ import { isCompanyLive, jobNoticesFor, jobPastItsLimit, type Notice } from "@ros
 import { candidates, companies, rolePackets, roles, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
+import { acceptingApplications } from "../services/closing-date";
 import { Layout } from "./layout";
 
 /**
@@ -40,14 +41,8 @@ export function screenPath(token: string): string {
   return `/c/screen/${token}`;
 }
 
-/**
- * A pause and a closing date that has passed both keep the job page up and close the form: the page says so, the apply
- * routes answer 404, and nobody already in the process is touched. A form opened before the closing date may still be
- * sent for a while.
- */
-export function acceptingApplications(role: { status: string; acceptingApplications: boolean }): boolean {
-  return role.status === "open" && role.acceptingApplications;
-}
+/** A job's own rule for taking a new application (services/closing-date.ts, the one copy), named here for the candidate pages. */
+export { acceptingApplications };
 
 /**
  * Whether this job takes a new application now: the job's own rule above, and the company's trial not ended. A trial
