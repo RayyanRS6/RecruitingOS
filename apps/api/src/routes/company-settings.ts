@@ -94,9 +94,7 @@ companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   }
   await assistantAnswered(container, "in Settings");
   await withTenant(container.db, t.companyId, (tx) => changeCompany(c, tx, t.companyId, "the assistant drafted the text about the company", (co, { now }) => {
-    // `basedOn` (the facts the draft rested on) was asked of the model and read by nothing: it is no longer asked for,
-    // and the stored shape (CompanySettings in packages/db) keeps the field, empty, until it is taken out there.
-    co.settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId, basedOn: [] };
+    co.settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId };
     return ["aboutDraft"];
   }));
   return c.json(await companyView(container, t), 201);

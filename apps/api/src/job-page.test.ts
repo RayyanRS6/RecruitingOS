@@ -187,7 +187,7 @@ describe("the job page and the careers page", () => {
   });
 
   it("shows the text about the company only once a person approved it, with the website; a draft waiting in Settings never shows", async () => {
-    await setSettings((s) => { s.aboutDraft = { text: "DRAFT-ONLY text about Ledger Dental that nobody approved yet.", draftedAt: new Date().toISOString(), draftedBy: { kind: "user", id: "u1" }, aiRunId: null, basedOn: [] }; s.website = "ledgerdental.example"; });
+    await setSettings((s) => { s.aboutDraft = { text: "DRAFT-ONLY text about Ledger Dental that nobody approved yet.", draftedAt: new Date().toISOString(), draftedBy: { kind: "user", id: "u1" }, aiRunId: null }; s.website = "ledgerdental.example"; });
     let html = decode(await page(`/careers/${slug}/jobs/${roleId}`));
     expect(html).not.toContain("DRAFT-ONLY");
     expect(html).not.toContain('id="about-company"');
