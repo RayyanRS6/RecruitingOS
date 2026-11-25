@@ -618,7 +618,10 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
     if (typed) await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed" } });
     const messages = [...session.messages, { role: "assistant" as const, content: message, at, aiRunId: out.runId }];
     const draftPacket = !notARole && session.draftPacket ? draftByRule({ ...loaded, session, state }, facts, input.actor) : null;
-    await q.update(intakeSessions).set({ messages, facts, missingFacts: missing, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
+    // What is still missing is worked out from the facts each time it is needed (`intakeReadiness`) and never stored: the
+    // column `intake_sessions.missing_facts` was written here on every turn and read by nothing, so it went stale the
+    // moment an answer was tapped. It is no longer written and keeps its default, an empty list.
+    await q.update(intakeSessions).set({ messages, facts, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.turn_completed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { missing, questions: questions.map((x) => x.field) } });
     // Not about hiring: nothing is left behind as a draft; the conversation stays in the record.
     if (notARole) await emit(q, { type: "intake.abandoned", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: "not_a_role", turns: messages.length } });

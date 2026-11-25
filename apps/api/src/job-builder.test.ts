@@ -82,6 +82,10 @@ describe("the job builder", () => {
     expect(draft.facts.remotePolicy).toBeUndefined();
     expect(draft.readiness.essentials.map((e) => [e.label, e.done])).toEqual([["Job title", true], ["Where the job is", false], ["On site, hybrid or remote", false], ["Pay", false], ["Full time or part time", false], ["Schedule", false], ["At least one must-have", true]]);
     expect(draft.readiness).toMatchObject({ mayDraft: false, hasDraft: false, payConfirmed: false });
+    // what is still missing is worked out from the facts whenever it is read; the draft's row keeps no second copy of it
+    // (it was written there on every turn, read by nothing, and stale as soon as an answer was tapped)
+    expect(draft.readiness.missing).toEqual(["location", "remote_policy", "compensation_range", "employment_type", "schedule"]);
+    expect((await container.db.select({ missingFacts: intakeSessions.missingFacts }).from(intakeSessions).where(eq(intakeSessions.id, draft.id)))[0].missingFacts).toEqual([]);
     // the AI asks for the place, the work arrangement and the pay
     expect(draft.questions.map((q) => [q.field, q.mode])).toEqual([["location", "single"], ["remote_policy", "single"], ["compensation", "pay"]]);
     expect(draft.questions[1].options.map((o) => o.label)).toEqual(["On site", "Hybrid", "Remote"]);
