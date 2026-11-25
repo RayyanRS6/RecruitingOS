@@ -56,6 +56,19 @@ describe("the AI interviewer is given the job and states pay as the job page doe
     expect(blocks[3]).toMatch(/^Chat plan \(JSON\): \{.*\}\n<cv>\n\(no CV details\)\n<\/cv>$/);
   });
 
+  // Round 1 made the code write the three notice lines; the turn's prompt was the one place left that read the line a
+  // model had written with the job ("Human alternative wording: ..."). When someone asks for a person the model sets
+  // humanRequested and the candidate reads the code's own words, so the model is given no wording of it.
+  it("is not given the job record's stored line about reaching a person, whatever that line says", () => {
+    const text = system(ctx(true));
+    expect(packet.communication.humanAlternativeText).toBe("Reply to reach a person.");
+    for (const gone of ["Reply to reach a person.", "Human alternative", "humanAlternativeText"]) expect(text, gone).not.toContain(gone);
+    // what the chat may say of the job is still there: the posted pay, what candidates may be told, the tone
+    expect(screenTurnPrompt.system(ctx(true))[1]!.text).toMatch(/\nPosted pay: hourly 45 to 55 USD\.\nWhat candidates may be told: the posted range, the schedule, and the process\.\nTone: warm\.$/);
+    // and it is still told to flag a request for a person, never to answer it itself
+    expect(text).toContain("set humanRequested=true and ask nothing more: the system shows them how to choose a person on the page.");
+  });
+
   // The code check of 25 November 2026: the answer on record is built in code from the candidate's own replies, so the
   // model is no longer asked to record one (its record was the longest rule of the prompt, and was wrong more than once).
   it("is not asked to record the candidate's answer: no rule about recording, and no word of it elsewhere", () => {

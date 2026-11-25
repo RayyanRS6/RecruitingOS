@@ -91,13 +91,17 @@ function jobBlock(p: RolePacket, company: string): string {
   ].join("\n");
 }
 
-/** What the chat may say about the job beyond its description. */
+/**
+ * What the chat may say about the job beyond its description. Never the job record's own line about reaching a person
+ * (`communication.humanAlternativeText`): when someone asks for one the model sets `humanRequested` and the candidate
+ * reads the code's words (`PERSON_REPLY` in packages/agents), so the model has no use for a wording of it.
+ */
 function tellBlock(p: RolePacket, payShown: boolean): string {
   const comp = p.compensation;
   return [
     `Posted pay: ${payShown ? `${comp.basis} ${comp.min} to ${comp.max} ${comp.currency}` : "not disclosed; say the hiring team can discuss pay"}.`,
     `What candidates may be told: ${p.communication.candidateMayBeTold.join("; ") || "the posted range, the schedule, and the process"}.`,
-    `Tone: ${p.communication.tone}. Human alternative wording: ${p.communication.humanAlternativeText}`,
+    `Tone: ${p.communication.tone}.`,
   ].join("\n");
 }
 
