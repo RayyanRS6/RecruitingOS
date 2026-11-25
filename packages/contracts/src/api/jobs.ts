@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
 import { isOwnerOrAdmin, type MembershipRole } from "../domain/company";
-import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
+import { INTAKE_ESSENTIALS, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeEssentialKey, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
 import { POST_TEXT_MAX, type ClosingDateView, type JobUrls, type LegalCheck, type PostChannel, type PostsState, type PublishCheck } from "../domain/publishing";
 import { CompensationBasis, EmploymentType, RemotePolicy, type PacketFlag, type RolePacket } from "../domain/role-packet";
 import { Importance } from "../domain/score";
@@ -73,8 +73,26 @@ export type IntakeStartResponse = (IntakeDraftAnswer | { session: null }) & { no
 export type IntakeTurnResponse = IntakeDraftAnswer & { reply: IntakeTurnReply; refused: IntakeRefusal[]; summary: string[] };
 /** GET /api/v1/intake/sessions/:id, and every builder answer that changes the draft without a turn. */
 export type IntakeSessionResponse = IntakeDraftAnswer;
+/**
+ * One line of the drafts list as the routes answer it (GET /api/v1/intake/sessions, and Home): the summary, and
+ * `payConfirmed`, whether a person has set or confirmed the pay the draft states. With `missing` it says what the draft
+ * still needs (`draftStillNeeds`), so a draft's line and the builder count the same things.
+ */
+export type IntakeDraftSummary = IntakeSessionSummary & { payConfirmed: boolean };
+
 /** GET /api/v1/intake/sessions: the drafts this person may continue, and the plan's room for another job. */
-export type IntakeSessionList = { sessions: IntakeSessionSummary[]; room: PlanRoom };
+export type IntakeSessionList = { sessions: IntakeDraftSummary[]; room: PlanRoom };
+
+/**
+ * What a draft still needs before its job can be written: the one meaning of "still needed", for the builder's list and
+ * for a draft's line in a list. The essentials that are missing (`missing`, the server's own list), and the pay while it
+ * is stated and no person has confirmed it: a range read from a pasted ad counts only once someone confirms it on the
+ * pay card. In the essentials' own order.
+ */
+export function draftStillNeeds(draft: { missing: readonly IntakeEssentialKey[]; payConfirmed: boolean }): IntakeEssentialKey[] {
+  const payWaits = !draft.payConfirmed && !draft.missing.includes("compensation_range");
+  return INTAKE_ESSENTIALS.filter((key) => draft.missing.includes(key) || (payWaits && key === "compensation_range"));
+}
 
 /**
  * A draft's title, the one rule for every place that shows it: the builder's heading, the draft's line on Home and on
@@ -299,4 +317,4 @@ export type HomeNotice = { kind: "trial_ending" | "trial_ended" | "ai_help_warni
  * GET /api/v1/home: the open and paused jobs, the one with the most to review first; this person's unfinished drafts;
  * the plan's room for another job, for the start-a-hire box; and the notices.
  */
-export type HomeView = { jobs: HomeJob[]; drafts: IntakeSessionSummary[]; room: PlanRoom; notices: HomeNotice[] };
+export type HomeView = { jobs: HomeJob[]; drafts: IntakeDraftSummary[]; room: PlanRoom; notices: HomeNotice[] };

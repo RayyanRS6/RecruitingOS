@@ -1,5 +1,5 @@
 import {
-  formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
+  draftStillNeeds, formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
   type IntakeAnswer, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
   type IntakeReadiness, type IntakeRefusal, type IntakeSessionView, type IntakeTurnReply,
 } from "@ros/contracts";
@@ -313,14 +313,14 @@ export function payPayload(f: PayForm): { basis: "hourly" | "salary"; min: numbe
 export type ChecklistItem = { key: string; label: string; done: boolean; value: string | null; note: string | null };
 
 /**
- * The essentials the server checks, in its words, as two lists. Pay counts as known only once a person has set or
- * confirmed it (`payConfirmed`): a range read from a pasted ad is listed as still needed, with the range, until then.
+ * The essentials the server checks, in its words, as two lists. What is still needed is the contracts' one answer
+ * (`draftStillNeeds`, which a draft's line in a list counts too): an essential that is missing, and the pay while a
+ * person has not set or confirmed it. A range read from a pasted ad is listed as still needed, with the range, until then.
  */
-export function essentialsList(r: Pick<IntakeReadiness, "essentials" | "payConfirmed">): { known: ChecklistItem[]; missing: ChecklistItem[]; complete: boolean } {
-  const items: ChecklistItem[] = r.essentials.map((e) => {
-    if (e.key === "compensation_range" && e.done && !r.payConfirmed) return { key: e.key, label: e.label, done: false, value: e.value, note: "Confirm it on the pay card." };
-    return { key: e.key, label: e.label, done: e.done, value: e.value, note: null };
-  });
+export function essentialsList(r: Pick<IntakeReadiness, "essentials" | "missing" | "payConfirmed">): { known: ChecklistItem[]; missing: ChecklistItem[]; complete: boolean } {
+  const needed = new Set(draftStillNeeds(r));
+  // an essential that is in and still needed is the pay nobody has confirmed: it keeps its value and says what to do
+  const items: ChecklistItem[] = r.essentials.map((e) => ({ key: e.key, label: e.label, done: !needed.has(e.key), value: e.value, note: e.done && needed.has(e.key) ? "Confirm it on the pay card." : null }));
   const missing = items.filter((i) => !i.done);
   return { known: items.filter((i) => i.done), missing, complete: missing.length === 0 };
 }

@@ -3,7 +3,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, type IntakeQuestion, type IntakeReadiness, type IntakeSessionSummary, type IntakeSessionView, type MembershipRole, type PlanRoom } from "@ros/contracts";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, type IntakeDraftSummary, type IntakeQuestion, type IntakeReadiness, type IntakeSessionView, type MembershipRole, type PlanRoom } from "@ros/contracts";
 import { jobPacket } from "../../../tests/web/job-fixture";
 
 /**
@@ -68,13 +68,13 @@ const builder = (view: IntakeSessionView, role: MembershipRole = "owner", timeZo
 const mainButton = (html: string) => /<button type="button" class="btn primary"([^>]*)>(Write the job|Publish job)<\/button>/.exec(html);
 
 describe("the builder's first page", () => {
-  const drafts = (sessions: IntakeSessionSummary[], r: PlanRoom = room) => {
+  const drafts = (sessions: IntakeDraftSummary[], r: PlanRoom = room) => {
     nav.search = "";
     return render(client("owner", [[["intake", "sessions", "mine"], { sessions, room: r }]]), createElement(JobBuilder));
   };
 
   it("is one way in: a box for a sentence or a pasted job ad, the line that an AI assistant drafts and a person decides, and this person's drafts", () => {
-    const html = drafts([{ id: "s9", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: "", updatedAt: new Date().toISOString(), ownerMessages: 1, hasDraft: false, missing: ["must_haves"] }]);
+    const html = drafts([{ id: "s9", status: "active", title: "Front Desk Lead", startedBy: { userId: "u1", name: "Sam Sample" }, mine: true, createdAt: "", updatedAt: new Date().toISOString(), ownerMessages: 1, hasDraft: false, missing: ["must_haves"], payConfirmed: true }]);
     expect(html).toContain("<h1>Who are you hiring?</h1>");
     expect(html).toMatch(/<textarea[^>]*placeholder="For example: a dental assistant for our Irvine office, full time, \$24 to \$28 an hour"[^>]*aria-label="Describe the job, or paste a job ad"|<textarea[^>]*aria-label="Describe the job, or paste a job ad"[^>]*placeholder="For example: a dental assistant for our Irvine office, full time, \$24 to \$28 an hour"/);
     expect(text(html)).toContain(AI_LINE);

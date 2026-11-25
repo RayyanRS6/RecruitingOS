@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, draftTitleOf,
+  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, draftStillNeeds, draftTitleOf,
   type IntakeQuestion, type IntakeReadiness, type IntakeSessionView,
 } from "../../packages/contracts/src/index";
 import {
@@ -222,21 +222,35 @@ describe("the picks echoed as one message", () => {
 });
 
 describe("what we know and what is still needed", () => {
-  const essentials = (done: Partial<Record<(typeof INTAKE_ESSENTIALS)[number], string>>): IntakeReadiness["essentials"] => INTAKE_ESSENTIALS.map((key) => ({ key, label: INTAKE_ESSENTIAL_LABEL[key], done: key in done, value: done[key] ?? null }));
+  /** The essentials and what is missing of them, as the server's readiness carries both. */
+  const readinessOf = (done: Partial<Record<(typeof INTAKE_ESSENTIALS)[number], string>>, payConfirmed: boolean): Pick<IntakeReadiness, "essentials" | "missing" | "payConfirmed"> => {
+    const essentials = INTAKE_ESSENTIALS.map((key) => ({ key, label: INTAKE_ESSENTIAL_LABEL[key], done: key in done, value: done[key] ?? null }));
+    return { essentials, missing: essentials.filter((e) => !e.done).map((e) => e.key), payConfirmed };
+  };
 
   it("lists the seven essentials as the server sees them; pay read from an ad counts only once a person confirms it", () => {
-    const some = essentials({ title: "Dental Hygienist", location: "Irvine, CA", compensation_range: "$45–$55 an hour" });
-    const unconfirmed = essentialsList({ essentials: some, payConfirmed: false });
+    const some = { title: "Dental Hygienist", location: "Irvine, CA", compensation_range: "$45–$55 an hour" };
+    const unconfirmed = essentialsList(readinessOf(some, false));
     expect(unconfirmed.known.map((i) => i.key)).toEqual(["title", "location"]);
     expect(unconfirmed.missing.map((i) => i.key)).toEqual(["remote_policy", "compensation_range", "employment_type", "schedule", "must_haves"]);
     expect(unconfirmed.missing.find((i) => i.key === "compensation_range")).toMatchObject({ value: "$45–$55 an hour", note: "Confirm it on the pay card.", done: false });
     expect(unconfirmed.complete).toBe(false);
-    const confirmed = essentialsList({ essentials: some, payConfirmed: true });
+    const confirmed = essentialsList(readinessOf(some, true));
     expect(confirmed.known.map((i) => i.key)).toEqual(["title", "location", "compensation_range"]);
     expect(confirmed.known.every((i) => i.note === null)).toBe(true);
-    const all = essentialsList({ essentials: essentials({ title: "t", location: "l", remote_policy: "r", compensation_range: "c", employment_type: "e", schedule: "s", must_haves: "m" }), payConfirmed: true });
+    const all = essentialsList(readinessOf({ title: "t", location: "l", remote_policy: "r", compensation_range: "c", employment_type: "e", schedule: "s", must_haves: "m" }, true));
     expect(all).toMatchObject({ complete: true, missing: [] });
     expect(all.known).toHaveLength(7);
+    // pay that is not stated at all is simply missing: nothing to confirm yet, so no note
+    const noPay = essentialsList(readinessOf({ title: "t" }, false));
+    expect(noPay.missing.find((i) => i.key === "compensation_range")).toMatchObject({ value: null, note: null, done: false });
+  });
+
+  it("lists as still needed exactly what a draft's line in a list counts: the contracts' one answer", () => {
+    for (const [done, payConfirmed] of [[{ title: "t", compensation_range: "c" }, false], [{ title: "t", compensation_range: "c" }, true], [{ title: "t" }, false], [{ title: "t", location: "l", remote_policy: "r", compensation_range: "c", employment_type: "e", schedule: "s", must_haves: "m" }, false]] as const) {
+      const r = readinessOf(done, payConfirmed);
+      expect(essentialsList(r).missing.map((i) => i.key)).toEqual(draftStillNeeds(r));
+    }
   });
 
   it("'Write the job' waits for the server's word, and says its reason until then", () => {

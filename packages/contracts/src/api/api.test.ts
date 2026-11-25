@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ApplyRequest, MeResponse } from "./index";
 import { DataRequestKind, accessDecisionsFor, adminCompanyStatus } from "./admin";
 import { ApplicationAction, BulkApplicationAction, CandidateListQuery } from "./candidates";
-import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, draftTitleOf, roleActions } from "./jobs";
+import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, draftStillNeeds, draftTitleOf, roleActions } from "./jobs";
 import { ALWAYS_EMAILED, NotificationKind, UpdateNotificationPreferences, emailsUpdate } from "./notifications";
 import { InviteMember, UpdateCompany, UpdateMember } from "./settings";
 import { appPaths } from "../domain/app-paths";
@@ -88,6 +88,25 @@ describe("the job builder and the one editor", () => {
     expect(draftTitleOf({ facts: {}, draft: { identity: { title: " Dental Hygienist " } } })).toBe("Dental Hygienist");
     expect(draftTitleOf({ facts: answers, draft: { identity: { title: " " } } })).toBe("Hygienist");
     for (const none of [{ facts: {} }, { facts: { title: "  " }, draft: null }, { facts: { title: null }, draft: { identity: {} } }]) expect(draftTitleOf(none)).toBeNull();
+  });
+
+  it("says what a draft still needs one way: the essentials that are missing, and the pay while it is stated and nobody has confirmed it", () => {
+    // nothing stated yet: the missing essentials, as the server lists them
+    expect(draftStillNeeds({ missing: ["location", "compensation_range", "must_haves"], payConfirmed: false })).toEqual(["location", "compensation_range", "must_haves"]);
+    // the pay is stated (a pasted ad) and waits for a person: it is still needed, in the essentials' own place
+    expect(draftStillNeeds({ missing: ["location", "must_haves"], payConfirmed: false })).toEqual(["location", "compensation_range", "must_haves"]);
+    expect(draftStillNeeds({ missing: [], payConfirmed: false })).toEqual(["compensation_range"]);
+    // confirmed: only what is missing
+    expect(draftStillNeeds({ missing: ["schedule"], payConfirmed: true })).toEqual(["schedule"]);
+    expect(draftStillNeeds({ missing: [], payConfirmed: true })).toEqual([]);
+    // the pay is never counted twice, and what the server calls missing is never dropped
+    for (const missing of [[], ["compensation_range"], ["title", "schedule"]] as const) {
+      for (const payConfirmed of [true, false]) {
+        const needs = draftStillNeeds({ missing, payConfirmed });
+        expect(needs.filter((k) => k === "compensation_range").length).toBeLessThanOrEqual(1);
+        for (const key of missing) expect(needs).toContain(key);
+      }
+    }
   });
 
   it("closes a job only with a confirmation", () => {
