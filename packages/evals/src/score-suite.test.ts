@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { EvidenceAssessment, ScreenAssessment } from "@ros/contracts";
+import { skillsInScore, type EvidenceAssessment, type ScreenAssessment } from "@ros/contracts";
 // A complete, valid job (not exported by @ros/agents): read by path, as suites.ts reads core.
 import { samplePacket } from "../../agents/src/fixtures/sample-packet";
 import { credentialMustHaves } from "@ros/agents";
 import {
-  CONSISTENCY_READS, SCORE_PACKET, WAREHOUSE_JOB, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, resumeCases, scoreCaseFailures, scoreCases, scoreOf,
-  scorecardDifferences, screenAssessCases, sentInterview, shownLicenceFailures, triageEdgeCases, verdictWords,
+  CONSISTENCY_READS, DENTAL_JOB, SCORE_PACKET, WAREHOUSE_JOB, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, resumeCases, scoreCaseFailures, scoreCases,
+  scoreOf, scorecardDifferences, screenAssessCases, sentInterview, shownLicenceFailures, triageEdgeCases, verdictWords,
 } from "./suites";
 
 /**
@@ -163,11 +163,25 @@ describe("a reading's own words give no verdict", () => {
 });
 
 /**
- * The code check of 25 November 2026: every scoring evaluation read against one dental job. A second job, a warehouse
- * with a forklift certificate, is read in the consistency, twin and licence cases too.
+ * The suites that compare one reading's score with another's (the consistency, twin and licence cases) read against
+ * two jobs written by hand, the same words on every run. The code check of 25 November 2026 found every scoring
+ * evaluation read against one dental job, so a warehouse job was added. The real-AI runs of 25 and 26 November then
+ * failed on resume lines that only half belonged to a skill or a must-have of the dental job that run's job builder had
+ * written, so the dental job of these suites is written by hand too, and every line of their resumes either names a
+ * must-have or a skill of its job outright or has nothing to do with it.
  */
-describe("the second job of the scoring evaluations", () => {
-  it("is nothing like the first, and has a certificate the licence rule holds", () => {
+describe("the two jobs written by hand for the suites that compare readings", () => {
+  it("the dental job keeps the licence must-have as the licence rule's cases read it, and names one thing in the other", () => {
+    expect(DENTAL_JOB.identity.title).toBe("Registered Dental Hygienist");
+    expect(DENTAL_JOB.requirements.mustHaves.map((m) => [m.key, m.text])).toEqual([["rdh_license", "Active California RDH license"], ["scaling_root_planing", "Experience with scaling and root planing"]]);
+    expect([...credentialMustHaves(DENTAL_JOB)]).toEqual(["rdh_license"]);
+    expect(JSON.stringify(DENTAL_JOB)).not.toMatch(/forklift|warehouse|truck|pallet/i);
+    // on the form, only someone whose resume shows the licence held answers yes to the question about it
+    expect(formAnswersFor(DENTAL_JOB)).toEqual({ fq_license: "yes", fq_hours: "yes" });
+    expect(formAnswersFor(DENTAL_JOB, { licenceHeld: false })).toEqual({ fq_license: "no", fq_hours: "yes" });
+  });
+
+  it("the warehouse job is nothing like it, and has a certificate the licence rule holds", () => {
     expect(WAREHOUSE_JOB.identity.title).toBe("Warehouse Associate");
     expect([...credentialMustHaves(WAREHOUSE_JOB)]).toEqual(["forklift_certificate"]);
     expect(WAREHOUSE_JOB.requirements.mustHaves.map((m) => m.key)).toEqual(["forklift_certificate", "order_picking"]);
@@ -177,20 +191,42 @@ describe("the second job of the scoring evaluations", () => {
     expect(formAnswersFor(WAREHOUSE_JOB, { licenceHeld: false })).toEqual({ fq_forklift: "no", fq_shift: "yes" });
   });
 
-  it("is read in the consistency, twin and licence cases, beside the cases of the first job", () => {
-    const against = <T extends { id: string; job?: unknown }>(cases: readonly T[]) => cases.filter((c) => c.job === WAREHOUSE_JOB).map((c) => c.id);
-    expect(against(consistencyCases)).toEqual(["warehouse_certified_associate", "warehouse_lapsed_certificate"]);
-    expect(against(biasPairs)).toEqual(["warehouse_name", "warehouse_zip_code"]);
-    expect(against(credentialCases)).toEqual(["warehouse_lapsed", "warehouse_said_plainly"]);
-    // every other case still reads against the dental job of the run
-    for (const cases of [consistencyCases, biasPairs, credentialCases]) for (const c of cases) expect(c.job === undefined || c.job === WAREHOUSE_JOB, c.id).toBe(true);
-    expect(biasPairs.filter((p) => !p.job).map((p) => p.id)).toEqual(["name", "graduation_year", "zip_code", "earlier_rejection"]);
-    // a twin pair differs in its cue and in nothing else
-    for (const p of biasPairs.filter((x) => x.job)) {
+  it("every skill of both is a named task or tool, never a quality, and the score counts each one", () => {
+    // how well the work is done is not something a resume line names, so a line would only half belong to such a skill
+    const quality = /\b(?:accura\w*|safe\w*|well|on time|consistent\w*|thorough\w*|gentl\w*|clear\w*|careful\w*|reliabl\w*|plain\w*|trust\w*|standards?|without (?:damage|injury|rushing))\b/i;
+    for (const job of [DENTAL_JOB, WAREHOUSE_JOB]) {
+      for (const skill of job.competencies) expect(`${skill.name}. ${skill.definition} ${skill.indicators.join("; ")}`, skill.key).not.toMatch(quality);
+      // none is named like a must-have, which the score would count once, as the must-have
+      expect(skillsInScore(job).map((c) => c.key)).toEqual(job.competencies.map((c) => c.key));
+    }
+    expect(DENTAL_JOB.competencies.map((c) => c.key)).toEqual(["home_care_instruction", "instrument_sterilization", "x_rays", "dentrix"]);
+    expect(WAREHOUSE_JOB.competencies.map((c) => c.key)).toEqual(["cycle_counts", "loading_trucks"]);
+    expect("Inventory accuracy. Loads and unloads trucks without damage or injury.").toMatch(quality);
+  });
+
+  it("every consistency, twin and licence case is read against one of the two, never the job a run happened to write", () => {
+    const against = <T extends { id: string; job: unknown }>(job: unknown, cases: readonly T[]) => cases.filter((c) => c.job === job).map((c) => c.id);
+    expect(against(DENTAL_JOB, consistencyCases)).toEqual(["experienced_hygienist", "lapsed_license", "assistant_not_yet_hygienist"]);
+    expect(against(DENTAL_JOB, biasPairs)).toEqual(["name", "graduation_year", "zip_code", "earlier_rejection"]);
+    expect(against(DENTAL_JOB, credentialCases)).toEqual(["lapsed", "pending", "in_training", "said_plainly", "active"]);
+    expect(against(WAREHOUSE_JOB, consistencyCases)).toEqual(["warehouse_certified_associate", "warehouse_lapsed_certificate"]);
+    expect(against(WAREHOUSE_JOB, biasPairs)).toEqual(["warehouse_name", "warehouse_zip_code"]);
+    expect(against(WAREHOUSE_JOB, credentialCases)).toEqual(["warehouse_lapsed", "warehouse_said_plainly"]);
+    for (const cases of [consistencyCases, biasPairs, credentialCases]) for (const c of cases) expect(c.job === DENTAL_JOB || c.job === WAREHOUSE_JOB, c.id).toBe(true);
+    // a twin pair whose cue is in the file differs in that cue and in nothing else
+    const inTheFile = biasPairs.filter((p) => p.varies !== "earlier_rejection");
+    expect(inTheFile.map((p) => p.id)).toEqual(["name", "graduation_year", "zip_code", "warehouse_name", "warehouse_zip_code"]);
+    for (const p of inTheFile) {
       expect(p.a).toContain(p.cues[0]);
       expect(p.b).toContain(p.cues[1]);
       expect(p.a.replace(p.cues[0], "").split("\n").slice(2)).toEqual(p.b.replace(p.cues[1], "").split("\n").slice(2));
     }
+  });
+
+  it("the resume lines the real runs read two ways are gone, and the lines they read one way are kept", () => {
+    const resumes = [...consistencyCases.map((c) => c.resume), ...credentialCases.map((c) => c.resume), ...biasPairs.flatMap((p) => [p.a, p.b])].join("\n");
+    for (const half of ["Dentrix scheduling", "pallet wrapping", "receiving"]) expect(resumes).not.toContain(half);
+    for (const clear of ["Chairside assisting, sterilization, X-rays, Dentrix", "Scaling and root planing, patient education", "Periodontal charting, scaling and root planing, Dentrix", "Picked 140 orders a shift with an RF scanner; weekly cycle counts", "Loaded and unloaded twelve trucks a day"]) expect(resumes).toContain(clear);
   });
 });
 
