@@ -326,13 +326,22 @@ function oneOf(value: string, words: string | undefined, allowed: readonly strin
 }
 
 /**
- * The place after an answer on its card. The card comes back while the place has no state, and the plain answer to
- * that is the state alone ("CO", "Colorado"): it completes the place already given ("Denver" becomes "Denver, CO"), so
- * the city is not lost and the card is not asked a third time. Any other answer is the place.
+ * The place once the owner adds its state. The card for the place comes back while the place has no state, and the
+ * plain answer to that is the state and nothing else ("CO", "co.", "Colorado"): it completes the place already given
+ * ("Denver" becomes "Denver, CO"), so the city is not lost and the card is not asked a third time. Null when there is
+ * no place yet, when the place has its state, or when the words are not a state alone.
+ *
+ * One reading for the two ways an owner gives that answer (`stateAlone`): in the card's own box, and as a message typed
+ * to the assistant, which is where the card's "Or type your own answer" puts the cursor (`inAMessage`).
  */
-function placeAfter(before: string | undefined, answer: string): string {
+export function placeCompletedBy(before: string | null | undefined, words: string, where: { inAMessage?: boolean } = {}): string | null {
   const had = before?.trim();
-  return had && !stateOfPlace(had) && stateAlone(answer) ? `${had}, ${answer.trim()}` : answer;
+  return had && !stateOfPlace(had) && stateAlone(words, where) ? `${had}, ${words.trim().replace(/\.$/, "")}` : null;
+}
+
+/** The place after an answer on its card: the place it completes (`placeCompletedBy`), and any other answer is the place. */
+function placeAfter(before: string | undefined, answer: string): string {
+  return placeCompletedBy(before, answer) ?? answer;
 }
 
 /**

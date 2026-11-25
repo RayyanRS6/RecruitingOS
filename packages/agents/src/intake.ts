@@ -8,7 +8,7 @@ import {
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
   BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, beginsWithState, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
-  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, saysState, screenCriterion, stateOfPlace, unresolvedFlags,
+  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, placeCompletedBy, saysState, screenCriterion, stateAlone, stateOfPlace, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -194,9 +194,14 @@ export function ownerWordsOf(messages: IntakeMessage[]): Set<string> {
   return new Set(messages.filter((m) => m.role === "owner").flatMap((m) => wordsOf(m.content)));
 }
 
+/** What the owner typed or pasted since the assistant last replied, in order (a summary of tapped answers is neither). */
+function typedNow(messages: IntakeMessage[]): IntakeMessage[] {
+  return messages.slice(messages.map((m) => m.role).lastIndexOf("assistant") + 1).filter((m) => m.role === "owner" && m.kind !== "answers");
+}
+
 /** Whether the owner typed or pasted anything since the assistant last replied (a summary of tapped answers is neither). */
 export function typedSinceReply(messages: IntakeMessage[]): boolean {
-  return messages.slice(messages.map((m) => m.role).lastIndexOf("assistant") + 1).some((m) => m.role === "owner" && m.kind !== "answers");
+  return typedNow(messages).length > 0;
 }
 
 /** A card asking which company or business the job is for: every job here is the workspace company's, so it is never shown. */
@@ -496,7 +501,8 @@ export function withoutReadyClaim(message: string): string {
  * typed, in any of the ordinary ways people say it, `namesWorkArrangement`; a pasted ad's mention is confirmed on a
  * card). Asked, never assumed. The arrangement the assistant wrote is read from its words ("On site", "Work from home")
  * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept. The state of
- * the place is the owner's to say as well (`placeAsSaid`).
+ * the place is the owner's to say as well (`placeAsSaid`), and when they type it by itself as a message it completes the
+ * place as it does on the place's card (`placeCompletedByMessage`).
  */
 export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: IntakeMessage[]): IntakeFacts {
   const out = { ...normalizeFacts(prev) } as Record<string, unknown>;
@@ -507,14 +513,45 @@ export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: Inta
   const merged = normalizeFacts(out);
   if (messages) {
     const owner = messages.filter((m) => m.role === "owner");
-    const words = ownerWordsOf(owner);
-    const place = wordsOf(merged.locationText ?? "");
-    if (merged.locationText !== prev.locationText && place.filter((w) => words.has(w)).length * 2 < place.length) merged.locationText = prev.locationText;
-    if (merged.locationText && merged.locationText !== prev.locationText) merged.locationText = placeAsSaid(merged.locationText, owner);
+    const completed = placeCompletedByMessage(prev, next, typedNow(messages));
+    if (completed) merged.locationText = completed;
+    else {
+      const words = ownerWordsOf(owner);
+      const place = wordsOf(merged.locationText ?? "");
+      if (merged.locationText !== prev.locationText && place.filter((w) => words.has(w)).length * 2 < place.length) merged.locationText = prev.locationText;
+      if (merged.locationText && merged.locationText !== prev.locationText) merged.locationText = placeAsSaid(merged.locationText, owner, prev.locationText);
+    }
     if (merged.remotePolicy !== prev.remotePolicy && !owner.some((m) => (m.kind ?? "text") === "text" && namesWorkArrangement(m.content))) merged.remotePolicy = prev.remotePolicy;
   }
   if (!RemotePolicy.safeParse(merged.remotePolicy).success) delete merged.remotePolicy;
   return merged;
+}
+
+/**
+ * The place completed by a state the owner typed as a message, or null. The card for the place has "Or type your own
+ * answer", which puts the cursor in the message box, so the plain answer to that card ("CO" after "Denver") arrives as
+ * an ordinary message. It completes the place exactly as it does in the card's own box (`placeCompletedBy` in
+ * packages/core: "Denver" becomes "Denver, CO"), when the place has no state yet and the one message typed since the
+ * last reply is a state and nothing else:
+ * - by the code itself, whatever the assistant made of the message, when the letters can be nothing but the state: not
+ *   one of the codes that are also words ("ok" after "Denver" is no Oklahoma: `stateAlone`, `inAMessage`), and the job
+ *   has its title ("MA", "PA" and "MD" are jobs too, and may answer the card for the title);
+ * - otherwise only when the assistant, which reads the conversation, wrote that very state with the place on this turn
+ *   ("OK" after "Tulsa", read as "Tulsa, OK"): the owner's word and the assistant's reading agree.
+ * Several messages typed since the last reply (a turn failed in between) complete nothing: the first may have moved
+ * the job, so the assistant's reading stands, held to `placeAsSaid`.
+ *
+ * Found on the live site in November 2026: the assistant wrote "Denver, CO" and said it had set it, the state was left
+ * off as one it had added (nothing read a bare code as the owner's answer), and the same card came back, as often as
+ * "CO" was typed.
+ */
+function placeCompletedByMessage(prev: IntakeFacts, next: IntakeFacts, typed: readonly IntakeMessage[]): string | null {
+  if (typed.length !== 1) return null;
+  const words = typed[0]!.content;
+  const byItself = prev.title?.trim() ? placeCompletedBy(prev.locationText, words, { inAMessage: true }) : null;
+  if (byItself) return byItself;
+  const state = stateAlone(words);
+  return state && state === stateOfPlace(next.locationText) ? placeCompletedBy(prev.locationText, words) : null;
 }
 
 /**
@@ -523,12 +560,17 @@ export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: Inta
  * state is on the job page and decides its notices: it is the owner's to say. A state written after the city is kept
  * only when the owner's own words have that state after that city ("Denver, CO", "denver co", "Denver, Colorado"), or
  * say it by itself ("It is in Colorado"); otherwise the city stands alone, and the card for the place asks for the state.
+ *
+ * `before`: the place as it stood. The same city and state spelled another way add nothing, so they stand ("Denver, co"
+ * as "Denver, CO", "Tulsa, OK" as "Tulsa, Oklahoma"): a state the owner gave alone, on the card or as a message, is not
+ * lost when the assistant later tidies the place.
  */
-function placeAsSaid(place: string, owner: readonly IntakeMessage[]): string {
+function placeAsSaid(place: string, owner: readonly IntakeMessage[], before?: string): string {
   const city = cityOf(place);
   const state = city === place.trim() ? null : stateOfPlace(place);
   if (!state) return place;
   const c = city.toLowerCase();
+  if (before && stateOfPlace(before) === state && cityOf(before).toLowerCase() === c) return place;
   const said = owner.some((m) => {
     if (saysState(m.content, state)) return true;
     const lower = m.content.toLowerCase();

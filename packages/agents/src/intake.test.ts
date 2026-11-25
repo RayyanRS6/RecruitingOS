@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "@ros/ai";
 import { IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
-import { adverseDecisionLineApplies, cvScoreFromReading, jobNoticesFor, unresolvedFlags } from "@ros/core";
+import { adverseDecisionLineApplies, cvScoreFromReading, jobNoticesFor, placeAnswered, unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
 import { afterAnswers, afterTurn, alreadyAskedOf, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
@@ -584,6 +584,190 @@ describe("the place of a job: its state is the owner's to say, and the card come
     expect(merged([assistantIn("Seattle"), "It is in WA."], "Seattle, WA", "Seattle")).toBe("Seattle, WA");
     expect(merged([assistantIn("Georgetown"), "It is in Washington DC."], "Georgetown, DC", "Georgetown")).toBe("Georgetown, DC");
     expect(merged([assistantIn("Seattle, Washington")], "Seattle, WA", "")).toBe("Seattle, WA");
+  });
+
+  // Found on the live site in November 2026. The card for the place has "Or type your own answer", which puts the cursor
+  // in the message box, so the owner's "CO" after "Denver" was a message to the assistant, not an answer on the card.
+  // The assistant wrote "Denver, CO" and said it had set it; the server read a bare code as no state, left the state off
+  // as one the assistant had added, and brought the same card back, as often as "CO" was typed. A state and nothing
+  // else, typed while the place has none, now completes the place by the reading the card's own box has.
+  describe("the state typed as a message", () => {
+    /**
+     * The place after the owner's sentence, the assistant's reply and this one message, which the assistant read as `read`
+     * (or not at all). The job has its title, as it had on the live site, unless `more` says otherwise.
+     */
+    const typed = (before: string, message: string, read?: string, more: Partial<IntakeFacts> = { title: "Dental assistant" }) =>
+      mergeFacts(facts({ locationText: before, ...more }), facts(read === undefined ? {} : { locationText: read }), [said(assistantIn(before)), replied("Which state is that in?"), said(message)]).locationText;
+
+    it("completes the place, whatever the assistant made of it", () => {
+      for (const read of [undefined, "Denver", "Denver, CO", "Denver, Colorado", "Denver CO", "CO", "Colorado", "Aurora, CO", "Denver, Colorado, USA"]) {
+        expect(typed("Denver", "CO", read), String(read)).toBe("Denver, CO");
+        expect(typed("Denver", "co", read), String(read)).toBe("Denver, co");
+        expect(typed("Denver", "CO.", read), String(read)).toBe("Denver, CO");
+        expect(typed("Denver", "Colorado", read), String(read)).toBe("Denver, Colorado");
+      }
+      expect(typed("Austin", "TX")).toBe("Austin, TX");
+      expect(typed("Austin", "TX", "Austin, Texas")).toBe("Austin, TX");
+      expect(typed("Kansas City", "Missouri", "Kansas City, KS")).toBe("Kansas City, Missouri");
+      expect(typed("Fort Washington", "MD", "Fort Washington, WA")).toBe("Fort Washington, MD");
+      // each of them now says its state, by the test the checklist uses
+      for (const place of [typed("Denver", "CO"), typed("Denver", "co"), typed("Denver", "Colorado"), typed("Austin", "TX")]) expect(placeAnswered({ locationText: place }), place).toBe(true);
+    });
+
+    it("completes nothing on 'LA' alone or 'Washington' alone, whatever the assistant made of them: the place is still asked", () => {
+      for (const read of [undefined, "Downtown", "Downtown, LA", "Downtown LA", "Los Angeles, CA", "Downtown Los Angeles, CA", "Downtown, Louisiana"]) expect(placeAnswered({ locationText: typed("Downtown", "LA", read) }), String(read)).toBe(false);
+      for (const read of [undefined, "Seattle", "Seattle, WA", "Seattle, Washington", "Washington", "Seattle, DC"]) expect(placeAnswered({ locationText: typed("Seattle", "Washington", read) }), String(read)).toBe(false);
+      // said so that it can only be the one, each completes the place
+      expect(typed("Downtown LA", "California")).toBe("Downtown LA, California");
+      expect(typed("New Orleans", "Louisiana")).toBe("New Orleans, Louisiana");
+      expect(typed("Seattle", "WA")).toBe("Seattle, WA");
+    });
+
+    // "ok", "hi", "or", "in" and "me" are words first. Typed alone they complete nothing by themselves, so "ok" after
+    // "Denver" never makes an Oklahoma job. They are the state only when the assistant, which reads the conversation,
+    // wrote that same state with the city: then the owner's word and the assistant's reading agree.
+    it("takes a code that is also a word only when the assistant read the same state, and never by itself", () => {
+      for (const read of [undefined, "Denver", "Denver, CO", "Denver, Colorado"]) {
+        expect(typed("Denver", "ok", read), String(read)).toBe("Denver");
+        expect(typed("Denver", "OK", read), String(read)).toBe("Denver");
+      }
+      expect(typed("Tulsa", "OK")).toBe("Tulsa");
+      expect(typed("Tulsa", "OK", "Tulsa")).toBe("Tulsa");
+      // the place is completed in the owner's own words, as on the card
+      expect(typed("Tulsa", "OK", "Tulsa, OK")).toBe("Tulsa, OK");
+      expect(typed("Tulsa", "ok", "Tulsa, Oklahoma")).toBe("Tulsa, ok");
+      expect(typed("Portland", "OR", "Portland, Oregon")).toBe("Portland, OR");
+      expect(placeAnswered({ locationText: typed("Tulsa", "ok", "Tulsa, Oklahoma") })).toBe(true);
+      // the assistant read another state than the word: neither is taken
+      expect(typed("Portland", "OR", "Portland, ME")).toBe("Portland");
+      // by its name the state completes the place by itself
+      expect(typed("Tulsa", "Oklahoma")).toBe("Tulsa, Oklahoma");
+      expect(typed("Portland", "Oregon", "Portland")).toBe("Portland, Oregon");
+    });
+
+    // "MA", "PA" and "MD" are jobs too, and may be the answer to the card for the title. While the title is still asked,
+    // two letters complete nothing by themselves: "MA" after "Springfield" must not make a medical assistant's job in
+    // Illinois a Massachusetts job. With the title in, the same letters can only be the state.
+    it("takes two letters for the state by itself only once the job has its title; before that, only when the assistant read the same state", () => {
+      const untitled: Partial<IntakeFacts> = {};
+      for (const read of [undefined, "Springfield", "Springfield, IL"]) {
+        expect(typed("Springfield", "MA", read, untitled), String(read)).toBe("Springfield");
+        expect(typed("Springfield", "PA", read, untitled), String(read)).toBe("Springfield");
+      }
+      expect(typed("Denver", "CO", undefined, untitled)).toBe("Denver");
+      expect(typed("Denver", "Colorado", "Denver", untitled)).toBe("Denver");
+      // the assistant read the letters as the place's state: its reading and the owner's word agree
+      expect(typed("Denver", "CO", "Denver, CO", untitled)).toBe("Denver, CO");
+      expect(typed("Denver", "co", "Denver, Colorado", untitled)).toBe("Denver, co");
+      expect(typed("Springfield", "MA", "Springfield, MA", untitled)).toBe("Springfield, MA");
+      // with the title in
+      expect(typed("Springfield", "MA")).toBe("Springfield, MA");
+      expect(typed("Springfield", "MA", "Springfield, IL")).toBe("Springfield, MA");
+      expect(typed("Pittsburgh", "PA", undefined, { title: "Physician assistant" })).toBe("Pittsburgh, PA");
+    });
+
+    // The safe side: only a message that is the state and nothing else is read as the answer about the place.
+    it("does not read a longer message as the place's state: the place is still asked", () => {
+      for (const read of [undefined, "Denver", "Denver, CO"]) {
+        expect(typed("Denver", "CO is fine, and it is on site", read), String(read)).toBe("Denver");
+        expect(typed("Denver", "CO, on site", read), String(read)).toBe("Denver");
+      }
+      // as before: the state's name in a sentence, or the whole place again, keeps the state the assistant then writes
+      expect(typed("Denver", "It is in Colorado.", "Denver, CO")).toBe("Denver, CO");
+      expect(typed("Denver", "Denver, CO", "Denver, CO")).toBe("Denver, CO");
+    });
+
+    // Two messages typed since the last reply (a turn failed in between): the first may have moved the job, so nothing
+    // is completed and a state the assistant writes is held to the rule as ever. The place is asked, and "CO" answers it.
+    it("completes nothing when several messages were typed since the last reply: the place is asked, and the state then answers it", () => {
+      const title = { title: "Dental assistant" };
+      const moved = [said(assistantIn("Denver")), replied("Which state is that in?"), said("Sorry, it is in Boulder."), said("CO")];
+      expect(mergeFacts(facts({ ...title, locationText: "Denver" }), facts(), moved).locationText).toBe("Denver");
+      const boulder = mergeFacts(facts({ ...title, locationText: "Denver" }), facts({ locationText: "Boulder, CO" }), moved).locationText;
+      expect(boulder).toBe("Boulder");
+      expect(mergeFacts(facts({ ...title, locationText: boulder }), facts(), [...moved, replied("Which state is Boulder in?"), said("CO")]).locationText).toBe("Boulder, CO");
+    });
+
+    it("takes it through a turn: 'Denver', then 'CO': the place is answered, its card does not come back, and the job is a Colorado job", async () => {
+      const { messages, server } = await first(assistantIn("Denver"));
+      expect(server).toMatchObject({ missing: ["location"], mayDraft: false });
+      expect(server.questions.map((q) => q.field)).toEqual(["location"]);
+      const conversation = [...messages, replied(server.message), said("CO")];
+      const reply = await turn(ctx(conversation, server.facts, { alreadyAsked: alreadyAskedOf(server.facts, server.state) }));
+      const placeCard = IntakeQuestion.parse({ id: "a1", field: "location", prompt: "Which state is Denver in?", mode: "free", options: [], allowOwn: true });
+      // whatever the assistant made of the message: nothing, the place as it wrote it on the live site, or a card that asks again
+      for (const made of [reply, { ...reply, factsExtracted: { ...reply.factsExtracted, locationText: "Denver" } }, { ...reply, factsExtracted: { ...reply.factsExtracted, locationText: "Denver, CO" } }, { ...reply, factsExtracted: { ...reply.factsExtracted, locationText: "Denver" }, questions: [placeCard] }]) {
+        const next = afterTurn({ turn: made, messages: conversation, facts: server.facts, state: server.state, actor: dana, at });
+        expect(next.facts.locationText).toBe("Denver, CO");
+        expect(next).toMatchObject({ missing: [], toAsk: [], mayDraft: true });
+        expect(fieldsKnownFromFacts(next.facts, true)).toContain("location");
+        // Colorado's own rule now applies: its benefits card, and no card for the place
+        expect(next.questions.map((q) => q.field)).toEqual(["benefits"]);
+        const job = await places(next.facts, conversation);
+        expect(job.locations).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+        expect(job.jurisdictions).toContain("US-CO");
+        expect(job.pageNotices).toEqual(["ai_use", "privacy", "pay_transparency", "adverse_decision_explanation"]);
+        expect(job.coloradoLine).toBe(true);
+      }
+      // "LA" after "Downtown" completes nothing: the place is still needed, and its card is there
+      const la = await first(assistantIn("Downtown"));
+      const laConversation = [...la.messages, replied(la.server.message), said("LA")];
+      const laReply = await turn(ctx(laConversation, la.server.facts, { alreadyAsked: alreadyAskedOf(la.server.facts, la.server.state) }));
+      for (const read of ["Downtown", "Downtown, LA", "Downtown LA"]) {
+        const next = afterTurn({ turn: { ...laReply, factsExtracted: { ...laReply.factsExtracted, locationText: read } }, messages: laConversation, facts: la.server.facts, state: la.server.state, actor: dana, at });
+        expect(next, read).toMatchObject({ missing: ["location"], mayDraft: false });
+        expect(next.questions.map((q) => q.prompt), read).toEqual([PLACE_CARD]);
+      }
+    });
+
+    // The place completed by a typed state, or by the state in the card's own box, keeps its state when the assistant
+    // later spells the place its own way ("Denver, co" as "Denver, CO"): the same city and state add nothing, so they
+    // are not judged again. Before, a state given as "co" or "OK" in the card's own box was lost at that moment, and the
+    // place was asked for once more; a state the assistant adds to another city is left off as ever.
+    it("keeps the state on later turns, however the assistant then spells the place", async () => {
+      const { messages, server } = await first(assistantIn("Denver"));
+      type Draft = { facts: IntakeFacts; state: IntakeServerState; messages: IntakeMessage[] };
+      /** The assistant's turn on the conversation as it stands, with the place spelled its own way if given. */
+      const assistantTurn = async (from: Draft, respelled?: string) => {
+        const t = await turn(ctx(from.messages, from.facts, { alreadyAsked: alreadyAskedOf(from.facts, from.state) }));
+        const next = afterTurn({ turn: respelled ? { ...t, factsExtracted: { ...t.factsExtracted, locationText: respelled } } : t, messages: from.messages, facts: from.facts, state: from.state, actor: dana, at });
+        return { facts: next.facts, state: next.state, messages: [...from.messages, replied(next.message)], missing: next.missing };
+      };
+      const asked: Draft = { facts: server.facts, state: server.state, messages: [...messages, replied(server.message)] };
+      // typed as a message, in small letters
+      const typedCo = await assistantTurn({ ...asked, messages: [...asked.messages, said("co")] });
+      expect(typedCo.facts.locationText).toBe("Denver, co");
+      for (const respelled of ["Denver, CO", "Denver, Colorado"]) {
+        const later = await assistantTurn({ ...typedCo, messages: [...typedCo.messages, said("Nice to have: Dentrix.")] }, respelled);
+        expect(later.facts.locationText, respelled).toBe(respelled);
+        expect(later.missing, respelled).toEqual([]);
+      }
+      // given in the card's own box, in small letters: the summary line "Where the job is: co" is the owner's answer
+      const inTheBox = (from: Draft, own: string) => afterAnswers({ answers: [{ questionId: from.state.openQuestions.find((q) => q.field === "location")!.id, selected: [], own: [own], skipped: false }], messages: from.messages, facts: from.facts, state: from.state, actor: dana, at });
+      const boxed = await assistantTurn(inTheBox(asked, "co"));
+      expect(boxed.facts.locationText).toBe("Denver, co");
+      expect(boxed.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: co"]);
+      for (const respelled of ["Denver, CO", "Denver, Colorado"]) {
+        const later = await assistantTurn({ ...boxed, messages: [...boxed.messages, said("Nice to have: Dentrix.")] }, respelled);
+        expect(later.facts.locationText, respelled).toBe(respelled);
+        expect(later.missing, respelled).toEqual([]);
+      }
+      // "OK" in the card's own box after "Tulsa" is Oklahoma, and stays so when the assistant writes the name
+      const tulsa = await first(assistantIn("Tulsa"));
+      const tulsaAsked: Draft = { facts: tulsa.server.facts, state: tulsa.server.state, messages: [...tulsa.messages, replied(tulsa.server.message)] };
+      const oklahoma = await assistantTurn(inTheBox(tulsaAsked, "OK"));
+      expect(oklahoma.facts.locationText).toBe("Tulsa, OK");
+      const later = await assistantTurn({ ...oklahoma, messages: [...oklahoma.messages, said("Nice to have: Dentrix.")] }, "Tulsa, Oklahoma");
+      expect(later.facts.locationText).toBe("Tulsa, Oklahoma");
+      expect(later.missing).toEqual([]);
+      // only the same city: one the owner did not name is not taken at all, and for one they moved the job to, the state
+      // is theirs to say, as ever
+      const unnamed = await assistantTurn({ ...typedCo, messages: [...typedCo.messages, said("Nice to have: Dentrix.")] }, "Aurora, CO");
+      expect(unnamed.facts.locationText).toBe("Denver, co");
+      const moved = await assistantTurn({ ...typedCo, messages: [...typedCo.messages, said("Actually the job is in Aurora.")] }, "Aurora, CO");
+      expect(moved.facts.locationText).toBe("Aurora");
+      expect(moved.missing).toEqual(["location"]);
+    });
   });
 
   // As before this rule: a remote job whose owner names no place has no state of its own, and is not asked for one.
