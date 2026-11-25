@@ -1,6 +1,10 @@
 import { ResumeExtraction } from "@ros/contracts";
-import { PROTECTED_TRAITS_RULE, type PromptDef } from "./registry";
+import { PROTECTED_TRAITS_RULE, withoutTag, type PromptDef } from "./registry";
 
+/**
+ * `text`: the resume's own text. `filename` is not read: the model is asked for nothing that needs the file's name, and
+ * a name is whatever the candidate typed. The field stays only while callers still pass it.
+ */
 export type ResumeInput = { text: string; filename?: string };
 
 /**
@@ -15,7 +19,9 @@ ${PROTECTED_TRAITS_RULE}`;
 /**
  * The resume's facts, read once per application: the name and the place, positions, licences, certifications and
  * skills, each with the line it rests on. Nothing is asked for that no code reads: the shape the model is sent is the
- * stored one (`ResumeExtraction` in @ros/contracts), which lists only what has a reader.
+ * stored one (`ResumeExtraction` in @ros/contracts), which lists only what has a reader. The resume's text goes between
+ * its tags as the resume reading's does (`withoutTag`): the candidate's text never carries the tag, so it cannot end its
+ * block or open another.
  */
 export const resumeExtractPrompt: PromptDef<ResumeInput, ResumeExtraction> = {
   key: "resume.extract",
@@ -25,6 +31,6 @@ export const resumeExtractPrompt: PromptDef<ResumeInput, ResumeExtraction> = {
   schema: ResumeExtraction,
   system: () => [{ text: SYSTEM, cache: true }],
   messages: (input) => [
-    { role: "user", content: `<resume filename="${input.filename ?? "resume"}">\n${input.text.slice(0, 40_000)}\n</resume>\n\nExtract the structured facts.` },
+    { role: "user", content: `<resume>\n${withoutTag(input.text.slice(0, 40_000), "resume")}\n</resume>\n\nExtract the structured facts.` },
   ],
 };

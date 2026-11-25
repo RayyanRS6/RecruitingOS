@@ -10,10 +10,11 @@ export { PLACEHOLDER as SCORING_PLACEHOLDER, SCORING_VIEW_VERSION, hasPlaceholde
 /**
  * The CV's facts, read by the model once per application. Quotes are verified against the source text in code: any quote
  * that is not in the CV is dropped, so nothing the model invented can be presented as evidence. The model is called with
- * no transaction open; the run is recorded in its own short one.
+ * no transaction open; the run is recorded in its own short one. The model is sent the CV's text and never the file's
+ * name, which is whatever the candidate typed: `filename` is not read, and stays only while the caller still passes it.
  */
 export async function extractResume(db: Db, ai: AiRuntime, input: { companyId: string; workflowRunId?: string | null; text: string; filename?: string; documentId: string }): Promise<RunOutcome<ResumeExtraction>> {
-  const out = await runPromptDetached(db, ai, resumeExtractPrompt, { text: input.text, filename: input.filename }, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { documentId: input.documentId, chars: input.text.length } });
+  const out = await runPromptDetached(db, ai, resumeExtractPrompt, { text: input.text }, { companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { documentId: input.documentId, chars: input.text.length } });
   if (!out.ok) return out;
   return { ...out, output: verifyQuotes(out.output, input.text) };
 }
