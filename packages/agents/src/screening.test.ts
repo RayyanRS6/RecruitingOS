@@ -501,6 +501,10 @@ describe("what each turn of the chat is held to", () => {
       // however the restatement is worded: one word in common with the job's first sentence changes nothing
       for (const lead of ["You keep a shared list and help the team stay on track.", "You keep tasks on one list so nobody gets confused."]) expect(moveTo("wq_help", `${lead}\n\nWhat did you do, and how did it turn out?`), lead).toBe(`${lead}\n\n${HELP}`);
       expect(moveToRoom("You would explain it to the class as a thirsty finger.\n\nHow do you handle the room?")).toBe("You would explain it to the class as a thirsty finger.\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?");
+      // an owner's own question typed without capitals has two sentences all the same: its last one alone is completed too
+      const TYPED = "tell us about a hard day at work. what did you do about it?";
+      expect(moveToOwn(TYPED, "You keep a list.\n\nWhat did you do about it?")).toBe(`You keep a list.\n\n${TYPED}`);
+      expect(moveToOwn(TYPED, "You keep a list.\n\nHow did you handle a hard day?")).toBe("You keep a list.\n\nHow did you handle a hard day?");
     });
 
     it("leaves alone a question that stands by itself, a short check on what they said, and a follow-up on the same question", () => {
@@ -1286,6 +1290,44 @@ describe("what each turn of the chat is held to", () => {
       expect(first.turn.answerRecorded?.answer).toBe("I can start on the 1st.");
       // and two sentences of the assistant's are still two
       expect(shown(`You work mornings. You like the early shift.\n\n${NEXT}`)).toBe(`You work mornings.\n\n${NEXT}`);
+    });
+
+    // The same cut at an abbreviation no list names: "in the U.S. for five years" would reach the candidate as "… in the
+    // U.S.". In words a model wrote, a full stop before a small letter ends no sentence; a capital, a digit or an opening
+    // quote opens the next one.
+    it("in the model's words a full stop before a small letter is an abbreviation's: the restatement keeps its sentence whole", () => {
+      for (const lead of [
+        "You have worked in the U.S. for five years.",
+        "You have charted for approx. two years in Dentrix.",
+        "You worked at Smile Dental Inc. as a hygienist.",
+        // "No." before a number, and a time zone after a time, go on with the sentence
+        "Your registration No. 4821 is active.",
+        "You can work 8 a.m. Pacific to 5 p.m. Pacific.",
+        "You can work 9 a.m. ET to 5 p.m. ET on weekdays.",
+      ]) expect(shown(`${lead}\n\n${NEXT}`), lead).toBe(`${lead}\n\n${NEXT}`);
+      // a second restatement in one breath is still left out: after a capital, after a digit, after an opening quote
+      expect(shown(`You worked in the U.S. You then moved to Canada.\n\n${NEXT}`)).toBe(`You worked in the U.S.\n\n${NEXT}`);
+      expect(shown(`You saw nine patients a day. 12 on Fridays.\n\n${NEXT}`)).toBe(`You saw nine patients a day.\n\n${NEXT}`);
+      expect(shown(`You called it a long week. "Never again" were your words.\n\n${NEXT}`)).toBe(`You called it a long week.\n\n${NEXT}`);
+      // and the question is still told from a restatement in the same paragraph
+      expect(shown(`You have worked in the U.S. for five years. ${NEXT}`)).toBe(`You have worked in the U.S. for five years.\n\n${NEXT}`);
+    });
+
+    it("a candidate's reply is read as people type: a full stop ends a sentence before a small letter, so their question is told from their answer", () => {
+      expect(onlyQuestions("sure. what are the hours?")).toBe(true);
+      expect(onlyQuestions("ok. thanks. what does it pay?")).toBe(true);
+      expect(onlyQuestions("i worked in the u.s. for five years. what does it pay?")).toBe(false);
+      // a day, a time zone or one word before the question mark goes on with the sentence after a time: these only ask
+      for (const asks of ["Is 8 a.m. OK?", "Can I start at 9 a.m. Mondays?", "Is that 8 a.m. Pacific or Eastern?", "Is it 9 a.m. ET?"]) expect(onlyQuestions(asks), asks).toBe(true);
+      const p = onHours();
+      for (const [reply, answer] of [
+        ["i worked in the u.s. for five years. what does it pay?", "i worked in the u.s. for five years."],
+        ["weekdays 8 a.m. Pacific to 5 p.m. Pacific. What does it pay?", "weekdays 8 a.m. Pacific to 5 p.m. Pacific."],
+        ["My registration No. 4821 is active. Is parking free?", "My registration No. 4821 is active."],
+      ] as const) {
+        const r = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "wq_tools", messageToCandidate: `The hiring team can discuss pay with you.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", reply), latest: reply });
+        expect(r.turn.answerRecorded, reply).toEqual({ questionKey: "wq_hours", answer, complete: true });
+      }
     });
   });
 

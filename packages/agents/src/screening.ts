@@ -421,38 +421,51 @@ const NEVER_ENDS_A_SENTENCE = /(?:^|[^\p{L}\p{N}])(?:dr|mr|mrs|ms|st|vs|e\.g|i\.
 /** A time of day ("8 a.m.", "5 p.m.") and "etc.": a sentence may end with one, or go on after it. */
 const A_TIME = /(?:^|[^\p{L}])[ap]\.m\.$/iu;
 const AND_SO_ON = /(?:^|[^\p{L}])etc\.$/iu;
+/** "No." before a number ("licence No. 4821"): the number goes with it. */
+const A_NUMBER_SIGN = /(?:^|[^\p{L}])no\.$/iu;
 /** How a new sentence opens after one of those: with a capital letter, with or without an opening quote. */
 const OPENS_A_SENTENCE = /^["“'‘(]?\p{Lu}/u;
-/** A day of the week, which goes on with the sentence after a time ("8 a.m. to 5 p.m. Monday to Friday"). */
-const A_DAY = /^(?:Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)s?\b/;
+/**
+ * What goes on with the sentence after a time though it opens with a capital: a day of the week ("8 a.m. to 5 p.m.
+ * Monday to Friday"), a time zone ("5 p.m. Pacific", "5 p.m. ET"), or one word before a question mark ("Is 8 a.m. OK?").
+ */
+const AFTER_A_TIME = /^(?:(?:Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)s?\b|(?:Pacific|Mountain|Central|Eastern|[PMCE][SD]?T|UTC|GMT)\b|\p{L}+\?)/u;
+/** How a sentence opens in words a model wrote: with a capital letter, a digit or an opening quote. */
+const WRITTEN_OPENING = /^(?:["“'‘(]|\p{Lu}|\p{N})/u;
 
 /**
  * Whether the sentence goes on after a full stop: `head` is the text up to and with it, `rest` what follows the space.
  * After a title or "e.g." always. After a time, unless a new sentence opens ("… to 5 p.m. What does it pay?"), which a
- * day of the week does not ("… 5 p.m. Monday to Friday"); so before a small letter or a digit it goes on ("8 a.m. to 5
- * p.m."). After "etc." unless a new sentence opens.
+ * day of the week or a time zone does not ("… 5 p.m. Monday to Friday"); so before a small letter or a digit it goes on
+ * ("8 a.m. to 5 p.m."). After "etc." unless a new sentence opens, and after "No." before a number. Anywhere else, in
+ * words a model wrote (`typed` false), it goes on before a small letter: the full stop was an abbreviation's ("in the
+ * U.S. for five years", "approx. two years").
  */
-function goesOnAfter(head: string, rest: string): boolean {
+function goesOnAfter(head: string, rest: string, typed: boolean): boolean {
   if (!head.endsWith(".")) return false;
   if (NEVER_ENDS_A_SENTENCE.test(head)) return true;
-  if (A_TIME.test(head)) return !OPENS_A_SENTENCE.test(rest) || A_DAY.test(rest);
-  return AND_SO_ON.test(head) && !OPENS_A_SENTENCE.test(rest);
+  if (A_TIME.test(head)) return !OPENS_A_SENTENCE.test(rest) || AFTER_A_TIME.test(rest);
+  if (AND_SO_ON.test(head)) return !OPENS_A_SENTENCE.test(rest);
+  if (A_NUMBER_SIGN.test(head) && /^\p{N}/u.test(rest)) return true;
+  return !typed && !WRITTEN_OPENING.test(rest);
 }
 
 /**
- * The sentences of a text, the assistant's or the candidate's. A sentence ends at ".", "!" or "?" followed by a space,
- * and at a line break; not at the full stop of an abbreviation (`goesOnAfter`). On the live site on 25 November 2026
- * "… Monday to Friday, 8 a.m. to 5 p.m." was read as two sentences, and the restatement, which keeps one, reached the
- * candidate as "… 8 a.m.". Everywhere else a full stop ends a sentence as before, also before a small letter:
- * candidates type in a chat without capitals ("yes. what does it pay?"), and the question in such a reply must still be
- * told from the answer.
+ * The sentences of a text. A sentence ends at "!" or "?" followed by a space, at a line break, and at a full stop that
+ * is not an abbreviation's (`goesOnAfter`). On the live site on 25 November 2026 "… Monday to Friday, 8 a.m. to 5 p.m."
+ * was read as two sentences, and the restatement, which keeps one, reached the candidate as "… 8 a.m.".
+ * - Words a model wrote (the default): a sentence ends at a full stop only before a capital letter, a digit or an
+ *   opening quote, and never after a known abbreviation.
+ * - `typed`, what a person typed (a candidate's reply): people type in a chat without capitals ("yes. what does it
+ *   pay?"), and the question in such a reply must still be told from the answer, so there a full stop ends a sentence
+ *   before a small letter too, as it always did; only the known abbreviations hold it together.
  */
-function sentencesOf(text: string): string[] {
+function sentencesOf(text: string, typed = false): string[] {
   const out: string[] = [];
   for (const line of text.split(/\n+/)) {
     let from = 0;
     for (const gap of line.matchAll(/(?<=[.!?])\s+/g)) {
-      if (goesOnAfter(line.slice(from, gap.index), line.slice(gap.index + gap[0].length))) continue;
+      if (goesOnAfter(line.slice(from, gap.index), line.slice(gap.index + gap[0].length), typed)) continue;
       out.push(line.slice(from, gap.index));
       from = gap.index + gap[0].length;
     }
@@ -601,7 +614,8 @@ function wordForWord(sentences: string[], known: string | null | undefined): { f
  * already answered, or the model's own words, and stands.
  */
 function onlyItsEnd(written: string, jobQuestion: string): boolean {
-  const job = sentencesOf(jobQuestion);
+  // the job's question may be an owner's, typed without capitals: its sentences are read as a person's are
+  const job = sentencesOf(jobQuestion, true);
   return job.length >= 2 && plainKey(written) === plainKey(job[job.length - 1]);
 }
 
@@ -750,7 +764,7 @@ function asksSomething(text: string): boolean {
  * "Ok. What are the hours?"): a question they asked is never their answer.
  */
 export function onlyQuestions(text: string | null | undefined): boolean {
-  const sentences = sentencesOf(text ?? "");
+  const sentences = sentencesOf(text ?? "", true);
   return sentences.some(asksAssistant) && sentences.every((s) => asksAssistant(s) || FILLER.test(s));
 }
 
@@ -790,7 +804,7 @@ export type ChatTurn = ScreenTurn & { answerRecorded: RecordedAnswer | null };
 
 /** Replies without what is never an answer: one that only shows confusion or only asks the assistant something, and a question asked inside a longer one. */
 function usableReplies(replies: ReadonlyArray<string>): string[] {
-  return replies.filter((r) => !seemsConfused(r) && !onlyQuestions(r)).map((r) => (sentencesOf(r).some(asksAssistant) ? sentencesOf(r).filter((s) => !asksAssistant(s)).join(" ") : r)).filter(Boolean);
+  return replies.filter((r) => !seemsConfused(r) && !onlyQuestions(r)).map((r) => (sentencesOf(r, true).some(asksAssistant) ? sentencesOf(r, true).filter((s) => !asksAssistant(s)).join(" ") : r)).filter(Boolean);
 }
 
 /** A message without the job's own questions in it: the words the model wrote around them. */
