@@ -16,7 +16,7 @@ import { postsCaseResult, postsCases } from "./posts-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication, type EvalInterview } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
 import {
-  CONSISTENCY_READS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, intakeGolden,
+  CONSISTENCY_READS, DENTAL_JOB, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, intakeGolden,
   intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, scoreCaseFailures, scoreCases, scoreOf, scorecardDifferences, screenAssessCases, screenConsistencyCases,
   screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, verdictWords, type IntakeCase,
 } from "./suites";
@@ -101,7 +101,10 @@ async function main() {
     record("resume.hallucination", hall);
   }
 
-  /** The golden dental hygienist job the CV and AI interview suites read against (written once per run). */
+  /**
+   * The dental hygienist job the job builder writes once per run. The resume suites that compare no scores and the AI
+   * interview's suites read against it, which keeps the link between writing a job and reading against it tested.
+   */
   let golden: Promise<RolePacket> | null = null;
   const goldenPacket = (): Promise<RolePacket> => {
     golden ??= (async () => {
@@ -115,7 +118,11 @@ async function main() {
   };
 
   if (familyRuns("triage")) {
-    /** The dental job of the run. A case with a job of its own (`WAREHOUSE_JOB`) is read against that one instead. */
+    /**
+     * The dental job of the run, which the suites that compare no scores read against. Every twin, consistency and
+     * licence case names its own job, written by hand (`DENTAL_JOB`, `WAREHOUSE_JOB`), so no score compared here rests on
+     * which skills a run's job happened to have.
+     */
     const packet = await goldenPacket();
     /** A reading's findings with their quotes, and the CV score the code works out from them against the job it was read for. */
     const findingsOf = (label: string, a: EvidenceAssessment, job: RolePacket = packet) =>
@@ -192,7 +199,7 @@ async function main() {
     // must be sent the very same input for both (`sameModelInput`).
     const bias: CaseResult[] = [];
     for (const pair of biasPairs) {
-      const job = pair.job ?? packet;
+      const job = pair.job;
       // The same CV file is read for its facts once, as it would be stored once.
       const shared = pair.a === pair.b ? { extraction: await extract(`${pair.id}_resume`, pair.a) } : {};
       const a = await assess(`${pair.id}_a`, pair.a, { candidate: pair.candidates[0], earlier: pair.earlier?.[0], ...shared }, job);
@@ -216,7 +223,7 @@ async function main() {
     const steady: CaseResult[] = [];
     const noted = new Set<RolePacket>();
     for (const c of consistencyCases) {
-      const job = c.job ?? packet;
+      const job = c.job;
       const reads: EvidenceAssessment[] = [];
       const notes: string[] = noted.has(job) ? [] : [jobNote(job)];
       noted.add(job);
@@ -237,10 +244,10 @@ async function main() {
     // Licence readings: a credential is "no" only when the candidate says plainly they do not hold it; lapsed, expired,
     // pending or in training is "unknown". Each CV is read as the app reads it (three readings and their middle
     // answer), twice, and both must give the expected finding.
-    const credentials = credentialMustHaves(packet);
+    const credentials = credentialMustHaves(DENTAL_JOB);
     const licence: CaseResult[] = [];
     for (const c of credentialCases) {
-      const job = c.job ?? packet;
+      const job = c.job;
       const reads: EvidenceAssessment[] = [];
       const notes: string[] = [];
       const f: string[] = [];
@@ -263,9 +270,10 @@ async function main() {
     const asIs = { restore: (s: string) => s };
     for (const c of scriptedCredentialCases) {
       const scripted = c.readings.map((r, i) => ({ ok: true as const, output: scriptedReading([...credentials], r), runId: `${c.id}_${i + 1}`, model: "scripted" }));
-      const r = readingsOutcome(scripted, asIs, { resumeText: c.resume, formAnswers: {}, packet });
+      // against the hand-written dental job, like the model cases above: no case of this suite rests on the run's job
+      const r = readingsOutcome(scripted, asIs, { resumeText: c.resume, formAnswers: {}, packet: DENTAL_JOB });
       const f = r.ok ? credentialFailures(r.output, credentials, c.expect) : [r.error];
-      licence.push({ id: `scripted_${c.id}`, pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("combined", r.output)] } : {}) });
+      licence.push({ id: `scripted_${c.id}`, pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("combined", r.output, DENTAL_JOB)] } : {}) });
     }
     record("triage.credentials", licence);
 

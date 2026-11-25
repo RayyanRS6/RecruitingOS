@@ -21,7 +21,8 @@ export type CaseDiagnostics = {
   /** What the team would see: the readings through the code's checks, combined into the middle answer. */
   shown?: Array<TraceOutput & { label: string }>;
   /**
-   * The job a case was read against, which is written afresh on each run: the questions its AI interview asked (a
+   * The job a case was read against (the one the job builder wrote in the run or, in the suites that compare readings,
+   * one of the two written by hand): the questions its AI interview asked (a
    * must-have the chat asked about among them), its must-haves, and each skill with its importance, definition and
    * indicators, as the CV reading is shown them.
    */

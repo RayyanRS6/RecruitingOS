@@ -97,7 +97,7 @@ export function scoringInput(input: Pick<AssessInput, "packet" | "extraction" | 
 /**
  * The candidate's answers on the application form as the CV reading reads them, one line each: every answered question
  * as a sentence ("Do you hold an active CA RDH license? Yes.", `formAnswerSentences` in @ros/core, the same wording the
- * AI interview is given, so a quote of one is always found again). Never a field name.
+ * AI interview lists on "Check your answers", so a quote of one is always found again). Never a field name.
  */
 export function formAnswerLines(packet: Pick<RolePacket, "formQuestions"> | null | undefined, answers: Readonly<Record<string, unknown>> | null | undefined): string[] {
   return formAnswerSentences(packet?.formQuestions ?? [], answers).map((s) => s.sentence);
