@@ -8,6 +8,7 @@ import type { Integrations } from "@ros/integrations";
 import { cancelAiInterview } from "@ros/workflows";
 import type { Container } from "../container";
 import { quarantineKey } from "../uploads";
+import { acceptingApplications } from "./closing-date";
 
 type Application = typeof applications.$inferSelect;
 type Candidate = typeof candidates.$inferSelect;
@@ -59,7 +60,7 @@ export async function createApplication(tx: Tx, container: Container, input: New
   const [role] = await tx.select().from(roles).where(eq(roles.id, input.roleId)).limit(1);
   if (!role) throw new Error("role not found");
   // `closingGrace`: a form opened before the job's closing date passed may still be sent (services/closing-date.ts).
-  const admits = (role.status === "open" && role.acceptingApplications) || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
+  const admits = acceptingApplications(role) || (!!opts.closingGrace && role.status === "open" && role.applicationsClosedReason === CLOSING_DATE_REASON);
   if (!admits || !role.currentPacketVersion) throw new Error("role is not accepting applications");
   // A trial that ended takes no new application, refused the way a job not taking applications is; `trialGrace` is for a
   // form opened before the end (pages/apply-form.tsx).

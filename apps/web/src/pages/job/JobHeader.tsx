@@ -65,12 +65,13 @@ export function JobHeader({ role, current }: { role: RoleDetail; current: JobTab
     else if (action === "close") setDialog("close");
   };
   const facts = jobFacts(role.packet, applyByOf(role.closingDate, role.status));
+  // The status dot pulses while the job takes applications: the API's own answer (open, and not stopped), shown as it is.
   return (
     <>
       <PageHeader
         className="mb-1"
         title={role.title}
-        status={<Pill tone={statusTone(role.status)} pulse={role.status === "open" && role.acceptingApplications}>{role.statusLabel}</Pill>}
+        status={<Pill tone={statusTone(role.status)} pulse={role.acceptingApplications}>{role.statusLabel}</Pill>}
         sub={facts.length ? facts.join(" · ") : undefined}
         actions={
           <>

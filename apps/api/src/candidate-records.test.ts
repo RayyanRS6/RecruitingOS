@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { redactText } from "@ros/contracts";
-import { createDataRequest, fulfilCorrectionRequest } from "@ros/core";
-import { applications, candidates, communications, companies, dataRequests, screens, withPlatform, withTenant } from "@ros/db";
+import { createDataRequest, fulfilCorrectionRequest, stageBeforeDecision } from "@ros/core";
+import { applications, candidates, communications, companies, dataRequests, events, screens, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter } from "@ros/integrations";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -315,6 +315,16 @@ describe("candidates and their applications", () => {
       expect(page).not.toMatch(/Decision|Not moving forward|did not work out/);
       expect(page).toContain("Withdraw my application");
       expect(page).not.toMatch(NEVER);
+      // Nor does "Last update" give the day of the decision away: it stays the day the stage they were at began. The
+      // stage history is read in one place (`stageBeforeDecision`, which an undo follows too): the latest move is the
+      // private decision, and the move before it is when they sent their answers.
+      const lastUpdate = (html: string) => /<span>Last update<\/span><span>([^<]+)<\/span>/.exec(html)?.[1] ?? null;
+      const [decided, sentAnswers] = await container.db.select({ id: events.id }).from(events).where(and(eq(events.type, "application.stage_changed"), eq(events.subjectId, a.id))).orderBy(desc(events.id)).limit(2);
+      await container.db.update(events).set({ occurredAt: "2026-11-12T18:00:00.000Z" }).where(eq(events.id, decided.id));
+      await container.db.update(events).set({ occurredAt: "2026-11-05T18:00:00.000Z" }).where(eq(events.id, sentAnswers.id));
+      const read = await withTenant(container.db, companyId, (tx) => stageBeforeDecision(tx, a.id));
+      expect({ before: read.before, since: read.since && new Date(read.since).toISOString() }).toEqual({ before: "screen_complete", since: "2026-11-05T18:00:00.000Z" });
+      expect(lastUpdate(await statusPage(roleA, stan))).toBe(statusDay("2026-11-05T18:00:00.000Z", zone));
       // the email waits a short while, during which nothing shows; once it has left, the page says the decision
       await act(a.id, "send_decision");
       expect(await statusPage(roleA, stan)).not.toMatch(/Decision|Not moving forward/);
@@ -326,6 +336,9 @@ describe("candidates and their applications", () => {
       expect(nextLine(page)).toBe("Thank you for applying. This role did not work out.");
       expect(page).not.toContain("Withdraw my application");
       expect(page).not.toMatch(NEVER);
+      // told: the last update is the decision's own day
+      expect(lastUpdate(page)).toBe(statusDay((await applicationOf(roleA, stan)).stageChangedAt, zone));
+      expect(lastUpdate(page)).not.toBe(statusDay("2026-11-05T18:00:00.000Z", zone));
     });
 
     it("hired reads as a decision at once; and once a job has closed, someone not hired and not told reads only that it takes no more applications, with nothing offered or promised", async () => {

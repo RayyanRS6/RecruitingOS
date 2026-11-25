@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { trialPaused } from "@ros/contracts";
+import { companyIsLive } from "@ros/core";
 import { companies, roles, withPlatform } from "@ros/db";
 import type { Container } from "../container";
 import type { Vars } from "../middleware/session";
@@ -26,9 +27,9 @@ export function resetSitemapCache(container: Container): void {
 }
 
 /**
- * Open jobs that take applications, of companies ITS has confirmed (an unconfirmed company is in no sitemap). A
- * company whose trial has ended takes no new applications, so its jobs leave the sitemap too. Platform read: the
- * sitemap spans every company.
+ * Open jobs that take applications, of companies that are live (`companyIsLive`, the one gate the careers pages ask
+ * too: a company that is waiting or was declined is in no sitemap). A company whose trial has ended takes no new
+ * applications, so its jobs leave the sitemap too. Platform read: the sitemap spans every company.
  */
 async function listings(container: Container): Promise<Listing[]> {
   const rows = await withPlatform(container.db, (tx) =>
@@ -36,7 +37,7 @@ async function listings(container: Container): Promise<Listing[]> {
       .select({ roleId: roles.id, updatedAt: roles.updatedAt, slug: companies.slug, companySettings: companies.settings, planKey: companies.planKey })
       .from(roles)
       .innerJoin(companies, eq(companies.id, roles.companyId))
-      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true), sql`coalesce(${companies.settings}->>'verifiedAt', '') <> ''`))
+      .where(and(eq(roles.status, "open"), eq(roles.acceptingApplications, true), companyIsLive))
       .orderBy(roles.openedAt),
   );
   const now = container.engine.clock();

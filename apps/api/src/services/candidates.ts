@@ -165,11 +165,13 @@ export function rowOf(p: Person, ctx: JobContext): CandidateRow {
   };
 }
 
-const noCounts = (): CandidateCounts => ({ total: 0, byTab: Object.fromEntries(CandidateTab.options.map((tab) => [tab, 0])) as Record<CandidateTab, number>, locked: 0 });
+/** A job nobody has applied to: no one in any tab, and no one locked. */
+export const noCounts = (): CandidateCounts => ({ total: 0, byTab: Object.fromEntries(CandidateTab.options.map((tab) => [tab, 0])) as Record<CandidateTab, number>, locked: 0 });
 
 /**
  * How many people each job has in each tab. A tab counts the people the team may read; the people past the plan's
- * candidates per job are counted only in `locked` and in `total`.
+ * candidates per job are counted only in `locked` and in `total`. The one count: a job's Candidates list, the Jobs
+ * list, a job's page and Home all read these figures, so they can never differ.
  */
 export async function candidateCounts(tx: Tx, roleIds: readonly string[]): Promise<Map<string, CandidateCounts>> {
   const out = new Map(roleIds.map((id) => [id, noCounts()]));

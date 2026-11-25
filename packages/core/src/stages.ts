@@ -74,7 +74,7 @@ export async function transition(q: Queryable, input: Move): Promise<{ from: App
  * the stage the decision was made at. Nothing of the decision stays on the application.
  */
 export async function undoDecision(q: Queryable, input: Omit<Move, "to" | "by">): Promise<{ from: ApplicationStage; to: ApplicationStage }> {
-  const before = await stageBeforeDecision(q, input.applicationId);
+  const { before } = await stageBeforeDecision(q, input.applicationId);
   return move(q, { ...input, to: stageAfterUndo(before), by: "team", payload: { ...(input.payload ?? {}), undo: true } }, true);
 }
 
@@ -97,10 +97,15 @@ async function move(q: Queryable, input: Move, undo: boolean): Promise<{ from: A
   return { from, to: input.to };
 }
 
-/** The stage a decision (Hired, Not selected) was made at: where the application's latest move came from. Null when nothing is recorded. */
-export async function stageBeforeDecision(q: Queryable, applicationId: string): Promise<ApplicationStage | null> {
-  const [last] = await q.select({ payload: events.payload }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId), eq(events.type, "application.stage_changed"))).orderBy(desc(events.id)).limit(1);
-  return (last?.payload.from as ApplicationStage | undefined) ?? null;
+/**
+ * The stage a decision (Hired, Not selected) was made at, read off the stage history: `before`, where the application's
+ * latest move came from (null when nothing is recorded), and `since`, when that stage began: the move before the latest
+ * (null when the latest move was its first, so the stage began when they applied). The one reading of it: an undo puts
+ * the person back by `before`, and the candidate's own page stands at `before` since `since` while a decision is private.
+ */
+export async function stageBeforeDecision(q: Queryable, applicationId: string): Promise<{ before: ApplicationStage | null; since: string | null }> {
+  const [last, previous] = await q.select({ payload: events.payload, at: events.occurredAt }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, applicationId), eq(events.type, "application.stage_changed"))).orderBy(desc(events.id)).limit(2);
+  return { before: (last?.payload.from as ApplicationStage | undefined) ?? null, since: previous?.at ?? null };
 }
 
 /**
