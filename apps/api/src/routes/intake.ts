@@ -111,7 +111,7 @@ async function turn(container: Container, input: Parameters<typeof runIntakeTurn
  * as it is, and an administrator has been alerted. Any other failure keeps "Try again".
  */
 function turnReply(r: TurnOutcome, t: Pick<Tenant, "role">): IntakeTurnReply {
-  if (!("error" in r)) return { assistantMessage: r.turn.assistantMessage, readyToCompile: r.turn.readyToCompile, takenFromAd: r.turn.takenFromAd, notARole: r.notARole };
+  if (!("error" in r)) return { assistantMessage: r.turn.assistantMessage, takenFromAd: r.turn.takenFromAd, notARole: r.notARole };
   if (r.busy) return { error: "The assistant did not answer.", recovery: AI_HELP_BUSY_LINE.turn, upgrade: false, ask: null };
   if (r.noCredit) return { error: "The assistant did not answer.", recovery: aiHelpLine("turn", r.words), upgrade: true, ask: can(t.role, "plan.request") ? askForAiHelpOn(r.words?.planKey) : null };
   if (r.unavailable) return { error: "The assistant is not available right now.", recovery: ASSISTANT_UNAVAILABLE_LINE, upgrade: false, ask: null, unavailable: true };

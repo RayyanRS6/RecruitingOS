@@ -72,7 +72,9 @@ describe("the job builder", () => {
     expect(r0.status).toBe(201);
     const first = (await r0.json()) as IntakeStartResponse;
     expect(first.notARole).toBe(false);
-    expect(first.reply).toMatchObject({ readyToCompile: false, notARole: false, takenFromAd: [] });
+    expect(first.reply).toMatchObject({ notARole: false, takenFromAd: [] });
+    // whether the job can be written is the draft's readiness, the one place the page reads it: the reply carries no second copy
+    expect(first.reply).not.toHaveProperty("readyToCompile");
     let draft = first.session!;
     expect(draft.facts).toMatchObject({ title: "Software Engineer", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
     // nothing is assumed: not the company's own place, not "on site"
@@ -118,7 +120,7 @@ describe("the job builder", () => {
     draft = two.session;
     expect(draft.readiness).toMatchObject({ missing: [], mayDraft: true, draftBlocker: null });
     expect(draft.questions).toEqual([]);
-    expect(two.reply).toMatchObject({ readyToCompile: true });
+    expect(two.reply).not.toHaveProperty("readyToCompile");
     expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Austin, TX\nOn site, hybrid or remote: Hybrid\nPay: $120,000–$150,000 a year", "Full or part time: Full time\nSchedule: Monday to Friday, 9 to 5"]);
 
     // written

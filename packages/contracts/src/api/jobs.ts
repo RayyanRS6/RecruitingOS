@@ -58,7 +58,7 @@ export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
  * the AI provider itself is the problem (it refuses our account, or it is not answering): trying again at once would not
  * help, an administrator has been alerted, and `recovery` is the whole sentence to show, exactly as it is.
  */
-export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
+export type IntakeTurnReply = { assistantMessage: string; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
 
 /** POST /api/v1/intake/sessions: the new draft and its first turn; `session` is null when the message was not about hiring someone. */
 export type IntakeStartResponse = { session: IntakeSessionView | null; notARole: boolean; reply: IntakeTurnReply };

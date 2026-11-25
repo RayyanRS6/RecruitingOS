@@ -386,7 +386,7 @@ describe("a turn that fails", () => {
     expect(used).toEqual({ message: "Your plan's AI help is used up. Upgrade to keep going.", ask: { label: "Talk to ITS", reason: AI_HELP_UPGRADE_QUESTION } });
     // someone who may not ask about the plan reads the line and gets no button
     expect(turnProblem({ error: "ai_credit_used_up", recovery: "Your plan's AI help is used up.", upgrade: true, ask: null })).toEqual({ message: "Your plan's AI help is used up.", ask: null });
-    const ok = { assistantMessage: "Got it.", readyToCompile: false, takenFromAd: [], notARole: false };
+    const ok = { assistantMessage: "Got it.", takenFromAd: [], notARole: false };
     expect(turnProblem(ok)).toBeNull();
     expect(turnProblem(null)).toBeNull();
     expect(replyWords(ok)).toBe("Got it.");
