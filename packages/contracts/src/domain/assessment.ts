@@ -3,10 +3,11 @@ import { Evidence } from "./common";
 
 /**
  * The facts of a resume, read by AI once per application. The model reads; code verifies quotes. Every field has a
- * reader: the name is hidden from the resume reading, the place decides a state's notice in the decision email, and the
- * positions, licences, certifications, skills and years are given to the resume reading and the AI interview. A stored
- * row of an earlier build also holds an email, a phone, a headline, education, languages, anomalies and a confidence;
- * they are dropped when it is parsed.
+ * reader: the name is hidden from the two readings that score, the place decides a state's notice in the decision email,
+ * and the positions, licences, certifications and skills are what the AI interview may say it saw on the resume; the
+ * resume reading is not given them. A stored row of an earlier build also holds an email, a phone, a headline, education,
+ * languages, anomalies, a confidence, the years of experience and a licence's number and expiry date; they are dropped
+ * when it is parsed.
  */
 export const ResumeExtraction = z.object({
   fullName: z.string().optional(),
@@ -20,10 +21,9 @@ export const ResumeExtraction = z.object({
     summary: z.string().optional(),
     quote: z.string().optional(),
   })).default([]),
-  licenses: z.array(z.object({ name: z.string(), jurisdiction: z.string().optional(), number: z.string().optional(), expires: z.string().optional(), quote: z.string().optional() })).default([]),
+  licenses: z.array(z.object({ name: z.string(), jurisdiction: z.string().optional(), quote: z.string().optional() })).default([]),
   certifications: z.array(z.object({ name: z.string(), quote: z.string().optional() })).default([]),
   skills: z.array(z.string()).default([]),
-  yearsOfExperienceEstimate: z.number().optional(),
 });
 export type ResumeExtraction = z.infer<typeof ResumeExtraction>;
 

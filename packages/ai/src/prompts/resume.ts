@@ -1,16 +1,7 @@
 import { ResumeExtraction } from "@ros/contracts";
-import { z } from "zod";
 import { PROTECTED_TRAITS_RULE, type PromptDef } from "./registry";
 
 export type ResumeInput = { text: string; filename?: string };
-
-/**
- * What the model is asked for: the stored shape (`ResumeExtraction` in @ros/contracts) less the three parts no code
- * reads, which are the years of experience, a licence's number and its expiry date. The stored shape still lists them,
- * so a row from before reads as it did; once they are taken out of it too, this is that shape and nothing more.
- */
-const { yearsOfExperienceEstimate: _noReader, ...stored } = ResumeExtraction.shape;
-const ASKED = z.object({ ...stored, licenses: z.array(stored.licenses.unwrap().element.omit({ number: true, expires: true })).default([]) });
 
 /**
  * "Extract only what is written" is this prompt's own word against inventing, so the old shared block's "Never invent
@@ -23,14 +14,15 @@ ${PROTECTED_TRAITS_RULE}`;
 
 /**
  * The resume's facts, read once per application: the name and the place, positions, licences, certifications and
- * skills, each with the line it rests on. Nothing is asked for that no code reads.
+ * skills, each with the line it rests on. Nothing is asked for that no code reads: the shape the model is sent is the
+ * stored one (`ResumeExtraction` in @ros/contracts), which lists only what has a reader.
  */
 export const resumeExtractPrompt: PromptDef<ResumeInput, ResumeExtraction> = {
   key: "resume.extract",
   version: 4,
   task: "resume.extract",
   agent: "triage",
-  schema: ASKED,
+  schema: ResumeExtraction,
   system: () => [{ text: SYSTEM, cache: true }],
   messages: (input) => [
     { role: "user", content: `<resume filename="${input.filename ?? "resume"}">\n${input.text.slice(0, 40_000)}\n</resume>\n\nExtract the structured facts.` },

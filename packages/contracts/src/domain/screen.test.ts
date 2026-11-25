@@ -67,15 +67,17 @@ describe("what the AI writes about a candidate", () => {
       fullName: "Dana Kim", email: "dana.kim@example.com", phone: "(303) 555-0100", locationText: "Denver, CO", headline: "Registered Dental Hygienist",
       positions: [{ title: "Hygienist", employer: "Mile High Dental", startDate: "2019", current: true, quote: "Hygienist at Mile High Dental 2019 - present" }],
       education: [{ institution: "Cypress College", credential: "A.S.", field: "Dental Hygiene" }],
-      licenses: [{ name: "RDH", jurisdiction: "CO", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"], languages: ["Spanish"],
+      licenses: [{ name: "RDH", jurisdiction: "CO", number: "RDH-1", expires: "2027-01-31", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"], languages: ["Spanish"],
       yearsOfExperienceEstimate: 6, anomalies: [{ kind: "other", detail: "x" }], confidence: "high",
     };
+    // the years of experience, a licence's number and its expiry date had no reader either (the code check of 25 November 2026)
     expect(ResumeExtraction.parse(stored)).toEqual({
       fullName: "Dana Kim", locationText: "Denver, CO",
       positions: [{ title: "Hygienist", employer: "Mile High Dental", startDate: "2019", current: true, quote: "Hygienist at Mile High Dental 2019 - present" }],
-      licenses: [{ name: "RDH", jurisdiction: "CO", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"], yearsOfExperienceEstimate: 6,
+      licenses: [{ name: "RDH", jurisdiction: "CO", quote: "RDH license CO active" }], certifications: [{ name: "BLS" }], skills: ["Dentrix"],
     });
-    expect(JSON.stringify(z.toJSONSchema(ResumeExtraction))).not.toMatch(/"(?:email|phone|headline|education|languages|anomalies|confidence)"/);
+    // no part of the shape the model is sent has one of those names (a name is a key: "number" may still be a value's type)
+    expect(JSON.stringify(z.toJSONSchema(ResumeExtraction))).not.toMatch(/"(?:email|phone|headline|education|languages|anomalies|confidence|yearsOfExperienceEstimate|number|expires)":/);
   });
 });
 

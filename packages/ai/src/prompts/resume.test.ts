@@ -14,18 +14,16 @@ describe("resume.extract: the facts of a resume, and nothing that no code reads"
 
   it("is version 4, and the shape it sends the model has only the parts something reads", () => {
     expect(resumeExtractPrompt.version).toBe(4);
-    for (const gone of ["yearsOfExperienceEstimate", "number", "expires"]) expect(asked, gone).not.toContain(`"${gone}"`);
+    // a part's name is a key of the shape ("number" may still be the type of a value)
+    for (const gone of ["yearsOfExperienceEstimate", "number", "expires"]) expect(asked, gone).not.toContain(`"${gone}":`);
     // the name is hidden from the readings that score, the place decides a state's notice in the decision email, and the
     // rest is what the AI interview may say it saw on the resume; the quotes are checked against the resume in code
-    for (const kept of ["fullName", "locationText", "positions", "title", "employer", "startDate", "endDate", "current", "summary", "quote", "licenses", "name", "jurisdiction", "certifications", "skills"]) expect(asked, kept).toContain(`"${kept}"`);
+    for (const kept of ["fullName", "locationText", "positions", "title", "employer", "startDate", "endDate", "current", "summary", "quote", "licenses", "name", "jurisdiction", "certifications", "skills"]) expect(asked, kept).toContain(`"${kept}":`);
   });
 
-  it("asks for nothing the stored shape does not have, and a row stored before still reads", () => {
-    const stored = z.toJSONSchema(ResumeExtraction) as { properties: Record<string, unknown> };
-    const sent = z.toJSONSchema(resumeExtractPrompt.schema) as { properties: Record<string, unknown> };
-    for (const key of Object.keys(sent.properties)) expect(Object.keys(stored.properties), key).toContain(key);
+  it("sends the stored shape itself, so what is stored is what was asked for, and a row or a reply from before still reads", () => {
+    expect(resumeExtractPrompt.schema).toBe(ResumeExtraction);
     const before = { fullName: "Dana Kim", positions: [{ title: "Hygienist", current: true }], licenses: [{ name: "RDH", jurisdiction: "CO", number: "RDH12345", expires: "2027-01-31" }], certifications: [], skills: ["Dentrix"], yearsOfExperienceEstimate: 6 };
-    expect(ResumeExtraction.safeParse(before).success).toBe(true);
     expect(resumeExtractPrompt.schema.parse(before)).toEqual({ fullName: "Dana Kim", positions: [{ title: "Hygienist", current: true }], licenses: [{ name: "RDH", jurisdiction: "CO" }], certifications: [], skills: ["Dentrix"] });
   });
 
