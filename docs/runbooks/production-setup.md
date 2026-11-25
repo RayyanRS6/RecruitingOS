@@ -48,7 +48,7 @@ One project for production, in the region nearest Vercel's `pdx1` (West US, Oreg
 
 **Microsoft**: one app registration in the platform company's tenant (Entra admin center, **App registrations**).
 
-- Name: `Recruiting OS`, the product name the sign-in page uses (`PRODUCT` in `apps/web/src/pages/Login.tsx`), since a company's IT sees it on Microsoft's consent screen.
+- Name: `Recruiting OS`, the product name the sign-in page uses (`PRODUCT` in `packages/contracts/src/api/index.ts`), since a company's IT sees it on Microsoft's consent screen.
 - Supported accounts: **Accounts in any organizational directory**, with **Allow all tenants**. Work and school accounts only: Microsoft's own page refuses a personal Microsoft account, by design, and those people use **Continue with Google**. Redirect URI (Web): `https://<prod-ref>.supabase.co/auth/v1/callback`.
 - **API permissions** (delegated): `openid`, `profile`, `email`, `User.Read`. **Token configuration**: the optional ID-token claims `email` and `xms_edov`.
 - **Certificates & secrets**, **New client secret**: the **Value** into the vault with its expiry date.
