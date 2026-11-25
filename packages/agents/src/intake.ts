@@ -774,14 +774,61 @@ function cityOf(written: string): string {
   return tail && regionFromLocationText(`, ${tail[1]}`) ? t.slice(0, tail.index).trim() : t;
 }
 
+/** Where `city` is named in `lower` at or after `from`, as a word of its own ("reno", not the end of "moreno"); -1 when it is not. */
+function namedAt(lower: string, city: string, from: number): number {
+  const letter = (ch: string | undefined) => !!ch && /[a-z]/.test(ch);
+  for (let i = lower.indexOf(city, from); i >= 0; i = lower.indexOf(city, i + 1)) if (!letter(lower[i - 1]) && !letter(lower[i + city.length])) return i;
+  return -1;
+}
+
+/** What stands between two places in an owner's answer: "Tustin, CA and Reno, NV", "Tustin, CA; Reno, NV", "Tustin, CA / Reno, NV". */
+const BETWEEN_PLACES = /[;/&|\n]|\band\b/i;
+
+/**
+ * The state of each city of a job, read from the owner's answer by the code's own reader (`regionFromLocationText`),
+ * never a guess. An answer that names one state gives it to every place ("Irvine and Tustin, CA"). One that names
+ * several gives each city the state written after its name ("Tustin, CA and Reno, NV": California, Nevada), or else
+ * the next one written after it ("Irvine, Tustin, CA and Reno, NV": California for Irvine too); a city with none
+ * after it, or one the answer does not name, has no state.
+ */
+function statesOf(cities: readonly string[], answer: string | undefined): Array<string | null> {
+  const text = (answer ?? "").trim();
+  const lower = text.toLowerCase();
+  // Each city is looked for after the one before it: the assistant mostly lists them in the order the owner wrote them.
+  let from = 0;
+  const at = cities.map((city) => {
+    const c = city.toLowerCase();
+    const after = namedAt(lower, c, from);
+    const i = after >= 0 ? after : namedAt(lower, c, 0);
+    if (i >= 0) from = i + c.length;
+    return i;
+  });
+  // The state written with a city: the first one between its name and the next place.
+  const own = at.map((i, n) => {
+    if (i < 0) return null;
+    const end = i + cities[n]!.length;
+    const next = text.slice(end).search(BETWEEN_PLACES);
+    const parts = text.slice(end, Math.min(next < 0 ? text.length : end + next, ...at.filter((j) => j > i))).split(",");
+    for (let k = 1; k <= parts.length; k += 1) {
+      const state = regionFromLocationText(parts.slice(0, k).join(","));
+      if (state) return state;
+    }
+    return null;
+  });
+  const all = new Set([regionFromLocationText(text), ...own].filter((s): s is string => !!s));
+  if (all.size <= 1) return at.map(() => [...all][0] ?? null);
+  const nextWritten = (i: number) => at.map((j, m) => ({ j, state: own[m] })).filter((x) => x.j > i && x.state).sort((a, b) => a.j - b.j)[0]?.state ?? null;
+  return at.map((i, n) => own[n] ?? (i < 0 ? null : nextWritten(i)));
+}
+
 /**
  * The job record from the job as the assistant wrote it (`WrittenJob`). Everything the model is not asked for is set
  * here from the owner's answers and the code's own words, so none of it can disagree with them:
  * - the work arrangement is the one the owner gave (a record without one reads as on site, as the record's own rule
  *   says, and cannot be published: the arrangement is an essential);
- * - the state of the job's places is read from the owner's answer by the code's own reader (`regionFromLocationText`),
- *   the reader the builder's benefits card already goes by; it decides which notices and legal checks apply, and a
- *   place whose state the answer does not say has none until a person sets it in the editor;
+ * - the state of each of the job's places is read from the owner's answer by the code's own reader (`statesOf`), the
+ *   reader the builder's benefits card already goes by; it decides which notices and legal checks apply, and a place
+ *   whose state the answer does not say has none until a person sets it in the editor;
  * - a question for the application form that asks about a protected characteristic is left out (never kept with a reason);
  * - the three lines under a candidate email are the code's (packages/core/src/compliance.ts), as the guard writes them
  *   on every save; the notices and their places are the guard's; the pay is `finishDraft`'s.
@@ -789,12 +836,12 @@ function cityOf(written: string): string {
 export function draftFromWritten(written: WrittenJob, facts: IntakeFacts, companyName: string): DraftRolePacket {
   const { cities, ...identity } = written.identity;
   const arrangement = RemotePolicy.safeParse(facts.remotePolicy);
-  const region = regionFromLocationText(facts.locationText);
-  const place = (city?: string) => ({ ...(city ? { city } : {}), ...(region ? { region } : {}), country: "US" });
+  const place = (city: string | undefined, region: string | null) => ({ ...(city ? { city } : {}), ...(region ? { region } : {}), country: "US" });
   const named = cities.map(cityOf).filter(Boolean);
+  const states = statesOf(named, facts.locationText);
   const refused = new Set(formQuestionProblems(written.formQuestions).map((p) => p.index));
   return DraftRolePacketSchema.parse({
-    identity: { ...identity, locations: named.length ? named.map(place) : [place()], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
+    identity: { ...identity, locations: named.length ? named.map((city, i) => place(city, states[i] ?? null)) : [place(undefined, regionFromLocationText(facts.locationText))], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
     description: written.description,
     requirements: written.requirements,
     competencies: written.competencies,

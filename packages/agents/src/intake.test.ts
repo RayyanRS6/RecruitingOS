@@ -404,7 +404,20 @@ describe("the job as written and then finished by the server", () => {
     expect(await places("Portland, Oregon", ["Portland, Oregon"])).toEqual([{ city: "Portland", region: "OR", country: "US" }]);
     // two places in one state each get it; with no city written, the place is the state alone
     expect(await places("Irvine and Tustin, CA", ["Irvine", "Tustin"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }]);
+    expect(await places("California: Irvine and Tustin", ["Irvine", "Tustin"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }]);
+    expect(await places("Orange County, CA", ["Irvine"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }]);
     expect(await places("California", [])).toEqual([{ region: "CA", country: "US" }]);
+    // places in different states: each city gets the state written with it, never the one written last for all of them
+    const [tustin, reno] = [{ city: "Tustin", region: "CA", country: "US" }, { city: "Reno", region: "NV", country: "US" }];
+    expect(await places("Tustin, CA and Reno, NV", ["Tustin", "Reno"])).toEqual([tustin, reno]);
+    expect(await places("Tustin, California; Reno, Nevada", ["Tustin, California", "Reno, Nevada"])).toEqual([tustin, reno]);
+    expect(await places("Tustin, CA / Reno, NV", ["Reno", "Tustin"])).toEqual([reno, tustin]);
+    expect(await places("Irvine, Tustin, CA and Reno, NV", ["Irvine", "Tustin", "Reno"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, tustin, reno]);
+    // a city is found as a word of its own: "Reno" is not the end of "Moreno Valley"
+    expect(await places("Moreno Valley, CA and Reno, NV", ["Reno", "Moreno Valley"])).toEqual([reno, { city: "Moreno Valley", region: "CA", country: "US" }]);
+    // among places in different states, a city with no state written from its name on has none, and so has one the answer does not name
+    expect(await places("Tustin, CA and Reno, NV, and Boise", ["Tustin", "Reno", "Boise"])).toEqual([tustin, reno, { city: "Boise", country: "US" }]);
+    expect(await places("Tustin, CA and Reno, NV", ["Tustin", "Sparks"])).toEqual([tustin, { city: "Sparks", country: "US" }]);
     // an answer that names no state gives the job none: the code never guesses one, and the model is not asked
     expect(await places("Tustin", ["Tustin"])).toEqual([{ city: "Tustin", country: "US" }]);
     expect(await places("Tustin", ["Tustin, CA"])).toEqual([{ city: "Tustin", country: "US" }]);
