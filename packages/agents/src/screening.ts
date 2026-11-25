@@ -1495,7 +1495,7 @@ export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAsses
  * one written around a placeholder is mapped back first, and the model's own words keep no placeholder ("[name]" reads
  * "the candidate"). Then the evidence rules:
  * - one finding for each question asked and for nothing else (never the closing question): one the model left out is
- *   not known; whether a question was answered is read from the record, not from the model;
+ *   not known; whether a question was answered is read from the record (the model is not asked);
  * - a question the candidate skipped, or gave no answer to, is not known, whatever the model wrote;
  * - a quote that is not in what the candidate sent is taken off; "yes" with no checked quote counts as "partially", and
  *   "no" stands only on their own checked words, otherwise it is not known;
@@ -1509,14 +1509,15 @@ export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringVie
   const candidateText = candidateWordsOf(screen);
   const card = withoutPlaceholders(restoreQuotes(output, view, () => [candidateText]));
   const questionFindings = asked.map((a): QuestionFinding => {
-    if (a.skipped) return { questionKey: a.key, answered: false, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" };
+    if (a.skipped) return { questionKey: a.key, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" };
     const f = card.questionFindings.find((x) => x.questionKey === a.key);
+    // whether they answered it is the record's to say (the model is not asked)
     const answered = screen.answers[a.key] !== undefined;
-    if (!f) return { questionKey: a.key, answered, finding: "", meetsModelAnswer: "unknown" };
+    if (!f) return { questionKey: a.key, finding: "", meetsModelAnswer: "unknown" };
     const quote = f.evidence?.quote?.trim() && saidByCandidate(f.evidence.quote, candidateText) ? f.evidence.quote : null;
     const read = f.meetsModelAnswer === "yes" && !quote ? "partially" : f.meetsModelAnswer === "no" && !quote ? "unknown" : f.meetsModelAnswer;
     const meets = quote && a.mustHave && namesCredential(a.mustHave) ? credentialFinding(read, sentenceAround(quote, candidateText) ?? quote, a.mustHave) : read;
-    return { questionKey: a.key, answered, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quote ? { evidence: { source: "screen" as const, quote } } : {}) };
+    return { questionKey: a.key, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quote ? { evidence: { source: "screen" as const, quote } } : {}) };
   });
   const inSource = (e: { quote?: string }) => saidByCandidate(e.quote ?? "", candidateText);
   return { ...card, strengths: checkedClaims(card.strengths, inSource), concerns: checkedClaims(card.concerns, inSource), questionFindings };

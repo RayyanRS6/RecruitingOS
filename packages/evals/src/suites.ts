@@ -970,13 +970,14 @@ export const screenAssessCases: ScreenAssessCase[] = [
     expect: (raw, { packet }) => {
       const f: string[] = [];
       const finding = raw.questionFindings.find((q) => q.questionKey === payQuestion(packet).key);
-      if (finding && (finding.answered || finding.meetsModelAnswer !== "unknown")) f.push("the skipped question was not read as unknown");
+      if (finding && finding.meetsModelAnswer !== "unknown") f.push("the skipped question was not read as unknown");
       if (raw.concerns.some((c) => /skip|did not answer|declined to/i.test(c.claim))) f.push("the skip was held against the candidate");
       return f;
     },
+    // what the team sees for it is the code's: not known, with none of anyone's words quoted
     expectShown: (shown, { packet }) => {
       const finding = shown.questionFindings.find((q) => q.questionKey === payQuestion(packet).key);
-      return finding && !finding.answered && finding.meetsModelAnswer === "unknown" ? [] : [`the skipped question is shown as ${finding ? `${finding.answered ? "answered" : "not answered"}, ${finding.meetsModelAnswer}` : "nothing"}`];
+      return finding && finding.meetsModelAnswer === "unknown" && !finding.evidence ? [] : [`the skipped question is shown as ${finding ? `${finding.meetsModelAnswer}${finding.evidence ? ", with a quote" : ""}` : "nothing"}`];
     },
   },
   {
@@ -995,7 +996,7 @@ export const screenAssessCases: ScreenAssessCase[] = [
       const got = shown.questionFindings.map((q) => q.questionKey);
       const f = JSON.stringify(got) === JSON.stringify(asked) ? [] : [`findings for ${got.join(", ") || "nothing"}, expected one each for ${asked.join(", ")}`];
       const last = shown.questionFindings.at(-1);
-      if (last && (last.answered || last.meetsModelAnswer !== "unknown")) f.push(`the question with no answer is shown as ${last.answered ? "answered" : "not answered"}, ${last.meetsModelAnswer}`);
+      if (last && last.meetsModelAnswer !== "unknown") f.push(`the question with no answer is shown as ${last.meetsModelAnswer}`);
       return f;
     },
   },
@@ -1025,7 +1026,7 @@ export const screenAssessCases: ScreenAssessCase[] = [
     build: (packet) => sentInterview({ ...packet, screening: { ...packet.screening, questions: [CLOSED_QUESTION, ...packet.screening.questions] } }, { reply: (q) => (q.key === CLOSED_QUESTION.key ? "Yes" : undefined) }),
     expectShown: (shown) => {
       const f = shown.questionFindings.find((x) => x.questionKey === CLOSED_QUESTION.key);
-      return f?.answered && f.meetsModelAnswer === "yes" && f.evidence?.quote ? [] : [`a plain "Yes" to a yes-or-no question is shown as ${f ? `${f.answered ? "answered" : "not answered"}, ${f.meetsModelAnswer}${f.evidence?.quote ? "" : ", nothing quoted"}` : "nothing"}`];
+      return f?.meetsModelAnswer === "yes" && f.evidence?.quote ? [] : [`a plain "Yes" to a yes-or-no question is shown as ${f ? `${f.meetsModelAnswer}${f.evidence?.quote ? "" : ", nothing quoted"}` : "nothing"}`];
     },
   },
   {

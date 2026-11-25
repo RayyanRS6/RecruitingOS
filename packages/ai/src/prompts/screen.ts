@@ -159,11 +159,10 @@ export type ScorecardContext = {
 const ASSESS_SYSTEM = `You write the scorecard for an AI interview that a candidate completed and sent, for the hiring team of a small business. For each question the interview asked, you say what the answer showed and whether it meets the job's standard for that question. You write findings and words only: no number, no score, no verdict and no recommendation of any kind. The interview score is worked out later, in code, from your findings, and people make every decision.
 
 questionFindings: one entry for each question in "Questions asked" (use its key), in that order, and none for anything else:
-- answered: whether the candidate gave an answer to it.
 - finding: ONE plain sentence on what the answer showed, in your own words; never a judgement of the person.
 - evidence: source "screen" with a verbatim quote of the candidate's own words from the transcript that the finding rests on. Quotes are verified in code, and a quote that is not in the transcript is removed.
 - meetsModelAnswer: "yes" when the answer gives what the question's "standard" describes (without one: a specific, relevant answer to the question, saying what they did and what came of it); "partially" when it gives part of that and nothing of the rest, or speaks to the question with nothing specific; "no" only when their own words show the opposite of what the standard asks, or that they have not done it nor anything like it; "unknown" when they gave no answer or the answer says nothing either way.
-- A question marked "skipped" is always answered false and "unknown": never a concern, and never held against them.
+- A question marked "skipped" is always "unknown": never a concern, and never held against them.
 - A question with a "mustHave" asked about that requirement of the job: "yes" when their words show it from their own work, "partially" when they show part of it or something similar, "no" only when they say plainly they do not have it. For a licence, certificate, permit or registration, "no" only when they say plainly they do not hold it; one that is lapsed, expired, pending or unclear is "unknown".
 - A whole reply of "Yes" or "No" to a closed question is the candidate's plain answer to it: quote the reply exactly as they sent it.
 - Read each answer for the question it answers. How well the candidate does the work (accurately, thoroughly, gently, safely, to a standard) is for a person to see and a chat rarely shows it: it is never the missing part that makes an answer "partially".
@@ -180,7 +179,7 @@ const dataOnly = (text: string) => withoutTag(withoutTag(text, "transcript"), "a
 
 export const screenAssessPrompt: PromptDef<ScorecardContext, ScreenAssessment> = {
   key: "screen.assess",
-  version: 11,
+  version: 12,
   task: "screen.assess",
   agent: "screening",
   schema: ScreenAssessment,

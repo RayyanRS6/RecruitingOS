@@ -60,6 +60,12 @@ describe("what the AI writes about a candidate", () => {
     const scorecard = ScreenAssessment.parse(stored);
     expect(Object.keys(scorecard).sort()).toEqual(["concerns", "questionFindings", "strengths", "summary", "unknowns"]);
     expect(scorecard.questionFindings.map((q) => [q.questionKey, q.meetsModelAnswer])).toEqual([["sq_1", "yes"], ["sq_2", "unknown"]]);
+    // Whether each question was answered was asked of the model and read by nothing (the code check of 25 November
+    // 2026): the record says it. A scorecard stored before still parses, without it, and the model is no longer asked.
+    expect(scorecard.questionFindings).toEqual([{ questionKey: "sq_1", finding: "Gave a concrete day.", evidence: { source: "screen", quote: "We saw 40 patients" }, meetsModelAnswer: "yes" }, { questionKey: "sq_2", finding: "Skipped.", meetsModelAnswer: "unknown" }]);
+    const asked = z.toJSONSchema(ScreenAssessment) as { properties?: { questionFindings?: { items?: { properties?: Record<string, unknown> } } } };
+    expect(Object.keys(asked.properties?.questionFindings?.items?.properties ?? {}).sort()).toEqual(["evidence", "finding", "meetsModelAnswer", "questionKey"]);
+    expect(JSON.stringify(asked)).not.toContain('"answered"');
   });
 
   it("a quote is its source and the words quoted: the model is asked for no confidence, verdict or number, and none is kept", () => {

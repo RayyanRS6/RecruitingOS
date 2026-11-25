@@ -162,7 +162,7 @@ describe("the scorecard rests only on what the candidate sent", () => {
   };
   const view = { restore: (text: string) => text } as never;
   const asked = askedQuestions(screen, hygienist);
-  const finding = (questionKey: string, meetsModelAnswer: string, quote?: string) => ({ questionKey, answered: true, finding: `About ${questionKey}.`, meetsModelAnswer, ...(quote ? { evidence: { source: "screen", quote } } : {}) });
+  const finding = (questionKey: string, meetsModelAnswer: string, quote?: string) => ({ questionKey, finding: `About ${questionKey}.`, meetsModelAnswer, ...(quote ? { evidence: { source: "screen", quote } } : {}) });
   const card = (findings: unknown[], over: Record<string, unknown> = {}) => ({ summary: "A hygienist with recent work.", strengths: [], concerns: [], unknowns: [], questionFindings: findings, ...over }) as unknown as ScreenAssessment;
 
   it("lists what was asked: the job's own questions and each must-have the chat got to, never the closing question", () => {
@@ -197,26 +197,33 @@ describe("the scorecard rests only on what the candidate sent", () => {
       finding("made_up", "yes", "I chart in Dentrix."),
     ], { strengths: [{ claim: "Charts in Dentrix", evidence: { source: "screen", quote: "I chart in Dentrix." } }, { claim: "Leads a team", evidence: { source: "screen", quote: "I supervised three assistants." } }] }), view, screen, asked);
     expect(out.questionFindings).toEqual([
-      { questionKey: "license", answered: true, finding: "About license.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: "Yes, active since 2015." } },
-      { questionKey: "experience", answered: true, finding: "About experience.", meetsModelAnswer: "partially" },
-      { questionKey: "pay", answered: false, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" },
-      { questionKey: "mh_perio", answered: true, finding: "About mh_perio.", meetsModelAnswer: "unknown" },
+      { questionKey: "license", finding: "About license.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: "Yes, active since 2015." } },
+      { questionKey: "experience", finding: "About experience.", meetsModelAnswer: "partially" },
+      { questionKey: "pay", finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" },
+      { questionKey: "mh_perio", finding: "About mh_perio.", meetsModelAnswer: "unknown" },
     ]);
     expect(out.strengths.map((s) => s.claim)).toEqual(["Charts in Dentrix"]);
   });
 
   it("gives every question asked a finding: one the model left out is not known, with no words of the model's", () => {
     const out = scorecardOutcome(card([finding("license", "yes", "Yes, active since 2015."), finding("mh_perio", "no", "I chart six points a tooth.")]), view, screen, asked);
-    expect(out.questionFindings.map((f) => [f.questionKey, f.answered, f.meetsModelAnswer, f.finding])).toEqual([
-      ["license", true, "yes", "About license."],
-      ["experience", true, "unknown", ""],
-      ["pay", false, "unknown", "Skipped by the candidate."],
+    expect(out.questionFindings.map((f) => [f.questionKey, f.meetsModelAnswer, f.finding])).toEqual([
+      ["license", "yes", "About license."],
+      ["experience", "unknown", ""],
+      ["pay", "unknown", "Skipped by the candidate."],
       // a must-have that names no licence stands as the model read it, on their own quoted words
-      ["mh_perio", true, "no", "About mh_perio."],
+      ["mh_perio", "no", "About mh_perio."],
     ]);
     // a question with no answer on record is not known, whatever the model wrote about it
     const unanswered = scorecardOutcome(card([finding("experience", "yes", "I chart in Dentrix.")]), view, { ...screen, answers: { license: "Yes, active since 2015." } }, asked);
-    expect(unanswered.questionFindings.find((f) => f.questionKey === "experience")).toMatchObject({ answered: false, meetsModelAnswer: "unknown" });
+    expect(unanswered.questionFindings.find((f) => f.questionKey === "experience")).toEqual({ questionKey: "experience", finding: "About experience.", meetsModelAnswer: "unknown", evidence: { source: "screen", quote: "I chart in Dentrix." } });
+    // Whether a question was answered is read from the record, and the model is no longer asked (the code check of 25
+    // November 2026: nothing read its answer). A reading that still says so, as a model of an earlier build did, changes
+    // nothing, and no finding the team sees carries it.
+    const said = (answered: boolean) => scorecardOutcome(card([{ ...finding("experience", "yes", "I chart in Dentrix."), answered }, { ...finding("pay", "yes", "I chart in Dentrix."), answered }]), view, { ...screen, answers: { license: "Yes, active since 2015." } }, asked);
+    expect(said(true)).toEqual(said(false));
+    expect(said(true).questionFindings.map((f) => [f.questionKey, f.meetsModelAnswer])).toEqual([["license", "unknown"], ["experience", "unknown"], ["pay", "unknown"], ["mh_perio", "unknown"]]);
+    for (const f of [...out.questionFindings, ...said(true).questionFindings]) expect(f).not.toHaveProperty("answered");
   });
 
   it("holds a question about a licence the job needs to the licence rule, whatever the model answered", () => {

@@ -331,7 +331,7 @@ async function main() {
    * (a must-have's own words decide how the licence rule reads its answer), each reading's finding for each question as
    * the model wrote it and after the code's checks, and what was shown.
    */
-  const questionsOf = (a: Pick<ScreenAssessment, "questionFindings">) => a.questionFindings.map((x) => `${x.questionKey}=${x.answered ? "" : "not answered, "}${x.meetsModelAnswer}${x.evidence?.quote ? ` ("${clipText(x.evidence.quote, 80)}")` : ""}`).join("; ") || "none written";
+  const questionsOf = (a: Pick<ScreenAssessment, "questionFindings">) => a.questionFindings.map((x) => `${x.questionKey}=${x.meetsModelAnswer}${x.evidence?.quote ? ` ("${clipText(x.evidence.quote, 80)}")` : ""}`).join("; ") || "none written";
   const scorecardNotes = (interview: EvalInterview, chat: ScoredChat): string[] => [
     ...interview.screen.transcript.slice(0, 30).map((t) => `${t.role}: ${clipText(t.content, 200)}`),
     `asked: ${chat.asked.map((a) => `${a.key}${a.mustHave ? ` (must-have "${clipText(a.mustHave, 80)}")` : ""}${a.skipped ? " skipped" : ""}`).join(" | ") || "nothing"}`,

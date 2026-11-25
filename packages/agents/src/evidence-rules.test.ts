@@ -122,7 +122,7 @@ describe("no number from the model", () => {
     const rt = { provider: fake, models: { judgment: "fake", standard: "fake", fast: "fake" } };
     // the resume reading writes findings and words only; the scorecard says, for each question asked, whether the answer met the job's standard
     expect(triageAssessPrompt.version).toBe(9);
-    expect(screenAssessPrompt.version).toBe(11);
+    expect(screenAssessPrompt.version).toBe(12);
     const input = { packet: PACKET as never, resumeText: RESUME, answerSentences: [] };
     const system = triageAssessPrompt.system(input).map((b) => b.text).join("\n");
     expect(system).not.toMatch(/secondaryScore|0 to 100/);
@@ -341,5 +341,15 @@ describe("what the AI sees when it scores", () => {
     expect(checked.questionFindings).toHaveLength(1);
     expect(checked.questionFindings[0]?.evidence?.quote).toContain("Dana Kim");
     expect(JSON.stringify(checked)).not.toContain("[name]");
+    // The code check of 25 November 2026: the scorecard asked the model whether each question was answered, and nothing
+    // read what it said (the record says it). It is not asked now; the stand-in writes what is asked for and no more, and
+    // a reading that still says so is not an error and reaches nobody.
+    expect(screenAssessPrompt.system(ctx)[0]!.text).not.toMatch(/\banswered\b/);
+    expect(Object.keys(card.result.output.questionFindings[0]!).sort()).toEqual(["evidence", "finding", "meetsModelAnswer", "questionKey"]);
+    fake.scriptNext("screen.assess", { summary: "Six years of perio.", questionFindings: [{ questionKey: "experience", answered: true, finding: "Names the practice.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: "Six years of perio at Harbor Dental" } }] });
+    const before = await callPrompt(rt, screenAssessPrompt, ctx, { companyId: null });
+    if (before.result.kind !== "ok") throw new Error(`expected a scorecard: ${before.result.kind}`);
+    expect(before.result.output.questionFindings).toEqual([{ questionKey: "experience", finding: "Names the practice.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: "Six years of perio at Harbor Dental" } }]);
+    expect(scorecardOutcome(before.result.output, view, screen, askedQuestions(screen, rolePacket)).questionFindings).toEqual([{ questionKey: "experience", finding: "Names the practice.", meetsModelAnswer: "yes", evidence: { source: "screen", quote: "Six years of perio at Harbor Dental" } }]);
   });
 });

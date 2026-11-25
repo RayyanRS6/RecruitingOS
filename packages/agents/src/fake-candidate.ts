@@ -204,6 +204,7 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
  * The scorecard of a sent AI interview, the way the model is asked to write it: one finding for each question asked,
  * quoting the answer the candidate sent. A full answer meets the job's standard, a short one partly, a plain "Yes" does,
  * and their own words saying they do not have or have not done it do not. A skipped or unanswered question is not known.
+ * It returns what the prompt asks for and no more: whether a question was answered is the record's to say.
  */
 export function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
   const user = req.messages[0]?.content ?? "";
@@ -211,15 +212,18 @@ export function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessm
   let answers: Record<string, string> = {};
   try { asked = JSON.parse(user.match(/^Questions asked \(JSON\): (.*)$/m)?.[1] ?? "[]"); } catch { /* keep */ }
   try { answers = JSON.parse(user.match(/^Answers sent \(JSON\): (.*)$/m)?.[1] ?? "{}"); } catch { /* keep */ }
+  /** The answer the candidate sent to a question, if any: none for one they skipped. */
+  const answerTo = (q: { key: string; skipped?: boolean }) => (q.skipped ? undefined : answers[q.key]) || undefined;
   const questionFindings: ScreenAssessment["questionFindings"] = asked.map((q) => {
-    const a = q.skipped ? undefined : answers[q.key];
-    if (!a) return { questionKey: q.key, answered: false, finding: q.skipped ? "Skipped by the candidate." : "Not answered.", meetsModelAnswer: "unknown" };
+    const a = answerTo(q);
+    if (!a) return { questionKey: q.key, finding: q.skipped ? "Skipped by the candidate." : "Not answered.", meetsModelAnswer: "unknown" };
     const meets = NOT_MET.test(a) || /^no\b/i.test(a) ? "no" : /^yes\b/i.test(a) || a.length > 60 ? "yes" : a.length > 20 ? "partially" : "unknown";
-    return { questionKey: q.key, answered: true, finding: `Answered: "${a.slice(0, 160)}"`, evidence: { source: "screen", quote: a }, meetsModelAnswer: meets };
+    return { questionKey: q.key, finding: `Answered: "${a.slice(0, 160)}"`, evidence: { source: "screen", quote: a }, meetsModelAnswer: meets };
   });
   const words = (key: string) => asked.find((q) => q.key === key)?.question ?? key;
   const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.meetsModelAnswer === "yes" && f.evidence).slice(0, 3).map((f) => ({ claim: `Gave a specific answer to "${words(f.questionKey)}"`, evidence: f.evidence! }));
   const concerns: ScreenAssessment["concerns"] = questionFindings.filter((f) => f.meetsModelAnswer === "no" && f.evidence).map((f) => ({ claim: `Their answer does not meet what the job asks: "${words(f.questionKey)}"`, evidence: f.evidence! }));
-  const unknowns = questionFindings.filter((f) => !f.answered).map((f) => ({ question: words(f.questionKey), whyItMatters: "Not answered in the AI interview." }));
-  return { summary: `${questionFindings.filter((f) => f.answered).length} of ${asked.length} questions answered.`, strengths, concerns, unknowns, questionFindings };
+  const unanswered = asked.filter((q) => !answerTo(q));
+  const unknowns = unanswered.map((q) => ({ question: q.question, whyItMatters: "Not answered in the AI interview." }));
+  return { summary: `${asked.length - unanswered.length} of ${asked.length} questions answered.`, strengths, concerns, unknowns, questionFindings };
 }

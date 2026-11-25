@@ -67,13 +67,14 @@ export type EvidenceAssessment = z.infer<typeof EvidenceAssessment>;
 /**
  * The AI interview's scorecard (AI task `screen.assess`): one finding per question the interview asked, and the words.
  * The interview score is worked out in code from `questionFindings` (`interviewScoreOf`). `finding`: one plain sentence
- * on what the answer showed. `meetsModelAnswer`: whether the answer met the job's standard for that question.
+ * on what the answer showed. `meetsModelAnswer`: whether the answer met the job's standard for that question. Whether a
+ * question was answered at all is read from the interview's own record, never asked of the model: a scorecard stored
+ * before also holds `answered` for each question, which nothing read; it is dropped when parsed.
  */
 export const ScreenAssessment = z.object({
   ...ReadingWords,
   questionFindings: z.array(z.object({
     questionKey: z.string(),
-    answered: z.boolean(),
     finding: z.string(),
     evidence: Evidence.optional(),
     meetsModelAnswer: z.enum(["yes", "partially", "no", "unknown"]).default("unknown"),
