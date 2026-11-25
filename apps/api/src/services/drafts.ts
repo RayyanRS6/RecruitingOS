@@ -1,5 +1,6 @@
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { draftTitleOf, type IntakeDraftSummary } from "@ros/contracts";
+import { draftOwnedBy } from "@ros/core";
 import { sessionView, type IntakeSessionRow } from "@ros/agents";
 import { intakeSessions, type Tx } from "@ros/db";
 
@@ -31,10 +32,10 @@ export function draftSummary(row: IntakeSessionRow, viewerUserId: string): Intak
 
 /**
  * The drafts in progress, newest first: this person's own, or with `everyone` every draft of the company (for an owner
- * or an admin, who may pick one up).
+ * or an admin, who may pick one up). Whose a draft is, is core's one reading of it (`draftOwnedBy`, the query's form of
+ * the `draftOwnerId` that opens a draft): a draft listed as a person's own is one they may open.
  */
 export async function draftSummaries(tx: Tx, input: { companyId: string; userId: string; everyone?: boolean }): Promise<IntakeDraftSummary[]> {
-  const own = or(eq(intakeSessions.createdByUserId, input.userId), sql`${intakeSessions.createdBy}->>'id' = ${input.userId}`);
-  const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, input.companyId), eq(intakeSessions.status, "active"), ...(input.everyone ? [] : [own]))).orderBy(desc(intakeSessions.updatedAt));
+  const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, input.companyId), eq(intakeSessions.status, "active"), ...(input.everyone ? [] : [draftOwnedBy(input.userId)]))).orderBy(desc(intakeSessions.updatedAt));
   return rows.map((row) => draftSummary(row, input.userId));
 }

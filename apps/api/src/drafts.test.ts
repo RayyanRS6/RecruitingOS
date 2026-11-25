@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { draftTitleOf, type DraftSaved, type HomeView, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse } from "@ros/contracts";
-import { notifications } from "@ros/db";
+import { draftTitleOf, type Actor, type DraftSaved, type HomeView, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse, type MeResponse } from "@ros/contracts";
+import { draftOwnerId } from "@ros/core";
+import { intakeSessions, notifications } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { seedCompany, signInAs, usePlan } from "./test-helpers";
@@ -82,5 +83,42 @@ describe("the drafts lists", () => {
     expect((await send(owner, "POST", `${sessions}/${draft.id}/take-over`)).status).toBe(200);
     const told = await container.db.select({ title: notifications.title }).from(notifications).where(eq(notifications.kind, "intake.taken_over"));
     expect(told.map((n) => n.title)).toEqual([expect.stringMatching(/ took over your draft: Senior Dental Hygienist$/)]);
+  });
+
+  it("ask one reading whose a draft is: a draft is in a person's own list exactly when it is theirs to open, whatever the two stored fields say", async () => {
+    // a company of its own, so no other test's draft is in these lists
+    const made = await seedCompany(app, { email: "owner@draft-owners.test", name: "Pier Dental" });
+    await usePlan(container, made.companyId, "ultra");
+    const person = async (name: string) => {
+      const cookie = await signInAs(container, app, { companyId: made.companyId, role: "hiring_manager", name });
+      return { cookie, id: (await send<MeResponse>(cookie, "GET", "/api/v1/auth/me")).body.user.id };
+    };
+    const ana = await person("Ana Example");
+    const ben = await person("Ben Example");
+    const plant = async (label: string, createdBy: Actor, createdByUserId: string | null) => {
+      const [row] = await container.db.insert(intakeSessions).values({ companyId: made.companyId, createdBy, createdByUserId, messages: [{ role: "owner", content: label, at: new Date().toISOString() }] }).returning();
+      return row;
+    };
+    // a draft holds who made it twice (the id column, and the actor); the two may be out of step, or name no person
+    const rows = [
+      await plant("both fields say Ana", { kind: "user", id: ana.id, name: "Ana Example" }, ana.id),
+      await plant("only the actor says Ana", { kind: "user", id: ana.id, name: "Ana Example" }, null),
+      await plant("the id says Ben while the actor still says Ana", { kind: "user", id: ana.id, name: "Ana Example" }, ben.id),
+      await plant("no person made it", { kind: "system", id: "system" }, null),
+      await plant("an agent that carries Ana's id is not Ana", { kind: "agent", id: ana.id }, null),
+    ];
+    expect(rows.map((row) => draftOwnerId(row))).toEqual([ana.id, ana.id, ben.id, null, null]);
+    for (const who of [ana, ben]) {
+      const theirs = rows.filter((row) => draftOwnerId(row) === who.id).map((row) => row.id).sort();
+      // the person's own list, and Home, hold exactly the drafts the one reading calls theirs
+      expect((await listOf(who.cookie)).map((d) => d.id).sort()).toEqual(theirs);
+      expect((await homeDrafts(who.cookie)).map((d) => d.id).sort()).toEqual(theirs);
+      // and what is listed is what opens: each of theirs opens, and none of the others does
+      for (const row of rows) expect((await send(who.cookie, "GET", `${sessions}/${row.id}`)).status, row.messages[0]?.content).toBe(theirs.includes(row.id) ? 200 : 403);
+    }
+    // an owner of the company reads all five, none of them marked as their own
+    const all = await listOf(made.owner);
+    expect(all.map((d) => d.id).sort()).toEqual(rows.map((row) => row.id).sort());
+    expect(all.every((d) => !d.mine)).toBe(true);
   });
 });

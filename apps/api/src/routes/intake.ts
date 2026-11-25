@@ -5,7 +5,7 @@ import {
   type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
-import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
+import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, draftOwnerId, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
 import { companies, entitlements as entitlementRows, events, intakeSessions, withTenant, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { HttpError } from "../middleware/errors";
@@ -34,8 +34,6 @@ const NOT_FOUND = () => new HttpError(404, "not_found", "Draft not found.");
 const NOT_ACTIVE = () => new HttpError(409, "not_active", "This draft has already become a job, or it was set aside. Start a new one for another hire.");
 const NO_DRAFT = () => new HttpError(409, "no_draft", "Write the job first; then you can change it.");
 
-const ownerOf = (row: Pick<IntakeSessionRow, "createdByUserId" | "createdBy">): string | null => row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
-
 /** Whether this person started the draft before an owner or admin took it over (the take-over event names them). */
 async function startedBeforeTakeOver(tx: Tx, sessionId: string, userId: string): Promise<boolean> {
   const [hit] = await tx.select({ id: events.id }).from(events).where(and(eq(events.type, "intake.taken_over"), eq(events.subjectType, "intake_session"), eq(events.subjectId, sessionId), sql`${events.payload}->>'fromUserId' = ${userId}`)).limit(1);
@@ -50,7 +48,7 @@ export async function loadDraft(c: Context<Vars>, sessionId: string): Promise<In
   const found = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [row] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
     if (!row) return null;
-    const allowed = ownerOf(row) === t.userId || isOwnerOrAdmin(t.role);
+    const allowed = draftOwnerId(row) === t.userId || isOwnerOrAdmin(t.role);
     return { row, allowed, takenFromMe: !allowed && (await startedBeforeTakeOver(tx, row.id, t.userId)) };
   });
   if (!found) throw NOT_FOUND();
@@ -352,11 +350,11 @@ intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.manage");
   const row = await loadDraft(c, c.req.param("id"));
-  if (ownerOf(row) === t.userId) throw new HttpError(409, "already_yours", "This draft is already yours.");
+  if (draftOwnerId(row) === t.userId) throw new HttpError(409, "already_yours", "This draft is already yours.");
   if (row.status !== "active") throw NOT_ACTIVE();
   const container = c.get("container");
   const actor: Actor = actorOf(c);
-  const fromUserId = ownerOf(row);
+  const fromUserId = draftOwnerId(row);
   await withTenant(container.db, t.companyId, async (tx) => {
     await tx.update(intakeSessions).set({ createdBy: actor, createdByUserId: t.userId }).where(eq(intakeSessions.id, row.id));
     await emit(tx, { type: "intake.taken_over", companyId: t.companyId, actor, subject: { type: "intake_session", id: row.id }, payload: { from: row.createdBy, fromUserId } });
