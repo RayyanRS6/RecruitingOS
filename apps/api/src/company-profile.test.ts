@@ -75,10 +75,12 @@ describe("what candidates see about the company: the text about it, its logo, th
       expect(drafted.aboutDraft!.text).not.toMatch(/young|energetic|pay figure|ignore/i);
       expect(drafted.aboutDraft!.check).toBeNull();
       expect(drafted.aboutDraft!.draftedAt).toBeTruthy();
-      expect((await stored()).aboutDraft!.basedOn.length).toBeGreaterThan(0);
+      // the draft is the text: the model is no longer asked for the facts it used, which nothing read, and none are kept
+      expect((await stored()).aboutDraft).toMatchObject({ text: drafted.aboutDraft!.text, basedOn: [] });
       // the run is on the record like every model call; the notes themselves are not
       const [run] = await container.db.select().from(aiRuns).where(and(eq(aiRuns.companyId, companyId), eq(aiRuns.task, "company.about")));
-      expect(run).toMatchObject({ promptKey: "company.about", promptVersion: 1, status: "ok" });
+      expect(run).toMatchObject({ promptKey: "company.about", promptVersion: 2, status: "ok" });
+      expect(run.structuredOutput).toEqual({ text: drafted.aboutDraft!.text });
       expect(JSON.stringify(run.inputRef)).not.toContain("train station");
       // not on the job page, not on the careers page
       expect(await jobPage()).not.toContain(drafted.aboutDraft!.text);

@@ -86,7 +86,9 @@ companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   if (outOfCredit(out)) throw await aiCreditAnswer(container, t, out.refusedHoldUsd, { usedUp: AI_HELP_LINE.about, busy: AI_HELP_BUSY_LINE.about });
   if (!out.ok) throw new HttpError(502, "ai_failed", "The assistant could not write a draft just now. Try again in a minute, or write the text yourself.");
   await withTenant(container.db, t.companyId, (tx) => changeCompany(c, tx, t.companyId, "the assistant drafted the text about the company", (co, { now }) => {
-    co.settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId, basedOn: out.output.basedOn };
+    // `basedOn` (the facts the draft rested on) was asked of the model and read by nothing: it is no longer asked for,
+    // and the stored shape (CompanySettings in packages/db) keeps the field, empty, until it is taken out there.
+    co.settings.aboutDraft = { text: out.output.text, draftedAt: now, draftedBy: actor, aiRunId: out.runId, basedOn: [] };
     return ["aboutDraft"];
   }));
   return c.json(await companyView(container, t), 201);
