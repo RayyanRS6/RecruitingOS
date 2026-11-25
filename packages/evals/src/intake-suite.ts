@@ -1,5 +1,5 @@
 import { HUMAN_KEYWORD, screenCriterion, type AfterTurn } from "@ros/agents";
-import { repeatsMustHave, rulesOut, type DraftRolePacket, type IntakeFacts, type IntakeTurn, type RolePacket } from "@ros/contracts";
+import { repeatsMustHave, rulesOut, type IntakeFacts, type IntakeTurn, type RolePacket, type WrittenJob } from "@ros/contracts";
 
 /**
  * The job builder's evaluation cases (intake.*, docs/11): what the conversation reads from an owner's words and asks
@@ -30,10 +30,10 @@ export type IntakeCase = {
    */
   expectTurn?: (turn: IntakeTurn, after: AfterTurn) => string[];
   /**
-   * The job as the model wrote it, before the server's own rules (`finalizePacket`): measures a line of the prompt that
-   * code would make true anyway, such as no pay figure in the description.
+   * The job as the model wrote it (`WrittenJob`: only what it is asked for), before the server builds the job record
+   * from it (`finalizePacket`): measures the lines of the prompt, such as no pay figure in the description.
    */
-  expectDraft?: (draft: DraftRolePacket) => string[];
+  expectDraft?: (draft: WrittenJob) => string[];
   /** The job as it would be published, after the server's rules and the fairness guard. */
   expectPacket?: (packet: RolePacket) => string[];
   /**
@@ -110,11 +110,24 @@ export function skillsRepeatingMustHaves(p: Pick<RolePacket, "requirements" | "c
 }
 
 /**
+ * The two lines under every automatic message to a candidate, on the job as it would be published: the disclosure
+ * names the AI, and neither line asks for a reply with a keyword, which nothing reads. The code writes both
+ * (packages/core/src/compliance.ts) and no model is asked for them, so this holds whatever a model wrote.
+ */
+export function noticeLineFailures(p: Pick<RolePacket, "communication">): string[] {
+  const f: string[] = [];
+  if (!/\bAI\b|artificial intelligence/i.test(p.communication.disclosureText)) f.push("the disclosure line does not mention AI");
+  if ([p.communication.disclosureText, p.communication.humanAlternativeText].some((line) => HUMAN_KEYWORD.test(line))) f.push("a line under every message asks for a reply with a keyword, which nothing reads");
+  return f;
+}
+
+/**
  * What a written job fails on once the server has finished it: the case's own checks, then a skill that repeats a
- * must-have, the way the case is held to it (`skillRepeats`, the same name unless it says otherwise).
+ * must-have, the way the case is held to it (`skillRepeats`, the same name unless it says otherwise), then the two
+ * lines under every message (`noticeLineFailures`).
  */
 export function draftFailures(c: Pick<IntakeCase, "expectPacket" | "skillRepeats">, p: RolePacket): string[] {
-  return [...(c.expectPacket?.(p) ?? []), ...skillsRepeatingMustHaves(p, c.skillRepeats ?? "same name")];
+  return [...(c.expectPacket?.(p) ?? []), ...skillsRepeatingMustHaves(p, c.skillRepeats ?? "same name"), ...noticeLineFailures(p)];
 }
 
 /**
@@ -134,24 +147,25 @@ export function draftSkillsNote(p: Pick<RolePacket, "requirements" | "competenci
 
 /**
  * What intake.compile asks of every job, read on the job as the model wrote it: a description of about 120 words or
- * more with no pay figure in it, the AI named in the disclosure line, no reply keyword in the two lines under every
- * message, three to six skills each with a definition and something that shows it, an AI interview of at most twelve
- * questions advertised as about ten minutes, at most five questions on the application form, and at most five assumptions.
+ * more with no pay figure in it, each city by its name alone, three to six skills each with a definition and something
+ * that shows it, an AI interview of at most twelve questions advertised as about ten minutes, at most five questions on
+ * the application form, and at most five assumptions. (The two lines under every message are no longer the model's to
+ * write: `noticeLineFailures` reads them on the finished job.)
  */
-export function writtenJobFailures(d: DraftRolePacket): string[] {
+export function writtenJobFailures(d: WrittenJob): string[] {
   const f: string[] = [];
   const description = d.description.publicJobDescription;
   const words = description.trim().split(/\s+/).length;
   if (words < 100) f.push(`the job description has ${words} words; about 120 or more expected`);
   if (/\$\s?\d/.test(description)) f.push("a pay figure is written into the job description");
-  if (!/\bAI\b|artificial intelligence/i.test(d.communication.disclosureText)) f.push("the disclosure line does not mention AI");
-  if ([d.communication.disclosureText, d.communication.humanAlternativeText].some((line) => HUMAN_KEYWORD.test(line))) f.push("a line under every message asks for a reply with a keyword, which nothing reads");
+  const withState = d.identity.cities.filter((city) => /,/.test(city));
+  if (withState.length) f.push(`a city is written with more than its name: ${withState.join("; ")}`);
   if (d.competencies.length < 3 || d.competencies.length > 6) f.push(`${d.competencies.length} skills; three to six expected`);
   for (const c of d.competencies) if (!c.definition.trim() || !c.indicators.length) f.push(`the skill "${c.name}" has no definition or nothing that shows it`);
   if (d.screening.questions.length > 12) f.push(`${d.screening.questions.length} questions in the AI interview; at most twelve expected`);
   if (d.screening.maxMinutes > 10) f.push(`the AI interview is advertised as ${d.screening.maxMinutes} minutes; about ten expected`);
   if (d.formQuestions.length > 5) f.push(`${d.formQuestions.length} questions on the application form; at most five expected`);
-  if (d.provenance.assumptions.length > 5) f.push(`${d.provenance.assumptions.length} assumptions; at most five expected`);
+  if (d.assumptions.length > 5) f.push(`${d.assumptions.length} assumptions; at most five expected`);
   return f;
 }
 

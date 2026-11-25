@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt } from "@ros/ai";
 import { afterTurn, finalizePacket, mergeFacts, registerFakeHandlers, type AfterTurn } from "@ros/agents";
-import { IntakeServerState, type DraftRolePacket, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeTurn, type RolePacket } from "@ros/contracts";
+import { IntakeServerState, WrittenJob, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeTurn, type RolePacket } from "@ros/contracts";
 import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
-import { EMPTY_FACTS, draftFailures, draftSkillsNote, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, ruleOutMustHaves, skillsRepeatingMustHaves, writtenJobFailures, type IntakeCase } from "./intake-suite";
+import { EMPTY_FACTS, draftFailures, draftSkillsNote, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, noticeLineFailures, ruleOutMustHaves, skillsRepeatingMustHaves, writtenJobFailures, type IntakeCase } from "./intake-suite";
 
 /**
  * The job builder's evaluation cases. Every case passes on the local stand-in, driven as the runner drives it, so the
@@ -27,7 +27,7 @@ function standIn() {
     const r = await callPrompt(rt, intakeCompilePrompt, ctx, { companyId: null });
     if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a job: ${r.result.kind}`);
     const draft = r.result.output;
-    return { draft, finish: (d: DraftRolePacket = draft): RolePacket => finalizePacket(d, ctx, { sessionId: "eval", aiRunId: "r" }) };
+    return { draft, finish: (d: WrittenJob = draft): RolePacket => finalizePacket(d, ctx, { sessionId: "eval", aiRunId: "r" }) };
   };
   return { call, written, tasks: () => fake.calls.map((c) => c.task) };
 }
@@ -136,18 +136,16 @@ describe("intake.golden: the job as written", () => {
   it("holds the model's own writing to the prompt's lines, which the stand-in keeps", async () => {
     const { draft } = await standIn().written(byId("dental_rdh_one_sentence"), RDH_ANSWERS);
     expect(writtenJobFailures(draft)).toEqual([]);
-    const broken: DraftRolePacket = structuredClone(draft);
+    const broken: WrittenJob = structuredClone(draft);
     broken.description.publicJobDescription = `${"We are hiring a careful hygienist for our Tustin office. ".repeat(6)}Pay is $45 an hour.`;
-    broken.communication.disclosureText = "Sent by the hiring team.";
-    broken.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
+    broken.identity.cities = ["Tustin, CA"];
     broken.competencies = [skill("Communication"), { ...skill("Reliability"), indicators: [] }];
     broken.screening.maxMinutes = 20;
-    broken.provenance.assumptions = ["One.", "Two.", "Three.", "Four.", "Five.", "Six."];
+    broken.assumptions = ["One.", "Two.", "Three.", "Four.", "Five.", "Six."];
     expect(writtenJobFailures(broken)).toEqual([
       "the job description has 65 words; about 120 or more expected",
       "a pay figure is written into the job description",
-      "the disclosure line does not mention AI",
-      "a line under every message asks for a reply with a keyword, which nothing reads",
+      "a city is written with more than its name: Tustin, CA",
       "2 skills; three to six expected",
       'the skill "Reliability" has no definition or nothing that shows it',
       "the AI interview is advertised as 20 minutes; about ten expected",
@@ -155,18 +153,35 @@ describe("intake.golden: the job as written", () => {
     ]);
   });
 
+  // The two lines under every message were the model's to write until 25 November 2026, and were checked on its
+  // writing. The code writes them now and no model is asked, so the same two checks read the job as published.
+  it("holds the two lines under every message on the job as published: the code's own, whatever a model wrote", async () => {
+    const { draft, finish } = await standIn().written(byId("dental_rdh_one_sentence"), RDH_ANSWERS);
+    expect(noticeLineFailures(finish())).toEqual([]);
+    // a reply that still carries lines of its own loses them when it is read, and the job says the code's
+    const own = WrittenJob.parse({ ...draft, communication: { ...draft.communication, disclosureText: "Sent by the hiring team.", humanAlternativeText: "Reply HUMAN at any time and a person from our team will follow up." } });
+    expect(finish(own).communication).toMatchObject({ disclosureText: "This message was sent by the hiring team at Eval Co with help from an AI recruiting assistant.", humanAlternativeText: "To reach a person at any time, reply to any of our emails or use the contact on the job page." });
+    expect(draftFailures(byId("dental_rdh_one_sentence"), finish(own))).toEqual([]);
+    // and a published job that said otherwise would fail every written case
+    const silent: RolePacket = structuredClone(finish());
+    silent.communication.disclosureText = "Sent by the hiring team.";
+    silent.communication.humanAlternativeText = "Reply HUMAN at any time and a person from our team will follow up.";
+    expect(noticeLineFailures(silent)).toEqual(["the disclosure line does not mention AI", "a line under every message asks for a reply with a keyword, which nothing reads"]);
+    expect(draftFailures(byId("dental_assistant_owner_questions"), silent)).toEqual(expect.arrayContaining(["the disclosure line does not mention AI", "a line under every message asks for a reply with a keyword, which nothing reads"]));
+  });
+
   it("fails a hygienist's job that changes what the owner said, asks too much in the AI interview, or leaves the licence off the form", async () => {
     const rdh = byId("dental_rdh_one_sentence");
     const { draft, finish } = await standIn().written(rdh, RDH_ANSWERS);
     expect(rdh.expectPacket?.(finish())).toEqual([]);
-    const off: DraftRolePacket = structuredClone(draft);
+    const off: WrittenJob = structuredClone(draft);
     off.formQuestions = [];
     off.screening.questions = [...off.screening.questions, { key: "extra_one", question: "What do you do first with a new patient?", kind: "skills" }, { key: "extra_two", question: "How do you keep to the schedule?", kind: "skills" }];
     expect(rdh.expectPacket?.(finish(off))).toEqual(["8 questions in the AI interview; five or six expected", "no yes or no question on the application form for the licence the job must have"]);
-    // the pay and the work arrangement are the owner's whatever the model wrote: the server sets them from the answers
-    const moved: DraftRolePacket = structuredClone(draft);
-    moved.identity.remotePolicy = "remote";
-    if (moved.compensation) moved.compensation.max = 70;
+    // the pay and the work arrangement are the owner's: no model writes them, and a reply that carries them all the
+    // same loses them when it is read, so the server's values from the answers are the only ones there are
+    const moved = WrittenJob.parse({ ...draft, identity: { ...draft.identity, remotePolicy: "remote" }, compensation: { basis: "hourly", min: 45, max: 70 } });
+    expect(moved).toEqual(draft);
     expect(rdh.expectPacket?.(finish(moved))).toEqual([]);
     const checked: RolePacket = structuredClone(finish());
     checked.identity.remotePolicy = "remote";
@@ -179,10 +194,10 @@ describe("intake.golden: the job as written", () => {
     expect(twice.compiles).toBe(2);
     const { draft, finish } = await standIn().written(twice);
     expect(draft.requirements.mustHaves.map((m) => m.text)).toEqual(["Four-handed dentistry", "Digital radiography", "X-ray permit", "Current BLS certification", "Certified in coronal polishing"]);
-    const kept: DraftRolePacket = structuredClone(draft);
+    const kept: WrittenJob = structuredClone(draft);
     kept.requirements.mustHaves = [mustHave("Four-handed dentistry"), mustHave("No x-ray permit"), mustHave("Without a current BLS card"), mustHave("Lacks coronal polishing certification")];
     expect(twice.expectPacket?.(finish(kept))).toEqual(["must-haves written as what rules someone out: No x-ray permit; Without a current BLS card; Lacks coronal polishing certification"]);
-    const dropped: DraftRolePacket = structuredClone(draft);
+    const dropped: WrittenJob = structuredClone(draft);
     dropped.requirements.mustHaves = dropped.requirements.mustHaves.filter((m) => !/coronal|BLS/.test(m.text));
     expect(twice.expectPacket?.(finish(dropped))).toEqual(["the must-have about the BLS certification is not on the job", "the must-have about coronal polishing is not on the job"]);
     expect(ruleOutMustHaves({ requirements: { mustHaves: [mustHave("Cannot work Saturdays"), mustHave("Able to work Saturdays")], niceToHaves: [] } })).toEqual(["must-haves written as what rules someone out: Cannot work Saturdays"]);
@@ -194,7 +209,7 @@ describe("intake.golden: the job as written", () => {
     expect(draft.formQuestions.map((q) => [q.kind, q.question])).toEqual([["yes_no", "Can you work Saturdays?"], ["yes_no", "Do you hold this: Active California RDA license?"]]);
     expect(draft.screening.questions[0]?.question).toBe("Tell me about a time you calmed an anxious patient.");
     expect(asked.expectPacket?.(finish())).toEqual([]);
-    const without: DraftRolePacket = structuredClone(draft);
+    const without: WrittenJob = structuredClone(draft);
     without.formQuestions = [];
     without.screening.questions = without.screening.questions.slice(1);
     expect(asked.expectPacket?.(finish(without))).toEqual([
@@ -223,7 +238,7 @@ describe("intake.golden: a skill that repeats a must-have", () => {
       const { draft, finish } = await standIn().written(c, c.facts ?? answers[c.id]);
       expect(draftFailures(c, finish()), c.id).toEqual([]);
       const first = draft.requirements.mustHaves[0]!;
-      const twin: DraftRolePacket = structuredClone(draft);
+      const twin: WrittenJob = structuredClone(draft);
       twin.competencies.push(skill(first.text.toUpperCase()));
       expect(draftFailures(c, finish(twin)), c.id).toContain(`the skill "${first.text.toUpperCase()}" (Shown in recent work.) repeats the must-have "${first.text}"`);
     }

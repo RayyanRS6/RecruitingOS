@@ -9,8 +9,9 @@ import { DEFAULT_NOTICES, REACH_A_PERSON_LINE, disclosureLine, hiringTeamSignatu
  *
  * Fixed by rule: jurisdictions and the notices that follow from them; pay shown on every job ad; a reversed range put the
  * right way round; the AI disclosure, how to reach a person and the signature, each written from the code's own wording
- * whatever was there (a model writes these three when it writes a job, and no page shows them to anyone before a
- * candidate would read them); at most six must-haves; anything the owner was told could not be used taken out of the
+ * whatever was there (a model wrote these three with the job until 25 November 2026 and is no longer asked for them; a
+ * record from before may still hold its words, and no page shows them to anyone before a candidate would read them); at
+ * most six must-haves; anything the owner was told could not be used taken out of the
  * lists it appears in. Flagged: wording that stands in for a protected trait, anywhere a candidate or a reader of
  * applications would meet it (the phrase list below), what the owner was told could not be used, reworded or not, and a
  * pay figure in the job description that nobody set or that is not the advertised range.

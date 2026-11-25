@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { FormQuestion } from "./apply-questions";
 import { Actor } from "./common";
 import type { LegalCheck, PublishCheck } from "./publishing";
-import { CompensationBasis, PayOrigin, type DraftRolePacket, type PacketFlag } from "./role-packet";
+import { COMPETENCIES_MAX, CommunicationPolicy, Competency, CompensationBasis, EmploymentType, PacketDescription, PacketRequirements, PacketScreening, PayOrigin, type DraftRolePacket, type PacketFlag } from "./role-packet";
 
 /**
  * The job builder ("intake" in code). One way in: the company types a short idea or pastes an ad. The AI works out what
@@ -245,6 +246,35 @@ export const IntakeTurn = z.object({
   takenFromAd: z.array(z.string().max(300)).max(20).default([]),
 });
 export type IntakeTurn = z.infer<typeof IntakeTurn>;
+
+/**
+ * The job as the assistant writes it (AI task `intake.compile`): the parts of the job record that are words to write,
+ * each in the record's own shape and under the record's own limits. This shape is what the model is asked for, so
+ * nothing the server sets by rule is in it: the work arrangement (the owner's answer), the state of each place (read
+ * from the owner's words by the code, `regionFromLocationText`), the pay (what a person set or confirmed), the notices
+ * and the places they follow from, the three lines under a candidate email (packages/core/src/compliance.ts), and the
+ * record of who did what. The server builds the job record from this and the answers (`draftFromWritten` in
+ * packages/agents); the record itself, and every stored version of it, parses as before (`DraftRolePacket`).
+ */
+export const WrittenJob = z.object({
+  identity: z.object({
+    title: z.string().min(2),
+    department: z.string().optional(),
+    /** The city of each place the job is in, by its name alone ("Tustin"). */
+    cities: z.array(z.string().trim().min(1)).max(20).default([]),
+    employmentType: EmploymentType,
+    schedule: z.string().optional(),
+  }),
+  description: PacketDescription,
+  requirements: PacketRequirements,
+  competencies: z.array(Competency).max(COMPETENCIES_MAX).default([]),
+  screening: PacketScreening,
+  formQuestions: z.array(FormQuestion).max(40).default([]),
+  communication: CommunicationPolicy.pick({ tone: true, companyBlurb: true, candidateMayBeTold: true }),
+  /** What the assistant assumed, in plain sentences for the owner. */
+  assumptions: z.array(z.string()).default([]),
+});
+export type WrittenJob = z.infer<typeof WrittenJob>;
 
 /** The cheap read of a long first message (AI task `intake.extract`): only what the text states, nothing guessed. */
 export const IntakeExtraction = z.object({

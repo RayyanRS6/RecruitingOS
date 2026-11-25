@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, IntakeQuestion, IntakeServerState, IntakeTurn, askedKind, lacksCredential, mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts, IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, askedKind, lacksCredential, mustHaveOf, restatementsOf, rulesOut } from "./intake";
+import { DraftRolePacket } from "./role-packet";
 
 /**
  * A deal-breaker as the must-have it rules people out on: "No active California RDA license" is the must-have "Active
@@ -202,6 +203,22 @@ describe("what the job builder needs and keeps", () => {
     expect(IntakeTurn.safeParse({ ...turn, questions: [card, card, card, card] }).success).toBe(false);
     for (const field of ["interviewers", "decision_maker", "reason_for_hire", "timeline"]) expect(IntakeQuestion.safeParse({ ...card, field }).success, field).toBe(false);
     expect(IntakeQuestion.safeParse({ ...card, mode: "team" }).success).toBe(false);
+  });
+
+  // What the model is asked for when it writes a job: this shape is sent to it, so what the server sets by rule (the
+  // work arrangement, the state, the pay, the notices, the three lines under a candidate email) is not in it.
+  it("takes a written job as only its words, under the record's own limits, and the record itself reads as before", () => {
+    const question = (key: string) => ({ key, question: `${key}?` });
+    const job = { identity: { title: "Dental Assistant", employmentType: "full_time" }, description: { publicJobDescription: "You will assist chairside, take digital x-rays and keep the operatories ready." }, requirements: { mustHaves: [{ key: "x_ray", text: "X-ray permit" }] }, screening: { questions: ["a", "b", "c"].map(question) }, communication: { companyBlurb: "A family practice." } };
+    expect(WrittenJob.parse(job)).toEqual({ ...job, identity: { ...job.identity, cities: [] }, requirements: { ...job.requirements, niceToHaves: [] }, competencies: [], screening: { questions: ["a", "b", "c"].map((k) => ({ ...question(k), kind: "skills" })), maxMinutes: 10 }, formQuestions: [], communication: { tone: "warm", companyBlurb: "A family practice.", candidateMayBeTold: [] }, assumptions: [] });
+    expect(Object.keys(WrittenJob.shape)).toEqual(["identity", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "assumptions"]);
+    const sevenMustHaves = { ...job, requirements: { mustHaves: Array.from({ length: 7 }, (_, i) => ({ key: `m${i}`, text: `Must-have ${i}` })) } };
+    expect(WrittenJob.safeParse(sevenMustHaves).success).toBe(false);
+    expect(WrittenJob.safeParse({ ...job, screening: { questions: Array.from({ length: 13 }, (_, i) => question(`q${i}`)) } }).success).toBe(false);
+    // a stored record still needs, and still holds, everything it did: the three lines, the notices, the arrangement
+    const record = { identity: { ...job.identity, locations: [{ city: "Irvine", region: "CA" }] }, description: job.description, requirements: job.requirements, screening: job.screening, communication: { companyBlurb: "A family practice.", signature: "The team", disclosureText: "Sent with help from an AI assistant.", humanAlternativeText: "Reply to reach a person." }, compliance: { jurisdictions: ["US-CA"], notices: ["ai_use"] }, provenance: {} };
+    expect(DraftRolePacket.parse(record)).toMatchObject({ identity: { remotePolicy: "onsite", locations: [{ city: "Irvine", region: "CA", country: "US" }] }, communication: { signature: "The team", disclosureText: "Sent with help from an AI assistant." }, compliance: { jurisdictions: ["US-CA"], notices: ["ai_use"] } });
+    expect(DraftRolePacket.safeParse({ ...record, communication: { companyBlurb: "A family practice." } }).success).toBe(false);
   });
 
   it("starts the server's own record of a draft empty, with no market figure anywhere in it", () => {

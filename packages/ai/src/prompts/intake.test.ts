@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IntakeTurn } from "@ros/contracts";
+import { IntakeTurn, WrittenJob } from "@ros/contracts";
 import { ASKED_WORDS, CARRY_ON_NOTE, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext } from "./intake";
 import { withoutTag } from "./registry";
 
@@ -89,46 +89,68 @@ describe("intake.turn: the builder's conversation", () => {
 });
 
 describe("intake.compile: writing the job", () => {
-  it("is version 8 and asks for the sections the job record holds, and no other", () => {
-    expect(intakeCompilePrompt).toMatchObject({ key: "intake.compile", version: 8, task: "intake.compile", agent: "intake" });
+  it("is version 9 and asks for the parts of the job that are words to write, and no other", () => {
+    expect(intakeCompilePrompt).toMatchObject({ key: "intake.compile", version: 9, task: "intake.compile", agent: "intake" });
     const c = compile();
-    for (const section of ["identity:", "description.publicJobDescription:", "requirements.mustHaves:", "competencies:", "screening:", "formQuestions:", "communication:", "compliance:", "compensation:", "provenance:"]) expect(c, section).toContain(`- ${section}`);
+    for (const section of ["identity:", "description.publicJobDescription:", "requirements.mustHaves:", "competencies:", "screening:", "formQuestions:", "communication:", "assumptions:"]) expect(c, section).toContain(`- ${section}`);
     expect(c).toContain("requirements.niceToHaves: the owner's nice-to-haves, in the same shape.");
     expect(c).not.toMatch(GONE);
     expect(c).not.toMatch(/\bbusiness\b\.|interviews\b|preferences|internalNotes|evidencedBy|competencyKey|followUpIf|weight/);
   });
 
-  it("takes the work arrangement and the must-haves from the owner, a must-have always worded as what the person needs", () => {
+  // Version 9 (25 November 2026). The model wrote the work arrangement, the state of the job's place, the pay, the
+  // notices and the three lines under a candidate email, and the code overwrote every one of them (the state it read
+  // for itself only in the builder's benefits card, so the two could disagree). None is asked for now, in the prompt or
+  // in the output shape, which is sent to the model too: the server sets them from the owner's answers.
+  it("is not asked for what the server sets: the work arrangement, the state, the pay, the notices, the three lines under an email", () => {
     const c = compile();
-    expect(c).toContain("remotePolicy onsite, hybrid or remote exactly as the owner answered");
+    expect(c).not.toMatch(/remotePolicy|two-letter state|\bregion\b|compensation|Confirmed pay|compliance|jurisdictions|notices|signature|disclosureText|humanAlternativeText|aiRunIds|provenance|keyword|HUMAN/);
+    expect(c).toContain('cities: the city of each place the job is in, by its name alone ("Tustin", not "Tustin, CA")');
+    expect(intakeCompilePrompt.schema).toBe(WrittenJob);
+    expect(Object.keys(WrittenJob.shape)).toEqual(["identity", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "assumptions"]);
+    expect(Object.keys(WrittenJob.shape.identity.shape)).toEqual(["title", "department", "cities", "employmentType", "schedule"]);
+    expect(Object.keys(WrittenJob.shape.communication.shape)).toEqual(["tone", "companyBlurb", "candidateMayBeTold"]);
+    // a reply that still carries them loses them: nothing of the model's can reach those parts of the job
+    const written = WrittenJob.parse({
+      identity: { title: "Dental Assistant", cities: ["Irvine"], employmentType: "full_time", remotePolicy: "remote", locations: [{ city: "Irvine", region: "NV" }] },
+      compensation: { basis: "hourly", min: 1, max: 2 }, compliance: { jurisdictions: ["US-NV"], notices: [] },
+      description: { publicJobDescription: "You will assist chairside, take digital x-rays and keep the operatories ready for the next patient." },
+      requirements: { mustHaves: [{ key: "x_ray", text: "X-ray permit" }] },
+      screening: { questions: [{ key: "a", question: "A?" }, { key: "b", question: "B?" }, { key: "c", question: "C?" }] },
+      communication: { companyBlurb: "A family practice.", signature: "Bye", disclosureText: "No AI here.", humanAlternativeText: "Reply HUMAN." },
+      provenance: { payConfirmedBy: { by: { kind: "agent", id: "intake" }, at: "2026-11-25T00:00:00.000Z", via: "typed" } },
+    });
+    expect(Object.keys(written)).toEqual(["identity", "description", "requirements", "competencies", "screening", "formQuestions", "communication", "assumptions"]);
+    expect(written.identity).toEqual({ title: "Dental Assistant", cities: ["Irvine"], employmentType: "full_time" });
+    expect(written.communication).toEqual({ tone: "warm", companyBlurb: "A family practice.", candidateMayBeTold: [] });
+  });
+
+  it("is given no pay at all: the job's pay is what a person set, and the description never states a figure", () => {
+    expect(intakeCompilePrompt.system(ctx).map((b) => b.text)).toEqual([expect.stringMatching(/^You write a job from the facts/), "Company: Harbor Dental. Kind of business: dental. Size: 10-19 employees. Locations: Irvine, CA. Benefits: Health cover."]);
+    expect(compile()).toContain("Never a pay figure: the job page shows the pay a person set beside the description");
+  });
+
+  it("takes the must-haves from the owner, a must-have always worded as what the person needs", () => {
+    const c = compile();
     expect(c).toContain('One worded as what rules someone out is written as the requirement, never kept as written: "No active California RDA license" is "Active California RDA license".');
     expect(c).toContain("Never turn a deal-breaker into a requirement yourself.");
     expect(c).toContain("Never a skill that is the same as a must-have under any name: the must-have already counts it.");
     expect(c).toContain("an importance (essential, important or helpful)");
   });
 
-  it("carries only the pay a person confirmed, and never a figure in the description", () => {
-    expect(compile()).toContain("Confirmed pay: none yet. Leave compensation out and state no pay figure.");
-    expect(compile({ confirmedPay: { basis: "hourly", min: 24, max: 28 } })).toContain("Confirmed pay (set or confirmed by a person): hourly 24 to 28.");
-    expect(compile()).toContain("Never a pay figure: the job page shows the pay a person set beside the description");
-  });
-
-  it("asks for an AI interview of five or six questions and a form answered with one tap or a number", () => {
+  // Each limit is said once. The interview's two used to be stacked ("five or six in all and never more than 12"), and
+  // the form's "at most five" stood beside two "one for each" rules with nothing to say which gives way.
+  it("asks for an AI interview of five or six questions and a form answered with one tap or a number, each limit said once", () => {
     const c = compile();
-    expect(c).toContain("five or six in all and never more than 12");
+    expect(c).toContain("The owner's own first (facts.screeningQuestions, at most 12), then yours to make five or six in all");
+    expect(c).toContain("at most five: first one yes_no question for each line of facts.formQuestions, then one for each must-have that is a licence, a certification, the right to work or the schedule.");
+    for (const once of [/at most 12/g, /five or six/g, /at most five:/g, /at most six/g, /three to six/g, /at least 120 words/g, /at most five short plain sentences/g]) expect(c.match(once), String(once)).toHaveLength(1);
+    expect(c).not.toMatch(/never more than 12/);
     expect(c).toContain("maxMinutes 10");
     expect(c).toContain("Never ask about pay history.");
     expect(c).toContain("kind is yes_no, choice (with options) or number (with a unit)");
     expect(c).toContain("A No rejects nobody: the team sees it.");
     expect(c).toContain("Never ask about a protected characteristic.");
-  });
-
-  it("asks for the two lines under every message in words that are true: how to reach a person by a reply or the job page's contact, never by a keyword", () => {
-    const c = compile();
-    expect(c).toContain("disclosureText (it must say that AI assists and a person is available)");
-    expect(c).toContain("humanAlternativeText (one sentence on how to reach a person: reply to any of our emails, or use the contact on the job page)");
-    expect(c).toContain("Never ask for a reply with a keyword in either line: nothing reads a reply for one.");
-    expect(c).not.toMatch(/HUMAN/);
   });
 
   it("asks for a few plain assumptions, never field names or stored values", () => {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "@ros/ai";
-import { DraftRolePacket, IntakeQuestion, IntakeServerState, IntakeTurn, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
+import { IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import { unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
-import { afterTurn, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
+import { afterTurn, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
 const OWNERS_SENTENCE = "Software Engineer required with 3 years of hands-on experience in Python and Flask";
 const HYGIENIST = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
@@ -24,10 +24,11 @@ async function turn(c: IntakeContext): Promise<IntakeTurn> {
   return IntakeTurn.parse(r.result.output);
 }
 
-async function written(c: IntakeContext): Promise<DraftRolePacket> {
+/** The job as the stand-in writes it: only what the model is asked for (`WrittenJob`). */
+async function written(c: IntakeContext): Promise<WrittenJob> {
   const r = await callPrompt(rt, intakeCompilePrompt, c, { companyId: null });
   if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a job: ${r.result.kind}`);
-  return DraftRolePacket.parse(r.result.output);
+  return WrittenJob.parse(r.result.output);
 }
 
 /** What the server makes of a turn the assistant answered to these messages, in a draft with nothing in it yet (the real `afterTurn`). */
@@ -309,41 +310,82 @@ describe("the facts after a turn", () => {
 describe("the job as written and then finished by the server", () => {
   const answered = facts({ title: "Registered Dental Hygienist", locationText: "Tustin, CA", remotePolicy: "hybrid", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55, benefits: "Health cover", mustHaves: ["No active CA RDH license", "Periodontal charting"], formQuestions: ["Can you work Saturdays"], screeningQuestions: ["How do you explain perio findings to a patient?"] });
   const payState = (via: "typed" | "pay_card" = "pay_card") => IntakeServerState.parse({ pay: { by: { kind: "user", id: "u1", name: "Dana" }, at: "2026-11-18T09:10:00.000Z", via, basis: "hourly", min: 45, max: 55 } });
+  /** The job record the server builds from the stand-in's writing and these answers, before the pay and the guard (`draftFromWritten`). */
+  const record = async (f: IntakeFacts = answered) => draftFromWritten(await written(ctx([said(HYGIENIST)], f)), f, company.name);
 
-  it("writes what the record holds: the owner's must-haves as what the person needs, three skills, six questions, the form's questions, no pay in the words", async () => {
-    const draft = await written(ctx([said(HYGIENIST)], answered, { confirmedPay: { basis: "hourly", min: 45, max: 55 } }));
-    expect(draft.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Periodontal charting"]);
-    expect(draft.competencies).toHaveLength(3);
-    expect(draft.competencies.every((c) => ["essential", "important", "helpful"].includes(c.importance))).toBe(true);
-    expect(draft.screening.questions).toHaveLength(6);
-    expect(draft.screening.questions[0].question).toBe("How do you explain perio findings to a patient?");
-    expect(draft.screening.maxMinutes).toBe(10);
-    expect(draft.formQuestions.map((q) => [q.kind, q.question])).toEqual([["yes_no", "Can you work Saturdays?"], ["yes_no", "Do you hold this: Active CA RDH license?"]]);
-    expect(draft.description.publicJobDescription.split(/\s+/).length).toBeGreaterThanOrEqual(120);
-    expect(draft.description.publicJobDescription).not.toMatch(/\$\s?\d/);
-    expect(draft.compensation).toMatchObject({ basis: "hourly", min: 45, max: 55 });
-    expect(Object.keys(draft).sort()).toEqual(["communication", "compensation", "competencies", "compliance", "description", "formQuestions", "identity", "provenance", "requirements", "schemaVersion", "screening"]);
+  it("writes only the words: the owner's must-haves as what the person needs, three skills, six questions, the form's questions, the city by its name", async () => {
+    const job = await written(ctx([said(HYGIENIST)], answered));
+    expect(job.requirements.mustHaves.map((m) => m.text)).toEqual(["Active CA RDH license", "Periodontal charting"]);
+    expect(job.competencies).toHaveLength(3);
+    expect(job.competencies.every((c) => ["essential", "important", "helpful"].includes(c.importance))).toBe(true);
+    expect(job.screening.questions).toHaveLength(6);
+    expect(job.screening.questions[0].question).toBe("How do you explain perio findings to a patient?");
+    expect(job.screening.maxMinutes).toBe(10);
+    expect(job.formQuestions.map((q) => [q.kind, q.question])).toEqual([["yes_no", "Can you work Saturdays?"], ["yes_no", "Do you hold this: Active CA RDH license?"]]);
+    expect(job.description.publicJobDescription.split(/\s+/).length).toBeGreaterThanOrEqual(120);
+    expect(job.description.publicJobDescription).not.toMatch(/\$\s?\d/);
+    expect(job.identity).toEqual({ title: "Registered Dental Hygienist", cities: ["Tustin"], employmentType: "full_time", schedule: "Monday to Friday" });
+    // nothing the server sets is written: no pay, no notices, no work arrangement, none of the three lines under an email
+    expect(Object.keys(job).sort()).toEqual(["assumptions", "communication", "competencies", "description", "formQuestions", "identity", "requirements", "screening"]);
+    expect(Object.keys(job.communication).sort()).toEqual(["candidateMayBeTold", "companyBlurb", "tone"]);
+  });
+
+  // Until 25 November 2026 the model wrote these too and the code overwrote them. It is no longer asked (the shape it is
+  // sent has none of them), so the server's values are the only ones there are.
+  it("builds the job record from the writing and the owner's answers: the arrangement they gave, the state their words name, the code's three lines", async () => {
+    const job = await record();
+    expect(job.identity).toEqual({ title: "Registered Dental Hygienist", locations: [{ city: "Tustin", region: "CA", country: "US" }], employmentType: "full_time", schedule: "Monday to Friday", remotePolicy: "hybrid" });
+    expect(job.communication).toMatchObject({ signature: "The hiring team at Harbor Dental", disclosureText: "This message was sent by the hiring team at Harbor Dental with help from an AI recruiting assistant.", humanAlternativeText: "To reach a person at any time, reply to any of our emails or use the contact on the job page." });
+    expect(job.compliance).toEqual({ jurisdictions: [], notices: [] });
+    expect(job.provenance).toEqual({ aiRunIds: [], assumptions: ["You did not name any nice-to-haves, so none are listed."] });
+    expect(job.compensation).toBeUndefined();
+    expect(Object.keys(job).sort()).toEqual(["communication", "competencies", "compliance", "description", "formQuestions", "identity", "provenance", "requirements", "schemaVersion", "screening"]);
+    // a reply that carries them all the same loses them when it is read, so the owner's answer stands
+    const wrote = WrittenJob.parse({ ...(await written(ctx([said(HYGIENIST)], answered))), compensation: { basis: "hourly", min: 10, max: 99 }, compliance: { jurisdictions: ["US-NV"], notices: [] }, identity: { title: "Registered Dental Hygienist", cities: ["Tustin"], employmentType: "full_time", remotePolicy: "onsite" } });
+    expect(draftFromWritten(wrote, answered, company.name)).toMatchObject({ identity: { remotePolicy: "hybrid", locations: [{ city: "Tustin", region: "CA" }] }, compliance: { jurisdictions: [] } });
+    expect(draftFromWritten(wrote, answered, company.name).compensation).toBeUndefined();
+  });
+
+  // The state decides which notices the job page carries and what the law asks of the ad. The model read it from the
+  // place while the builder's own benefits card went by the code's reader, so the two could disagree. One reader now.
+  it("reads the state of the job's place from the owner's answer with the code's own reader, never from the model", async () => {
+    const places = async (locationText: string, cities: string[]) => draftFromWritten({ ...(await written(ctx([said(HYGIENIST)], answered))), identity: { title: "Registered Dental Hygienist", cities, employmentType: "full_time" } }, { ...answered, locationText }, company.name).identity.locations;
+    expect(await places("Denver, CO", ["Denver"])).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+    expect(await places("Boulder, Colorado 80302", ["Boulder"])).toEqual([{ city: "Boulder", region: "CO", country: "US" }]);
+    // a state the model added to the city all the same is not kept beside the code's
+    expect(await places("Kansas City, MO", ["Kansas City, MO"])).toEqual([{ city: "Kansas City", region: "MO", country: "US" }]);
+    expect(await places("Portland, Oregon", ["Portland, Oregon"])).toEqual([{ city: "Portland", region: "OR", country: "US" }]);
+    // two places in one state each get it; with no city written, the place is the state alone
+    expect(await places("Irvine and Tustin, CA", ["Irvine", "Tustin"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }]);
+    expect(await places("California", [])).toEqual([{ region: "CA", country: "US" }]);
+    // an answer that names no state gives the job none: the code never guesses one, and the model is not asked
+    expect(await places("Tustin", ["Tustin"])).toEqual([{ city: "Tustin", country: "US" }]);
+    expect(await places("Tustin", ["Tustin, CA"])).toEqual([{ city: "Tustin", country: "US" }]);
+    // and the notices and legal places follow the same reading, through the guard
+    const colorado = { ...answered, locationText: "Denver, CO" };
+    const done = finalizeDraft(await record(colorado), ctx([], colorado), { sessionId: "s1", aiRunId: "r1", state: payState() });
+    expect(done.compliance.jurisdictions).toEqual(["US-CO", "US-CA"]);
+    expect(done.compliance.notices).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
   });
 
   it("leaves the pay out when nobody confirmed one", async () => {
-    const draft = await written(ctx([said(HYGIENIST)], answered));
-    expect(draft.compensation).toBeUndefined();
-    expect(finalizeDraft(draft, ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: IntakeServerState.parse({}) }).compensation).toBeUndefined();
+    expect(finalizeDraft(await record(), ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: IntakeServerState.parse({}) }).compensation).toBeUndefined();
   });
 
-  it("sets the pay and the benefits line by rule, with who confirmed it, whatever the model wrote", async () => {
-    const draft = await written(ctx([said(HYGIENIST)], answered, { confirmedPay: { basis: "hourly", min: 45, max: 55 } }));
-    const tampered = { ...draft, compensation: { ...draft.compensation!, min: 10, max: 99, benefitsSummary: "A pony" } };
+  it("sets the pay and the benefits line by rule, with who confirmed it, whatever the record held", async () => {
+    const tampered = { ...(await record()), compensation: { basis: "hourly" as const, currency: "USD", min: 10, max: 99, benefitsSummary: "A pony", discloseRange: false } };
     const done = finalizeDraft(tampered, ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: payState() });
     expect(done.compensation).toEqual({ basis: "hourly", currency: "USD", min: 45, max: 55, benefitsSummary: "Health cover", discloseRange: true });
     expect(done.provenance.payConfirmedBy).toEqual({ by: { kind: "user", id: "u1", name: "Dana" }, at: "2026-11-18T09:10:00.000Z", via: "pay_card" });
     expect(done.provenance).toMatchObject({ intakeSessionId: "s1", aiRunIds: ["r1"], payOrigin: "pay_card" });
     expect(done.compliance.jurisdictions).toContain("US-CA");
     expect(done.compliance.notices).toEqual(expect.arrayContaining(["ai_use", "privacy", "pay_transparency"]));
+    // the pay is on a job as soon as a person confirmed it, though no model ever writes one
+    expect(finalizeDraft(await record(), ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: payState("typed") }).compensation).toEqual({ basis: "hourly", currency: "USD", min: 45, max: 55, benefitsSummary: "Health cover", discloseRange: true });
   });
 
   it("drops a 'keep' the model wrote on a flagged phrase: it stays open, and a person's earlier keep of it carries over", async () => {
-    const draft = await written(ctx([said(HYGIENIST)], answered));
+    const draft = await record();
     const flagged = { ...draft, description: { publicJobDescription: `${draft.description.publicJobDescription} We want a digital native.` } };
     const once = finalizeDraft(flagged, ctx([], answered), { sessionId: "s1", aiRunId: "r1", state: payState() });
     const [flag] = unresolvedFlags(once);
@@ -355,12 +397,15 @@ describe("the job as written and then finished by the server", () => {
   });
 
   it("publishes the work arrangement the owner answered, and never a form question about a protected characteristic", async () => {
-    const draft = await written(ctx([said(HYGIENIST)], answered));
-    const wrong = { ...draft, identity: { ...draft.identity, remotePolicy: "onsite" as const }, formQuestions: [...draft.formQuestions, { kind: "yes_no" as const, key: "kids", question: "Do you have children?", required: true }] };
+    const job = await written(ctx([said(HYGIENIST)], answered));
+    const wrong = { ...job, formQuestions: [...job.formQuestions, { kind: "yes_no" as const, key: "kids", question: "Do you have children?", required: true }] };
     const packet = finalizePacket(wrong, ctx([], answered), { sessionId: "eval", aiRunId: "r1" });
     expect(packet.identity.remotePolicy).toBe("hybrid");
     expect(packet.formQuestions.map((q) => q.key)).not.toContain("kids");
     expect(packet.formQuestions).toHaveLength(2);
     expect(packet.compensation).toMatchObject({ min: 45, max: 55 });
+    // a job whose answers hold no arrangement reads as on site, the record's own rule, and no draft like it can be written or published
+    const { remotePolicy: _none, ...unanswered } = answered;
+    expect(draftFromWritten(job, unanswered, company.name).identity.remotePolicy).toBe("onsite");
   });
 });

@@ -18,19 +18,17 @@ const EVAL_OWNER: Actor = { kind: "system", id: "eval" };
 export type IntakeModelCall = <TInput, TOutput>(prompt: PromptDef<TInput, TOutput>, input: TInput, meta: { inputRef: Record<string, unknown>; maxTokens?: number }) => Promise<RunOutcome<TOutput>>;
 
 /**
- * The job builder's input for a case's answers and conversation so far. The pay in the answers counts as set by the
- * owner, as pay they typed does in the app; pay read from a pasted ad does not, until they confirm it.
+ * The job builder's input for a case's answers and conversation so far. No pay is among it: no prompt is asked for the
+ * pay any more, and a written job carries the pay in the case's answers (`finalizePacket`).
  */
 export function intakeContextOf(c: Pick<IntakeCase, "vertical">, facts: IntakeFacts, messages: IntakeMessage[]): { ctx: IntakeContext } {
   const ad = messages.find((m) => m.kind === "pasted_ad");
-  const pay = facts.compensationBasis && facts.compensationMin !== undefined && facts.compensationMax !== undefined && !ad ? { basis: facts.compensationBasis, min: facts.compensationMin, max: facts.compensationMax } : null;
   return {
     ctx: {
       company: { name: "Eval Co", vertical: c.vertical, sizeBand: "50-99", locations: [{ city: "Irvine", region: "CA", country: "US" }] },
       facts,
       messages,
       ad: ad ? { text: ad.content } : null,
-      confirmedPay: pay,
     },
   };
 }
@@ -86,7 +84,8 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
   if (compile && (c.expectPacket || c.expectDraft) && failures.length === 0) {
     const { ctx } = intakeContextOf(c, facts, messages);
     // As many jobs as the case asks for, each written afresh from the same answers and judged on its own: first as
-    // the model wrote it, then as the server finishes it (the pay, the rules set in code, the fairness guard).
+    // the model wrote it, then as the server builds the job record from it (the work arrangement, the state, the pay,
+    // the notices and their lines, the fairness guard).
     const drafts = Math.max(1, c.compiles ?? 1);
     for (let n = 1; n <= drafts; n++) {
       const which = drafts > 1 ? `draft ${n}: ` : "";
@@ -97,12 +96,12 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
       }
       failures.push(...(c.expectDraft?.(r.output) ?? []).map((x) => `${which}${x}`));
       // A job that cannot be published as it stands (no pay in the answers, say, so none is on the job) fails its case
-      // with the reason. It never stops the run: the stand-in always writes a pay, so only the real models show this.
+      // with the reason. It never stops the run.
       let packet: RolePacket;
       try {
         packet = finalizePacket(r.output, ctx, { sessionId: "eval", aiRunId: r.runId });
       } catch (e) {
-        failures.push(`${which}the job as written cannot be published: ${problemOf(e)} (pay in the answers: ${payOf(facts)}; pay as written: ${payOf({ compensationBasis: r.output.compensation?.basis, compensationMin: r.output.compensation?.min, compensationMax: r.output.compensation?.max })})`);
+        failures.push(`${which}the job as written cannot be published: ${problemOf(e)} (pay in the answers: ${payOf(facts)})`);
         continue;
       }
       // The case's checks and, on every written job, a skill that repeats a must-have; the note keeps the job's

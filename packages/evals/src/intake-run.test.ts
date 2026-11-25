@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt } from "@ros/ai";
 import { registerFakeHandlers } from "@ros/agents";
-import type { DraftRolePacket, IntakeFacts, IntakeMessage } from "@ros/contracts";
+import type { IntakeFacts, IntakeMessage, WrittenJob } from "@ros/contracts";
 import { intakeCaseResult, intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
 import { EMPTY_FACTS, intakeGolden, intakeIllegal, type IntakeCase } from "./intake-suite";
 
@@ -25,7 +25,7 @@ function standIn() {
     return { ok: false, runId, model, reason: result.kind === "refused" ? "refused" : "invalid", error: result.kind === "refused" ? result.reason : result.error };
   };
   /** The stand-in's own job from a case's answers, written before the case is run (its calls are not counted). */
-  const draftOf = async (c: IntakeCase, answers: Partial<IntakeFacts> = c.facts ?? {}): Promise<DraftRolePacket> => {
+  const draftOf = async (c: IntakeCase, answers: Partial<IntakeFacts> = c.facts ?? {}): Promise<WrittenJob> => {
     const messages: IntakeMessage[] = c.ownerMessages.map((content) => ({ role: "owner", content, at: "2026-11-18T12:00:00.000Z", kind: "text" }));
     const r = await callPrompt(rt, intakeCompilePrompt, intakeContextOf(c, { ...EMPTY_FACTS, ...answers }, messages).ctx, { companyId: null });
     if (r.result.kind !== "ok") throw new Error(`the stand-in did not write a job: ${r.result.kind}`);
@@ -41,7 +41,7 @@ const byId = (id: string): IntakeCase => {
   return c;
 };
 const HYGIENIST: Partial<IntakeFacts> = { title: "Hygienist", locationText: "Irvine, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55, mustHaves: ["Active CA RDH license"] };
-const skill = (name: string, definition = "Shown in recent work."): DraftRolePacket["competencies"][number] => ({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, importance: "important", indicators: ["An example from recent work"] });
+const skill = (name: string, definition = "Shown in recent work."): WrittenJob["competencies"][number] =>({ key: name.toLowerCase().replace(/[^a-z]+/g, "_"), name, definition, importance: "important", indicators: ["An example from recent work"] });
 
 describe("a job-builder case as the runner drives it", () => {
   it("writes a case set from its answers straight from them, asking no turn, as many jobs as it says, each noted", async () => {
@@ -68,20 +68,20 @@ describe("a job-builder case as the runner drives it", () => {
     const twice = byId("dental_assistant_rule_out_words_written_twice");
     const { fake, call, draftOf } = standIn();
     const draft = await draftOf(twice);
-    const kept: DraftRolePacket = structuredClone(draft);
+    const kept: WrittenJob = structuredClone(draft);
     kept.requirements.mustHaves = kept.requirements.mustHaves.map((m) => (m.text === "X-ray permit" ? { ...m, text: "No x-ray permit" } : m));
     fake.scriptNext("intake.compile", draft);
     fake.scriptNext("intake.compile", kept);
     expect((await runIntakeCase(call, twice, true)).failures).toEqual(["draft 2: must-haves written as what rules someone out: No x-ray permit"]);
   });
 
-  it("checks the job as the model wrote it, though the server would set the disclosure line right", async () => {
+  it("checks the job as the model wrote it, though the server would set the city right", async () => {
     const asked = byId("dental_assistant_owner_questions");
     const { fake, call, draftOf } = standIn();
-    const silent: DraftRolePacket = structuredClone(await draftOf(asked));
-    silent.communication.disclosureText = "Sent by the hiring team.";
-    fake.scriptNext("intake.compile", silent);
-    expect((await runIntakeCase(call, asked, true)).failures).toEqual(["the disclosure line does not mention AI"]);
+    const withState: WrittenJob = structuredClone(await draftOf(asked));
+    withState.identity.cities = ["Irvine, CA"];
+    fake.scriptNext("intake.compile", withState);
+    expect((await runIntakeCase(call, asked, true)).failures).toEqual(["a city is written with more than its name: Irvine, CA"]);
   });
 
   it("asks nothing for a case set from its answers that also checks a turn, and says why it fails", async () => {
@@ -94,7 +94,7 @@ describe("a job-builder case as the runner drives it", () => {
   it("finds what the owner was told could not be used in a job written afterwards", async () => {
     const age = byId("age_recent_grads");
     const { fake, call, draftOf, tasks } = standIn();
-    const leaked: DraftRolePacket = structuredClone(await draftOf(age, HYGIENIST));
+    const leaked: WrittenJob = structuredClone(await draftOf(age, HYGIENIST));
     leaked.description.publicJobDescription += " Recent grads are welcome.";
     fake.scriptNext("intake.compile", leaked);
     const out = await runIntakeCase(call, age, true);
@@ -102,19 +102,16 @@ describe("a job-builder case as the runner drives it", () => {
     expect(out.failures).toEqual(["declined criterion leaked into the job: recent grads"]);
   });
 
-  // On the real models a job is written with no pay when the answers hold none. The stand-in always writes a pay, so
-  // only a scripted job can tell: the case fails with the reason, and the run goes on to the next case.
+  // No model writes a pay: a job carries the pay in the answers, and one whose answers hold none cannot be published.
+  // The case fails with the reason, and the run goes on to the next case.
   it("fails a case whose written job cannot be published, with the reason, and never stops the run", async () => {
     const asked = byId("dental_assistant_owner_questions");
     const noPay = Object.fromEntries(Object.entries(asked.facts ?? {}).filter(([k]) => !k.startsWith("compensation"))) as Partial<IntakeFacts>;
-    const { fake, call, draftOf } = standIn();
-    const written: DraftRolePacket = structuredClone(await draftOf(asked));
-    delete written.compensation;
-    fake.scriptNext("intake.compile", written);
+    const { call } = standIn();
     const entry = await intakeCaseResult(call, { ...asked, facts: noPay }, true);
     expect(entry.pass).toBe(false);
     expect(entry.failures).toHaveLength(1);
-    expect(entry.failures[0]).toMatch(/^the job as written cannot be published: compensation: .+ \(pay in the answers: none; pay as written: none\)$/);
+    expect(entry.failures[0]).toMatch(/^the job as written cannot be published: compensation: .+ \(pay in the answers: none\)$/);
     expect(entry.notes).toBeUndefined();
     // a case whose own check throws is a failed case too
     const thrown = await intakeCaseResult(standIn().call, { ...byId("dental_rdh_one_sentence"), expectTurn: () => { throw new Error("boom"); } }, false);
@@ -127,7 +124,7 @@ describe("a job-builder case as the runner drives it", () => {
   it("fails a job with a skill named the same as one of its must-haves, and the case's entry keeps its skills by name", async () => {
     const asked = byId("dental_assistant_owner_questions");
     const { fake, call, draftOf } = standIn();
-    const twin: DraftRolePacket = structuredClone(await draftOf(asked));
+    const twin: WrittenJob = structuredClone(await draftOf(asked));
     expect(twin.requirements.mustHaves.map((m) => m.text)).toEqual(["Active California RDA license", "Four-handed dentistry"]);
     twin.competencies.push(skill("FOUR-HANDED DENTISTRY"));
     fake.scriptNext("intake.compile", twin);

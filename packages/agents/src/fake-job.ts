@@ -1,6 +1,6 @@
-import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type JobPosts } from "@ros/contracts";
+import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type JobPosts, type WrittenJob } from "@ros/contracts";
 import { ASKED_WORDS, type StructuredRequest } from "@ros/ai";
-import { REACH_A_PERSON_LINE, disclosureLine, normalizeCriterion } from "@ros/core";
+import { normalizeCriterion } from "@ros/core";
 
 /**
  * The stand-in provider's answers for the job builder (intake.turn, intake.compile, intake.extract) and for a published
@@ -15,13 +15,12 @@ type FakeJobContext = {
   vertical: string;
   companyPlace: string;
   ad: string | null;
-  confirmedPay: { basis: "hourly" | "salary"; min: number; max: number } | null;
   asked: Set<string>;
 };
 
 const EMPTY_FACTS: IntakeFacts = { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] };
 
-/** The prompts render the facts, the company, the pay and the transcript as text; this reads them back from the request. */
+/** The prompts render the facts, the company and the transcript as text; this reads them back from the request. */
 function contextFrom(req: StructuredRequest<unknown>): FakeJobContext {
   const sys = req.system.map((b) => b.text).join("\n");
   const said = req.messages.map((m) => m.content).join("\n");
@@ -30,7 +29,6 @@ function contextFrom(req: StructuredRequest<unknown>): FakeJobContext {
   if (factsJson) {
     try { facts = { ...EMPTY_FACTS, ...(JSON.parse(factsJson) as IntakeFacts) }; } catch { /* the defaults stand */ }
   }
-  const pay = sys.match(/Confirmed pay \(set or confirmed by a person\): (hourly|salary) ([\d.]+) to ([\d.]+)\./);
   const fromTranscript = [...said.matchAll(/^owner: (.*)$/gm)].map((m) => m[1]);
   const askedLine = req.system.map((b) => b.text).find((t) => t.startsWith("Already asked or answered in this draft")) ?? "";
   return {
@@ -40,7 +38,6 @@ function contextFrom(req: StructuredRequest<unknown>): FakeJobContext {
     vertical: sys.match(/Kind of business: ([^.]+)\./)?.[1]?.trim() ?? "general",
     companyPlace: (sys.match(/Locations: ([^.\n]+)\./)?.[1] ?? "").split(";")[0].trim(),
     ad: sys.match(/<job_ad>\n([\s\S]*?)\n<\/job_ad>/)?.[1] ?? null,
-    confirmedPay: pay ? { basis: pay[1] as "hourly" | "salary", min: Number(pay[2]), max: Number(pay[3]) } : null,
     asked: new Set(Object.entries(ASKED_WORDS).filter(([, words]) => askedLine.includes(words)).map(([field]) => field)),
   };
 }
@@ -246,16 +243,16 @@ export function fakeIntakeExtract(req: StructuredRequest<unknown>): IntakeExtrac
 const A_CREDENTIAL = /\blicen[cs]\w*|\bcertif\w*|\bpermit\b|\bregistration\b/i;
 
 /**
- * intake.compile: the job as the model is told to write it. The owner's must-haves, each worded as what the person
- * needs; no pay in the description; three skills, none named the same as a must-have; the owner's AI interview questions
- * first, six in all; one yes/no form question for each line the owner asked for and for each must-have that is a
- * credential; pay only when a person set or confirmed it.
+ * intake.compile: the job as the model is told to write it (`WrittenJob`). The owner's must-haves, each worded as what
+ * the person needs; no pay in the description; three skills, none named the same as a must-have; the owner's AI
+ * interview questions first, six in all; one yes/no form question for each line the owner asked for and then for each
+ * must-have that is a credential, five at most; the city by its name alone. Nothing the server sets is written: no
+ * work arrangement, no state, no pay, no notices and none of the three lines under a candidate email.
  */
-export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePacket {
+export function fakeIntakeCompile(req: StructuredRequest<unknown>): WrittenJob {
   const c = contextFrom(req);
   const f = c.facts;
   const title = f.title ?? "New hire";
-  const pay = c.confirmedPay;
   const [city, region] = (f.locationText ?? "").split(",").map((s) => s.trim());
   const assumptions: string[] = [];
   const owners = f.mustHaves.map(mustHaveOf).filter((m, i, all) => m && all.findIndex((x) => normalizeCriterion(x) === normalizeCriterion(m)) === i);
@@ -264,26 +261,26 @@ export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePac
   if (!f.niceToHaves.length) assumptions.push("You did not name any nice-to-haves, so none are listed.");
   if (!f.screeningQuestions?.length) assumptions.push("You did not give questions for the AI interview, so they were drafted from the job.");
   const named = mustHaves.map((text) => ({ text }));
-  const skills: DraftRolePacket["competencies"] = [
+  const skills: WrittenJob["competencies"] = [
     { key: "role_skill", name: `${title} skill`, definition: `Does the core work of a ${title} well.`, importance: "essential", indicators: ["Concrete examples from recent work"] },
     { key: "communication", name: "Communication", definition: "Clear with customers and the team.", importance: "important", indicators: ["Example of a hard conversation"] },
     { key: "reliability", name: "Reliability", definition: "Shows up consistently and says early when something slips.", importance: "important", indicators: ["Attendance history"] },
     { key: "teamwork", name: "Teamwork", definition: "Works well with the team and asks for help early.", importance: "helpful", indicators: ["Example of helping a colleague"] },
   ];
   const competencies = skills.filter((s) => !repeatsMustHave(s, named)).slice(0, 3);
-  const kindOf = (q: string): DraftRolePacket["screening"]["questions"][number]["kind"] => /salary|pay |earn|range are you|compensation/i.test(q) ? "compensation" : /available|start|schedule/i.test(q) ? "availability" : /looking for in your next/i.test(q) ? "motivation" : /tell me about|describe|walk me through|give an example/i.test(q) ? "behavioral" : "skills";
-  const own: DraftRolePacket["screening"]["questions"] = (f.screeningQuestions ?? []).map((q, i) => ({ key: slug(q.split(/[,:?]/)[0].split(" ").slice(0, 4).join(" ")) || `q${i + 1}`, question: q, kind: kindOf(q), modelAnswer: "A specific example from their own work." }));
-  const drafted: DraftRolePacket["screening"]["questions"] = [
+  const kindOf = (q: string): WrittenJob["screening"]["questions"][number]["kind"] => /salary|pay |earn|range are you|compensation/i.test(q) ? "compensation" : /available|start|schedule/i.test(q) ? "availability" : /looking for in your next/i.test(q) ? "motivation" : /tell me about|describe|walk me through|give an example/i.test(q) ? "behavioral" : "skills";
+  const own: WrittenJob["screening"]["questions"] = (f.screeningQuestions ?? []).map((q, i) => ({ key: slug(q.split(/[,:?]/)[0].split(" ").slice(0, 4).join(" ")) || `q${i + 1}`, question: q, kind: kindOf(q), modelAnswer: "A specific example from their own work." }));
+  const drafted: WrittenJob["screening"]["questions"] = [
     { key: "experience", question: `Tell me about your most recent ${title} work and what a typical day looked like.`, kind: "skills", modelAnswer: "Names the work this job describes, with specifics." },
     { key: "must_have", question: `This job needs: ${mustHaves[0].replace(/[\s.]+$/, "")}. Tell me about your experience with that.`, kind: "skills", modelAnswer: "A concrete example that shows the requirement is met." },
     { key: "hard_moment", question: "Tell me about a difficult moment at work and what you did.", kind: "behavioral", modelAnswer: "Stays calm, takes responsibility, and describes what changed afterwards." },
     { key: "availability", question: "Which days and hours are you available, and when could you start?", kind: "availability", modelAnswer: "Matches the posted schedule." },
-    { key: "pay", question: `What ${pay?.basis === "salary" ? "salary" : "hourly"} range are you looking for?`, kind: "compensation", modelAnswer: "Within or near the posted range." },
+    { key: "pay", question: `What ${f.compensationBasis === "salary" ? "salary" : "hourly"} range are you looking for?`, kind: "compensation", modelAnswer: "Within or near the posted range." },
     { key: "why", question: "What are you looking for in your next job?", kind: "motivation", modelAnswer: "Reasons that fit this job and this team." },
   ];
   const questions = [...own, ...drafted].filter((q, i, all) => all.findIndex((x) => x.key === q.key) === i).slice(0, Math.min(12, Math.max(6, own.length)));
   const asked = [...f.formQuestions, ...mustHaves.filter((m) => A_CREDENTIAL.test(m)).map((m) => `Do you hold this: ${m.replace(/[\s.?!]+$/, "")}?`)];
-  const formQuestions: DraftRolePacket["formQuestions"] = asked
+  const formQuestions: WrittenJob["formQuestions"] = asked
     .filter((q, i, all) => all.findIndex((x) => normalizeCriterion(x) === normalizeCriterion(q)) === i)
     .slice(0, 5)
     .map((q, i) => ({ kind: "yes_no", key: slug(q.split(" ").slice(0, 6).join(" ")) || `fq${i + 1}`, question: /\?\s*$/.test(q) ? q : `${q.replace(/[\s.]+$/, "")}?`, required: true }));
@@ -291,9 +288,7 @@ export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePac
   const duties = f.responsibilities?.length ? ` You will ${f.responsibilities.map((r) => r.replace(/\.$/, "").replace(/^./, (ch) => ch.toLowerCase())).join(", and ")}.` : "";
   const description = `${c.companyName} is hiring a ${title}${city ? ` in ${city}${region ? `, ${region}` : ""}` : ""}. This is ${arrangement}, ${f.employmentType === "part_time" ? "part time" : "full time"}${f.schedule ? `, ${f.schedule}` : ""}. We are looking for someone who takes pride in careful, friendly work, on a team that values consistency and kindness.${duties} You will own the day-to-day work of the job from the first week, work directly with a small team that moves quickly, and see the results of your decisions. What the job needs: ${mustHaves.map((m) => m.replace(/[\s.]+$/, "")).join("; ")}. We read every application, keep the process short, and tell you where you stand at each step. If you are shortlisted, a short AI interview by email asks about the work, and a person on our team makes every decision.`;
   return {
-    schemaVersion: 1,
-    identity: { title, locations: [{ city: city || undefined, region: region || undefined, country: "US" }], employmentType: (["full_time", "part_time", "contract", "temporary", "per_diem", "internship"].includes(f.employmentType ?? "") ? f.employmentType : "full_time") as DraftRolePacket["identity"]["employmentType"], schedule: f.schedule, remotePolicy: f.remotePolicy === "hybrid" || f.remotePolicy === "remote" ? f.remotePolicy : "onsite" },
-    ...(pay ? { compensation: { basis: pay.basis, currency: "USD", min: pay.min, max: pay.max, benefitsSummary: f.benefits, discloseRange: true } } : {}),
+    identity: { title, cities: city ? [city] : [], employmentType: (["full_time", "part_time", "contract", "temporary", "per_diem", "internship"].includes(f.employmentType ?? "") ? f.employmentType : "full_time") as WrittenJob["identity"]["employmentType"], schedule: f.schedule },
     description: { publicJobDescription: description },
     requirements: {
       mustHaves: mustHaves.map((m, i) => ({ key: `mh_${i + 1}_${slug(m)}`, text: m, rationale: owners.length ? "Chosen by the owner as a must-have" : "Drafted from the job title" })),
@@ -302,9 +297,8 @@ export function fakeIntakeCompile(req: StructuredRequest<unknown>): DraftRolePac
     competencies,
     screening: { questions, maxMinutes: 10 },
     formQuestions,
-    communication: { tone: "warm", companyBlurb: `${c.companyName} is a ${c.vertical} business that treats its team and its customers with respect.`, candidateMayBeTold: ["The posted pay range", "The schedule", "The steps of the process"], signature: `The hiring team at ${c.companyName}`, disclosureText: disclosureLine(c.companyName), humanAlternativeText: REACH_A_PERSON_LINE },
-    compliance: { jurisdictions: [], notices: ["ai_use", "privacy"] },
-    provenance: { aiRunIds: [], assumptions },
+    communication: { tone: "warm", companyBlurb: `${c.companyName} is a ${c.vertical} business that treats its team and its customers with respect.`, candidateMayBeTold: ["The posted pay range", "The schedule", "The steps of the process"] },
+    assumptions,
   };
 }
 

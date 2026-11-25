@@ -3,12 +3,12 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import {
   DraftRolePacket as DraftRolePacketSchema, EmploymentType, INTAKE_ESSENTIALS, IntakeServerState, RemotePolicy, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
   type Actor, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal,
-  type IntakeSessionView, type IntakeTurn, type LegalCheck, type PublishBlocker, type RolePacket,
+  type IntakeSessionView, type IntakeTurn, type LegalCheck, type PublishBlocker, type RolePacket, type WrittenJob,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  BENEFITS_DESCRIPTION_JURISDICTIONS, applyAnswers, dealBreakerOffer, draftFactsKey, emit, formQuestionProblems, guardPacket, intakeReadiness, jobJurisdictions, namesWorkArrangement, normalizeCriterion,
-  normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
+  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, dealBreakerOffer, disclosureLine, draftFactsKey, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
+  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -72,8 +72,8 @@ async function loadIntakeInputs(q: Queryable, companyId: string, sessionId: stri
   return { company, session, state: stateOf(session) };
 }
 
-/** The confirmed pay the written job may carry, or null: never the model's figures, never a figure nobody confirmed. */
-function confirmedPayOf(facts: IntakeFacts, state: IntakeServerState): IntakeContext["confirmedPay"] {
+/** The pay the written job carries, or null: what a person set or confirmed, never a figure nobody confirmed. No model writes it. */
+function confirmedPayOf(facts: IntakeFacts, state: IntakeServerState): { basis: "hourly" | "salary"; min: number; max: number } | null {
   if (!payConfirmed(facts, state) || !state.pay) return null;
   return { basis: state.pay.basis, min: state.pay.min, max: state.pay.max };
 }
@@ -86,7 +86,6 @@ function contextFrom(inputs: IntakeInputs, facts = normalizeFacts(inputs.session
     facts,
     messages: session.messages,
     ad: adText ? { text: adText } : null,
-    confirmedPay: confirmedPayOf(facts, state),
     alreadyAsked: settle(state.settledFields, fieldsKnownFromFacts(facts, payConfirmed(facts, state))),
   };
 }
@@ -717,7 +716,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    const draft = finalizeDraft(asAnswered(out.output, facts), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [] });
+    const draft = finalizeDraft(draftFromWritten(out.output, facts, ctx.company.name), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [] });
     const at = new Date().toISOString();
     // The key is of the answers the model was given, so anything changed while it wrote shows the job as out of date.
     state.draft = { at, aiRunId: out.runId, by: actorOfTurn(input.actor), payKey: payConfirmed(facts, state) ? payKey(state) : null, factsKey: draftFactsKey(ctx.facts), edits: 0 };
@@ -728,19 +727,43 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   });
 }
 
+/** A city as the assistant wrote it, without a state it added all the same ("Tustin, CA"): the state is the code's to read. */
+function cityOf(written: string): string {
+  const t = written.trim();
+  const tail = t.match(/,\s*([^,]+)$/);
+  return tail && regionFromLocationText(`, ${tail[1]}`) ? t.slice(0, tail.index).trim() : t;
+}
+
 /**
- * A job just written, held to the owner's answers where the model must not decide: the work arrangement is the one the
- * owner gave, and a question for the application form that asks about a protected characteristic is left out (such a
- * question is never kept with a reason).
+ * The job record from the job as the assistant wrote it (`WrittenJob`). Everything the model is not asked for is set
+ * here from the owner's answers and the code's own words, so none of it can disagree with them:
+ * - the work arrangement is the one the owner gave (a record without one reads as on site, as the record's own rule
+ *   says, and cannot be published: the arrangement is an essential);
+ * - the state of the job's places is read from the owner's answer by the code's own reader (`regionFromLocationText`),
+ *   the reader the builder's benefits card already goes by; it decides which notices and legal checks apply, and a
+ *   place whose state the answer does not say has none until a person sets it in the editor;
+ * - a question for the application form that asks about a protected characteristic is left out (never kept with a reason);
+ * - the three lines under a candidate email are the code's (packages/core/src/compliance.ts), as the guard writes them
+ *   on every save; the notices and their places are the guard's; the pay is `finishDraft`'s.
  */
-function asAnswered(written: DraftRolePacket, facts: IntakeFacts): DraftRolePacket {
+export function draftFromWritten(written: WrittenJob, facts: IntakeFacts, companyName: string): DraftRolePacket {
+  const { cities, ...identity } = written.identity;
   const arrangement = RemotePolicy.safeParse(facts.remotePolicy);
+  const region = regionFromLocationText(facts.locationText);
+  const place = (city?: string) => ({ ...(city ? { city } : {}), ...(region ? { region } : {}), country: "US" });
+  const named = cities.map(cityOf).filter(Boolean);
   const refused = new Set(formQuestionProblems(written.formQuestions).map((p) => p.index));
-  return {
-    ...written,
-    identity: arrangement.success ? { ...written.identity, remotePolicy: arrangement.data } : written.identity,
+  return DraftRolePacketSchema.parse({
+    identity: { ...identity, locations: named.length ? named.map(place) : [place()], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
+    description: written.description,
+    requirements: written.requirements,
+    competencies: written.competencies,
+    screening: written.screening,
     formQuestions: written.formQuestions.filter((_, i) => !refused.has(i)),
-  };
+    communication: { ...written.communication, signature: hiringTeamSignature(companyName), disclosureText: disclosureLine(companyName), humanAlternativeText: REACH_A_PERSON_LINE },
+    compliance: { jurisdictions: [], notices: [] },
+    provenance: { aiRunIds: [], assumptions: written.assumptions },
+  });
 }
 
 /**
@@ -764,7 +787,7 @@ function finishDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: FinishInput
   const pay = confirmedPayOf(facts, prov.state);
   if (pay && prov.state.pay) {
     const benefits = facts.benefits?.trim() || packet.compensation?.benefitsSummary;
-    packet.compensation = { basis: pay.basis as "hourly" | "salary", currency: packet.compensation?.currency ?? "USD", min: pay.min, max: pay.max, ...(benefits ? { benefitsSummary: benefits } : {}), discloseRange: true };
+    packet.compensation = { basis: pay.basis, currency: packet.compensation?.currency ?? "USD", min: pay.min, max: pay.max, ...(benefits ? { benefitsSummary: benefits } : {}), discloseRange: true };
     packet.provenance.payConfirmedBy = { by: prov.state.pay.by, at: prov.state.pay.at, via: prov.state.pay.via };
     packet.provenance.payOrigin = prov.state.pay.via;
   } else {
@@ -794,17 +817,16 @@ function draftByRule(loaded: IntakeInputs, facts: IntakeFacts, actor: Actor): Dr
   }
 }
 
-/** The job as it is published, from a job the model wrote, outside a draft: for the evaluation harness, where the case's own pay counts as confirmed. */
-export function finalizePacket(raw: DraftRolePacket, ctx: IntakeContext, prov: { sessionId: string; aiRunId: string }): RolePacket {
+/**
+ * The job as it is published, from a job the model wrote, outside a draft: for the evaluation harness, where the pay in
+ * the case's answers counts as confirmed. A job whose answers hold no pay has none and cannot be published (it throws).
+ */
+export function finalizePacket(raw: WrittenJob, ctx: IntakeContext, prov: { sessionId: string; aiRunId: string }): RolePacket {
   const facts = normalizeFacts(ctx.facts);
   const state = IntakeServerState.parse({});
-  const basis = facts.compensationBasis ?? raw.compensation?.basis;
-  const min = facts.compensationMin ?? raw.compensation?.min;
-  const max = facts.compensationMax ?? raw.compensation?.max;
-  const paid = (basis === "hourly" || basis === "salary") && min !== undefined && max !== undefined;
-  if (paid) state.pay = { by: { kind: "system", id: "eval" }, at: new Date().toISOString(), via: "typed", basis, min, max };
-  const answered = paid ? { ...facts, compensationBasis: basis, compensationMin: min, compensationMax: max } : facts;
-  return RolePacketSchema.parse(finalizeDraft(asAnswered(raw, answered), { ...ctx, facts: answered }, { ...prov, state }));
+  const { compensationBasis: basis, compensationMin: min, compensationMax: max } = facts;
+  if ((basis === "hourly" || basis === "salary") && min !== undefined && max !== undefined) state.pay = { by: { kind: "system", id: "eval" }, at: new Date().toISOString(), via: "typed", basis, min, max };
+  return RolePacketSchema.parse(finalizeDraft(draftFromWritten(raw, facts, ctx.company.name), { ...ctx, facts }, { ...prov, state }));
 }
 
 /**
