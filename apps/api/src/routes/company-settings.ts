@@ -8,6 +8,7 @@ import { LOGO_MAX_BYTES, inspectLogo, logoFileName, logoKey } from "@ros/integra
 import { actorOf, clientIp, requireTenant, type Tenant, type Vars } from "../middleware/session";
 import { HttpError } from "../middleware/errors";
 import { aiCreditAnswer } from "../services/ai-credit";
+import { ASSISTANT_UNAVAILABLE_ABOUT_LINE, assistantAnswered, assistantUnavailable } from "../services/assistant-unavailable";
 import { aboutWordingProblem, companyView, draftAbout, logoMemberPath, logoResponse } from "../services/company-settings-profile";
 
 /**
@@ -75,7 +76,9 @@ companySettingsRoutes.patch("/current", requireTenant, async (c) => {
 
 /**
  * The assistant drafts a few sentences about the company from what it already told us (and the person's notes, when
- * given). Nothing is shown to candidates: the draft waits in Settings until a person approves a text.
+ * given). Nothing is shown to candidates: the draft waits in Settings until a person approves a text. A draft that
+ * failed answers 502: `assistant_unavailable` when the AI provider itself is the problem (an administrator is alerted,
+ * and the message never says to try again in a minute, which could not work), `ai_failed` for anything else.
  */
 companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   const t = mayEdit(c);
@@ -84,7 +87,12 @@ companySettingsRoutes.post("/current/about/draft", requireTenant, async (c) => {
   const actor = actorOf(c);
   const out = await draftAbout(container, { companyId: t.companyId, actor, notes: body.notes || null });
   if (outOfCredit(out)) throw await aiCreditAnswer(container, t, out.refusedHoldUsd, { usedUp: AI_HELP_LINE.about, busy: AI_HELP_BUSY_LINE.about });
-  if (!out.ok) throw new HttpError(502, "ai_failed", "The assistant could not write a draft just now. Try again in a minute, or write the text yourself.");
+  if (!out.ok) {
+    // The same helper as the job builder: the truth for the owner, one alert for an administrator.
+    if (await assistantUnavailable(container, { error: out.error, task: "company.about", aiRunId: out.runId })) throw new HttpError(502, "assistant_unavailable", ASSISTANT_UNAVAILABLE_ABOUT_LINE, { aiRunId: out.runId });
+    throw new HttpError(502, "ai_failed", "The assistant could not write a draft just now. Try again in a minute, or write the text yourself.");
+  }
+  await assistantAnswered(container, "in Settings");
   await withTenant(container.db, t.companyId, (tx) => changeCompany(c, tx, t.companyId, "the assistant drafted the text about the company", (co, { now }) => {
     // `basedOn` (the facts the draft rested on) was asked of the model and read by nothing: it is no longer asked for,
     // and the stored shape (CompanySettings in packages/db) keeps the field, empty, until it is taken out there.
