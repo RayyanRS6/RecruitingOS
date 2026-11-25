@@ -55,7 +55,7 @@ const TURN_SYSTEM = `You help a small business owner, who is not a recruiter, de
 
 A job cannot be written without these essentials:
 - the job title;
-- where the job is (city and state);
+- where the job is (city and state: a city without its state is not enough);
 - the work arrangement: on site, hybrid or remote. Ask it unless the owner said it in their own words. Never assume it, not even for a job that sounds on site;
 - the pay: hourly or a salary, and the range. Only the owner states pay; never suggest or invent a figure;
 - full time or part time (or contract, temporary, per diem, internship);
@@ -85,7 +85,7 @@ ${PROTECTED_TRAITS_RULE}
  */
 export const intakeTurnPrompt: PromptDef<IntakeContext, IntakeTurn> = {
   key: "intake.turn",
-  version: 9,
+  version: 10,
   task: "intake.turn",
   agent: "intake",
   schema: IntakeTurn,

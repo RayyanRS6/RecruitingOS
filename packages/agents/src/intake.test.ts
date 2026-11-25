@@ -74,6 +74,38 @@ describe("the stand-in assistant's turn (intake.turn)", () => {
     expect(t.questions.map((q) => q.field)).toEqual(["remote_policy", "employment_type", "schedule"]);
   });
 
+  // intake.turn 10: a city without its state is not enough. Until then the stand-in, like the real model on the live
+  // site, took "Denver" as the place answered and said nothing of it while the page asked for the state.
+  it("takes a city without its state as not enough: asks for the state once, says it is still needed after that, and reads the state typed by itself", async () => {
+    const sentence = "I need a dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.";
+    const t = await turn(ctx([said(sentence)]));
+    expect(t.factsExtracted.locationText).toBe("Denver");
+    expect(t.questions.map((q) => [q.field, q.prompt, q.mode, q.options, q.allowOwn])).toEqual([["location", "Which state is the job in?", "free", [], true]]);
+    // what the server makes of it agrees: the place is still needed, and that card is the one shown
+    expect(after(t, [said(sentence)])).toMatchObject({ missing: ["location"], mayDraft: false, questions: [{ field: "location", prompt: "Which state is the job in?" }] });
+    // asked once: after that it says in one sentence what is still needed, as the prompt asks
+    const asked = (typed: string) => turn(ctx([said(sentence), replied(t.assistantMessage), said(typed)], t.factsExtracted, { alreadyAsked: ["location"] }));
+    const later = await asked("Nice to have: Dentrix.");
+    expect(later.questions).toEqual([]);
+    expect(later.assistantMessage).toBe("Still needed before the job can be written: location. You can type them here.");
+    // the state typed by itself completes the place, and nothing is left to say
+    for (const [typed, place] of [["CO", "Denver, CO"], ["co.", "Denver, co"], ["Colorado", "Denver, Colorado"]] as const) {
+      const done = await asked(typed);
+      expect(done.factsExtracted.locationText, typed).toBe(place);
+      expect(done.questions, typed).toEqual([]);
+      expect(done.assistantMessage, typed).toBe("Noted.");
+    }
+    // "ok" is a word, "LA" may be Los Angeles, and a longer message is not the state alone: the place stays as it was
+    for (const typed of ["ok", "LA", "Washington", "CO is fine, and it is on site"]) {
+      const still = await asked(typed);
+      expect(still.factsExtracted.locationText, typed).toBe("Denver");
+      expect(still.assistantMessage, typed).toBe("Still needed before the job can be written: location. You can type them here.");
+    }
+    // a remote job that names no place has nothing to add a state to: it is asked for no state
+    const remote = await turn(ctx([said("Thanks.")], facts({ title: "Support agent", locationText: "Anywhere in the US", remotePolicy: "remote", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 20, compensationMax: 24, mustHaves: ["Two years in customer support"] })));
+    expect(remote.questions).toEqual([]);
+  });
+
   it("starts no draft for a question about the day, and declines a criterion that stands in for age", async () => {
     expect((await turn(ctx([said("Did we hire anyone this week?")]))).notARole).toBe(true);
     const t = await turn(ctx([said("Front desk coordinator in Tustin, CA."), replied("Got it."), said("Only recent grads please.")], facts({ title: "Front desk coordinator", locationText: "Tustin, CA" })));
@@ -380,7 +412,10 @@ describe("the place of a job: its state is the owner's to say, and the card come
   const dana = { kind: "user" as const, id: "u1", name: "Dana" };
   const at = "2026-11-25T10:00:00.000Z";
   const assistantIn = (place: string) => `I need a dental assistant in ${place}, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.`;
+  /** The server's own card for the place: asked when the assistant asks none for it, and on every later turn until the place is answered. */
   const PLACE_CARD = "Where is the job? Give the city and state.";
+  /** The stand-in assistant's own card for a place with no state: since intake.turn 10 it is told that a city without its state is not enough. */
+  const STATE_CARD = "Which state is the job in?";
   /** The stand-in's turn on the owner's sentence, and what the server makes of it. */
   const first = async (sentence: string) => {
     const messages = [said(sentence)];
@@ -397,11 +432,12 @@ describe("the place of a job: its state is the owner's to say, and the card come
   it("keeps the place card and holds the job for 'Denver' alone, also when it is answered with the city again, until the state is said", async () => {
     const { messages, t, server } = await first(assistantIn("Denver"));
     expect(t.factsExtracted.locationText).toBe("Denver");
-    // every other essential is in the sentence: only the place is still needed, it has its card, and the job cannot be written
+    // every other essential is in the sentence: only the place is still needed, it has a card (the assistant's own, which
+    // asks for the state), and the job cannot be written
     expect(server).toMatchObject({ missing: ["location"], toAsk: ["location"], mayDraft: false });
-    expect(server.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    expect(server.questions.map((q) => [q.field, q.prompt])).toEqual([["location", STATE_CARD]]);
     expect(fieldsKnownFromFacts(server.facts, true)).not.toContain("location");
-    // the city again is no state: the same card comes back, as often as it takes
+    // the city again is no state: the assistant asks once, so now the server's own card for the place comes, as often as it takes
     const conversation = [...messages, replied(server.message)];
     const again = afterAnswers({ answers: [{ questionId: server.questions[0].id, selected: [], own: ["Denver"], skipped: false }], messages: conversation, facts: server.facts, state: server.state, actor: dana, at });
     expect(again.facts.locationText).toBe("Denver");
@@ -443,7 +479,7 @@ describe("the place of a job: its state is the owner's to say, and the card come
     const alone = await first(assistantIn("Kansas City"));
     expect(alone.server.facts.locationText).toBe("Kansas City");
     expect(alone.server).toMatchObject({ missing: ["location"], mayDraft: false });
-    expect(alone.server.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    expect(alone.server.questions.map((q) => q.prompt)).toEqual([STATE_CARD]);
     const withState = await first(assistantIn("Kansas City, MO"));
     expect(withState.server).toMatchObject({ missing: [], mayDraft: true, questions: [] });
     const job = await places(withState.server.facts, withState.messages);
@@ -467,9 +503,10 @@ describe("the place of a job: its state is the owner's to say, and the card come
     expect(merged([assistantIn("Denver, Colorado")], "Denver, CO")).toBe("Denver, CO");
     expect(merged([assistantIn("Denver"), "It is in Colorado."], "Denver, CO", facts({ locationText: "Denver" }))).toBe("Denver, CO");
     expect(merged([assistantIn("Denver"), "Denver, CO"], "Denver, CO", facts({ locationText: "Denver" }))).toBe("Denver, CO");
-    // so with a state the assistant added, the server still asks for the place and holds the job
+    // so with a state the assistant added (it takes the place as answered and asks no card for it), the server still
+    // asks for the place, on its own card, and holds the job
     const { messages, t } = await first(assistantIn("Denver"));
-    const guessed = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: "Denver, CO" } }, messages);
+    const guessed = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: "Denver, CO" }, questions: [] }, messages);
     expect(guessed.facts.locationText).toBe("Denver");
     expect(guessed).toMatchObject({ missing: ["location"], mayDraft: false });
     expect(guessed.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
@@ -482,8 +519,8 @@ describe("the place of a job: its state is the owner's to say, and the card come
     for (const place of ["Downtown LA", "East LA", "LA", "Remote OK", "Portland OR"]) {
       const messages = [said(assistantIn(place))];
       const t = await turn(ctx(messages));
-      // the assistant read the place as the owner wrote it; the rest is in the sentence
-      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      // the assistant read the place as the owner wrote it and took it as answered, so it asks no card for it; the rest is in the sentence
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" }, questions: [] }, messages);
       expect(server.facts.locationText, place).toBe(place);
       expect(server.missing, place).toEqual(["location"]);
       expect(server.mayDraft, place).toBe(false);
@@ -549,7 +586,8 @@ describe("the place of a job: its state is the owner's to say, and the card come
     for (const place of ["Fort Washington", "Port Washington", "Mount Washington", "East Texas", "Reno Nevada", "Washington"]) {
       const messages = [said(assistantIn(place))];
       const t = await turn(ctx(messages));
-      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      // an assistant that took the place as answered asks no card for it: the server's own card asks
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" }, questions: [] }, messages);
       expect(server.facts.locationText, place).toBe(place);
       expect(server.missing, place).toEqual(["location"]);
       expect(server.mayDraft, place).toBe(false);

@@ -8,7 +8,7 @@ The AI writes findings and quotes only. Every number a suite compares (the resum
 
 | Family | Suite | What it checks |
 |---|---|---|
-| Job builder | `intake.golden` | From what an owner types, the builder reads the facts, asks whether the job is on site, hybrid or remote instead of assuming it, asks for the state when the owner names a city alone, asks nothing twice, brings back a card the owner left alone until it is answered, and writes a whole job with the owner's pay and must-haves |
+| Job builder | `intake.golden` | From what an owner types, the builder reads the facts, asks whether the job is on site, hybrid or remote instead of assuming it, asks for the state when the owner names a city alone and takes it from the card or typed by itself as a message, asks nothing twice, brings back a card the owner left alone until it is answered, and writes a whole job with the owner's pay and must-haves |
 | | `intake.illegal_criteria` | An unlawful wish (people under 30, no gaps, a native speaker, no children, one zip code) is declined and is in no job written afterwards |
 | | `intake.job_ad` | A pasted ad is read for its job and its pay, the pay card comes back until the owner confirms the pay, and an instruction hidden in the ad is ignored |
 | | `intake.proxy_refusal` | Wording that stands in for age or another protected trait is refused wherever it comes from |

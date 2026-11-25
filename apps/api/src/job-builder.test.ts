@@ -474,17 +474,19 @@ describe("the job builder", () => {
   // state, and its card comes back until they do: a job's notices follow its state, and none may go missing.
   it("asks for the place again while its state is missing, holds 'Write the job', and writes a Colorado job once the state is said", async () => {
     const PLACE_CARD = "Where is the job? Give the city and state.";
+    // the stand-in assistant's own card: it is told that a city without its state is not enough (intake.turn 10)
+    const STATE_CARD = "Which state is the job in?";
     let draft = await start(owner, "Dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
-    // "Denver" stays on the checklist, still needed, with its card; nothing else is missing
+    // "Denver" stays on the checklist, still needed, with a card that asks for the state; nothing else is missing
     expect(draft.facts.locationText).toBe("Denver");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"], draftBlocker: "Still needed before the job can be written: where the job is." });
     expect(draft.readiness.essentials.find((e) => e.key === "location")).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver" });
-    expect(draft.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    expect(draft.questions.map((q) => [q.field, q.prompt])).toEqual([["location", STATE_CARD]]);
     // "Write the job" is refused, with the reason
     const early = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
     expect(early.status).toBe(409);
     expect(((await early.json()) as Refusal).error).toMatchObject({ code: "not_ready", message: "Still needed before the job can be written: where the job is." });
-    // answered with the city again: the card is there again
+    // answered with the city again: the assistant asks once, so the server's own card for the place is there now
     draft = (await answerCards(owner, draft, { location: "Denver" })).session;
     expect(draft.readiness.missing).toEqual(["location"]);
     expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
@@ -511,7 +513,8 @@ describe("the job builder", () => {
     let draft = await start(owner, "Dental assistant in Downtown LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     expect(draft.facts.locationText).toBe("Downtown LA");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
-    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the stand-in assistant's own card for the state the first time, the server's card for the place after that
+    expect(draft.questions.map((q) => q.prompt)).toEqual(["Which state is the job in?"]);
     // "LA" on the card, twice: the place is "LA", it still has no state, and the card is there again
     for (let n = 0; n < 2; n += 1) {
       draft = (await answerCards(owner, draft, { location: "LA" })).session;
@@ -542,7 +545,8 @@ describe("the job builder", () => {
     let draft = await start(owner, "Dental assistant in Fort Washington, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     expect(draft.facts.locationText).toBe("Fort Washington");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
-    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the stand-in assistant's own card for the state the first time, the server's card for the place after that
+    expect(draft.questions.map((q) => q.prompt)).toEqual(["Which state is the job in?"]);
     // "Washington" on the card completes nothing: the place is "Washington", with no state, and the card is there again
     draft = (await answerCards(owner, draft, { location: "Washington" })).session;
     expect(draft.facts.locationText).toBe("Washington");
