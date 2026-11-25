@@ -378,7 +378,7 @@ export const DENTAL_JOB = {
     niceToHaves: [],
   },
   competencies: [
-    { key: "home_care_instruction", name: "Home care instruction", definition: "Shows each patient how to brush and floss at home.", importance: "essential", indicators: ["demonstrates a brushing technique", "recommends a floss or an interdental brush"] },
+    { key: "patient_education", name: "Educating patients", definition: "Explains findings and home care steps to each patient.", importance: "essential", indicators: ["explains a diagnosis", "demonstrates a brushing technique"] },
     { key: "instrument_sterilization", name: "Instrument sterilization", definition: "Cleans, bags and sterilizes instruments between patients.", importance: "important", indicators: ["runs the autoclave", "sets up instrument cassettes"] },
     { key: "x_rays", name: "X-rays", definition: "Takes bitewing and full-mouth X-rays.", importance: "important", indicators: ["bitewings", "full-mouth series"] },
     { key: "dentrix", name: "Dentrix", definition: "Uses Dentrix, the software this office runs on, for appointments and records.", importance: "helpful", indicators: ["books appointments in Dentrix", "enters treatment in Dentrix"] },
@@ -415,7 +415,7 @@ export const WAREHOUSE_JOB = {
 /**
  * The twins' resume on the dental job, and the experienced hygienist's. Line by line against `DENTAL_JOB`: the licence
  * line is the licence must-have, held; the last line names scaling and root planing (the other must-have) and Dentrix (a
- * skill) and says no more of either; no line names home care instruction, sterilization or X-rays. The name, the place
+ * skill) and says no more of either; no line names educating patients, sterilization or X-rays. The name, the place
  * and the school are what a pair varies.
  */
 const pairResume = (name: string, place: string, school: string) => `${name}, RDH\n${place}\nRegistered Dental Hygienist at Harbor Dental 2019 - present\nRegistered Dental Hygienist at Pacific Smiles 2014 - 2019\n${school}\nRDH license CA active\nPeriodontal charting, scaling and root planing, Dentrix`;
@@ -481,7 +481,7 @@ export type ConsistencyCase = { id: string; provenance: "synthetic"; candidate: 
 
 /**
  * A dental assistant still in training, with a bare list of duties. Against `DENTAL_JOB`: the only line about the
- * licence is the program they are enrolled in; none names scaling and root planing or home care instruction; the
+ * licence is the program they are enrolled in; none names scaling and root planing or educating patients; the
  * duties name sterilization, X-rays and Dentrix, three of its skills, and say no more of them ("Chairside assisting" is
  * none of its skills).
  */
@@ -532,7 +532,7 @@ export type CredentialCase = { id: string; provenance: "synthetic"; candidate: S
 
 /**
  * A hygienist's resume around one licence line. Against `DENTAL_JOB`: the last line names scaling and root planing (the
- * other must-have) and patient education (the skill of home care instruction) and says no more of either; no line names
+ * other must-have) and patient education (the skill of educating patients) and says no more of either; no line names
  * sterilization, X-rays or Dentrix.
  */
 const credentialResume = (name: string, licenceLine: string) => `${name}\nAnaheim, CA\nRegistered Dental Hygienist at Bayside Dental 2016 - 2021\nA.S. Dental Hygiene, Cypress College\n${licenceLine}\nScaling and root planing, patient education`;

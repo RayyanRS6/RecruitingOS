@@ -199,7 +199,7 @@ describe("the two jobs written by hand for the suites that compare readings", ()
       // none is named like a must-have, which the score would count once, as the must-have
       expect(skillsInScore(job).map((c) => c.key)).toEqual(job.competencies.map((c) => c.key));
     }
-    expect(DENTAL_JOB.competencies.map((c) => c.key)).toEqual(["home_care_instruction", "instrument_sterilization", "x_rays", "dentrix"]);
+    expect(DENTAL_JOB.competencies.map((c) => c.key)).toEqual(["patient_education", "instrument_sterilization", "x_rays", "dentrix"]);
     expect(WAREHOUSE_JOB.competencies.map((c) => c.key)).toEqual(["cycle_counts", "loading_trucks"]);
     expect("Inventory accuracy. Loads and unloads trucks without damage or injury.").toMatch(quality);
   });
