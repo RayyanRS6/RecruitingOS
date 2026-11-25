@@ -72,7 +72,7 @@ export async function openSession(container: Container, c: Context<Vars>, identi
     if (err instanceof InvitationRefused) {
       if (err.code === "invite_expired" || err.code === "invite_seats_full") clearInviteCookie(c);
       await audit(container.db, { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: err.code, ip: clientIp(c), details: { email: normalizeEmail(identity.email), provider: startedProvider ?? identity.provider } });
-      throw new SignInRefused(err.code, err.message);
+      throw new SignInRefused(err.code);
     }
     throw err;
   }

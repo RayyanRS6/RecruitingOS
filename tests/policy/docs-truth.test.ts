@@ -9,7 +9,8 @@ const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta
 
 describe("the setup documents", () => {
   it("name the Microsoft app registration as the sign-in page names the product, the name IT sees on Microsoft's consent screen", () => {
-    const product = /const PRODUCT = "([^"]+)";/.exec(read("apps/web/src/pages/Login.tsx"))?.[1];
+    // the name the sign-in page's sentences use, kept beside those sentences (SIGN_IN_REFUSAL in packages/contracts)
+    const product = /const PRODUCT = "([^"]+)";/.exec(read("packages/contracts/src/api/index.ts"))?.[1];
     expect(product).toBe("Recruiting OS");
     const runbook = read("docs/runbooks/production-setup.md");
     const microsoft = runbook.slice(runbook.indexOf("### Microsoft and Google sign-in"), runbook.indexOf("**Google**", runbook.indexOf("### Microsoft and Google sign-in")));

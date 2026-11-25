@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { auditRecords, sessions, users } from "@ros/db";
 import { signHs256, type FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -83,7 +84,8 @@ describe("delegated sign-in with the Microsoft-for-staff policy", () => {
     expect(((await google.json()) as { error: { code: string } }).error.code).toBe("staff_provider_required");
     const noMfa = await session(idp().mint({ email: "nadine@identifiedtalent.com", provider: "azure", aal: "aal1" }));
     expect(noMfa.status).toBe(403);
-    expect(((await noMfa.json()) as { error: { code: string } }).error.code).toBe("mfa_required");
+    // the refusal says what the sign-in page says for its code: one table holds both (SIGN_IN_REFUSAL in packages/contracts)
+    expect(await noMfa.json()).toMatchObject({ error: { code: "mfa_required", message: SIGN_IN_REFUSAL.mfa_required } });
     const ok = await session(idp().mint({ email: "nadine@identifiedtalent.com", name: "Nadine", provider: "azure", aal: "aal2" }));
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as { staff: boolean }).staff).toBe(true);

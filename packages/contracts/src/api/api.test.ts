@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApplyRequest, MeResponse } from "./index";
+import { ApplyRequest, MeResponse, SIGN_IN_REFUSAL, signInRefusalLine } from "./index";
 import { DataRequestKind, accessDecisionsFor, adminCompanyStatus } from "./admin";
 import { ApplicationAction, BulkApplicationAction, CandidateListQuery } from "./candidates";
 import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, draftStillNeeds, draftTitleOf, roleActions } from "./jobs";
@@ -29,6 +29,27 @@ describe("who people are", () => {
     const me = { user: { id: "u1", email: "sam@example.com", name: "Sam", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "c1", companyName: "Smile Dental", companySlug: "smile-dental", role: "hiring_manager" }], activeCompanyId: "c1", ai: { provider: "fake" } };
     expect(MeResponse.parse(me)).toEqual(me);
     expect(MeResponse.safeParse({ ...me, memberships: [{ ...me.memberships[0], role: "hr" }] }).success).toBe(false);
+  });
+});
+
+describe("a refused sign-in", () => {
+  it("has one sentence for each code, which the sign-in page reads by the code in its address", () => {
+    expect(Object.keys(SIGN_IN_REFUSAL)).toHaveLength(20);
+    for (const [code, sentence] of Object.entries(SIGN_IN_REFUSAL)) expect(signInRefusalLine(code), code).toBe(sentence);
+  });
+
+  // The sign-in page and the server each had a sentence for these, and the two differed until 25 November 2026.
+  it("says the sentence that tells the person what to do next, where the page and the server said two things", () => {
+    expect(SIGN_IN_REFUSAL.mfa_required).toBe("ITS staff need a second factor. Finish multi-factor sign-in with Microsoft and try again.");
+    expect(SIGN_IN_REFUSAL.identity_mismatch).toBe("This email address is already linked to a different Google or Microsoft account. Sign in with the account you used before, or contact ITS support to change it.");
+    expect(SIGN_IN_REFUSAL.invite_email_mismatch).toBe("That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.");
+    expect(SIGN_IN_REFUSAL.invite_expired).toBe("That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.");
+    expect(SIGN_IN_REFUSAL.invite_seats_full).toBe("This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again.");
+    expect(SIGN_IN_REFUSAL.expired).toBe("That sign-in link is invalid or has expired. Request a new one.");
+  });
+
+  it("gives a code it has no sentence for the general line, a name every object has included", () => {
+    for (const code of ["something_new", "", "constructor", "toString", "__proto__", "hasOwnProperty"]) expect(signInRefusalLine(code), code).toBe("Sign-in failed. Try again.");
   });
 });
 

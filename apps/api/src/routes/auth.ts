@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { and, eq } from "drizzle-orm";
-import { MagicLinkConsume, MagicLinkRequest, appPaths, type AuthConfig, type MeResponse, type MembershipRole } from "@ros/contracts";
+import { MagicLinkConsume, MagicLinkRequest, SIGN_IN_REFUSAL, appPaths, type AuthConfig, type MeResponse, type MembershipRole } from "@ros/contracts";
 import { createHash, randomBytes } from "node:crypto";
 import { InvitationRefused, audit, consumeMagicLink, createMagicLink, escapeHtml, findInvitationByToken, hashInvitationToken, invitationState, isStaffAccount, newMfaTransactionId, normalizeEmail, revokeSession, roleInWords, sealMfaTransaction, setActiveCompany, SignInRefused, MFA_TRANSACTION_TTL_MS } from "@ros/core";
 import { companies, memberships, users, withPlatform } from "@ros/db";
@@ -170,7 +170,7 @@ authRoutes.post("/magic-link", rateLimit(POLICIES.authMagicLink), async (c) => {
   if (!container.env.MAGIC_LINK_ENABLED) throw new HttpError(410, "magic_link_disabled", "Email links are not offered here. Sign in with Google or Microsoft.");
   // ITS staff accounts never sign in with an email link (D19, correction 4): Microsoft plus a second factor, always.
   const [existing] = await container.db.select({ platformRole: users.platformRole }).from(users).where(eq(users.email, normalizeEmail(body.email))).limit(1);
-  if (isStaffAccount(body.email, existing?.platformRole ?? null, signInPolicy(container))) throw new HttpError(403, "staff_provider_required", "ITS staff sign in with their Microsoft 365 account.");
+  if (isStaffAccount(body.email, existing?.platformRole ?? null, signInPolicy(container))) throw new HttpError(403, "staff_provider_required", SIGN_IN_REFUSAL.staff_provider_required);
   const { token } = await createMagicLink(container.db, { email: body.email, ip: clientIp(c) });
   const link = consumeLink(container, token);
   await container.integrations.email.send({
