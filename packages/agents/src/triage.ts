@@ -413,23 +413,19 @@ export function formAnswerAround(quote: string, application: string): string | n
   return null;
 }
 
-/** From the first word that says what a thing is about or belongs to: "restrictions | on your licence", "experience | with CPR". */
-const WHAT_IT_IS_ABOUT = /\s+(?:on|with|of|in|for|from|to|about|regarding|against|under|at)\s.*$/i;
-
 /**
  * Whether an answer on the form (one line, the question then the answer: "Do you hold a current CPR certificate? No.")
  * says, read with its question, that they do not hold a licence, certificate, permit or registration: a "no" to "Do you
  * hold …?", "Do you have …?" or "Are you licensed …?" (`closedAnswer`), where what they do not hold is the credential
- * itself (`namesCredential`) and never something about one: "Do you have any restrictions on your license? No." and "Do
- * you have experience with CPR? No." say nothing of the kind. Nor does any other question ("Has your licence ever been
- * suspended? No.") or any other answer. The AI interview goes by it (`answeredNoOnTheForm` in screening.ts). Pure.
+ * itself and never something about one (`saysNotHeld`, the licence rule's own test): "Do you have any restrictions on
+ * your license? No." and "Do you have experience with CPR? No." say nothing of the kind. Nor does any other question
+ * ("Has your licence ever been suspended? No.") or any other answer. The AI interview goes by it (`answeredNoOnTheForm`
+ * in screening.ts). Pure.
  */
 export function formAnswerSaysNotHeld(line: string): boolean {
   const asked = line.trim().match(/^(.+\?)\s+(\S.*)$/);
   const said = asked ? closedAnswer(asked[1] ?? "", asked[2] ?? "") : null;
-  if (!said || said.held) return false;
-  const what = said.statement.replace(/^I (?:do not (?:have|hold)|am not)\s+/i, "");
-  return namesCredential(what.replace(WHAT_IT_IS_ABOUT, ""));
+  return !!said && !said.held && saysNotHeld(said.statement);
 }
 
 /** The candidate's own record or words: a claim citing one of these must quote it, and the quote is checked. */
@@ -457,21 +453,39 @@ const NOT_HELD = /\b(expired|lapsed|inactive|revoked|suspended|not renewed|renew
 const STILL_HELD = /\b(active|current|valid|reinstated|reactivated|good standing)\b|\bcurrently (licensed|certified|registered|active|valid|hold|holding)\b|(?<!\bnot )\brenewed\b/i;
 /** A status word just after a negation ("never lapsed", "not expired", "hasn't been suspended", "non-expired") says the opposite. */
 const NEGATED = /(\b(never|not|no|nor|without)\b[^.;,]{0,20}|n['’]t\s+(been\s+)?|\bnon-?\s*)$/i;
-/** A plain statement that the candidate does not hold the credential: "I do not hold", "not licensed", "no RDH license". */
-const PLAINLY_NOT_HELD = new RegExp(
+/**
+ * Words that say a person does not have or hold what follows them: "do not hold …", "never had …", "no longer have …",
+ * "have no …", "No …" at the start, "without a …", and "not", "no longer" or "never been" before "licensed", "certified"
+ * or "registered". Whether what follows is the credential is for `isTheCredential` to say.
+ */
+const NOT_HAVING = new RegExp(
   [
     String.raw`\b(?:do|does|did)\s+not\s+(?:currently\s+)?(?:have|hold)\b`,
     String.raw`\b(?:do|does|did)n['’]t\s+(?:currently\s+)?(?:have|hold)\b`,
-    String.raw`\bnever\s+(?:had|held|been\s+(?:licensed|certified|registered))\b`,
-    String.raw`\bno\s+longer\s+(?:have|hold|licensed|certified|registered)\b`,
-    String.raw`\bnot\s+(?:currently\s+)?(?:licensed|certified|registered)\b`,
-    String.raw`\b(?:unlicensed|uncertified|unregistered)\b`,
-    String.raw`\b(?:have|hold)\s+no\s+(?:[\w-]+\s+){0,3}?(?:licen[cs]es?|certificat\w*|registrations?|permits?|credentials?)\b`,
-    String.raw`^\s*no\s+(?:[\w-]+\s+){0,3}?(?:licen[cs]es?|certificat\w*|registrations?|permits?|credentials?)\b`,
-    String.raw`\bwithout\s+(?:a|an|any)\s+(?:[\w-]+\s+){0,2}?(?:licen[cs]es?|certificat\w*|registrations?|permits?)\b`,
+    String.raw`\bnever\s+(?:had|held)\b`,
+    String.raw`\bno\s+longer\s+(?:have|hold)\b`,
+    String.raw`\b(?:never\s+been|no\s+longer|not(?:\s+currently)?)(?=\s+(?:licensed|certified|registered)\b)`,
+    String.raw`\b(?:have|hold)\s+no\b`,
+    String.raw`^\s*no\b`,
+    String.raw`\bwithout\s+(?:a|an|any)\b`,
   ].join("|"),
-  "i",
+  "gi",
 );
+/** The same said in one word, with nothing to follow. */
+const UNLICENSED = /\b(?:unlicensed|uncertified|unregistered)\b/i;
+/** "Never", "not" or "can't" a little before "without a license" turns it round: "never practised without a license". */
+const NOT_WITHOUT = /(?:\b(?:never|not|cannot)\b|n['’]t\b)[^.;,]{0,20}$/i;
+/**
+ * Where the first thing a person says they do not have ends: at a comma (unless it sits inside "a current, valid …"), a
+ * bracket, a dash or the end of the sentence, and at "and" or "but", which start a second thing or a second sentence.
+ */
+const AFTER_THE_FIRST_THING = /(?:[.;:!?()\n]|(?<!\b(?:current|valid|active)),|\s[-–—]\s|\s+(?:and|but)\s)[\s\S]*$/i;
+/** From the first word that says what a thing is about or belongs to, or when: "restrictions | on your licence", "experience | with CPR", "my licence | yet". */
+const WHAT_IT_IS_ABOUT = /\s+(?:on|with|of|in|for|from|to|about|regarding|against|under|at|yet|currently|now|anymore|today)(?=\s|$)[\s\S]*$/i;
+/** Another one than the job asks for: "any other license", "a license in another state". */
+const ANOTHER_ONE = /\b(?:other|another|additional|different)\b/i;
+/** Words that stand for the credential in a reply about it: "I don't have it", "I do not have one". */
+const STANDS_FOR_IT = new Set(["it", "one", "that", "this", "any", "them", "those", "these"]);
 /** Still to come, or not settled: a "do not hold" with any of these is pending, so "unknown". */
 const NOT_SETTLED = /\b(yet|pending|applied|applying|awaiting|waiting|in progress|enrolled|studying|training|graduat\w*|expected|exam|soon|will)\b/i;
 
@@ -484,6 +498,8 @@ const RENEWAL_BEFORE = /\brenewal\s+(?:is\s+|was\s+)?$/i;
 const RENEWAL_STATE = /^(expected|in progress|pending|applied for|applying for|awaiting)$/i;
 
 const wordsIn = (s: string): string[] => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+/** The words of a must-have that say which credential it is: "ca" and "rdh" of "Active CA RDH license". */
+const ownWordsOf = (subject?: string | null): string[] => wordsIn(subject ?? "").filter((w) => w.length > 1 && !FILLER_WORDS.has(w) && !GENERIC_SUBJECT_WORDS.has(w));
 
 /**
  * The parts of a quote (or of the line around it) about the credential itself, split at semicolons, line breaks and
@@ -496,7 +512,7 @@ function aboutTheCredential(quote: string, subject?: string | null): string[] {
     .split(/;|\r?\n|(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  const own = wordsIn(subject ?? "").filter((w) => w.length > 1 && !FILLER_WORDS.has(w) && !GENERIC_SUBJECT_WORDS.has(w));
+  const own = ownWordsOf(subject);
   const hasOwn = (c: string) => {
     const w = wordsIn(c);
     return own.some((o) => w.includes(o));
@@ -529,13 +545,65 @@ export function shownNotHeld(quote: string, subject?: string | null): boolean {
 }
 
 /**
+ * Whether the first thing a person says they do not have or hold (`first`: the words after "do not hold", "have no",
+ * "without a" …, as far as `AFTER_THE_FIRST_THING`) is the credential itself, and not something about one, another one, or
+ * something else. It is read up to what it is about or belongs to (`WHAT_IT_IS_ABOUT`), and things joined by "or" are each
+ * read ("a CPR or BLS certificate"). It is the credential when it ends in a word for one (`namesCredential`: "a California
+ * RDH license", "licensed"), or in the must-have's own name for it (`own`: "CPR", "my RDH"), or stands for it in a reply
+ * ("it", "a current one"). "Any restrictions on my license", "experience with CPR", "any license restrictions" and "a
+ * license in any other state" are not.
+ */
+function isTheCredential(first: string, own: readonly string[]): boolean {
+  if (ANOTHER_ONE.test(first)) return false;
+  return first
+    .replace(WHAT_IT_IS_ABOUT, "")
+    .split(/\s+(?:or|nor)\s+/i)
+    .some((named) => {
+      const words = wordsIn(named);
+      const last = words.at(-1);
+      if (!last) return false;
+      const standsForIt = words.some((w) => STANDS_FOR_IT.has(w)) && ownWordsOf(named).every((w) => STANDS_FOR_IT.has(w));
+      return namesCredential(last) || own.includes(last) || standsForIt;
+    });
+}
+
+/**
+ * What a quote says apart from denying the credential, or null when it does not deny it. It denies it where, in a part
+ * about the credential (`aboutTheCredential`), words of not having (`NOT_HAVING`) come before the credential itself
+ * (`isTheCredential`), or it says "unlicensed", "uncertified" or "unregistered"; "never … without a license" says the
+ * opposite (`NOT_WITHOUT`). The one reader of such words: a resume line, a reply in the AI interview and an answer on the
+ * form all go through it (`plainlyNotHeld`, `credentialFinding`, `formAnswerSaysNotHeld`), so "I do not have any
+ * restrictions on my license" is nowhere read as not holding one.
+ */
+function apartFromTheDenial(quote: string, subject?: string | null): string | null {
+  const about = aboutTheCredential(quote, subject).join("; ");
+  const own = ownWordsOf(subject);
+  let denied = UNLICENSED.test(about);
+  let rest = "";
+  let from = 0;
+  for (const m of about.matchAll(NOT_HAVING)) {
+    const at = m.index ?? 0;
+    if (at < from) continue;
+    if (/^without/i.test(m[0]) && NOT_WITHOUT.test(about.slice(0, at))) continue;
+    const first = about.slice(at + m[0].length).replace(AFTER_THE_FIRST_THING, "");
+    if (!isTheCredential(first, own)) continue;
+    denied = true;
+    rest += about.slice(from, at);
+    from = at + m[0].length + first.length;
+  }
+  return denied ? rest + about.slice(from) : null;
+}
+
+/** Whether a quote says the candidate does not have or hold the credential (`apartFromTheDenial`). */
+const saysNotHeld = (quote: string, subject?: string | null): boolean => apartFromTheDenial(quote, subject) !== null;
+
+/**
  * Whether a quote says plainly that the candidate does not hold the credential, with nothing pending, lapsed or held
- * about it. The plain words must be in a part about the credential (`aboutTheCredential`); anything pending or held
- * anywhere in the quote keeps it from being plain.
+ * about it. What they say they do not have must be the credential itself, in a part about it (`saysNotHeld`); anything
+ * pending or held anywhere in the quote keeps it from being plain.
  */
 export function plainlyNotHeld(quote: string, subject?: string | null): boolean {
-  const about = aboutTheCredential(quote, subject).join("; ");
-  return PLAINLY_NOT_HELD.test(about) && !NOT_SETTLED.test(quote) && !STILL_HELD.test(quote) && !shownNotHeld(quote, subject);
+  return saysNotHeld(quote, subject) && !NOT_SETTLED.test(quote) && !STILL_HELD.test(quote) && !shownNotHeld(quote, subject);
 }
 
 type Met = EvidenceAssessment["requirementFindings"][number]["met"];
@@ -545,14 +613,18 @@ type Met = EvidenceAssessment["requirementFindings"][number]["met"];
  * the quote sits on, or the form's question a short answer replies to, so the finding never rests on which part of a
  * line the model chose to quote): "no" when the words say plainly the candidate does not hold it,
  * whatever the model answered; a lapsed, expired, pending or unclear credential is "unknown", never "no", "yes" or
- * "partially"; a "no" the words do not say plainly is "unknown". Anything else stands as read. `subject`: the
- * must-have's own words, so a part of the line about another qualification is not read as this one.
+ * "partially"; a "no" the words do not say plainly is "unknown". Words that say they do not hold it are never a "yes" or
+ * a "partially" either: "I do not hold a current CPR certificate" is "unknown" (a lapsed one is not current either),
+ * because the word that says a credential is in force sits inside what they say they do not hold. Only where the line
+ * says one is in force apart from that ("my RN license is active, I do not hold a compact license") does the reading
+ * stand, as anything else does. `subject`: the must-have's own words, so a part of the line about another qualification
+ * is not read as this one.
  */
 export function credentialFinding(met: Met, text: string, subject?: string | null): Met {
   if (plainlyNotHeld(text, subject)) return "no";
-  if (shownNotHeld(text, subject)) return "unknown";
-  if (met === "no") return "unknown";
-  return met;
+  if (met === "no" || shownNotHeld(text, subject)) return "unknown";
+  const rest = apartFromTheDenial(text, subject);
+  return rest !== null && !STILL_HELD.test(rest) ? "unknown" : met;
 }
 
 /** The parts of a CV reading the evidence rules touch. */
