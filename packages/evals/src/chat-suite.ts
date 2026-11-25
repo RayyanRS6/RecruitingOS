@@ -83,7 +83,7 @@ export const CHAT_PACKET = {
 } as unknown as RolePacket;
 
 /** What the candidate's CV says (their own information, which the chat may name). The model is not given the form's answers. */
-export const CHAT_CV: string[] = ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Final-year IoT project at CUST: soil sensors and a water pump", "Skills: TypeScript, WebRTC, IoT"];
+export const CHAT_CV: string[] = ["Software engineer at Acme Calls (2023 to now): WebRTC calls platform", "Final-year IoT project at Anytown Tech: soil sensors and a water pump", "Skills: TypeScript, WebRTC, IoT"];
 
 const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 const fives = (s: string) => {
@@ -126,7 +126,7 @@ const CERTIFICATE = "first_aid";
  * "No" to the form's question about one.
  */
 const FORM_NO = {
-  resumeText: ["Software engineer at CallsFlow 2023 - present", "Built and wired Arduino line-following robots for a school club", "Taught weekly technical workshops in English to first-year students"].join("\n"),
+  resumeText: ["Software engineer at Acme Calls 2023 - present", "Built and wired Arduino line-following robots for a school club", "Taught weekly technical workshops in English to first-year students"].join("\n"),
   formAnswers: { fq_first_aid: "no" },
   shown: { arduino: "Built and wired Arduino line-following robots for a school club", english: "Taught weekly technical workshops in English to first-year students" } as Record<string, string>,
 };
@@ -178,7 +178,7 @@ export function chatCaseContext(c: ChatCase): ScreenContext {
   const progress = chatCaseProgress(c);
   const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
   if (!progress.chat) throw new Error(`case ${c.id} has no plan`);
-  return { company: { name: "Robotronics" }, packet: CHAT_PACKET, candidate: { firstName: "Meerub" }, progress, answers: {}, transcript: transcriptOf(c), latestCandidateMessage: latest, payShown: false, chat: chatPromptOf(chatPacket(CHAT_PACKET, progress), progress.chat, progress.currentQuestionKey, CHAT_CV) };
+  return { company: { name: "Eval Robotics" }, packet: CHAT_PACKET, candidate: { firstName: "Leah" }, progress, answers: {}, transcript: transcriptOf(c), latestCandidateMessage: latest, payShown: false, chat: chatPromptOf(chatPacket(CHAT_PACKET, progress), progress.chat, progress.currentQuestionKey, CHAT_CV) };
 }
 
 /** A case's failures, from the model's raw turn: the code's rules applied as the app applies them, then the case's own checks. */
@@ -235,7 +235,7 @@ export const chatCases: ChatCase[] = [
     suite: "chat.shape",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    transcript: [{ role: "assistant", content: `Hi Meerub. Your resume shows your work as Software engineer at CallsFlow (2023 to now).\n\n${GAP_ASK}`, questionKey: "arduino" }, { role: "candidate", content: "At CUST I built a water pump that an Arduino switched on from two soil-moisture sensors; I wrote the firmware and did the wiring." }],
+    transcript: [{ role: "assistant", content: `Hi Leah. Your resume shows your work as Software engineer at Acme Calls (2023 to now).\n\n${GAP_ASK}`, questionKey: "arduino" }, { role: "candidate", content: "At Anytown Tech I built a water pump that an Arduino switched on from two soil-moisture sensors; I wrote the firmware and did the wiring." }],
     expect: ({ raw, move }) => [
       ...(raw.reading === "concrete" ? [] : [`the model read a concrete answer as ${raw.reading ?? "nothing"}`]),
       ...(move?.move === "covered" ? [] : [`the item was not covered (${move?.move ?? "no move"})`]),
@@ -357,7 +357,7 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST the soil sensor readings kept dropping out. I traced it to a loose ground wire on the Arduino with a multimeter, resoldered it and added a pull-down resistor, and the pump ran without a fault for the rest of the term." }],
+    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At Anytown Tech the soil sensor readings kept dropping out. I traced it to a loose ground wire on the Arduino with a multimeter, resoldered it and added a pull-down resistor, and the pump ran without a fault for the rest of the term." }],
     // Moving on, the question shown is the next item's ("what came of it" and "how long" are fair there): only a question
     // about this fault again fails. Staying on this item, any of the reply's parts asked again fails.
     expect: ({ raw, move, turn }) => [
@@ -373,7 +373,7 @@ export const chatCases: ChatCase[] = [
     suite: "chat.no_reask",
     gaps: ["arduino", "english"],
     asking: "arduino",
-    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At CUST I built a soil-moisture pump on an Arduino and wrote its firmware. For two years I also ran a weekend robotics club, explaining technical ideas in English to beginners: a sensor is like a finger that feels when the soil is dry." }],
+    transcript: [{ role: "assistant", content: GAP_ASK, questionKey: "arduino" }, { role: "candidate", content: "At Anytown Tech I built a soil-moisture pump on an Arduino and wrote its firmware. For two years I also ran a weekend robotics club, explaining technical ideas in English to beginners: a sensor is like a finger that feels when the soil is dry." }],
     expect: ({ move, turn }) => [
       ...(move?.move === "covered" ? [] : [`a reply that covers the item should move on, got ${move?.move ?? "no move"}`]),
       ...(turn.questionKey === "english" ? [] : [`moved to ${turn.questionKey ?? "nothing"}, not the next item`]),
@@ -404,7 +404,7 @@ export const chatCases: ChatCase[] = [
     suite: "chat.close",
     gaps: [],
     asking: "wrap_up",
-    transcript: [{ role: "assistant", content: "How would you explain what a sensor is to six-year-olds?", questionKey: "wq_explain" }, { role: "candidate", content: "Like a thirsty finger that feels when the soil is dry and tells the pump to drink." }, { role: "assistant", content: "Meerub, is there anything else you would like the hiring team to know before we finish?", questionKey: "wrap_up" }, { role: "candidate", content: "No, nothing else." }],
+    transcript: [{ role: "assistant", content: "How would you explain what a sensor is to six-year-olds?", questionKey: "wq_explain" }, { role: "candidate", content: "Like a thirsty finger that feels when the soil is dry and tells the pump to drink." }, { role: "assistant", content: "Leah, is there anything else you would like the hiring team to know before we finish?", questionKey: "wrap_up" }, { role: "candidate", content: "No, nothing else." }],
     expect: ({ turn }) => [
       ...(turn.done ? [] : ["the closing question's answer did not close the chat"]),
       ...(/\?/.test(turn.messageToCandidate) ? [`the close asks something: ${turn.messageToCandidate}`] : []),
@@ -421,7 +421,7 @@ export const chatCases: ChatCase[] = [
     gaps: ["first_aid"],
     asking: "wq_transport",
     transcript: [{ role: "assistant", content: TRANSPORT_ASK, questionKey: "wq_transport" }, { role: "candidate", content: TRANSPORT_REPLY }],
-    scripted: { messageToCandidate: `You ride a motorbike and can reach any school in the city.\n\nMeerub, ${CHAT_WRAP_QUESTION[0]?.toLowerCase()}${CHAT_WRAP_QUESTION.slice(1)}`, questionKey: CHAT_WRAP_KEY, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" },
+    scripted: { messageToCandidate: `You ride a motorbike and can reach any school in the city.\n\nLeah, ${CHAT_WRAP_QUESTION[0]?.toLowerCase()}${CHAT_WRAP_QUESTION.slice(1)}`, questionKey: CHAT_WRAP_KEY, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" },
     expect: ({ turn, move, plan }) => [
       ...(move?.move === "covered" ? [] : [`the reply settles the question it answers, got ${move?.move ?? "no move"}`]),
       ...(turn.questionKey === "first_aid" ? [] : [`went to ${turn.questionKey ?? "nothing"} with the certificate still open`]),

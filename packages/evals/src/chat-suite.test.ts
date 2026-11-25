@@ -106,7 +106,7 @@ describe("chat.* suites", () => {
   it("a turn that goes to the closing question with the certificate still open is put right, with no model call, and the case fails a turn left where the model put it", async () => {
     const c = chatCases.find((x) => x.id === "closing_question_only_after_every_item")!;
     expect(chatCaseProgress(c).chat?.items.map((i) => [i.key, i.state])).toEqual([["wq_explain", "covered"], ["wq_room", "covered"], ["wq_transport", "asking"], ["first_aid", "open"]]);
-    expect(c.scripted).toMatchObject({ questionKey: "wrap_up", messageToCandidate: "You ride a motorbike and can reach any school in the city.\n\nMeerub, is there anything else you would like the hiring team to know before we finish?" });
+    expect(c.scripted).toMatchObject({ questionKey: "wrap_up", messageToCandidate: "You ride a motorbike and can reach any school in the city.\n\nLeah, is there anything else you would like the hiring team to know before we finish?" });
     expect(chatCaseFailures(c, c.scripted!)).toEqual([]);
     const called: string[] = [];
     const results = await runChatSuite(async (ctx, x) => { called.push(x.id); return run(ctx); }, (s) => s === "chat.close");
@@ -137,7 +137,7 @@ describe("chat.* suites", () => {
     // a close with nothing but a question: the code keeps none of it, and the eval says so
     expect(chatCaseFailures(close, { ...base, done: true, messageToCandidate: "Anything else before we finish?" })).toContain("the close is empty");
     // a time promised in the close never reaches the candidate (the code leaves it out), so the case still passes
-    expect(chatCaseFailures(close, { ...base, done: true, messageToCandidate: "Thank you, Meerub. You will hear back within a few days." })).toEqual([]);
+    expect(chatCaseFailures(close, { ...base, done: true, messageToCandidate: "Thank you, Leah. You will hear back within a few days." })).toEqual([]);
     expect(sharesFiveWords("would you use a concrete everyday analogy and", "uses a concrete everyday analogy and checks understanding")).toBe(true);
     expect(sharesFiveWords("How would you explain a sensor?", "uses a concrete everyday analogy and checks understanding")).toBe(false);
   });
