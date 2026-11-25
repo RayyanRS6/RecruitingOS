@@ -88,6 +88,17 @@ describe("intake.turn: the builder's conversation", () => {
     expect(turn()).toContain("Company: Harbor Dental. Kind of business: dental. Size: 10-19 employees. Locations: Irvine, CA. Benefits: Health cover.");
   });
 
+  // Still version 9 (26 November 2026, found by the real model before anything went live). Two rules stood on each
+  // other: "never ask again what is listed as already asked" and, for a pasted ad, "when it states pay, ask the owner to
+  // confirm the pay". The model followed the second on every turn: it wrote the pay card again after the owner had left
+  // it alone, and again after they had confirmed the pay. The server brings the pay card back by itself until a person
+  // confirms, so the model asks once, and the list of what was asked decides the rest.
+  it("asks an ad's pay to be confirmed once: not again once the pay is listed as already asked or answered", () => {
+    const bullet = turn().split("\n").find((line) => line.startsWith("- A pasted job ad"));
+    expect(bullet).toContain('when it states pay and the pay is not yet listed under "Already asked or answered", ask the owner to confirm the pay is still current (mode "pay").');
+    expect(turn().match(/confirm the pay/g)).toHaveLength(1);
+  });
+
   it("always ends with the owner's turn, which the models require", () => {
     const assistant = { role: "assistant" as const, content: "Thanks. Two quick questions beside this.", at: "2026-11-18T09:00:05.000Z" };
     const turns = intakeTurnPrompt.messages({ ...ctx, messages: [...ctx.messages, assistant] });

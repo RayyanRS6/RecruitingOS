@@ -115,7 +115,10 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
       }
       after = afterTurn({ turn: r.output, messages: answered.messages, facts: answered.facts, state: answered.state, actor: EVAL_OWNER, at });
       draft = { facts: after.facts, state: after.state, messages: [...answered.messages, { role: "assistant", content: after.message, at }] };
-      failures.push(...cardLoopFailures({ turn: r.output, after, asked }).map((x) => `round ${n + 1}: ${x}`));
+      const loop = cardLoopFailures({ turn: r.output, after, asked });
+      failures.push(...loop.map((x) => `round ${n + 1}: ${x}`));
+      // A failed round keeps what the assistant wrote and what the page stored, so the failure can be traced from the result file.
+      if (loop.length) notes.push(`round ${n + 1}, as the assistant wrote it: cards ${r.output.questions.map((q) => `${cardField(q)} ("${q.prompt}")`).join("; ") || "none"}; message "${r.output.assistantMessage.slice(0, 300)}"; as stored: "${after.message.slice(0, 300)}"`);
       const fields = (qs: readonly IntakeQuestion[]) => qs.map(cardField).join(", ") || "none";
       notes.push(`round ${n + 1}: answered ${fields(open.filter((_, i) => !answers[i]?.skipped))}; skipped ${fields(open.filter((_, i) => answers[i]?.skipped))}; cards after it: ${fields(after.questions)}`);
     }
