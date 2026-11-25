@@ -1,6 +1,18 @@
 import type { ClosingDateView, RolePacket } from "@ros/contracts";
 import { CLOSING_DATE_REASON, CLOSING_GRACE_HOURS, closingDateRequired, closingDateView, openPayload, sealPayload } from "@ros/core";
 
+/**
+ * Whether a job takes a new application by its own rule: it is open, and its applications have not been stopped (a
+ * closing date that passed, or a person switching them off). A pause or a passed closing date keeps the job page up and
+ * closes the form: the page says so, the apply routes answer 404, and nobody already in the process is touched. The one
+ * test of it: the job pages, the application itself and the team's Jobs list all ask here. (A form opened before the
+ * closing date may still be sent for a while: `lateApplicationAllowed`, below. A company whose trial has ended takes
+ * none either: `jobTakesApplications` in pages/candidate-shared.tsx adds that.)
+ */
+export function acceptingApplications(role: { status: string; acceptingApplications: boolean }): boolean {
+  return role.status === "open" && role.acceptingApplications;
+}
+
 /** A job's closing date as every page reads it; "required by law" is worked out from the places of the version given. */
 export function closingDateFor(role: Parameters<typeof closingDateView>[0]["role"], company: { timezone: string | null } | null, packet: Pick<RolePacket, "identity"> | null, now: Date): ClosingDateView {
   const requiredByLaw = !!packet && closingDateRequired({ jobLocations: packet.identity.locations, remotePolicy: packet.identity.remotePolicy });

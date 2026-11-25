@@ -3,14 +3,14 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  appPaths,
-  type IntakeAnswer, type IntakeAnswersRequest, type IntakeMessageRequest, type IntakeSessionResponse, type IntakeSessionView, type IntakeTurnReply, type IntakeTurnResponse,
+  appPaths, draftTitleOf, isOwnerOrAdmin,
+  type IntakeAnswer, type IntakeAnswersRequest, type IntakeDraftAnswer, type IntakeMessageRequest, type IntakeSessionResponse, type IntakeTurnReply, type IntakeTurnResponse,
   type KeepPacketFlag, type PublishResult, type SetClosingDate,
 } from "@ros/contracts";
 import { Alert, Button, EmptyState, ErrorState, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { ApiError, api, errorCode, errorWords, type Me, planLimitOf } from "../../api/client";
 import {
-  answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftTitle, draftingNow, echoText,
+  answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftingNow, echoText,
   firstReplyKey, initialCards, publishHelp, refusedLines, sessionKey, turnProblem, typedWithCards, typeInstead, writeHelp,
   type ButtonHelp, type Deck, type Problem,
 } from "../../builder";
@@ -18,7 +18,6 @@ import { Upgrade } from "../../components/Upgrade";
 import { dockFocusDue, focusLost } from "../../focus-after";
 import { Link, useNavigate } from "../../nav";
 import { activeCompanyOf } from "../../rail";
-import { managesCompany } from "../../roles";
 import { toast } from "../../toast";
 import { JobEditor } from "../job/JobEditor";
 import { Composer } from "./Composer";
@@ -47,10 +46,13 @@ export function Builder({ sessionId }: { sessionId: string }) {
     retry: (count, e) => !(e instanceof ApiError && (e.status === 403 || e.status === 404)) && count < 1,
     refetchInterval: (q) => (polling || draftingNow(q.state.data?.session.progress ?? null) ? 1000 : false),
   });
-  const view = session.data?.session ?? null;
+  // the draft, and beside it the company's time zone (the closing date's "today" is counted in it)
+  const loaded = session.data ?? null;
+  const view = loaded?.session ?? null;
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  // an owner or an admin sets the closing date and may take over a draft someone else started
-  const manages = managesCompany(activeCompanyOf(me.data).role);
+  // An owner or an admin sets the closing date and may take over a draft someone else started. The API sends no action
+  // list for a draft, so the page asks the contracts' one test of it; the API checks again on every request.
+  const manages = isOwnerOrAdmin(activeCompanyOf(me.data).role);
 
   const [problem, setProblem] = useState<Problem | null>(() => turnProblem(qc.getQueryData<IntakeTurnReply>(firstReplyKey(sessionId)) ?? null));
   const [notUsed, setNotUsed] = useState<string[]>([]);
@@ -69,10 +71,11 @@ export function Builder({ sessionId }: { sessionId: string }) {
   const [helpShown, setHelpShown] = useState(false);
   const helpId = useId();
 
-  const apply = (s: IntakeSessionView) => qc.setQueryData<IntakeSessionResponse>(key, { session: s });
+  /** Every answer that carries the draft carries the company's time zone beside it: both are kept. */
+  const apply = (r: IntakeDraftAnswer) => qc.setQueryData<IntakeSessionResponse>(key, { session: r.session, timeZone: r.timeZone });
   const failed = (err: unknown) => setProblem({ message: errorWords(err), ask: planLimitOf(err)?.ask ?? null });
   const afterTurn = (r: IntakeTurnResponse) => {
-    apply(r.session);
+    apply(r);
     setProblem(turnProblem(r.reply));
     setNotUsed(refusedLines(r.refused));
     qc.invalidateQueries({ queryKey: ["intake", "sessions"] });
@@ -126,7 +129,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
     mutationFn: async (carried: { answers: IntakeAnswer[] } | null) => {
       if (carried) {
         const r = await api.post<IntakeTurnResponse>(`${base}/answers`, { answers: carried.answers } satisfies IntakeAnswersRequest);
-        apply(r.session);
+        apply(r);
         setNotUsed(refusedLines(r.refused));
       }
       return api.post<IntakeSessionResponse>(`${base}/draft`);
@@ -136,7 +139,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
       setPolling(true);
     },
     onSuccess: (r) => {
-      apply(r.session);
+      apply(r);
       setPane("secondary");
       toast("The job is written.", "Check it, then publish.");
     },
@@ -170,7 +173,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
   const keep = useMutation({
     mutationFn: (input: KeepPacketFlag) => api.post<IntakeSessionResponse>(`${base}/flags/keep`, input),
     onSuccess: (r) => {
-      apply(r.session);
+      apply(r);
       toast("Kept, with your reason.");
     },
     onError: (err) => toast(errorWords(err), { tone: "critical" }),
@@ -178,7 +181,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
   const closing = useMutation({
     mutationFn: (closesOn: string | null) => api.put<IntakeSessionResponse>(`${base}/closing-date`, { closesOn } satisfies SetClosingDate),
     onSuccess: (r) => {
-      apply(r.session);
+      apply(r);
       toast(r.session.closesOn ? "Closing date saved." : "Closing date taken off.");
     },
   });
@@ -194,7 +197,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
   const takeOver = useMutation({
     mutationFn: () => api.post<IntakeSessionResponse>(`${base}/take-over`),
     onSuccess: (r) => {
-      apply(r.session);
+      apply(r);
       toast("The draft is yours now.");
       qc.invalidateQueries({ queryKey: ["intake", "sessions"] });
     },
@@ -214,14 +217,15 @@ export function Builder({ sessionId }: { sessionId: string }) {
 
   if (session.isLoading) return <Skeleton lines={6} />;
   const startAgain = <Link to={appPaths.newJob} className="btn primary">Start a hire</Link>;
-  if (session.error || !view) {
+  if (session.error || !loaded || !view) {
     if (session.error instanceof ApiError && session.error.status === 404) return <EmptyState icon="roles" title="We could not find that draft" action={startAgain} />;
     return <ErrorState message={errorWords(session.error, "Could not load this draft.")} onRetry={() => session.refetch()} />;
   }
   if (view.status === "compiled") return <EmptyState icon="roles" title="This draft is now a job" action={view.roleId ? <Link to={appPaths.job(view.roleId)} className="btn primary">Open the job</Link> : undefined} />;
   if (view.status !== "active") return <EmptyState icon="roles" title="This draft was discarded" action={startAgain} />;
 
-  const title = draftTitle(view);
+  // the one rule for a draft's title, the same one its line in a list is given by the server
+  const title = draftTitleOf(view);
   const written = !!view.draft;
   const cards = cardsToShow(view);
   const deckKey = cardsKey(cards);
@@ -371,6 +375,7 @@ export function Builder({ sessionId }: { sessionId: string }) {
         secondary={
           <DraftPane
             view={view}
+            timeZone={loaded.timeZone}
             guardChanges={guardChanges}
             previewHref={`${base}/preview/page`}
             onEdit={() => setEditing(true)}

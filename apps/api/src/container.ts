@@ -1,4 +1,4 @@
-import { createRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
+import { createAppRuntime, type AiRuntime, type FakeProvider } from "@ros/ai";
 import { createDb, inspectConnectionRole, migrate, migrationStatus, problemsWithConnectionRole, seedPlatform, withPlatform, type Db, type DbHandle, type DbRole } from "@ros/db";
 import { SYSTEM_ACTOR, countActiveAdmins, createAiCreditGate, createRateLimitStore, raiseAlert, type RateLimitStore } from "@ros/core";
 import { createIntegrations, type Integrations } from "@ros/integrations";
@@ -87,6 +87,9 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       console.warn("[auth] BOOTSTRAP_ADMIN_EMAILS is set but administrators already exist: the list grants nothing and every match is audited as ignored. Remove the variable.");
     }
 
+    // The app's own runtime: whatever the AI_MODEL_* and AI_EFFORT_* settings say, the larger model runs only the writing
+    // of the job and the two scoring readings keep their effort; a setting that says otherwise is ignored, with a line in
+    // the log (packages/ai/src/routing.ts, `appRouting`).
     let fake: FakeProvider | null = null;
     let ai: AiRuntime;
     if (env.AI_PROVIDER === "fake") {
@@ -94,9 +97,9 @@ export async function createContainer(opts: { env?: Record<string, string | unde
       const [{ FakeProvider: Fake }, { registerFakeHandlers }] = await Promise.all([import("@ros/ai"), import("@ros/agents")]);
       fake = new Fake();
       registerFakeHandlers(fake);
-      ai = await createRuntime(env.raw, fake);
+      ai = await createAppRuntime(env.raw, fake);
     } else {
-      ai = await createRuntime(env.raw);
+      ai = await createAppRuntime(env.raw);
     }
     // Every value the adapters read is the normalized one from loadEnv, so a default lives in one place only.
     const integrations = createIntegrations(

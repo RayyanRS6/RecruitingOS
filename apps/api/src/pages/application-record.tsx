@@ -1,12 +1,12 @@
 /** @jsxRuntime automatic */
 /** @jsxImportSource hono/jsx */
 import { Hono } from "hono";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { CANDIDATE_STEP_LABEL, CandidatePrivacyRequest, SCREEN_ACTIVE_STATUSES, type ApplicationStage, type CandidateStep, type RolePacket, type ScreenStatus } from "@ros/contracts";
 import { CLOSE_OUT_TEMPLATE, sendPrivacyAcknowledgment } from "@ros/agents";
-import { CLOSED_OUT_STATUS_LINE, audit, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, isCompanyLive, mayWithdraw, onFileNoDateLine, onFileStatusLine, openHumanReview, screenAnswersSent } from "@ros/core";
-import { applications, candidates, communications, companies, dataRequests, events, roles, withPlatform, withTenant } from "@ros/db";
+import { CLOSED_OUT_STATUS_LINE, audit, candidateStep, closeOutDayWords, closeOutDueAt, createDataRequest, decisionTold, isCompanyLive, mayWithdraw, onFileNoDateLine, onFileStatusLine, openHumanReview, screenAnswersSent, stageBeforeDecision } from "@ros/core";
+import { applications, candidates, communications, companies, dataRequests, roles, withPlatform, withTenant } from "@ros/db";
 import type { Vars } from "../middleware/session";
 import type { Container } from "../container";
 import { POLICIES, rateLimit } from "../middleware/rate-limit";
@@ -158,12 +158,13 @@ div.card.status { display: grid; grid-template-columns: repeat(auto-fit, minmax(
 
 /**
  * What the candidate may see of a decision: Not selected shows only once they were told. Until then the page stands where
- * they last saw it: the stage the decision was made at, and the date that stage began. Read off the stage history.
+ * they last saw it: the stage the decision was made at, and the date that stage began (`stageBeforeDecision`, the one
+ * reading of the stage history, which an undo of the decision follows too).
  */
 async function visibleStage(container: Container, app: typeof applications.$inferSelect): Promise<{ hidden: boolean; before: ApplicationStage | null; since: string }> {
   if (app.stage !== "rejected" || decisionTold(app.toldState)) return { hidden: false, before: null, since: app.stageChangedAt };
-  const moves = await withTenant(container.db, app.companyId, (tx) => tx.select({ payload: events.payload, at: events.occurredAt }).from(events).where(and(eq(events.subjectType, "application"), eq(events.subjectId, app.id), eq(events.type, "application.stage_changed"))).orderBy(asc(events.id)));
-  return { hidden: true, before: (moves.at(-1)?.payload.from as ApplicationStage | undefined) ?? null, since: moves.at(-2)?.at ?? app.createdAt };
+  const { before, since } = await withTenant(container.db, app.companyId, (tx) => stageBeforeDecision(tx, app.id));
+  return { hidden: true, before, since: since ?? app.createdAt };
 }
 
 /**

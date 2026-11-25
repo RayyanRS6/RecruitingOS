@@ -49,8 +49,8 @@ describe("AI interview rules: the follow-up cap, choosing a person instead, and 
     return { application: a, candidate: cand, token: scr.token, screenId: scr.id };
   }
 
-  /** What a model that keeps asking for more would say: a follow-up, no question key, nothing recorded. */
-  const followUp: ScreenTurn = { messageToCandidate: "Could you say a bit more about that? A sentence or two is plenty.", questionKey: null, answerRecorded: null, followUpReason: "answer too short to establish anything", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+  /** What a model that keeps asking for more would say: a follow-up, with no question key. */
+  const followUp: ScreenTurn = { messageToCandidate: "Could you say a bit more about that? A sentence or two is plenty.", questionKey: null, followUpReason: "answer too short to establish anything", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
   beforeAll(async () => {
     // The per-link budget for "Tell the hiring team" is lowered so the test can trip it without thirty posts.

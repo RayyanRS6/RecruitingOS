@@ -1,10 +1,10 @@
 import {
-  appPaths, EMPLOYMENT_TYPE_LABEL, FORM_QUESTION_KIND_LABEL, formatPayRange, REMOTE_POLICY_LABEL,
-  type CandidateCounts, type ClosingDateView, type DraftRolePacket, type FormQuestion, type IntakeSessionSummary, type Location, type PostsState,
+  appPaths, draftStillNeeds, EMPLOYMENT_TYPE_LABEL, FORM_QUESTION_KIND_LABEL, formatPayRange, REMOTE_POLICY_LABEL,
+  type CandidateCounts, type ClosingDateView, type DraftRolePacket, type FormQuestion, type IntakeDraftSummary, type Location, type PostsState,
   type RoleActionState, type RolePacket, type RoleStatus, type RoleSummary, type SharePost, type ShareView,
 } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
-import { calendarDay, shortDay } from "./dates";
+import { calendarDay, shortDay, todayIn } from "./dates";
 
 /**
  * The Jobs page and a job's own page (its header, its Job tab and its Share tab), the parts that need no browser, kept
@@ -59,15 +59,18 @@ export function countWords(counts: CandidateCounts): string[] {
 /**
  * One unfinished draft, on Home, on the Jobs page and under the job builder's first box: its title (or "Untitled job"),
  * where it continues, who started it when that is someone else, when it last changed, and how much is still needed.
+ * "Still needed" counts what the builder lists under that heading when the draft is opened (`draftStillNeeds`): the
+ * essentials that are missing, and the pay while nobody has confirmed it.
  */
 export type DraftRow = { id: string; title: string; href: string; facts: string[] };
 
-export function draftRow(draft: Pick<IntakeSessionSummary, "id" | "title" | "updatedAt" | "mine" | "startedBy" | "missing" | "hasDraft">, now: Date = new Date()): DraftRow {
+export function draftRow(draft: Pick<IntakeDraftSummary, "id" | "title" | "updatedAt" | "mine" | "startedBy" | "missing" | "payConfirmed" | "hasDraft">, now: Date = new Date()): DraftRow {
   const facts: string[] = [];
   if (!draft.mine) facts.push(`Started by ${draft.startedBy.name ?? "someone on your team"}`);
   const day = shortDay(draft.updatedAt, now);
   if (day) facts.push(`Last changed ${day}`);
-  if (draft.missing.length) facts.push(`${counted(draft.missing.length, "thing", "things")} still needed`);
+  const needed = draftStillNeeds(draft).length;
+  if (needed) facts.push(`${counted(needed, "thing", "things")} still needed`);
   else if (draft.hasDraft) facts.push("Written");
   return { id: draft.id, title: draft.title?.trim() || "Untitled job", href: appPaths.draft(draft.id), facts };
 }
@@ -167,10 +170,13 @@ export function closingDateLine(c: Pick<ClosingDateView, "closesOn" | "applyBy" 
   return "No closing date";
 }
 
-/** Why a closing date cannot be saved, or null. `today` is today in the company's time zone (YYYY-MM-DD). */
-export function closingDateProblem(value: string, today: string): string | null {
+/**
+ * Why a closing date cannot be saved, or null. "Today" is today in the company's time zone (`todayIn`, the one place
+ * the pages work it out), as the server checks the date: `timeZone` is the one the API sends with the job or the draft.
+ */
+export function closingDateProblem(value: string, timeZone: string, now: Date = new Date()): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "Choose a date.";
-  if (value < today) return "Choose today or a later date.";
+  if (value < todayIn(timeZone, now)) return "Choose today or a later date.";
   return null;
 }
 

@@ -7,7 +7,7 @@ import { resumeAsWeWriteIt } from "./assistant-words";
 import type { Integrations } from "@ros/integrations";
 import { unfairQuestion } from "./fair-question";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringView } from "./scoring-view";
-import { TRIAGE_READINGS, checkedClaims, credentialFinding, formAnswerSaysNotHeld, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
+import { TRIAGE_READINGS, checkedClaims, credentialFinding, formAnswerLines, formAnswerSaysNotHeld, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
 
 /**
  * The AI interview ("screen" in code): a web chat a shortlisted candidate does from an emailed link. This file is the
@@ -144,9 +144,15 @@ export async function loadScreenBundle(q: Queryable, screenId: string) {
 }
 export type ScreenBundle = NonNullable<Awaited<ReturnType<typeof loadScreenBundle>>>;
 
-/** Screening stays within the job. Anything about a protected characteristic the candidate volunteers is kept out of recorded answers (the transcript itself is the record). */
+/**
+ * Screening stays within the job. Anything about a protected characteristic the candidate volunteers is kept out of
+ * recorded answers (the transcript itself is the record): each sentence that touches one is left out whole. A sentence
+ * is not cut at an abbreviation's full stop (`cutAtSentenceEnds`): cut after "U.S.", "I moved to the U.S. from Mexico"
+ * was two pieces that each matched nothing, and stayed in the answer; cut after "St.", "My son goes to St. Mary's
+ * school, so mornings suit me" kept its second half.
+ */
 export function redactProtected(text: string): string {
-  const sentences = text.split(/(?<=[.!?])\s+/);
+  const sentences = cutAtSentenceEnds(text, true);
   const protectedPattern = /\b(i am|i'm|im)\s+\d{2}\b|\b\d{2}\s+years? old\b|\bmy (kids?|children|son|daughter|husband|wife|spouse)\b|\bi(?: have|'ve) (?:a |an |one |two |three |four |five |\d+ )?(?:little |young |small )?(kids?|children|sons?|daughters?|baby|toddlers?)\b|\bpregnan|\bmaternity\b|\bpaternity\b|\bchurch\b|\bmosque\b|\bsynagogue\b|\breligio|\bdisabilit|\bwheelchair\b|\bmy (illness|condition|diagnosis)\b|\bimmigra|\bcitizen(ship)?\b|\bvisa\b|\bnational(ity)?\b|\bdivorc|\bmarried\b|\bsingle (?:mom|mum|dad|mother|father|parent)\b/i;
   // Parenthood, military service, national origin and faith in the ways people mention them ("As a mom of three", "I'm
   // a veteran", "I moved here from Mexico"), kept apart so each list stays readable.
@@ -215,12 +221,13 @@ export function screenIntro(input: { companyName: string; firstName: string; pac
 /* The plan, and what the chat may know about the candidate                                                      */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** What the chat may know about the candidate: their own CV lines, and their form answers as sentences. */
-export type ChatFacts = { cv: string[]; formAnswers: string[] };
-
 const line = (s: string, max = 200) => s.replace(/\s+/g, " ").trim().slice(0, max);
 
-/** The CV's positions, licences, certificates and skills as a few plain lines (the candidate's own information: the chat names it). */
+/**
+ * The CV's positions, licences, certificates and skills as a few plain lines (the candidate's own information: the chat
+ * names it). All the chat's model is told of the application: what the form already settled is left out of the plan in
+ * code (`chatGaps`), so the model is not given the form's answers.
+ */
 export function cvLinesOf(x: ApplicationRow["extraction"] | null | undefined): string[] {
   const cv: string[] = [];
   for (const p of (x?.positions ?? []).slice(0, 4)) cv.push(line(`${p.title}${p.employer ? ` at ${p.employer}` : ""}${p.startDate ? ` (${p.startDate}${p.current ? " to now" : p.endDate ? ` to ${p.endDate}` : ""})` : ""}${p.summary ? `: ${p.summary}` : ""}`));
@@ -230,9 +237,12 @@ export function cvLinesOf(x: ApplicationRow["extraction"] | null | undefined): s
   return cv;
 }
 
-/** The candidate's CV as a few plain lines, and every answer they gave on the application form as a sentence, so the chat never asks one again. */
-export function chatFactsOf(packet: Pick<RolePacket, "formQuestions">, app: Pick<ApplicationRow, "extraction" | "answers">): ChatFacts {
-  return { cv: cvLinesOf(app.extraction), formAnswers: formAnswerSentences(packet.formQuestions, formAnswersOf(app.answers)).map((s) => s.sentence) };
+/**
+ * Every answer the candidate gave on the application form as a sentence, in the form's order: what "Check your answers"
+ * lists as sent with their application. `packet`: the version they applied to, whose form they answered.
+ */
+export function formAnswersSent(packet: Pick<RolePacket, "formQuestions">, app: Pick<ApplicationRow, "answers">): string[] {
+  return formAnswerLines(packet, formAnswersOf(app.answers));
 }
 
 /** Said when "No" settles an item as not known: calm, and never a guess about what they can do. */
@@ -372,8 +382,8 @@ export function chatOpening(input: { firstName: string; cv: string[]; question: 
   return `Hi ${first}. ${said}\n\n${input.question}`;
 }
 
-/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, the CV and the form. `packet`: the chat's own (`chatPacket`). */
-export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, facts: ChatFacts): ChatPromptContext {
+/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, and the CV's lines (`cvLinesOf`). `packet`: the chat's own (`chatPacket`). */
+export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, cv: string[]): ChatPromptContext {
   const qs = new Map(packet.screening.questions.map((q) => [q.key, q]));
   return {
     section: plan.section,
@@ -384,8 +394,7 @@ export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string
       return { key: i.key, kind: i.kind, required: i.required, state: i.state, step: i.step, pushes: i.pushes, question: q?.question ?? i.key, ladder: ladderApplies(packet, i), ...(q?.modelAnswer ? { modelAnswer: q.modelAnswer } : {}) };
     }),
     wrap: { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION },
-    cv: facts.cv,
-    formAnswers: facts.formAnswers,
+    cv,
   };
 }
 
@@ -401,7 +410,7 @@ function turnContext(b: ScreenBundle, plan: ChatPlan, screen: Pick<ScreenRow, "p
     latestCandidateMessage: latest,
     // The same pay rule as the job page the candidate applied from.
     payShown: payShown(b.rolePacket.compensation, jobNoticesFor({ jobLocations: b.rolePacket.identity.locations, companyLocations: b.company.locations, overrides: b.company.settings.notices })),
-    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, chatFactsOf(b.appliedPacket, b.app)),
+    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, cvLinesOf(b.app.extraction)),
   };
 }
 
@@ -413,8 +422,70 @@ const FILLER = /^(?:(?:ok(?:ay)?|great|good|excellent|awesome|perfect|wonderful|
 const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|strong|solid|clear(?:ly)?|well done|nicely|good job|good work)\b/i;
 const INFERENCE = /^(?:it sounds like|it seems|it looks like|that suggests|this suggests|clearly|obviously|you must|you clearly|you obviously|i can tell|that shows|this shows|so it was|so that was|it must have)\b|\b(?:which|that|this) (?:shows|proves|demonstrates)\b|\byou(?:'re| are) clearly\b/i;
 
-function sentencesOf(text: string): string[] {
-  return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+/** An abbreviation whose full stop ends no sentence: a title before a name ("Dr. Lee"), or Latin before what it introduces ("e.g. Dentrix"). Not "1st.". */
+const NEVER_ENDS_A_SENTENCE = /(?:^|[^\p{L}\p{N}])(?:dr|mr|mrs|ms|st|vs|e\.g|i\.e)\.$/iu;
+/** A time of day ("8 a.m.", "5 p.m.") and "etc.": a sentence may end with one, or go on after it. */
+const A_TIME = /(?:^|[^\p{L}])[ap]\.m\.$/iu;
+const AND_SO_ON = /(?:^|[^\p{L}])etc\.$/iu;
+/** "No." before a number ("licence No. 4821"): the number goes with it. */
+const A_NUMBER_SIGN = /(?:^|[^\p{L}])no\.$/iu;
+/** Initials with full stops ("U.S.", "D.D.S."): like a time, a sentence may end with them, or go on after them. */
+const INITIALS = /(?:^|[^\p{L}\p{N}])(?:\p{L}\.){2,}$/u;
+/** How a new sentence opens after one of those: with a capital letter, with or without an opening quote. */
+const OPENS_A_SENTENCE = /^["“'‘(]?\p{Lu}/u;
+/**
+ * What goes on with the sentence after a time though it opens with a capital: a day of the week ("8 a.m. to 5 p.m.
+ * Monday to Friday"), a time zone ("5 p.m. Pacific", "5 p.m. ET"), or one word before a question mark ("Is 8 a.m. OK?").
+ */
+const AFTER_A_TIME = /^(?:(?:Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)s?\b|(?:Pacific|Mountain|Central|Eastern|[PMCE][SD]?T|UTC|GMT)\b|\p{L}+\?)/u;
+/** How a sentence opens in words a model wrote: with a capital letter, a digit or an opening quote. */
+const WRITTEN_OPENING = /^(?:["“'‘(]|\p{Lu}|\p{N})/u;
+
+/**
+ * Whether the sentence goes on after a full stop: `head` is the text up to and with it, `rest` what follows the space.
+ * After a title or "e.g." always. After a time, unless a new sentence opens ("… to 5 p.m. What does it pay?"), which a
+ * day of the week or a time zone does not ("… 5 p.m. Monday to Friday"); so before a small letter or a digit it goes on
+ * ("8 a.m. to 5 p.m."). After "etc." or initials ("in the U.S. for five years") unless a new sentence opens, and after
+ * "No." before a number. Anywhere else, in words a model wrote (`typed` false), it goes on before a small letter: the
+ * full stop was an abbreviation's ("approx. two years", "at Smile Dental Inc. as a hygienist").
+ */
+function goesOnAfter(head: string, rest: string, typed: boolean): boolean {
+  if (!head.endsWith(".")) return false;
+  if (NEVER_ENDS_A_SENTENCE.test(head)) return true;
+  if (A_TIME.test(head)) return !OPENS_A_SENTENCE.test(rest) || AFTER_A_TIME.test(rest);
+  if (AND_SO_ON.test(head) || INITIALS.test(head)) return !OPENS_A_SENTENCE.test(rest);
+  if (A_NUMBER_SIGN.test(head) && /^\p{N}/u.test(rest)) return true;
+  return !typed && !WRITTEN_OPENING.test(rest);
+}
+
+/**
+ * A text cut where its sentences end: at "!" or "?" followed by a space, and at a full stop that is not an
+ * abbreviation's (`goesOnAfter`). Each piece as it stands, with nothing trimmed and its line breaks kept.
+ */
+function cutAtSentenceEnds(text: string, typed: boolean): string[] {
+  const out: string[] = [];
+  let from = 0;
+  for (const gap of text.matchAll(/(?<=[.!?])\s+/g)) {
+    if (goesOnAfter(text.slice(from, gap.index), text.slice(gap.index + gap[0].length), typed)) continue;
+    out.push(text.slice(from, gap.index));
+    from = gap.index + gap[0].length;
+  }
+  out.push(text.slice(from));
+  return out;
+}
+
+/**
+ * The sentences of a text. A sentence ends at "!" or "?" followed by a space, at a line break, and at a full stop that
+ * is not an abbreviation's (`goesOnAfter`). On the live site on 25 November 2026 "… Monday to Friday, 8 a.m. to 5 p.m."
+ * was read as two sentences, and the restatement, which keeps one, reached the candidate as "… 8 a.m.".
+ * - Words a model wrote (the default): a sentence ends at a full stop only before a capital letter, a digit or an
+ *   opening quote, and never after a known abbreviation.
+ * - `typed`, what a person typed (a candidate's reply): people type in a chat without capitals ("yes. what does it
+ *   pay?"), and the question in such a reply must still be told from the answer, so there a full stop ends a sentence
+ *   before a small letter too, as it always did; only the known abbreviations hold it together.
+ */
+function sentencesOf(text: string, typed = false): string[] {
+  return text.split(/\n+/).flatMap((line) => cutAtSentenceEnds(line, typed)).map((s) => s.trim()).filter(Boolean);
 }
 
 /**
@@ -424,10 +495,12 @@ function sentencesOf(text: string): string[] {
  * are the candidate's.
  */
 function personal(s: string): boolean {
-  if (redactProtected(s) !== s) return true;
+  // spacing aside: what the redaction keeps is joined by single spaces, and a sentence can hold a full stop of its own
+  const redacted = (x: string) => redactProtected(x).replace(/\s+/g, " ") !== x.replace(/\s+/g, " ");
+  if (redacted(s)) return true;
   if (!/\b(?:so|since|because|given)\b/i.test(s)) return false;
   const asTheirs = s.replace(/\byou(?:['’]re| are)\b/gi, "I am").replace(/\byou(?:['’]ve| have)\b/gi, "I have").replace(/\byour\b/gi, "my");
-  return redactProtected(asTheirs) !== asTheirs;
+  return redacted(asTheirs);
 }
 
 /**
@@ -557,7 +630,8 @@ function wordForWord(sentences: string[], known: string | null | undefined): { f
  * already answered, or the model's own words, and stands.
  */
 function onlyItsEnd(written: string, jobQuestion: string): boolean {
-  const job = sentencesOf(jobQuestion);
+  // the job's question may be an owner's, typed without capitals: its sentences are read as a person's are
+  const job = sentencesOf(jobQuestion, true);
   return job.length >= 2 && plainKey(written) === plainKey(job[job.length - 1]);
 }
 
@@ -706,7 +780,7 @@ function asksSomething(text: string): boolean {
  * "Ok. What are the hours?"): a question they asked is never their answer.
  */
 export function onlyQuestions(text: string | null | undefined): boolean {
-  const sentences = sentencesOf(text ?? "");
+  const sentences = sentencesOf(text ?? "", true);
   return sentences.some(asksAssistant) && sentences.every((s) => asksAssistant(s) || FILLER.test(s));
 }
 
@@ -730,27 +804,23 @@ const sentenceKey = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").rep
 const plainKey = (s: string) => sentenceKey(s).replace(/,/g, "");
 
 /**
- * The recorded answer held to the candidate's latest message: a question they asked in it is never part of
- * the answer (that sentence is left out), and a turn that answers their question records only words of that message
- * that are not a question (an answer given in the same message, "Yes, active in CA. What does it pay?"). Null when
- * nothing is left.
+ * The answer on record for a question after a turn: the candidate's own replies about it, as they sent them, put
+ * together in code (`enforceChatTurn`), never the model's words. `complete`: false while the chat still asks about the
+ * question (the push, the analog, the smaller version, or after answering a question of theirs), so their words are
+ * kept if they move on from there.
  */
-function answerAgainstLatest(t: ScreenTurn, latest: string): ScreenTurn["answerRecorded"] {
-  const a = t.answerRecorded;
-  if (!a) return null;
-  const said = sentencesOf(latest);
-  const asked = new Set(said.filter(asksAssistant).map(sentenceKey));
-  const statements = said.filter((s) => !asksAssistant(s) && !FILLER.test(s)).map(sentenceKey).join(" ");
-  const all = sentencesOf(a.answer);
-  const kept = all.filter((s) => !asked.has(sentenceKey(s)));
-  if (t.candidateAskedAbout && !kept.every((s) => statements.includes(sentenceKey(s)))) return null;
-  if (!kept.length) return null;
-  return kept.length === all.length ? a : { ...a, answer: kept.join(" ") };
-}
+export type RecordedAnswer = { questionKey: string; answer: string; complete: boolean };
+
+/**
+ * A turn as the code leaves it: the model's turn held to the rules (`enforceChatTurn`), or one worked out in code
+ * (`turnWithoutModel`), with the answer the code recorded with it, if any. The model's own turn (`ScreenTurn`) carries no
+ * record of an answer.
+ */
+export type ChatTurn = ScreenTurn & { answerRecorded: RecordedAnswer | null };
 
 /** Replies without what is never an answer: one that only shows confusion or only asks the assistant something, and a question asked inside a longer one. */
 function usableReplies(replies: ReadonlyArray<string>): string[] {
-  return replies.filter((r) => !seemsConfused(r) && !onlyQuestions(r)).map((r) => (sentencesOf(r).some(asksAssistant) ? sentencesOf(r).filter((s) => !asksAssistant(s)).join(" ") : r)).filter(Boolean);
+  return replies.filter((r) => !seemsConfused(r) && !onlyQuestions(r)).map((r) => (sentencesOf(r, true).some(asksAssistant) ? sentencesOf(r, true).filter((s) => !asksAssistant(s)).join(" ") : r)).filter(Boolean);
 }
 
 /** A message without the job's own questions in it: the words the model wrote around them. */
@@ -761,11 +831,14 @@ function modelWordsOf(packet: RolePacket, text: string): string {
 /**
  * The code's rules for a turn, after the model answered. What the candidate wrote decides what is recorded, and the
  * code, not the model's labels, decides what kind of turn it is:
+ * - the answer on record is built here, from the candidate's own replies about the question (`RecordedAnswer`): the
+ *   model is not asked for one, and returns none;
  * - only this chat's own questions count, and a skipped one is never asked again;
  * - a turn that asks for a person closes nothing: the candidate is shown how to choose one on the page, and the question
  *   stays (choosing not to do the interview is theirs to do, never the model's to read into their words);
  * - a reply that only asks the assistant something, or only shows confusion, is never an answer, nor is a question asked
- *   inside a longer reply; a confused candidate gets the same question again and is shown how to choose a person;
+ *   inside a longer reply (what else that reply says is kept as theirs); a confused candidate gets the same question
+ *   again and is shown how to choose a person;
  * - the model's own words never touch a protected trait (`unfairQuestion`): on a hit the chat moves on in the job's words;
  * - the ladder: how the latest reply reads (a plain "No" climbs it whatever the model read) and what comes next
  *   (`chatNextMove`): a follow-up the ladder allows passes, one it does not is replaced by the next question; moving on
@@ -773,12 +846,16 @@ function modelWordsOf(packet: RolePacket, text: string): string {
  *   except a must-have settled as not known, which records nothing (never a "no" for a skill). A yes-or-no question,
  *   and a must-have that names a licence, certificate, permit or registration, have no ladder (`ladderApplies`): any
  *   reply is the answer, a "No" included, and nothing "similar" is asked for;
- * - the closing question is followed by the close; a close before the end goes on to what is left;
+ * - the plan is the code's: the model says whether its turn stays on the question being asked or leaves it, never where
+ *   it goes. A turn that leaves goes to the first question still open, in the plan's order, and to the closing question
+ *   only once every item is covered, settled as not known or skipped; wherever else the model went (an item out of its
+ *   turn, one already asked, the closing question, a close) the candidate reads the model's restatement and then that
+ *   question in the job's own words. The closing question is followed by the close;
  * - every message is one restatement and one question (`shapeChatMessage`), and never says the job's private standard
  *   for a question (`modelAnswer`), even in part.
  * Returns the turn and the step taken on the item, for the plan (`advanceProgress`).
  */
-export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } {
+export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ChatTurn; move: { key: string; move: ChatMove } | null } {
   const plan = progress.chat;
   const keys = packet.screening.questions.map((x) => x.key);
   const q = (key: string | null | undefined) => (key ? packet.screening.questions.find((x) => x.key === key) : undefined);
@@ -786,17 +863,13 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   const asked = new Set(progress.askedKeys);
   const current = progress.currentQuestionKey;
   const reply = input.latest;
-  let t: ScreenTurn = { ...raw };
-  // How an answer was recorded is the code's to say: the model only ever answers.
-  if (t.answerRecorded) t = { ...t, answerRecorded: { questionKey: t.answerRecorded.questionKey, answer: t.answerRecorded.answer, complete: t.answerRecorded.complete } };
+  // The answer on record is the code's to build (`record` below): the model's turn carries none, and one that an
+  // earlier build's turn still holds is never read.
+  let t: ChatTurn = { ...raw, answerRecorded: null };
   if (t.questionKey && (!keys.includes(t.questionKey) || declined.has(t.questionKey))) t = { ...t, questionKey: null };
-  if (t.answerRecorded && !keys.includes(t.answerRecorded.questionKey)) t = { ...t, answerRecorded: null };
-  if (t.humanRequested) return { turn: { ...t, humanRequested: false, done: false, questionKey: null, followUpReason: "shown how to choose a person", answerRecorded: null, messageToCandidate: PERSON_REPLY }, move: null };
+  if (t.humanRequested) return { turn: { ...t, humanRequested: false, done: false, questionKey: null, followUpReason: "shown how to choose a person", messageToCandidate: PERSON_REPLY }, move: null };
 
   if (t.sentiment !== "distressed" && t.sentiment !== "frustrated" && seemsConfused(reply)) t = { ...t, sentiment: "confused" };
-  if (t.sentiment === "confused" || onlyQuestions(reply)) t = { ...t, answerRecorded: null };
-  else if (t.answerRecorded) t = { ...t, answerRecorded: answerAgainstLatest(t, reply) };
-  if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
   if (current && t.sentiment === "confused") {
     // A confused candidate gets help with the same question, never a move on or a close.
     if (t.done || (t.questionKey && t.questionKey !== current)) t = { ...t, done: false, messageToCandidate: `No problem. ${q(current)?.question ?? ""}`.trim() };
@@ -808,20 +881,20 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   // A turn that stays on the question being asked and asks something about it is a follow-up, labelled or not.
   if (current && !t.done && !t.questionKey && !t.followUpReason && !t.candidateAskedAbout && !onlyQuestions(reply) && asksSomething(t.messageToCandidate)) t = { ...t, followUpReason: "asked for more" };
   const remaining = packet.screening.questions.filter((x) => x.key !== current && !asked.has(x.key) && !(x.key in answers) && !declined.has(x.key));
+  // Where a turn goes when it leaves the question being asked: the first one still open, in the plan's order, and the
+  // closing question once none is (`remaining` keeps that order, the closing question last). At the closing question
+  // nothing is left to go to.
+  const next = current === CHAT_WRAP_KEY ? undefined : remaining[0];
   if (unfairQuestion(modelWordsOf(packet, t.messageToCandidate))) {
     if (t.questionKey && !t.done) t = { ...t, messageToCandidate: "", followUpReason: null };
-    else {
-      const next = t.done ? undefined : remaining[0];
-      t = next ? { ...t, messageToCandidate: "", questionKey: next.key, followUpReason: null } : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: "" };
-    }
+    else t = next && !t.done ? { ...t, messageToCandidate: "", questionKey: next.key, followUpReason: null } : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: "" };
   }
 
   const item = plan?.items.find((i) => i.key === current) ?? null;
   const experience = plan?.section === "experience";
   // A message the code put together here (the model's restatement, then the next question in the job's words) is final.
   let composed = false;
-  const moveOn = (lead: string, recorded: ScreenTurn["answerRecorded"]): ScreenTurn => {
-    const next = remaining[0];
+  const moveOn = (lead: string, recorded: RecordedAnswer | null): ChatTurn => {
     composed = true;
     return next ? { ...t, questionKey: next.key, followUpReason: null, done: false, answerRecorded: recorded, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question } : { ...t, questionKey: null, followUpReason: null, done: true, answerRecorded: recorded, messageToCandidate: lead };
   };
@@ -830,27 +903,27 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   let move: { key: string; move: ChatMove } | null = null;
   let calm = false;
   let ladderQuestion: string | null = null;
+  // Their replies about the question being asked, without a confused reply or a question of their own on the way: neither
+  // is ever part of the answer, and neither keeps a bare "yes" on the push from reading as one.
+  const replies = current ? usableReplies(replyListSince(input.transcript, current)) : [];
+  const said = replies.join(" ");
+  // The answer on record is their replies about the question, every one of them, as they sent them (`said`), with
+  // anything personal left out. The model is not asked for a record of it: while it was, the real model recorded two
+  // replies joined its own way ("… | …", 19 November 2026), and only the latest of two (25 November 2026), so that what
+  // the candidate had said about their work in the first one was gone from what the team reads and the scorecard scores.
+  // With no usable reply nothing is recorded: one of the job's own questions then shows as not answered on "Check your
+  // answers", where the candidate can answer it.
+  const record = (complete: boolean): RecordedAnswer | null => (current && said ? { questionKey: current, answer: redactProtected(said), complete } : null);
 
   if (current === CHAT_WRAP_KEY && replied) {
     // The closing question was answered: the close follows, whatever the model wanted to ask next.
-    const own = reply.trim();
-    t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: t.answerRecorded ?? (own ? { questionKey: CHAT_WRAP_KEY, answer: own, complete: true } : null) };
+    t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: record(true) };
   } else if (item && replied) {
     const ladder = ladderApplies(packet, item);
     const modelStays = !!t.followUpReason && !t.questionKey && !t.done;
     const reading = ladder && saysNotDone(reply) ? "not_done" : t.reading === "not_done" && !ladder ? "concrete" : (t.reading ?? (modelStays ? "vague" : "concrete"));
     const expected = chatNextMove(item, reading, ladder);
-    // Their replies about the item, without a confused reply or a question of their own on the way: neither is ever part
-    // of the answer, and neither keeps a bare "yes" on the push from reading as one.
-    const replies = usableReplies(replyListSince(input.transcript, item.key));
-    const said = replies.join(" ");
-    // The answer is their replies about the item, every one of them, as they sent them (`said`): the words of the model's
-    // own record of the answer are never used. The real model has recorded two replies joined its own way ("… | …", 19
-    // November 2026), and only the latest of two replies (25 November 2026), so that what the candidate had said about
-    // their work in the first one was gone from what the team reads and the scorecard scores. Only when no reply of
-    // theirs is usable does the model's record stand as it wrote it.
-    const record = (complete: boolean): ScreenTurn["answerRecorded"] => (said ? { questionKey: item.key, answer: redactProtected(said), complete } : t.answerRecorded);
-    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : record(m === "covered"));
+    const answerFor = (m: ChatMove): RecordedAnswer | null => (m === "unknown" && item.kind === "gap" ? null : record(m === "covered"));
     if (chatMoveStays(expected) && modelStays) {
       move = { key: item.key, move: expected };
       ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
@@ -871,14 +944,32 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
       if (modelStays || (!t.questionKey && !t.done)) t = moveOn(chatLead(t.messageToCandidate, { experience, calm, answering: false, known: q(item.key)?.question }), answerFor(expected));
       else t = { ...t, answerRecorded: answerFor(expected) };
     }
-    if (move.move === "unknown" && item.kind === "gap" && t.answerRecorded?.questionKey === item.key) t = { ...t, answerRecorded: null };
   }
 
-  // A close before the end goes on to what is left: the plan is the code's (and the model's words saying it was the end are not said).
-  if (t.done && current !== CHAT_WRAP_KEY && remaining.length) {
-    const next = remaining[0];
+  // The plan is the code's. Wherever else the model's turn went (an item out of its turn, one already asked, the closing
+  // question while one is open, a close before the end), it goes to `next`: the model's restatement, then that question in
+  // the job's own words. Of a close nothing is said: its words said it was the end.
+  const strays = !t.done && !!t.questionKey && t.questionKey !== next?.key;
+  if (next && (t.done || strays)) {
+    const lead = t.done ? (calm ? CHAT_CALM_LINE : "") : chatLead(t.messageToCandidate, { experience, calm, answering: !!t.candidateAskedAbout, known: q(t.questionKey)?.question });
     composed = true;
-    t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: calm ? `${CHAT_CALM_LINE}\n\n${next.question}` : next.question };
+    t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question };
+  } else if (strays) {
+    // Nothing is left to go to. At the closing question the turn stays on it (the candidate asked something; their answer
+    // to it brought the close above), and it never goes back to a question already asked. Anywhere else every question
+    // has been asked, the closing one too (a chat stored before the plan was held this way): the end of the questions.
+    const lead = chatLead(t.messageToCandidate, { experience, calm, answering: !!t.candidateAskedAbout, known: q(t.questionKey)?.question });
+    composed = true;
+    if (current === CHAT_WRAP_KEY) t = { ...t, questionKey: null, followUpReason: t.candidateAskedAbout ? t.followUpReason : t.followUpReason ?? "asked again", messageToCandidate: lead ? `${lead}\n\n${CHAT_WRAP_QUESTION}` : CHAT_WRAP_QUESTION };
+    else t = { ...t, questionKey: null, followUpReason: null, done: true, messageToCandidate: lead };
+  }
+  // A turn that answers a question of the candidate's takes no reply to the question being asked (`replied`). When the
+  // same message also said something about it ("Yes, active in CA. What does it pay?"), those words are still theirs:
+  // they are kept, the question left out, as the answer when the turn leaves the question, and as words to keep while it
+  // is asked again. A bare "yes" or a plain "No" to a question with a ladder is kept by neither, as on the push.
+  if (current && t.candidateAskedAbout && t.sentiment !== "confused" && usableReplies([reply]).length) {
+    const bare = !!item && ladderApplies(packet, item) && replies.every(bareReply);
+    t = { ...t, answerRecorded: bare ? null : record(t.done || !!t.questionKey) };
   }
   // Five words in a row of a private standard are never said, whichever question it belongs to: the model is given every one.
   const notes = packet.screening.questions.flatMap((x) => (x.modelAnswer ? [x.modelAnswer] : []));
@@ -901,7 +992,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** A turn with nothing in it, for the steps code takes on its own (the first question, a skip, a tap). */
-const SILENT_TURN: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+const SILENT_TURN: ChatTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
 /**
  * "Start" on the introduction: the chat gets its plan, the first question appears in the job's own words with no model
@@ -1099,7 +1190,7 @@ export function chatCodeLead(tapped: string | null, kept = false): string {
  * - No next question: the end of the questions (`done`).
  * Null with no current question: the caller ends the chat as it does at the turn cap.
  */
-export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenProgress; answers: Record<string, string>; transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } | null {
+export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenProgress; answers: Record<string, string>; transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ChatTurn; move: { key: string; move: ChatMove } | null } | null {
   const { packet, progress, answers, transcript, latest } = input;
   const current = progress.currentQuestionKey;
   const question = currentQuestion(packet, progress);
@@ -1110,7 +1201,7 @@ export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenPr
   }
   const item = progress.chat?.items.find((i) => i.key === current) ?? null;
   const unknown = item?.kind === "gap" && ladderApplies(packet, item) && saysNotDone(latest);
-  const answerRecorded: ScreenTurn["answerRecorded"] = unknown ? null : { questionKey: current, answer: said, complete: true };
+  const answerRecorded: RecordedAnswer | null = unknown ? null : { questionKey: current, answer: said, complete: true };
   const move = item ? { key: current, move: (unknown ? "unknown" : "covered") as ChatMove } : null;
   // The question being asked is among those asked already, so this is the one after it.
   const next = nextQuestion(packet, progress, answers);
@@ -1475,7 +1566,7 @@ export function scorecardReadings(readings: ReadonlyArray<RunOutcome<ScreenAsses
  * one written around a placeholder is mapped back first, and the model's own words keep no placeholder ("[name]" reads
  * "the candidate"). Then the evidence rules:
  * - one finding for each question asked and for nothing else (never the closing question): one the model left out is
- *   not known; whether a question was answered is read from the record, not from the model;
+ *   not known; whether a question was answered is read from the record (the model is not asked);
  * - a question the candidate skipped, or gave no answer to, is not known, whatever the model wrote;
  * - a quote that is not in what the candidate sent is taken off; "yes" with no checked quote counts as "partially", and
  *   "no" stands only on their own checked words, otherwise it is not known;
@@ -1489,14 +1580,15 @@ export function scorecardOutcome(output: ScreenAssessment, view: Pick<ScoringVie
   const candidateText = candidateWordsOf(screen);
   const card = withoutPlaceholders(restoreQuotes(output, view, () => [candidateText]));
   const questionFindings = asked.map((a): QuestionFinding => {
-    if (a.skipped) return { questionKey: a.key, answered: false, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" };
+    if (a.skipped) return { questionKey: a.key, finding: "Skipped by the candidate.", meetsModelAnswer: "unknown" };
     const f = card.questionFindings.find((x) => x.questionKey === a.key);
+    // whether they answered it is the record's to say (the model is not asked)
     const answered = screen.answers[a.key] !== undefined;
-    if (!f) return { questionKey: a.key, answered, finding: "", meetsModelAnswer: "unknown" };
+    if (!f) return { questionKey: a.key, finding: "", meetsModelAnswer: "unknown" };
     const quote = f.evidence?.quote?.trim() && saidByCandidate(f.evidence.quote, candidateText) ? f.evidence.quote : null;
     const read = f.meetsModelAnswer === "yes" && !quote ? "partially" : f.meetsModelAnswer === "no" && !quote ? "unknown" : f.meetsModelAnswer;
     const meets = quote && a.mustHave && namesCredential(a.mustHave) ? credentialFinding(read, sentenceAround(quote, candidateText) ?? quote, a.mustHave) : read;
-    return { questionKey: a.key, answered, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quote ? { evidence: { source: "screen" as const, quote } } : {}) };
+    return { questionKey: a.key, finding: f.finding, meetsModelAnswer: answered ? meets : "unknown", ...(quote ? { evidence: { source: "screen" as const, quote } } : {}) };
   });
   const inSource = (e: { quote?: string }) => saidByCandidate(e.quote ?? "", candidateText);
   return { ...card, strengths: checkedClaims(card.strengths, inSource), concerns: checkedClaims(card.concerns, inSource), questionFindings };

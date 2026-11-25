@@ -1,8 +1,9 @@
 import {
-  EMPLOYMENT_TYPE_LABEL, EmploymentType, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts as IntakeFactsSchema, MUST_HAVES_MAX, REMOTE_POLICY_LABEL, RemotePolicy, formatPayRange, mustHaveOf,
+  EMPLOYMENT_TYPE_LABEL, EmploymentType, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIELD_LABEL, IntakeFacts as IntakeFactsSchema, MUST_HAVES_MAX, REMOTE_POLICY_LABEL, RemotePolicy, formatPayRange, mustHaveOf,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal,
   type IntakeServerState, type PayOrigin, type PublishBlocker,
 } from "@ros/contracts";
+import { stateAlone, stateOfPlace } from "./compliance";
 import { normalizeCriterion, openFlagsMessage, screenCriterion, screenDealBreaker, unresolvedFlags } from "./packet-guard";
 
 /**
@@ -89,13 +90,42 @@ export function payKey(state: Pick<IntakeServerState, "pay">): string | null {
   return p ? `${p.basis}:${p.min}:${p.max}` : null;
 }
 
+/**
+ * The words of an answer about a remote job's place that name no place: "Remote", "Anywhere in the US", "Work from
+ * home, United States". Any other word may be a place ("Remote, team in Denver"), and a place is asked for its state.
+ */
+const NO_PLACE_WORDS: ReadonlySet<string> = new Set([
+  "remote", "remotely", "fully", "100", "anywhere", "everywhere", "nationwide", "work", "working", "from", "home", "wfh", "virtual", "online", "telework",
+  "us", "usa", "u", "s", "a", "united", "states", "state", "america", "country", "the", "in", "within", "across", "of", "any", "all", "only", "based", "no", "none", "na", "n",
+]);
+
+/**
+ * Whether the place of the job is answered: a state can be read from the owner's own words (`stateOfPlace`). The state
+ * is on the job page and decides which notices the page carries, and since 25 November 2026 nothing fills one in: the
+ * AI is no longer asked for it. So "Denver" alone is not an answer yet, and the card for the place comes back until
+ * the words say the state ("Denver, CO").
+ *
+ * One way out, as before: a job the owner said is remote, when the answer names no place at all ("Remote", "Anywhere
+ * in the US"). Such a job has no state of its own, and never had; the legal check holds a remote job to every state
+ * with a rule for job ads whatever its place (`jobJurisdictions`). A remote job whose answer does name a place is
+ * asked for that place's state like any other.
+ */
+export function placeAnswered(f: Pick<IntakeFacts, "locationText" | "remotePolicy">): boolean {
+  const place = f.locationText?.trim();
+  if (!place) return false;
+  if (stateOfPlace(place)) return true;
+  const remote = RemotePolicy.safeParse(f.remotePolicy);
+  return remote.success && remote.data === "remote" && (place.toLowerCase().match(/[a-z0-9]+/g) ?? []).every((word) => NO_PLACE_WORDS.has(word));
+}
+
 function essentialValue(key: IntakeEssentialKey, f: IntakeFacts): { done: boolean; value: string | null } {
   const text = (v: string | undefined) => ({ done: !!v?.trim(), value: v?.trim() || null });
   switch (key) {
     case "title":
       return text(f.title);
     case "location":
-      return text(f.locationText);
+      // The words stay on the checklist while the state is still needed ("Where the job is: Denver").
+      return { done: placeAnswered(f), value: f.locationText?.trim() || null };
     case "remote_policy": {
       const policy = RemotePolicy.safeParse(f.remotePolicy);
       return { done: policy.success, value: policy.success ? REMOTE_POLICY_LABEL[policy.data] : null };
@@ -220,18 +250,7 @@ export type FactsEdit = {
   summary: string[];
 };
 
-const FIELD_LABEL: Record<IntakeQuestion["field"], string> = {
-  title: "Job title",
-  location: "Where the job is",
-  remote_policy: "On site, hybrid or remote",
-  employment_type: "Full or part time",
-  schedule: "Schedule",
-  compensation_basis: "Paid",
-  compensation: "Pay",
-  must_haves: "Must-haves",
-  deal_breakers: "Deal-breakers",
-  benefits: "Benefits",
-};
+const FIELD_LABEL = INTAKE_FIELD_LABEL;
 
 const LIST_OF: Partial<Record<IntakeQuestion["field"], "mustHaves" | "dealBreakers">> = { must_haves: "mustHaves", deal_breakers: "dealBreakers" };
 
@@ -295,7 +314,7 @@ function setPay(edit: FactsEdit, pay: { basis: "hourly" | "salary"; min: number;
   f.compensationMax = pay.max;
   // The same figures that were already there (read from a pasted ad) are confirmed; new ones are set.
   edit.pay = { ...pay, via: unchanged ? "confirmed" : "pay_card" };
-  edit.summary.push(`Pay: ${formatPayRange(pay)}`);
+  edit.summary.push(`${FIELD_LABEL.compensation}: ${formatPayRange(pay)}`);
 }
 
 /** A fact kept as one of a few values, from the option's value or the words the person read; refused when it names none. */
@@ -304,6 +323,16 @@ function oneOf(value: string, words: string | undefined, allowed: readonly strin
   const hit = list.find(([re]) => re.test(value)) ?? (words ? list.find(([re]) => re.test(words)) : undefined);
   if (hit) return hit[1];
   throw new IntakeEditError("invalid_value", `That is not a ${what} we know. Choose one of the options.`);
+}
+
+/**
+ * The place after an answer on its card. The card comes back while the place has no state, and the plain answer to
+ * that is the state alone ("CO", "Colorado"): it completes the place already given ("Denver" becomes "Denver, CO"), so
+ * the city is not lost and the card is not asked a third time. Any other answer is the place.
+ */
+function placeAfter(before: string | undefined, answer: string): string {
+  const had = before?.trim();
+  return had && !stateOfPlace(had) && stateAlone(answer) ? `${had}, ${answer.trim()}` : answer;
 }
 
 /**
@@ -346,7 +375,7 @@ export function applyAnswers(facts: IntakeFacts, questions: IntakeQuestion[], an
     const text = words ?? value;
     switch (q.field) {
       case "title": f.title = text; break;
-      case "location": f.locationText = text; break;
+      case "location": f.locationText = placeAfter(f.locationText, text); break;
       case "schedule": f.schedule = text; break;
       case "benefits": f.benefits = text; break;
       case "employment_type": f.employmentType = oneOf(value, words, EmploymentType.options, EMPLOYMENT_WORDS, "kind of job"); break;

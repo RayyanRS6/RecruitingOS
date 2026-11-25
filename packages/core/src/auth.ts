@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { and, eq, gt, inArray, isNull, ne, notInArray, or } from "drizzle-orm";
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { magicLinks, memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor } from "./platform-roles";
 
 /** A sign-in link is short-lived. Team invitations are no longer links that sign a person in: see ./invitations. */
 export const MAGIC_LINK_TTL_MS = 15 * 60_000;
-const SESSION_IDLE_MS = 30 * 24 * 3600_000;
+/** A customer's session lasts thirty days from when it was last used (sliding). The one copy: every way a session opens reads it. */
+export const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 /** Staff sessions are shorter (I8): eight hours, sliding, and never extended to the customer window. */
 export const STAFF_SESSION_MS = 8 * 3600_000;
 
@@ -59,7 +61,8 @@ export async function consumeMagicLink(
     .set({ usedAt: now })
     .where(and(eq(magicLinks.tokenHash, hashToken(input.token)), isNull(magicLinks.usedAt), gt(magicLinks.expiresAt, now)))
     .returning();
-  if (!link) throw new AuthError("This sign-in link is invalid or has expired. Request a new one.");
+  // The sign-in page's own sentence for a link that cannot be used (the form route sends the browser there with `error=expired`).
+  if (!link) throw new AuthError(SIGN_IN_REFUSAL.expired);
 
   let [user] = await q.select().from(users).where(eq(users.email, link.email)).limit(1);
   if (!user) [user] = await q.insert(users).values({ email: link.email }).returning();
@@ -201,6 +204,6 @@ export class StaffProviderRequired extends Error {
   status = 403;
   code = "staff_provider_required";
   constructor() {
-    super("ITS staff sign in with their Microsoft 365 account.");
+    super(SIGN_IN_REFUSAL.staff_provider_required);
   }
 }

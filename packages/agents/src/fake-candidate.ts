@@ -19,18 +19,13 @@ export function fakeResumeExtract(req: StructuredRequest<unknown>): ResumeExtrac
   }
   const licenses: ResumeExtraction["licenses"] = [];
   for (const l of lines) {
-    const m = l.match(/\b(RDH|RDA|DDS|DMD|RN|LVN|CNA|EPA 608|CDL)\b[^\n]*?(?:license|lic\.?|#|no\.?)?\s*([A-Z]{0,3}\d{3,8})?/i);
-    if (m && /licen|RDH|RDA|DDS|DMD/i.test(l)) licenses.push({ name: m[1].toUpperCase(), jurisdiction: l.match(/\b(CA|AZ|NV|TX|NY|FL|WA|OR|CO)\b/)?.[1], number: m[2], quote: l });
+    const m = l.match(/\b(RDH|RDA|DDS|DMD|RN|LVN|CNA|EPA 608|CDL)\b/i);
+    if (m && /licen|RDH|RDA|DDS|DMD/i.test(l)) licenses.push({ name: m[1].toUpperCase(), jurisdiction: l.match(/\b(CA|AZ|NV|TX|NY|FL|WA|OR|CO)\b/)?.[1], quote: l });
   }
   const certifications: ResumeExtraction["certifications"] = [];
   for (const l of lines) if (/\b(BLS|CPR|ACLS|OSHA|HIPAA)\b/i.test(l) && !/licen/i.test(l)) certifications.push({ name: l.match(/\b(BLS|CPR|ACLS|OSHA|HIPAA)\b/i)![1].toUpperCase(), quote: l });
-  const years = positions.reduce((n, p) => {
-    const s = Number(p.startDate?.slice(0, 4));
-    const e = p.endDate ? Number(p.endDate.slice(0, 4)) : new Date().getFullYear();
-    return Number.isFinite(s) && Number.isFinite(e) ? n + Math.max(0, e - s) : n;
-  }, 0);
   const skills = [...new Set((text.match(/\b(Dentrix|Eaglesoft|Open Dental|perio(?:dontal)?|radiograph|x-ray|scaling|root planing|scheduling|insurance|billing|Salesforce|Excel|HVAC|EPA 608|welding)\b/gi) ?? []).map((s) => s.toLowerCase()))];
-  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, positions, licenses, certifications, skills, yearsOfExperienceEstimate: years || undefined };
+  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, positions, licenses, certifications, skills };
 }
 
 const STOP = new Set(["with", "that", "this", "from", "have", "your", "their", "will", "able", "must", "need", "work", "experience", "years", "year", "active", "current", "relevant", "setting", "posted", "schedule", "reliable", "availability", "the", "and", "for"]);
@@ -150,13 +145,14 @@ function quoteOf(text: string): string {
  * an open question (the analog, then for a must-have the smaller version, then the item is settled with the calm line);
  * every reply is read (`reading`). A question about pay is answered from the posted range; someone who asks for a
  * person, or says they are struggling, is flagged for one; a confused reply gets the question again. The closing
- * question's answer brings the close, naming the longest thing the candidate said, in their own words.
+ * question's answer brings the close, naming the longest thing the candidate said, in their own words. It returns what
+ * the prompt asks for and no more: no record of an answer, which the code builds from the candidate's own replies.
  */
 export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const s = parseTurn(req);
   const user = req.messages[0]?.content ?? "";
   const said = (user.match(/Candidate's latest message: ([\s\S]*?)\n\nProduce the next turn\./)?.[1] ?? "").trim();
-  const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+  const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
   const current = s.progress.currentQuestionKey;
   const asked = new Set(s.progress.askedKeys);
   const declined = new Set(s.progress.declined ?? []);
@@ -173,7 +169,7 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const theirs = [...user.matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim());
   if (current === s.wrap.key) {
     const longest = theirs.filter((x) => x.length >= 25 && redactProtected(x) === x).sort((a, b) => b.length - a.length)[0];
-    return { ...base, done: true, answerRecorded: said ? { questionKey: s.wrap.key, answer: redactProtected(said), complete: true } : null, messageToCandidate: longest ? `Thank you, ${s.name}. You told me "${quoteOf(longest)}".` : `Thank you, ${s.name}.` };
+    return { ...base, done: true, messageToCandidate: longest ? `Thank you, ${s.name}. You told me "${quoteOf(longest)}".` : `Thank you, ${s.name}.` };
   }
   const item = s.items.find((i) => i.key === current);
   if (!item) return { ...base, questionKey: next?.key ?? null, done: !next, messageToCandidate: "Noted." };
@@ -190,13 +186,9 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
     }) ?? null;
   };
   const moveOn = (reading: "concrete" | "vague" | "not_done"): ScreenTurn => {
-    // Their words about this item since it was asked, verbatim and in order; a keyword command is not an answer.
-    const at = user.lastIndexOf(item.question);
-    const replies = [...(at >= 0 ? user.slice(at) : user).matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x && !/^(?:human|person|a person|a human|agent|representative|withdraw(?: my application)?|confirm)[.!]?$/i.test(x)).join(" ");
-    const recorded = reading === "not_done" && item.kind === "gap" ? null : { questionKey: item.key, answer: redactProtected(replies || said), complete: reading === "concrete" };
     const already = reading === "concrete" ? saidAlready(next?.key) : null;
     const message = reading === "not_done" ? "Understood, thanks for saying so." : already ? `You also said "${quoteOf(already)}".\n\nIs there one thing you would add about that?` : `You said "${quoteOf(said)}".`;
-    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: message };
+    return { ...base, reading, questionKey: next?.key ?? null, done: !next, messageToCandidate: message };
   };
   if (item.ladder && said.length < 60 && /^(no|nope|not really|never|i haven'?t|i have not)\b/i.test(said) && !/\bbut\b/i.test(said)) {
     if (item.step === "direct") return { ...base, reading: "not_done", followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };
@@ -212,6 +204,7 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
  * The scorecard of a sent AI interview, the way the model is asked to write it: one finding for each question asked,
  * quoting the answer the candidate sent. A full answer meets the job's standard, a short one partly, a plain "Yes" does,
  * and their own words saying they do not have or have not done it do not. A skipped or unanswered question is not known.
+ * It returns what the prompt asks for and no more: whether a question was answered is the record's to say.
  */
 export function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessment {
   const user = req.messages[0]?.content ?? "";
@@ -219,15 +212,18 @@ export function fakeScreenAssess(req: StructuredRequest<unknown>): ScreenAssessm
   let answers: Record<string, string> = {};
   try { asked = JSON.parse(user.match(/^Questions asked \(JSON\): (.*)$/m)?.[1] ?? "[]"); } catch { /* keep */ }
   try { answers = JSON.parse(user.match(/^Answers sent \(JSON\): (.*)$/m)?.[1] ?? "{}"); } catch { /* keep */ }
+  /** The answer the candidate sent to a question, if any: none for one they skipped. */
+  const answerTo = (q: { key: string; skipped?: boolean }) => (q.skipped ? undefined : answers[q.key]) || undefined;
   const questionFindings: ScreenAssessment["questionFindings"] = asked.map((q) => {
-    const a = q.skipped ? undefined : answers[q.key];
-    if (!a) return { questionKey: q.key, answered: false, finding: q.skipped ? "Skipped by the candidate." : "Not answered.", meetsModelAnswer: "unknown" };
+    const a = answerTo(q);
+    if (!a) return { questionKey: q.key, finding: q.skipped ? "Skipped by the candidate." : "Not answered.", meetsModelAnswer: "unknown" };
     const meets = NOT_MET.test(a) || /^no\b/i.test(a) ? "no" : /^yes\b/i.test(a) || a.length > 60 ? "yes" : a.length > 20 ? "partially" : "unknown";
-    return { questionKey: q.key, answered: true, finding: `Answered: "${a.slice(0, 160)}"`, evidence: { source: "screen", quote: a }, meetsModelAnswer: meets };
+    return { questionKey: q.key, finding: `Answered: "${a.slice(0, 160)}"`, evidence: { source: "screen", quote: a }, meetsModelAnswer: meets };
   });
   const words = (key: string) => asked.find((q) => q.key === key)?.question ?? key;
   const strengths: ScreenAssessment["strengths"] = questionFindings.filter((f) => f.meetsModelAnswer === "yes" && f.evidence).slice(0, 3).map((f) => ({ claim: `Gave a specific answer to "${words(f.questionKey)}"`, evidence: f.evidence! }));
   const concerns: ScreenAssessment["concerns"] = questionFindings.filter((f) => f.meetsModelAnswer === "no" && f.evidence).map((f) => ({ claim: `Their answer does not meet what the job asks: "${words(f.questionKey)}"`, evidence: f.evidence! }));
-  const unknowns = questionFindings.filter((f) => !f.answered).map((f) => ({ question: words(f.questionKey), whyItMatters: "Not answered in the AI interview." }));
-  return { summary: `${questionFindings.filter((f) => f.answered).length} of ${asked.length} questions answered.`, strengths, concerns, unknowns, questionFindings };
+  const unanswered = asked.filter((q) => !answerTo(q));
+  const unknowns = unanswered.map((q) => ({ question: q.question, whyItMatters: "Not answered in the AI interview." }));
+  return { summary: `${asked.length - unanswered.length} of ${asked.length} questions answered.`, strengths, concerns, unknowns, questionFindings };
 }

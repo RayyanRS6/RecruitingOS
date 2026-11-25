@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, gt } from "drizzle-orm";
-import { isAccessRequestStatus, seatsFullAtSignInLine, type Actor } from "@ros/contracts";
+import { SIGN_IN_REFUSAL, isAccessRequestStatus, type Actor } from "@ros/contracts";
 import { invitations, memberships, randomToken, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
 import { seatRoom } from "./entitlements";
@@ -119,12 +119,15 @@ export async function listPendingInvitations(q: Queryable, companyId: string, no
   return q.select().from(invitations).where(and(eq(invitations.companyId, companyId), eq(invitations.status, "pending"), gt(invitations.expiresAt, now.toISOString()))).orderBy(desc(invitations.createdAt));
 }
 
-/** Raised while a session opens: the sign-in carried an invitation it cannot honour. The transaction rolls back; no session opens. */
+/**
+ * Raised while a session opens: the sign-in carried an invitation it cannot honour. The transaction rolls back; no session
+ * opens. Its message is the one sentence the sign-in page shows for the code (`SIGN_IN_REFUSAL` in packages/contracts).
+ */
 export class InvitationRefused extends Error {
   status = 403;
   /** The verified address that was refused rides along for the audit record the caller writes once the transaction has rolled back. */
-  constructor(public readonly code: "invite_email_mismatch" | "invite_expired" | "invite_seats_full", message: string, public readonly email: string | null = null) {
-    super(message);
+  constructor(public readonly code: "invite_email_mismatch" | "invite_expired" | "invite_seats_full", public readonly email: string | null = null) {
+    super(SIGN_IN_REFUSAL[code]);
   }
 }
 
@@ -156,8 +159,8 @@ export async function acceptPendingInvitations(
     [carried] = await q.select().from(invitations).where(eq(invitations.tokenHash, input.tokenHash)).limit(1);
     if (carried) {
       const state = invitationState(carried, now);
-      if (state === "pending" && carried.email !== email) throw new InvitationRefused("invite_email_mismatch", "This invitation was sent to a different email address. Sign in with the address the invitation was sent to.", email);
-      if (state === "expired" || state === "revoked") throw new InvitationRefused("invite_expired", "This invitation has expired or was withdrawn. Ask the person who invited you for a new one.", email);
+      if (state === "pending" && carried.email !== email) throw new InvitationRefused("invite_email_mismatch", email);
+      if (state === "expired" || state === "revoked") throw new InvitationRefused("invite_expired", email);
     }
   }
   if (input.staff) return { accepted: [], activeCompanyId: null };
@@ -172,7 +175,7 @@ export async function acceptPendingInvitations(
       // This invitation already holds a place among the open ones, so it is left out of the count and asks for one place.
       const room = await seatRoom(q, inv.companyId, { now, exceptEmail: email });
       if (!room.ok) {
-        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", seatsFullAtSignInLine(room.limit ?? 0, room.planKey), email);
+        if (carried?.id === inv.id) throw new InvitationRefused("invite_seats_full", email);
         continue;
       }
     }

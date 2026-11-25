@@ -1,6 +1,6 @@
 /**
- * A refusal the identity service brings back, as a code the sign-in page has words for (apps/web/src/pages/Login.tsx,
- * `ERRORS`). Supabase Auth sends the browser to redirect_to with `error` and `error_description` (Microsoft's own, or the
+ * A refusal the identity service brings back, as a code the sign-in page has words for (`SIGN_IN_REFUSAL` in
+ * packages/contracts). Supabase Auth sends the browser to redirect_to with `error` and `error_description` (Microsoft's own, or the
  * service's) and, for the service's own refusals only, `error_code`, in the query and again in the fragment, and no code;
  * one it cannot tie to a sign-in (its record of the flow expired or missing) goes to the Site URL, the address's root,
  * the same way. Microsoft's reason is the AADSTS number its description starts with; Microsoft also sends

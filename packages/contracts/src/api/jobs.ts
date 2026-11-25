@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
-import type { MembershipRole } from "../domain/company";
-import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
+import { isOwnerOrAdmin, type MembershipRole } from "../domain/company";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeEssentialKey, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
 import { POST_TEXT_MAX, type ClosingDateView, type JobUrls, type LegalCheck, type PostChannel, type PostsState, type PublishCheck } from "../domain/publishing";
 import { CompensationBasis, EmploymentType, RemotePolicy, type PacketFlag, type RolePacket } from "../domain/role-packet";
 import { Importance } from "../domain/score";
@@ -52,22 +52,78 @@ export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), rea
 export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
 
 /**
+ * How each question card's answer is named in the one-line summary of tapped answers ("Where the job is: Austin, TX"):
+ * the words the server writes into the conversation, and the words the page shows at once, before the server's copy of
+ * the message arrives. A fact that is one of the job's essentials takes its name from the essentials' own table
+ * (`INTAKE_ESSENTIAL_LABEL`), so the checklist and the summary call it the same. That table has no name for the other
+ * three (how the pay is counted, the deal-breakers, the benefits), and names the must-haves as a checklist line ("At
+ * least one must-have"), not as the list a summary gives, so those four are named here.
+ */
+export const INTAKE_FIELD_LABEL: Readonly<Record<IntakeQuestionField, string>> = {
+  title: INTAKE_ESSENTIAL_LABEL.title,
+  location: INTAKE_ESSENTIAL_LABEL.location,
+  remote_policy: INTAKE_ESSENTIAL_LABEL.remote_policy,
+  employment_type: INTAKE_ESSENTIAL_LABEL.employment_type,
+  schedule: INTAKE_ESSENTIAL_LABEL.schedule,
+  compensation: INTAKE_ESSENTIAL_LABEL.compensation_range,
+  compensation_basis: "Paid",
+  must_haves: "Must-haves",
+  deal_breakers: "Deal-breakers",
+  benefits: "Benefits",
+};
+
+/**
  * The assistant's turn as the builder reads it, or what went wrong and what to do next. On a failure `upgrade` is true
  * when the plan's AI help is used up: the way on is the request about the plan, not trying again. `ask`: that request's
  * button and the words it sends; null when nothing is used up, or for someone who may not ask. `unavailable`: true when
  * the AI provider itself is the problem (it refuses our account, or it is not answering): trying again at once would not
  * help, an administrator has been alerted, and `recovery` is the whole sentence to show, exactly as it is.
  */
-export type IntakeTurnReply = { assistantMessage: string; readyToCompile: boolean; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
+export type IntakeTurnReply = { assistantMessage: string; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
+
+/**
+ * A draft in an answer of the job builder's routes: the draft, and beside it the company's time zone. `timeZone` is the
+ * one "today" is counted in for the closing date chosen on a draft, as the server checks that date (never the device's
+ * own zone). Every answer that carries a draft carries both.
+ */
+export type IntakeDraftAnswer = { session: IntakeSessionView; timeZone: string };
 
 /** POST /api/v1/intake/sessions: the new draft and its first turn; `session` is null when the message was not about hiring someone. */
-export type IntakeStartResponse = { session: IntakeSessionView | null; notARole: boolean; reply: IntakeTurnReply };
+export type IntakeStartResponse = (IntakeDraftAnswer | { session: null }) & { notARole: boolean; reply: IntakeTurnReply };
 /** POST .../messages and .../answers: the draft as it now stands, the next turn, anything refused by the fairness check, and the summary of what was taken. */
-export type IntakeTurnResponse = { session: IntakeSessionView; reply: IntakeTurnReply; refused: IntakeRefusal[]; summary: string[] };
+export type IntakeTurnResponse = IntakeDraftAnswer & { reply: IntakeTurnReply; refused: IntakeRefusal[]; summary: string[] };
 /** GET /api/v1/intake/sessions/:id, and every builder answer that changes the draft without a turn. */
-export type IntakeSessionResponse = { session: IntakeSessionView };
+export type IntakeSessionResponse = IntakeDraftAnswer;
+/**
+ * One line of the drafts list as the routes answer it (GET /api/v1/intake/sessions, and Home): the summary, and
+ * `payConfirmed`, whether a person has set or confirmed the pay the draft states. With `missing` it says what the draft
+ * still needs (`draftStillNeeds`), so a draft's line and the builder count the same things.
+ */
+export type IntakeDraftSummary = IntakeSessionSummary & { payConfirmed: boolean };
+
 /** GET /api/v1/intake/sessions: the drafts this person may continue, and the plan's room for another job. */
-export type IntakeSessionList = { sessions: IntakeSessionSummary[]; room: PlanRoom };
+export type IntakeSessionList = { sessions: IntakeDraftSummary[]; room: PlanRoom };
+
+/**
+ * What a draft still needs before its job can be written: the one meaning of "still needed", for the builder's list and
+ * for a draft's line in a list. The essentials that are missing (`missing`, the server's own list), and the pay while it
+ * is stated and no person has confirmed it: a range read from a pasted ad counts only once someone confirms it on the
+ * pay card. In the essentials' own order.
+ */
+export function draftStillNeeds(draft: { missing: readonly IntakeEssentialKey[]; payConfirmed: boolean }): IntakeEssentialKey[] {
+  const payWaits = !draft.payConfirmed && !draft.missing.includes("compensation_range");
+  return INTAKE_ESSENTIALS.filter((key) => draft.missing.includes(key) || (payWaits && key === "compensation_range"));
+}
+
+/**
+ * A draft's title, the one rule for every place that shows it: the builder's heading, the draft's line on Home and on
+ * the Jobs page, and the notice that a draft was taken over. Once the job has been written, the written job's title
+ * (a person may have changed it in the editor); before that, the title from the answers. Null while neither names one,
+ * which a page shows as "Untitled job".
+ */
+export function draftTitleOf(draft: { facts: { title?: string | null }; draft?: { identity: { title?: string | null } } | null }): string | null {
+  return draft.draft?.identity.title?.trim() || draft.facts.title?.trim() || null;
+}
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* The one editor.                                                                                                */
@@ -135,7 +191,7 @@ export type DraftFieldEdit = z.infer<typeof DraftFieldEdit>;
 export type FormQuestionRefusal = { index: number; key: string | null; part: "question" | "help" | "option"; rule: string; text: string; reason: string; alternative: string; words: string };
 
 /** What saving the draft answers. `guardChanges`: what the fairness guard fixed by rule on saving, in plain words. */
-export type DraftSaved = { session: IntakeSessionView; guardChanges: string[] };
+export type DraftSaved = IntakeDraftAnswer & { guardChanges: string[] };
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Jobs.                                                                                                          */
@@ -168,7 +224,7 @@ export const ROLE_ACTION_BLOCKED = {
 export function roleActions(f: { status: RoleStatus; role: MembershipRole; trialEnded: boolean }): RoleActionState[] {
   const state = (action: RoleActionKey, reason: string | null = null): RoleActionState => ({ action, label: ROLE_ACTION_LABEL[action], allowed: reason === null, reason });
   if (f.status === "closed") return [state("edit", ROLE_ACTION_BLOCKED.closed)];
-  const manages = f.role === "owner" || f.role === "admin" ? null : ROLE_ACTION_BLOCKED.ownerOrAdmin;
+  const manages = isOwnerOrAdmin(f.role) ? null : ROLE_ACTION_BLOCKED.ownerOrAdmin;
   const out: RoleActionState[] = [state("edit")];
   if (f.status === "draft") out.push(state("publish", f.trialEnded ? ROLE_ACTION_BLOCKED.trialEnded : null));
   if (f.status === "open") out.push(state("pause", manages));
@@ -282,4 +338,4 @@ export type HomeNotice = { kind: "trial_ending" | "trial_ended" | "ai_help_warni
  * GET /api/v1/home: the open and paused jobs, the one with the most to review first; this person's unfinished drafts;
  * the plan's room for another job, for the start-a-hire box; and the notices.
  */
-export type HomeView = { jobs: HomeJob[]; drafts: IntakeSessionSummary[]; room: PlanRoom; notices: HomeNotice[] };
+export type HomeView = { jobs: HomeJob[]; drafts: IntakeDraftSummary[]; room: PlanRoom; notices: HomeNotice[] };

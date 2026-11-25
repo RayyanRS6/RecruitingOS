@@ -76,7 +76,11 @@ export type CandidateActionFacts = {
   planStop: PlanStop | null;
 };
 
-const PLAN_STOP_REASON: Record<PlanStop, string> = { ai_interviews_used_up: ACTION_BLOCKED.interviewsUsedUp, ai_used_up: ACTION_BLOCKED.aiUsedUp, trial_ended: ACTION_BLOCKED.trialEnded };
+/**
+ * The plain reason for each thing the plan stops: the words on the greyed button, and the ones the API answers 402 with
+ * when the action is sent anyway (it knows a refusal is the plan's by this table).
+ */
+export const PLAN_STOP_REASON: Record<PlanStop, string> = { ai_interviews_used_up: ACTION_BLOCKED.interviewsUsedUp, ai_used_up: ACTION_BLOCKED.aiUsedUp, trial_ended: ACTION_BLOCKED.trialEnded };
 
 /**
  * The actions that apply to a person where they are now, in the order the buttons are shown, each allowed or not with

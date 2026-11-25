@@ -1,4 +1,5 @@
 import type { ScreenTurn } from "@ros/contracts";
+import type { RecordedAnswer } from "@ros/agents";
 
 /**
  * The full record a failing case keeps in the result file, so it can be diagnosed without running it again. The chat the
@@ -20,7 +21,8 @@ export type CaseDiagnostics = {
   /** What the team would see: the readings through the code's checks, combined into the middle answer. */
   shown?: Array<TraceOutput & { label: string }>;
   /**
-   * The job a case was read against, which is written afresh on each run: the questions its AI interview asked (a
+   * The job a case was read against (the one the job builder wrote in the run or, in the suites that compare readings,
+   * one of the two written by hand): the questions its AI interview asked (a
    * must-have the chat asked about among them), its must-haves, and each skill with its importance, definition and
    * indicators, as the CV reading is shown them.
    */
@@ -33,10 +35,13 @@ export const TRACE_CHARS = 400;
 /** `source`: how the entry came (a tapped answer, a change on the check page, a skip), when the record says. */
 export type TraceMessage = { role: string; text: string; questionKey?: string; source?: string };
 
-/** A turn's fields that decide what happens next, and the message itself. */
+/**
+ * A turn's fields that decide what happens next, and the message itself. `answerRecorded`: the answer the code recorded
+ * from the candidate's own replies, on a turn after the code's rules only (the model returns no record of an answer).
+ */
 export type TraceTurn = {
   questionKey: string | null;
-  answerRecorded: ScreenTurn["answerRecorded"];
+  answerRecorded?: RecordedAnswer | null;
   followUpReason: string | null;
   candidateAskedAbout: ScreenTurn["candidateAskedAbout"];
   sentiment: ScreenTurn["sentiment"];
@@ -64,10 +69,11 @@ export function traceTranscript(entries: ReadonlyArray<{ role: string; content: 
   return entries.map((t) => ({ role: t.role, text: clipText(t.content), ...(t.questionKey ? { questionKey: t.questionKey } : {}), ...(t.source ? { source: t.source } : {}) }));
 }
 
-export function traceTurn(t: ScreenTurn): TraceTurn {
+/** A turn for the record: the model's own (`ScreenTurn`), or the turn after the code's rules (with what the code recorded). */
+export function traceTurn(t: ScreenTurn & { answerRecorded?: RecordedAnswer | null }): TraceTurn {
   return {
     questionKey: t.questionKey,
-    answerRecorded: t.answerRecorded ? { ...t.answerRecorded, answer: clipText(t.answerRecorded.answer) } : null,
+    ...(t.answerRecorded !== undefined ? { answerRecorded: t.answerRecorded ? { ...t.answerRecorded, answer: clipText(t.answerRecorded.answer) } : null } : {}),
     followUpReason: t.followUpReason === null ? null : clipText(t.followUpReason),
     candidateAskedAbout: t.candidateAskedAbout,
     sentiment: t.sentiment,

@@ -1,9 +1,9 @@
 import { and, count, eq, gte, inArray, isNotNull, like } from "drizzle-orm";
 import type { Actor, ToldState } from "@ros/contracts";
-import { CLOSE_OUT_SENDS_FROM_DAYS, adverseDecisionLineApplies } from "@ros/core";
+import { CLOSE_OUT_SENDS_FROM_DAYS, DECISION_TEMPLATE, adverseDecisionLineApplies } from "@ros/core";
 import { applications, candidates, communications, companies, rolePackets, roles, type Queryable } from "@ros/db";
 import type { Integrations } from "@ros/integrations";
-import { CLOSE_OUT_TEMPLATE, DECISION_TEMPLATE, decisionMessage, sendCloseOutNote, sendDecisionMessage } from "./coordinator";
+import { CLOSE_OUT_TEMPLATE, decisionMessage, sendCloseOutNote, sendDecisionMessage } from "./coordinator";
 
 /**
  * Telling a candidate a private decision. Someone marked Not selected hears nothing until a person presses "Email the

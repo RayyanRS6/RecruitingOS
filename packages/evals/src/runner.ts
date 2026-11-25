@@ -12,12 +12,13 @@ import { runChatSuite, shownAfterAnUnfairFollowUp } from "./chat-suite";
 import { runConversationSuite } from "./conversation-suite";
 import { clipText, traceOutcome, traceTranscript, type CaseDiagnostics } from "./diagnostics";
 import { intakeCaseResult, intakeContextOf, type IntakeModelCall } from "./intake-run";
+import { postsCaseResult, postsCases } from "./posts-suite";
 import { leakedDetails, lostEvidence, modelInputDifference, scorecardModelInput, triageModelInput, type EarlierApplication, type EvalApplication, type EvalInterview } from "./scoring-inputs";
 import { chosenBy, suiteNameFailures } from "./summary";
 import {
-  CONSISTENCY_READS, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, intakeGolden,
+  CONSISTENCY_READS, DENTAL_JOB, RDH_FACTS, aboutCases, assessmentQuotesGrounded, biasPairDifferences, biasPairs, consistencyCases, consistencyDifferences, credentialCases, credentialFailures, fairnessRuleCases, formAnswersFor, intakeGolden,
   intakeIllegal, intakeJobAd, intakeProxyRefusal, questionFairnessCases, quotesAreGrounded, redactionCases, resumeCases, scoreCaseFailures, scoreCases, scoreOf, scorecardDifferences, screenAssessCases, screenConsistencyCases,
-  screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, type IntakeCase,
+  screenRedactionCases, scriptedCredentialCases, scriptedReading, triageEdgeCases, verdictWords, type IntakeCase,
 } from "./suites";
 
 /**
@@ -76,11 +77,19 @@ async function main() {
   await runIntakeSuite("intake.job_ad", intakeJobAd, false);
   await runIntakeSuite("intake.proxy_refusal", intakeProxyRefusal, false);
 
+  // The two posts on a job's Share tab: each post judged as the model wrote it, before the Share service finishes it by
+  // rule (posts-suite.ts). One model call per case writes both posts.
+  if (runs("job.posts")) {
+    const out: CaseResult[] = [];
+    for (const c of postsCases) out.push(await postsCaseResult(intakeCall, c));
+    record("job.posts", out);
+  }
+
   if (familyRuns("resume")) {
     const ext: CaseResult[] = [];
     const hall: CaseResult[] = [];
     for (const c of resumeCases) {
-      const r = await runPrompt(q, rt, resumeExtractPrompt, { text: c.text, filename: `${c.id}.txt` }, { companyId: null, inputRef: { eval: c.id } });
+      const r = await runPrompt(q, rt, resumeExtractPrompt, { text: c.text }, { companyId: null, inputRef: { eval: c.id } });
       if (!r.ok) { ext.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const verified = verifyQuotes(r.output, c.text);
       const f = c.expect(verified, c.text);
@@ -92,7 +101,10 @@ async function main() {
     record("resume.hallucination", hall);
   }
 
-  /** The golden dental hygienist job the CV and AI interview suites read against (written once per run). */
+  /**
+   * The dental hygienist job the job builder writes once per run. The resume suites that compare no scores and the AI
+   * interview's suites read against it, which keeps the link between writing a job and reading against it tested.
+   */
   let golden: Promise<RolePacket> | null = null;
   const goldenPacket = (): Promise<RolePacket> => {
     golden ??= (async () => {
@@ -106,13 +118,18 @@ async function main() {
   };
 
   if (familyRuns("triage")) {
+    /**
+     * The dental job of the run, which the suites that compare no scores read against. Every twin, consistency and
+     * licence case names its own job, written by hand (`DENTAL_JOB`, `WAREHOUSE_JOB`), so no score compared here rests on
+     * which skills a run's job happened to have.
+     */
     const packet = await goldenPacket();
-    /** A reading's findings with their quotes, and the CV score the code works out from them. */
-    const findingsOf = (label: string, a: EvidenceAssessment) =>
-      `${label}: resume score ${scoreOf(a, packet).score ?? "none"}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
+    /** A reading's findings with their quotes, and the CV score the code works out from them against the job it was read for. */
+    const findingsOf = (label: string, a: EvidenceAssessment, job: RolePacket = packet) =>
+      `${label}: resume score ${scoreOf(a, job).score ?? "none"}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
     /** The CV read for its facts, from the original text, as the app does: the record is filled from it. */
     const extract = async (id: string, text: string): Promise<ResumeExtraction | null> => {
-      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text }, { companyId: null, inputRef: { eval: id } });
       return ex.ok ? verifyQuotes(ex.output, text) : null;
     };
     /**
@@ -129,9 +146,9 @@ async function main() {
      * are the model's own readings before any check, and `seen` the texts it was given, which the hallucination suite
      * measures them against; `modelInput` is everything the model was sent, and `app` the application as stored.
      */
-    const assess = async (id: string, text: string, who: Applied) => {
+    const assess = async (id: string, text: string, who: Applied, job: RolePacket = packet) => {
       const extraction = who.extraction !== undefined ? who.extraction : await extract(id, text);
-      const app: EvalApplication = { packet, extraction, resumeText: text, formAnswers: formAnswersFor(packet, { licenceHeld: who.licenceHeld ?? true }), identity: who.candidate, earlierApplications: who.earlier ?? [] };
+      const app: EvalApplication = { packet: job, extraction, resumeText: text, formAnswers: formAnswersFor(job, { licenceHeld: who.licenceHeld ?? true }), identity: who.candidate, earlierApplications: who.earlier ?? [] };
       const { promptInput, view, text: modelInput } = triageModelInput(app);
       const calls = await Promise.all(Array.from({ length: TRIAGE_READINGS }, (_, i) => runPrompt(q, rt, triageAssessPrompt, promptInput, { companyId: null, inputRef: { eval: id, reading: i + 1, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() } })));
       // what the app does once the model has answered (`readingsOutcome`), not a copy of it
@@ -139,24 +156,24 @@ async function main() {
     };
     type Assessed = Awaited<ReturnType<typeof assess>>;
     /** Each model call of one read as the model wrote it (on the scoring view, before the checks), or why it gave nothing. */
-    const callNotes = (read: number, calls: Assessed["calls"]): string[] => calls.map((r, j) => (r.ok ? findingsOf(`read ${read} call ${j + 1}`, r.output) : `read ${read} call ${j + 1}: none (${r.reason})`));
-    /** The golden job as the CV reading is shown it: its must-haves, and each skill the score counts with its importance. */
-    const skills = skillsInScore(packet);
-    const packetNote = `job: must-haves: ${packet.requirements.mustHaves.map((m) => `${m.key} "${clipText(m.text, 120)}"`).join(" | ") || "none"} || skills: ${skills.map((c) => `${c.key} [${importanceOf(c)}] "${clipText(c.definition, 200)}" indicators: ${clipText(c.indicators.join("; "), 200)}`).join(" | ") || "none"}`;
-    const packetRole: NonNullable<CaseDiagnostics["role"]> = {
+    const callNotes = (read: number, calls: Assessed["calls"], job: RolePacket = packet): string[] => calls.map((r, j) => (r.ok ? findingsOf(`read ${read} call ${j + 1}`, r.output, job) : `read ${read} call ${j + 1}: none (${r.reason})`));
+    /** A job as the CV reading is shown it: its must-haves, and each skill the score counts with its importance. */
+    const jobNote = (job: RolePacket) =>
+      `job: must-haves: ${job.requirements.mustHaves.map((m) => `${m.key} "${clipText(m.text, 120)}"`).join(" | ") || "none"} || skills: ${skillsInScore(job).map((c) => `${c.key} [${importanceOf(c)}] "${clipText(c.definition, 200)}" indicators: ${clipText(c.indicators.join("; "), 200)}`).join(" | ") || "none"}`;
+    const jobRole = (job: RolePacket): NonNullable<CaseDiagnostics["role"]> => ({
       questions: [],
-      mustHaves: packet.requirements.mustHaves.map((m) => ({ key: m.key, text: clipText(m.text) })),
-      skills: skills.map((c) => ({ key: c.key, name: c.name, definition: clipText(c.definition), importance: importanceOf(c), indicators: c.indicators.map((x) => clipText(x)) })),
-    };
-    /** What a failing edge case needs to be diagnosed: each reading's findings and concerns as the model wrote them, and the reading the team sees. */
+      mustHaves: job.requirements.mustHaves.map((m) => ({ key: m.key, text: clipText(m.text) })),
+      skills: skillsInScore(job).map((c) => ({ key: c.key, name: c.name, definition: clipText(c.definition), importance: importanceOf(c), indicators: c.indicators.map((x) => clipText(x)) })),
+    });
+    /** What a failing edge case needs to be diagnosed: each reading's findings, concerns and summary as the model wrote them, and the reading the team sees. */
     const edgeRecord = (a: Assessed): { notes: string[]; diagnostics: CaseDiagnostics } => {
-      const concerns = (r: EvidenceAssessment) => r.concerns.map((c) => clipText(c.claim, 120)).join("; ") || "none";
+      const words = (r: EvidenceAssessment) => `concerns: ${r.concerns.map((c) => clipText(c.claim, 120)).join("; ") || "none"} | summary: ${clipText(r.summary, 200)}`;
       return {
         notes: [
-          ...a.calls.map((r, i) => (r.ok ? `${findingsOf(`reading ${i + 1}`, r.output)} | concerns: ${concerns(r.output)}` : `reading ${i + 1}: none (${r.reason}: ${clipText(r.error, 200)})`)),
-          ...(a.combined.ok ? [`${findingsOf("shown", a.combined.output)} | concerns: ${concerns(a.combined.output)}`] : []),
+          ...a.calls.map((r, i) => (r.ok ? `${findingsOf(`reading ${i + 1}`, r.output)} | ${words(r.output)}` : `reading ${i + 1}: none (${r.reason}: ${clipText(r.error, 200)})`)),
+          ...(a.combined.ok ? [`${findingsOf("shown", a.combined.output)} | ${words(a.combined.output)}`] : []),
         ],
-        diagnostics: { readings: a.calls.map((r, i) => ({ label: `reading ${i + 1}`, ...traceOutcome(r) })), shown: [{ label: "shown", ...traceOutcome(a.combined) }], role: packetRole },
+        diagnostics: { readings: a.calls.map((r, i) => ({ label: `reading ${i + 1}`, ...traceOutcome(r) })), shown: [{ label: "shown", ...traceOutcome(a.combined) }], role: jobRole(packet) },
       };
     };
     /** A quote the model wrote is grounded when it is in what the model was given (the scoring view, placeholders and all). */
@@ -165,10 +182,11 @@ async function main() {
     const edge: CaseResult[] = [];
     const hall: CaseResult[] = [];
     for (const c of triageEdgeCases) {
-      const read = await assess(c.id, c.resumeText, { candidate: c.candidate });
+      const read = await assess(c.id, c.resumeText, { candidate: c.candidate, licenceHeld: c.licenceHeld });
       const { combined: r, raws, seen } = read;
       if (!r.ok) { edge.push({ id: c.id, pass: false, failures: [r.error], ...edgeRecord(read) }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
-      const f = c.expect(r.output, scoreOf(r.output, packet));
+      // what the case expects of the reading the team sees, and no verdict in any reading's own words as the model wrote them
+      const f = [...c.expect(r.output, scoreOf(r.output, packet)), ...raws.flatMap((raw, i) => verdictWords(raw).map((x) => `reading ${i + 1}: ${x}`))];
       edge.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? edgeRecord(read) : {}) });
       const h = groundedIn(raws, seen);
       hall.push({ id: c.id, pass: h.length === 0, failures: h });
@@ -181,73 +199,81 @@ async function main() {
     // must be sent the very same input for both (`sameModelInput`).
     const bias: CaseResult[] = [];
     for (const pair of biasPairs) {
+      const job = pair.job;
       // The same CV file is read for its facts once, as it would be stored once.
       const shared = pair.a === pair.b ? { extraction: await extract(`${pair.id}_resume`, pair.a) } : {};
-      const a = await assess(`${pair.id}_a`, pair.a, { candidate: pair.candidates[0], earlier: pair.earlier?.[0], ...shared });
-      const b = await assess(`${pair.id}_b`, pair.b, { candidate: pair.candidates[1], earlier: pair.earlier?.[1], ...shared });
-      // With two CV files each has its own extraction, which a real model may word differently from one read to the
-      // next: then the candidate's texts are compared as the model reads them (the input without the extraction).
+      const a = await assess(`${pair.id}_a`, pair.a, { candidate: pair.candidates[0], earlier: pair.earlier?.[0], ...shared }, job);
+      const b = await assess(`${pair.id}_b`, pair.b, { candidate: pair.candidates[1], earlier: pair.earlier?.[1], ...shared }, job);
+      // The reading is never sent the CV's facts as another model read them, but they tell the scoring view which name to
+      // hide and which words to keep, and with two CV files each has its own, which a real model may word differently
+      // from one read to the next: then the candidate's texts are compared as the reading gets them with none behind the view.
       const inputDiff = !pair.sameModelInput ? [] : "extraction" in shared ? modelInputDifference(a.modelInput, b.modelInput) : modelInputDifference(triageModelInput({ ...a.app, extraction: null }).text, triageModelInput({ ...b.app, extraction: null }).text);
       const ra = a.combined;
       const rb = b.combined;
       if (!ra.ok || !rb.ok) { bias.push({ id: pair.id, pass: false, failures: [...inputDiff, ra.ok ? "" : ra.error, rb.ok ? "" : rb.error].filter(Boolean) }); continue; }
       // the pair must read the same and score the same: the CV score is worked out from these findings
-      const f = [...inputDiff, ...biasPairDifferences(pair, ra.output, rb.output, packet)];
-      bias.push({ id: pair.id, pass: f.length === 0, failures: f, notes: [findingsOf(pair.cues[0], ra.output), findingsOf(pair.cues[1], rb.output)] });
+      const f = [...inputDiff, ...biasPairDifferences(pair, ra.output, rb.output, job)];
+      bias.push({ id: pair.id, pass: f.length === 0, failures: f, notes: [findingsOf(pair.cues[0], ra.output, job), findingsOf(pair.cues[1], rb.output, job)] });
     }
     record("triage.bias_pairs", bias);
 
     // Consistency (docs/11): the same CV read again must give the same findings and the same score each time. Each
-    // read's combined reading, then each of its model calls as the model wrote it.
+    // read's combined reading, then each of its model calls as the model wrote it. A job is noted with the first case read
+    // against it.
     const steady: CaseResult[] = [];
-    for (const [n, c] of consistencyCases.entries()) {
+    const noted = new Set<RolePacket>();
+    for (const c of consistencyCases) {
+      const job = c.job;
       const reads: EvidenceAssessment[] = [];
-      const notes: string[] = n === 0 ? [packetNote] : [];
+      const notes: string[] = noted.has(job) ? [] : [jobNote(job)];
+      noted.add(job);
       let failed: string | null = null;
       for (let i = 1; i <= CONSISTENCY_READS && !failed; i++) {
-        const a = await assess(`${c.id}_read_${i}`, c.resume, { candidate: c.candidate, licenceHeld: c.licenceHeld });
+        const a = await assess(`${c.id}_read_${i}`, c.resume, { candidate: c.candidate, licenceHeld: c.licenceHeld }, job);
         if (a.combined.ok) {
           reads.push(a.combined.output);
-          notes.push(findingsOf(`reading ${i}`, a.combined.output));
+          notes.push(findingsOf(`reading ${i}`, a.combined.output, job));
         } else failed = a.combined.error;
-        notes.push(...callNotes(i, a.calls));
+        notes.push(...callNotes(i, a.calls, job));
       }
-      const f = failed ? [failed] : consistencyDifferences(reads, packet);
-      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: packetRole } } : {}) });
+      const f = failed ? [failed] : consistencyDifferences(reads, job);
+      steady.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: jobRole(job) } } : {}) });
     }
     record("triage.consistency", steady);
 
     // Licence readings: a credential is "no" only when the candidate says plainly they do not hold it; lapsed, expired,
     // pending or in training is "unknown". Each CV is read as the app reads it (three readings and their middle
     // answer), twice, and both must give the expected finding.
-    const credentials = credentialMustHaves(packet);
+    const credentials = credentialMustHaves(DENTAL_JOB);
     const licence: CaseResult[] = [];
     for (const c of credentialCases) {
+      const job = c.job;
       const reads: EvidenceAssessment[] = [];
       const notes: string[] = [];
       const f: string[] = [];
       for (let i = 1; i <= 2; i++) {
-        const a = await assess(`${c.id}_licence_${i}`, c.resume, { candidate: c.candidate, licenceHeld: c.expect === "yes" });
+        const a = await assess(`${c.id}_licence_${i}`, c.resume, { candidate: c.candidate, licenceHeld: c.expect === "yes" }, job);
         const r = a.combined;
         if (!r.ok) f.push(r.error);
         else {
           reads.push(r.output);
-          notes.push(findingsOf(`reading ${i}`, r.output));
-          f.push(...credentialFailures(r.output, credentials, c.expect).map((x) => `reading ${i}: ${x}`));
+          notes.push(findingsOf(`reading ${i}`, r.output, job));
+          f.push(...credentialFailures(r.output, credentialMustHaves(job), c.expect).map((x) => `reading ${i}: ${x}`));
         }
-        notes.push(...callNotes(i, a.calls));
+        notes.push(...callNotes(i, a.calls, job));
       }
-      if (reads.length > 1) f.push(...consistencyDifferences(reads, packet));
-      licence.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: packetRole } } : {}) });
+      if (reads.length > 1) f.push(...consistencyDifferences(reads, job));
+      licence.push({ id: c.id, pass: f.length === 0, failures: f, notes, ...(f.length ? { diagnostics: { role: jobRole(job) } } : {}) });
     }
     // Readings that disagree, scripted (no model call): the finding the team sees rests on the candidate's words, so it
     // is the same whatever each reading said and whichever part of the licence line it quoted.
     const asIs = { restore: (s: string) => s };
     for (const c of scriptedCredentialCases) {
       const scripted = c.readings.map((r, i) => ({ ok: true as const, output: scriptedReading([...credentials], r), runId: `${c.id}_${i + 1}`, model: "scripted" }));
-      const r = readingsOutcome(scripted, asIs, { resumeText: c.resume, formAnswers: {}, packet });
+      // against the hand-written dental job, like the model cases above: no case of this suite rests on the run's job
+      const r = readingsOutcome(scripted, asIs, { resumeText: c.resume, formAnswers: {}, packet: DENTAL_JOB });
       const f = r.ok ? credentialFailures(r.output, credentials, c.expect) : [r.error];
-      licence.push({ id: `scripted_${c.id}`, pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("combined", r.output)] } : {}) });
+      licence.push({ id: `scripted_${c.id}`, pass: f.length === 0, failures: f, ...(r.ok ? { notes: [findingsOf("combined", r.output, DENTAL_JOB)] } : {}) });
     }
     record("triage.credentials", licence);
 
@@ -322,7 +348,7 @@ async function main() {
    * (a must-have's own words decide how the licence rule reads its answer), each reading's finding for each question as
    * the model wrote it and after the code's checks, and what was shown.
    */
-  const questionsOf = (a: Pick<ScreenAssessment, "questionFindings">) => a.questionFindings.map((x) => `${x.questionKey}=${x.answered ? "" : "not answered, "}${x.meetsModelAnswer}${x.evidence?.quote ? ` ("${clipText(x.evidence.quote, 80)}")` : ""}`).join("; ") || "none written";
+  const questionsOf = (a: Pick<ScreenAssessment, "questionFindings">) => a.questionFindings.map((x) => `${x.questionKey}=${x.meetsModelAnswer}${x.evidence?.quote ? ` ("${clipText(x.evidence.quote, 80)}")` : ""}`).join("; ") || "none written";
   const scorecardNotes = (interview: EvalInterview, chat: ScoredChat): string[] => [
     ...interview.screen.transcript.slice(0, 30).map((t) => `${t.role}: ${clipText(t.content, 200)}`),
     `asked: ${chat.asked.map((a) => `${a.key}${a.mustHave ? ` (must-have "${clipText(a.mustHave, 80)}")` : ""}${a.skipped ? " skipped" : ""}`).join(" | ") || "nothing"}`,
@@ -349,7 +375,8 @@ async function main() {
   };
 
   // The scorecard: one finding for every question asked, a skip not known, the licence rule, and only the candidate's
-  // own words quoted. `expect` reads the model's own first reading; `expectShown` what the team sees.
+  // own words quoted. `expect` reads the model's own first reading; `expectShown` what the team sees. And no reading
+  // gives a verdict on the person in its own words (`verdictWords`, as for the resume reading), in any case.
   if (runs("screen.assess")) {
     const packet = await goldenPacket();
     const out: CaseResult[] = [];
@@ -358,7 +385,7 @@ async function main() {
       const chat = await scoreChat(c.id, interview);
       const { shown, raws } = chat;
       if (!shown.ok || !raws[0]) { out.push({ id: c.id, pass: false, failures: [`assess failed: ${shown.ok ? "no reading came back" : shown.error}`], notes: scorecardNotes(interview, chat), diagnostics: scorecardDiagnostics(interview, [chat]) }); continue; }
-      const f = [...(c.expect?.(raws[0], interview) ?? []), ...(c.expectShown?.(shown.output, interview) ?? []).map((x) => `shown: ${x}`)];
+      const f = [...(c.expect?.(raws[0], interview) ?? []), ...(c.expectShown?.(shown.output, interview) ?? []).map((x) => `shown: ${x}`), ...raws.flatMap((raw, i) => verdictWords(raw).map((x) => `reading ${i + 1}: ${x}`))];
       out.push({ id: c.id, pass: f.length === 0, failures: f, ...(f.length ? { notes: scorecardNotes(interview, chat), diagnostics: scorecardDiagnostics(interview, [chat]) } : {}) });
     }
     record("screen.assess", out);

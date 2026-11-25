@@ -1,5 +1,5 @@
 import { and, asc, count, eq, inArray } from "drizzle-orm";
-import { MEMBERSHIP_ROLE_LABEL, appPaths, seatsFullLine, type Actor, type InviteAnswer, type InviteMember, type LeftCompany, type MemberChanged, type MembershipRole, type TeamInvitation, type TeamView, type UpdateMember } from "@ros/contracts";
+import { MEMBERSHIP_ROLE_LABEL, appPaths, isOwnerOrAdmin, seatsFullLine, type Actor, type InviteAnswer, type InviteMember, type LeftCompany, type MemberChanged, type MembershipRole, type TeamInvitation, type TeamView, type UpdateMember } from "@ros/contracts";
 import { FRESH_SESSION_MS, REAUTH_WINDOW_MS, audit, can, createInvitation, emit, entitlements, invitationLink, invitationState, isRecentlyAuthenticated, listPendingInvitations, normalizeEmail, notify, resendInvitation, revokeInvitation, revokeSessionsForCompany, roleInWords, setActiveCompany, type InvitationRow, type SessionContext } from "@ros/core";
 import { queueCommunication } from "@ros/agents";
 import { communications, companies, invitations, memberships, users, withPlatform, withTenant, type Tx } from "@ros/db";
@@ -160,7 +160,7 @@ async function assertSeatFor(tx: Tx, companyId: string, email: string, now: Date
  */
 function assertMayInviteAs(team: Team, role: string): void {
   if (role === "owner" && team.tenant.role !== "owner") throw new HttpError(403, "owner_only", "Only an owner can invite another owner.");
-  if (role === "owner" || role === "admin") assertRecentSignIn(team);
+  if (isOwnerOrAdmin(role)) assertRecentSignIn(team);
 }
 
 /**
@@ -244,7 +244,7 @@ export async function updateMember(team: Team, input: { userId: string; body: Up
       return { role: from, changed: true, removed: true };
     }
     // Granting admin or owner needs a recent sign-in; taking either away does not.
-    if (to === "admin" || to === "owner") assertRecentSignIn(team);
+    if (isOwnerOrAdmin(to)) assertRecentSignIn(team);
     await tx.update(memberships).set({ role: to }).where(eq(memberships.id, target.id));
     await emit(tx, { type: "membership.changed", companyId: tenant.companyId, actor, subject: { type: "user", id: userId }, payload: { role: to, previousRole: from, status: "active" } });
     await audit(tx, { companyId: tenant.companyId, actor, action: "membership.changed", target: { type: "user", id: userId }, reason: `role changed from ${from} to ${to}`, details: { from, to } });

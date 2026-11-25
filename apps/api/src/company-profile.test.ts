@@ -75,10 +75,15 @@ describe("what candidates see about the company: the text about it, its logo, th
       expect(drafted.aboutDraft!.text).not.toMatch(/young|energetic|pay figure|ignore/i);
       expect(drafted.aboutDraft!.check).toBeNull();
       expect(drafted.aboutDraft!.draftedAt).toBeTruthy();
-      expect((await stored()).aboutDraft!.basedOn.length).toBeGreaterThan(0);
+      // the draft is the text, when and by whom, and its run: the model is no longer asked for the facts it used
+      // ("basedOn"), which nothing read, and nothing is stored under that name
+      const kept = (await stored()).aboutDraft!;
+      expect(kept.text).toBe(drafted.aboutDraft!.text);
+      expect(Object.keys(kept).sort()).toEqual(["aiRunId", "draftedAt", "draftedBy", "text"]);
       // the run is on the record like every model call; the notes themselves are not
       const [run] = await container.db.select().from(aiRuns).where(and(eq(aiRuns.companyId, companyId), eq(aiRuns.task, "company.about")));
-      expect(run).toMatchObject({ promptKey: "company.about", promptVersion: 1, status: "ok" });
+      expect(run).toMatchObject({ promptKey: "company.about", promptVersion: 2, status: "ok" });
+      expect(run.structuredOutput).toEqual({ text: drafted.aboutDraft!.text });
       expect(JSON.stringify(run.inputRef)).not.toContain("train station");
       // not on the job page, not on the careers page
       expect(await jobPage()).not.toContain(drafted.aboutDraft!.text);
@@ -159,6 +164,22 @@ describe("what candidates see about the company: the text about it, its logo, th
       // a draft nobody approved goes with it
       expect((await json(owner, "POST", "/api/v1/companies/current/about/draft", {})).status).toBe(201);
       expect((await view(await json(owner, "POST", "/api/v1/companies/current/about", { text: null }))).aboutDraft).toBeNull();
+    });
+
+    // Until 25 November 2026 a stored draft also held "basedOn", the facts the assistant said it had used. Nothing read
+    // it, and it is no longer asked for or written. A draft stored with it reads, and is approved, as before.
+    it("still reads a draft stored with the facts the assistant used to list, and approves it like any other", async () => {
+      const older = { text: "Harbor Dental is a dental practice in Irvine, CA, that takes its time with every patient.", draftedAt: "2026-11-20T10:00:00.000Z", draftedBy: { kind: "user" as const, id: "u1" }, aiRunId: null, basedOn: ["a dental practice in Irvine, CA"] };
+      await container.db.update(companies).set({ settings: { ...(await stored()), aboutDraft: older } }).where(eq(companies.id, companyId));
+      expect((await stored()).aboutDraft).toEqual(older);
+      expect((await current(owner)).aboutDraft).toEqual({ text: older.text, draftedAt: older.draftedAt, check: null });
+      const approved = await json(owner, "POST", "/api/v1/companies/current/about", { text: older.text });
+      expect(approved.status).toBe(200);
+      expect(await view(approved)).toMatchObject({ about: { text: older.text, aiAssisted: true }, aboutDraft: null });
+      expect((await stored()).aboutDraft).toBeUndefined();
+      expect(await jobPage()).toContain(older.text);
+      // and off again, as the tests after this one found it
+      expect((await view(await json(owner, "POST", "/api/v1/companies/current/about", { text: null }))).about).toBeNull();
     });
   });
 

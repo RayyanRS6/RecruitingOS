@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, isNull } from "drizzle-orm";
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { auditRecords, adminAlerts, platformRoleGrants, users } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -198,7 +199,8 @@ describe("platform administrators: one-time bootstrap, ledger, MFA, self-grant r
     // the same provider with a different subject for the same address is refused and audited
     const mismatch = await app.request("/api/v1/auth/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accessToken: (container.integrations.identity as FakeIdentityProvider).mint({ email: "first@identifiedtalent.com", provider: "azure", aal: "aal2", subject: "someone-else-entirely" }) }) });
     expect(mismatch.status).toBe(403);
-    expect(((await mismatch.json()) as { error: { code: string } }).error.code).toBe("identity_mismatch");
+    // the refusal says what the sign-in page says for its code: one table holds both (SIGN_IN_REFUSAL in packages/contracts)
+    expect(await mismatch.json()).toMatchObject({ error: { code: "identity_mismatch", message: SIGN_IN_REFUSAL.identity_mismatch } });
     expect((await container.db.select().from(auditRecords).where(eq(auditRecords.reason, "identity_mismatch"))).length).toBeGreaterThanOrEqual(1);
     // sliding expiry keeps an administrator inside the eight-hour window
     const { sessions } = await import("@ros/db");

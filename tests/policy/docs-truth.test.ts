@@ -9,7 +9,8 @@ const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta
 
 describe("the setup documents", () => {
   it("name the Microsoft app registration as the sign-in page names the product, the name IT sees on Microsoft's consent screen", () => {
-    const product = /const PRODUCT = "([^"]+)";/.exec(read("apps/web/src/pages/Login.tsx"))?.[1];
+    // the name the sign-in page's sentences use, kept beside those sentences (SIGN_IN_REFUSAL in packages/contracts)
+    const product = /const PRODUCT = "([^"]+)";/.exec(read("packages/contracts/src/api/index.ts"))?.[1];
     expect(product).toBe("Recruiting OS");
     const runbook = read("docs/runbooks/production-setup.md");
     const microsoft = runbook.slice(runbook.indexOf("### Microsoft and Google sign-in"), runbook.indexOf("**Google**", runbook.indexOf("### Microsoft and Google sign-in")));
@@ -80,7 +81,7 @@ describe("the fairness runbook", () => {
       return at < 0 ? "" : yml.slice(at, yml.indexOf(next, at + 1));
     };
     const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(input("tests", "\n      screening_model:\n"))?.[1] ?? "[]");
-    expect(choices).toContain("intake");
+    expect(choices).toContain("intake,job");
     const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
     const runIt = runbook.slice(runbook.indexOf("## Run it"), runbook.indexOf("## If a check fails"));
     expect(runIt).toContain("**Which tests**");
@@ -103,7 +104,7 @@ describe("the fairness runbook", () => {
     const yml = read(".github/workflows/fairness.yml").replace(/\r\n/g, "\n");
     const tests = yml.slice(yml.indexOf("\n      tests:\n"), yml.indexOf("\n      screening_model:\n"));
     const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(tests)?.[1] ?? "[]");
-    expect(choices).toEqual(expect.arrayContaining(["resume,triage", "screen,chat", "intake"]));
+    expect(choices).toEqual(expect.arrayContaining(["resume,triage", "screen,chat", "intake,job"]));
     const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
     const checks = runbook.slice(runbook.indexOf("## What it checks"), runbook.indexOf("## Set it up once"));
     for (const rowName of ["| Twin resumes |", "| The AI interview |", "| Job builder |"]) expect(checks, rowName).toContain(rowName);

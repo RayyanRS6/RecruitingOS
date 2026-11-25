@@ -1,7 +1,8 @@
 import { and, eq } from "drizzle-orm";
+import { SIGN_IN_REFUSAL, type SignInRefusalCode } from "@ros/contracts";
 import { memberships, randomToken, sessions, users, type Queryable } from "@ros/db";
 import { audit } from "./audit";
-import { STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
+import { SESSION_IDLE_MS, STAFF_SESSION_MS, hashToken, isEmailAddress, normalizeEmail } from "./auth";
 import { acceptPendingInvitations } from "./invitations";
 import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 
@@ -12,10 +13,12 @@ import { activeGrantFor, applyBootstrapAdmin } from "./platform-roles";
 export type IdentityLike = { subject: string; email: string; emailVerified: boolean; name: string | null; provider: string; /** Every provider linked to the account at the identity service, its first (`provider`) included. */ providers?: string[]; aal: "aal1" | "aal2"; mfaVerifiedAt: string | null };
 export type SignInPolicy = { staffDomains: string[]; staffProvider: string; requireStaffMfa: boolean; /** One-time bootstrap list (BOOTSTRAP_ADMIN_EMAILS): honoured only while no administrator exists; never a standing grant. */ bootstrapAdmins?: string[]; /** The providers the deployment offers (AUTH_SIGNIN_PROVIDERS): a session opens through these only. */ allowedProviders?: string[] };
 export const DEFAULT_SIGN_IN_POLICY: SignInPolicy = { staffDomains: ["identifiedtalent.com"], staffProvider: "azure", requireStaffMfa: true, bootstrapAdmins: [], allowedProviders: ["azure", "google"] };
-const SESSION_IDLE_MS = 30 * 24 * 3600_000;
 
 export type SignInDecision = { ok: true; staff: boolean } | { ok: false; staff: boolean; code: "email_unverified" | "staff_provider_required" | "staff_provider_linked" | "mfa_required"; message: string };
 export type SignInIdentity<T extends IdentityLike> = { ok: true; identity: T } | { ok: false; code: "provider_mismatch" | "provider_not_allowed" | "email_invalid"; message: string };
+
+/** A refusal by its code. Its message is the one sentence the sign-in page shows for that code (`SIGN_IN_REFUSAL` in packages/contracts): no sentence is written here. */
+const refuse = <C extends SignInRefusalCode>(code: C) => ({ ok: false as const, code, message: SIGN_IN_REFUSAL[code] });
 
 /**
  * What a verified identity signs in as, before any account is looked at (audit SEC-8, known bug row 41). The identity
@@ -26,10 +29,10 @@ export type SignInIdentity<T extends IdentityLike> = { ok: true; identity: T } |
  * Then the provider must be one the deployment offers, and the address a usable one.
  */
 export function identityForSignIn<T extends IdentityLike>(identity: T, startedProvider: string | null | undefined, policy: SignInPolicy = DEFAULT_SIGN_IN_POLICY): SignInIdentity<T> {
-  if (startedProvider && !(identity.providers ?? [identity.provider]).includes(startedProvider)) return { ok: false, code: "provider_mismatch", message: "That sign-in did not match the provider you chose. Start again." };
+  if (startedProvider && !(identity.providers ?? [identity.provider]).includes(startedProvider)) return refuse("provider_mismatch");
   const used = startedProvider ? { ...identity, provider: startedProvider } : identity;
-  if (!(policy.allowedProviders ?? DEFAULT_SIGN_IN_POLICY.allowedProviders ?? []).includes(used.provider)) return { ok: false, code: "provider_not_allowed", message: "Sign in with Microsoft or Google." };
-  if (!isEmailAddress(normalizeEmail(used.email))) return { ok: false, code: "email_invalid", message: "Your sign-in account has no usable email address. Sign in with Microsoft or Google." };
+  if (!(policy.allowedProviders ?? DEFAULT_SIGN_IN_POLICY.allowedProviders ?? []).includes(used.provider)) return refuse("provider_not_allowed");
+  if (!isEmailAddress(normalizeEmail(used.email))) return refuse("email_invalid");
   return { ok: true, identity: used };
 }
 
@@ -63,10 +66,10 @@ export function holdsOtherThanStaffProvider(identity: IdentityLike, policy: Sign
 export function evaluateSignIn(identity: IdentityLike, existing: { platformRole: string } | null, policy: SignInPolicy = DEFAULT_SIGN_IN_POLICY): SignInDecision {
   const bootstrap = (policy.bootstrapAdmins ?? []).includes(normalizeEmail(identity.email));
   const staff = isStaffAccount(identity.email, bootstrap ? "platform_admin" : existing?.platformRole, policy);
-  if (!identity.emailVerified) return { ok: false, staff, code: "email_unverified", message: "Your email address is not verified with the sign-in provider. Ask your IT to check the email address on your account, or use the other sign-in button." };
-  if (staff && identity.provider !== policy.staffProvider) return { ok: false, staff, code: "staff_provider_required", message: "ITS staff sign in with their Microsoft 365 account." };
-  if (staff && holdsOtherThanStaffProvider(identity, policy)) return { ok: false, staff, code: "staff_provider_linked", message: "This ITS account is also linked to another sign-in method. Ask an ITS administrator to remove that link, then sign in with Microsoft 365." };
-  if (staff && policy.requireStaffMfa && identity.aal !== "aal2") return { ok: false, staff, code: "mfa_required", message: "ITS staff need a second factor. Finish multi-factor sign-in and try again." };
+  if (!identity.emailVerified) return { ...refuse("email_unverified"), staff };
+  if (staff && identity.provider !== policy.staffProvider) return { ...refuse("staff_provider_required"), staff };
+  if (staff && holdsOtherThanStaffProvider(identity, policy)) return { ...refuse("staff_provider_linked"), staff };
+  if (staff && policy.requireStaffMfa && identity.aal !== "aal2") return { ...refuse("mfa_required"), staff };
   return { ok: true, staff };
 }
 
@@ -89,7 +92,7 @@ export async function openSessionFromIdentity(
   if (!checked.ok) {
     const record: Parameters<typeof audit>[1] = { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: checked.code, ip: input.ip, details: { email, provider: input.identity.provider, providers: input.identity.providers ?? [input.identity.provider], startedProvider: input.startedProvider ?? null } };
     await audit(q, record);
-    throw new SignInRefused(checked.code, checked.message, record);
+    throw new SignInRefused(checked.code, record);
   }
   const identity = checked.identity;
   let [user] = await q.select().from(users).where(and(eq(users.authProvider, identity.provider), eq(users.authSubject, identity.subject))).limit(1);
@@ -98,13 +101,13 @@ export async function openSessionFromIdentity(
   if (user && linkedToAnotherSubject(user, identity)) {
     const record: Parameters<typeof audit>[1] = { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: "identity_mismatch", ip: input.ip, details: { email, provider: identity.provider } };
     await audit(q, record);
-    throw new SignInRefused("identity_mismatch", "This account is linked to a different sign-in identity. Contact ITS support.", record);
+    throw new SignInRefused("identity_mismatch", record);
   }
   const decision = evaluateSignIn(identity, user ? { platformRole: user.platformRole } : null, policy);
   if (!decision.ok) {
     const record: Parameters<typeof audit>[1] = { companyId: null, actor: { kind: "system", id: "sign_in" }, action: "signin.refused", reason: decision.code, ip: input.ip, details: { email, provider: identity.provider, aal: identity.aal, staff: decision.staff } };
     await audit(q, record);
-    throw new SignInRefused(decision.code, decision.message, record);
+    throw new SignInRefused(decision.code, record);
   }
   if (!user) {
     [user] = await q.insert(users).values({ email, name: identity.name, authProvider: identity.provider, authSubject: identity.subject }).returning();
@@ -133,10 +136,11 @@ export async function openSessionFromIdentity(
   return { sessionToken, userId: user.id, activeCompanyId, staff: decision.staff, platformAdmin, expiresAt, invitationsAccepted: invited.accepted.length };
 }
 
+/** A refused sign-in, by its code. Its message is the one sentence the sign-in page shows for that code (`SIGN_IN_REFUSAL` in packages/contracts). */
 export class SignInRefused extends Error {
   status = 403;
   /** The refusal's audit record: when the sign-in ran inside a transaction that rolled back, the caller writes it again. */
-  constructor(public readonly code: string, message: string, public readonly auditRecord?: Parameters<typeof audit>[1]) {
-    super(message);
+  constructor(public readonly code: SignInRefusalCode, public readonly auditRecord?: Parameters<typeof audit>[1]) {
+    super(SIGN_IN_REFUSAL[code]);
   }
 }

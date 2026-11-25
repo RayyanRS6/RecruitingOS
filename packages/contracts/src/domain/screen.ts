@@ -99,7 +99,7 @@ export type ScreenProgress = z.infer<typeof ScreenProgress>;
 
 /**
  * How an answer came to be recorded: `answered` in the conversation, `declined` (the candidate skipped it), or `edited`
- * on the "check your answers" page. The model only ever records `answered`; the other two are set in code.
+ * on the "check your answers" page. All three are set in code: the model records no answer.
  */
 export const AnswerStatus = z.enum(["answered", "declined", "edited"]);
 export type AnswerStatus = z.infer<typeof AnswerStatus>;
@@ -113,13 +113,20 @@ export type AnswerStatus = z.infer<typeof AnswerStatus>;
 export const ChatReading = z.enum(["concrete", "vague", "not_done"]);
 export type ChatReading = z.infer<typeof ChatReading>;
 
-/** One assistant turn. Rules (enforced in the prompt and checked in code): disclose at the start, one question at a time, at most two follow-ups per question, never ask about protected characteristics. */
+/**
+ * One assistant turn as the model writes it (AI task `screen.turn`): the message, and what the code needs to know about
+ * it to hold it to the rules (`enforceChatTurn` in packages/agents). The model is asked for nothing the code does not
+ * use: the answer on record is built in code from the candidate's own replies, so a turn carries no record of an answer.
+ * A turn written by an earlier build also held `answerRecorded` (the model's own record, with `complete` and `status`);
+ * it is dropped when such a turn is parsed.
+ */
 export const ScreenTurn = z.object({
   messageToCandidate: z.string().min(1).max(1200),
-  /** The job question this message asks, or null for a follow-up, an answer to the candidate, or the close. */
+  /**
+   * The question this message moves on to, or null for a follow-up, an answer to the candidate, or the close. It says
+   * whether the turn leaves the question being asked; where the chat goes then is the plan's to say, in code.
+   */
   questionKey: z.string().nullable(),
-  /** The candidate's latest message, recorded as the answer to a question. */
-  answerRecorded: z.object({ questionKey: z.string(), answer: z.string(), complete: z.boolean(), status: AnswerStatus.optional() }).nullable(),
   followUpReason: z.string().nullable(),
   candidateAskedAbout: z.enum(["pay", "schedule", "process", "company", "other"]).nullable().default(null),
   sentiment: z.enum(["fine", "confused", "frustrated", "distressed"]).default("fine"),

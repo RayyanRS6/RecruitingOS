@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ADVERSE_DECISION_LINE, adverseDecisionLineApplies, regionFromLocationText } from "@ros/core";
-import { DECISION_TEMPLATE, decisionMessage, replyToFor } from "./coordinator";
+import { ADVERSE_DECISION_LINE, DECISION_TEMPLATE, adverseDecisionLineApplies, regionFromLocationText } from "@ros/core";
+import { decisionMessage, replyToFor } from "./coordinator";
 import { samplePacket } from "./fixtures/sample-packet";
 
 /**

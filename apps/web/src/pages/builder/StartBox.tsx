@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { appPaths, type IntakeStartResponse, type PlanRoom, type StartIntake } from "@ros/contracts";
+import { appPaths, type IntakeSessionResponse, type IntakeStartResponse, type PlanRoom, type StartIntake } from "@ros/contracts";
 import { Alert } from "@ros/ui";
 import { api, errorWords, planLimitOf } from "../../api/client";
 import { composerPlaceholder, firstReplyKey, replyWords, sessionKey, turnProblem, type Problem } from "../../builder";
@@ -37,7 +37,8 @@ function useStartDraft() {
         else setSaid(replyWords(r.reply) ?? "That does not sound like a job to hire for, so no draft was started.");
         return;
       }
-      qc.setQueryData(sessionKey(r.session.id), { session: r.session });
+      // the builder opens on this answer: the draft, with the company's time zone beside it
+      qc.setQueryData<IntakeSessionResponse>(sessionKey(r.session.id), { session: r.session, timeZone: r.timeZone });
       qc.setQueryData(firstReplyKey(r.session.id), r.reply);
       for (const key of [["intake", "sessions"], ["home"]]) qc.invalidateQueries({ queryKey: key });
       nav(appPaths.draft(r.session.id));

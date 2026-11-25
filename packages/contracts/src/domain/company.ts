@@ -9,6 +9,15 @@ export const MembershipRole = z.enum(["owner", "admin", "hiring_manager"]);
 export type MembershipRole = z.infer<typeof MembershipRole>;
 export const MEMBERSHIP_ROLE_LABEL: Record<MembershipRole, string> = { owner: "Owner", admin: "Admin", hiring_manager: "Member" };
 
+/**
+ * An owner or an admin: beside everything a member does, they manage the company, its team and its plan, pause, resume
+ * or close a job, set a closing date and may take over a draft. The one test of it: the permissions (packages/core),
+ * a job's actions (`roleActions`), the routes and the pages all ask here, so "owner or admin" is written once.
+ */
+export function isOwnerOrAdmin(role: string | null | undefined): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** A platform administrator runs the admin dashboard; everyone else is `none`. */
 export const PlatformRole = z.enum(["none", "platform_admin"]);
 export type PlatformRole = z.infer<typeof PlatformRole>;

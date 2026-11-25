@@ -1,12 +1,12 @@
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
-import { ROLE_STATUS_LABEL, TRIAL_ENDED_LINE, type HomeJob, type HomeNotice, type HomeView, type IntakeSessionSummary, type RoleStatus } from "@ros/contracts";
+import { and, eq, inArray } from "drizzle-orm";
+import { ROLE_STATUS_LABEL, TRIAL_ENDED_LINE, type HomeJob, type HomeNotice, type HomeView, type RoleStatus } from "@ros/contracts";
 import { aiCreditView, can } from "@ros/core";
-import { sessionView } from "@ros/agents";
-import { companies, intakeSessions, roles, type Tx } from "@ros/db";
+import { companies, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
 import { askForAiHelpOn } from "./ai-credit";
 import { candidateCounts } from "./candidates";
+import { draftSummaries } from "./drafts";
 import { planRoom } from "./plan-room";
 import { TRIAL_ENDING_PLAN_QUESTION, TRIAL_PLAN_QUESTION, companyTrialStanding, trialDateWords } from "./trial";
 
@@ -26,12 +26,8 @@ export async function homeView(tx: Tx, container: Pick<Container, "engine">, t: 
     return { id: r.id, title: r.title, status, statusLabel: ROLE_STATUS_LABEL[status], toReview: c?.byTab.new ?? 0, interviewed: c?.byTab.interviewed ?? 0, applicants: c?.total ?? 0 };
   });
   jobs.sort((a, b) => b.toReview - a.toReview || b.interviewed - a.interviewed || a.title.localeCompare(b.title));
-  const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`);
-  const rows = await tx.select().from(intakeSessions).where(and(eq(intakeSessions.companyId, t.companyId), eq(intakeSessions.status, "active"), own)).orderBy(desc(intakeSessions.updatedAt));
-  const drafts: IntakeSessionSummary[] = rows.map((row) => {
-    const view = sessionView(row, t.userId);
-    return { id: row.id, status: row.status, title: view.facts.title ?? view.draft?.identity.title ?? null, startedBy: { userId: view.startedBy.userId, name: view.startedBy.name }, mine: view.startedBy.mine, createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString(), ownerMessages: row.messages.filter((m) => m.role === "owner").length, hasDraft: !!row.draftPacket, missing: view.readiness.missing };
-  });
+  // this person's own drafts, each the one summary the Jobs page and the builder's first page show too
+  const drafts = await draftSummaries(tx, { companyId: t.companyId, userId: t.userId });
   return { jobs, drafts, room: await planRoom(tx, t.companyId, { now, newDraft: true }), notices: await homeNotices(tx, t, now) };
 }
 

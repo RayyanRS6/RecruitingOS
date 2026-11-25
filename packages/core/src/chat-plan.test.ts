@@ -90,9 +90,10 @@ describe("the AI interview's plan (a counter and the section, never the question
     expect(chatCounter(stored([["question", true, "skipped"], ["gap", false, "unknown"]], "wrapping_up"))).toEqual({ done: 2, total: 2, label: "All 2 questions done" });
     expect(chatCounter(stored([["question", true, "skipped"]], "wrapping_up"))?.label).toBe("All questions done");
     expect(chatCounter(stored([], "wrapping_up"))?.label).toBe("One question");
-    // an item the chat passed over without asking (the model never asks again what the form asked) is not a question it
-    // asked: above the closing question the line says how many are done, never "Question 3 of 3" (the live site, 25
-    // November 2026); while another item is still being asked it counts as before
+    // an item the chat passed over without asking (a chat stored before the code held the plan's order: the model then
+    // passed over what the form had asked) is not a question it asked: above the closing question the line says how many
+    // are done, never "Question 3 of 3" (the live site, 25 November 2026); while another item is still being asked it
+    // counts as before
     expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"], ["gap", false, "covered"]], "wrapping_up"))).toEqual({ done: 2, total: 2, label: "All 2 questions done" });
     expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"]], "wrapping_up"))?.label).toBe("All questions done");
     expect(chatCounter(stored([["question", true, "covered"], ["gap", false, "open"], ["gap", false, "asking"]], "experience"))?.label).toBe("Question 2 of 3");

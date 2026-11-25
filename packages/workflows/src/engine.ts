@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { redactDatabaseValues, type Actor } from "@ros/contracts";
-import { SYSTEM_ACTOR, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
+import { ENDED_RUN, SYSTEM_ACTOR, emit, raiseAlert, raiseAlertOnce, resolveAlertsOfKind } from "@ros/core";
 import { jobs, randomToken, rowsOf, workflowRuns, workflowSteps, withTenant, type Queryable, type Tx, type WaitCondition } from "@ros/db";
 import type { EngineDeps, EngineOptions, PrepareContext, RunRow, StartInput, StepContext, StepResult, WakePayload, WorkflowDefinition } from "./types";
 
@@ -439,7 +439,7 @@ export class WorkflowEngine {
   async tick(runId: string, wake: WakePayload = null): Promise<RunRow | null> {
     const [run] = await this.deps.db.select().from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
     if (!run) return null;
-    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") return run;
+    if (ENDED_RUN.includes(run.status)) return run;
     if (run.status === "paused") return run;
     if (run.status === "waiting") {
       const w = run.wait;
@@ -575,7 +575,7 @@ export class WorkflowEngine {
     const delayMs = retryDelayMs(attempts);
     const until = new Date(this.now().getTime() + delayMs).toISOString();
     const token = randomToken(8);
-    const retried = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait: { kind: "timer", until, reason: `retry ${attempts}/${max}`, token } }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    const retried = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait: { kind: "timer", until, reason: `retry ${attempts}/${max}`, token } }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, [...ENDED_RUN]))).returning({ id: workflowRuns.id });
     if (retried.length === 0) return "stop";
     await this.deps.db.insert(jobs).values({ kind: "workflow.tick", payload: { runId: run.id, wake: { kind: "timer", key: token } }, runAt: until });
     await emit(this.deps.db, { type: "workflow.retried", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, attempt: attempts, error, until }, correlationId: run.id });
@@ -590,7 +590,7 @@ export class WorkflowEngine {
   private async holdForProvider(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts: number): Promise<void> {
     const now = this.now();
     const wait: HeldWait = { kind: "event", eventTypes: [AI_HOLD_KEY], reason: "held: the AI provider is not answering; it resumes by itself when it answers again", token: randomToken(8), keys: [AI_HOLD_KEY], heldAt: now.toISOString() };
-    const held = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    const held = await this.deps.db.update(workflowRuns).set({ status: "waiting", attempts, lastError: error, wait }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, [...ENDED_RUN]))).returning({ id: workflowRuns.id });
     if (held.length === 0) return;
     await emit(this.deps.db, { type: "workflow.waiting", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, held: true, reason: "ai_provider_outage", attempts, error, wait }, correlationId: run.id });
     await this.ensureQueued(this.deps.db, { kind: AI_HOLD_CHECK_JOB_KIND, runAt: new Date(now.getTime() + AI_HOLD_CHECK_EVERY_MS) });
@@ -667,7 +667,7 @@ export class WorkflowEngine {
 
   private async failForGood(def: WorkflowDefinition, run: RunRow, stepKey: string, error: string, actor: Actor, attempts = run.attempts + 1): Promise<void> {
     // A run cancelled while its step ran stays cancelled (and scrubbed, if that was why it was cancelled).
-    const failed = await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, ENDED_STATUSES))).returning({ id: workflowRuns.id });
+    const failed = await this.deps.db.update(workflowRuns).set({ status: "failed", attempts, lastError: error, wait: null }).where(and(eq(workflowRuns.id, run.id), notInArray(workflowRuns.status, [...ENDED_RUN]))).returning({ id: workflowRuns.id });
     if (failed.length === 0) return;
     await emit(this.deps.db, { type: "workflow.failed", companyId: run.companyId, actor, subject: { type: "workflow_run", id: run.id }, payload: { step: stepKey, error, attempts }, correlationId: run.id });
     try {
@@ -711,18 +711,16 @@ export class WorkflowEngine {
   /** Cancels a run (e.g. candidate withdrew). */
   async cancel(q: Queryable, runId: string, actor: Actor, reason: string): Promise<void> {
     const [run] = await q.select().from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
-    if (!run || ["completed", "failed", "cancelled"].includes(run.status)) return;
+    if (!run || ENDED_RUN.includes(run.status)) return;
     await q.update(workflowRuns).set({ status: "cancelled", wait: null, lastError: reason }).where(eq(workflowRuns.id, runId));
     await emit(q, { type: "workflow.cancelled", companyId: run.companyId, actor, subject: { type: "workflow_run", id: runId }, payload: { reason }, correlationId: runId });
   }
 }
 
-const ENDED_STATUSES = ["completed", "failed", "cancelled"];
-
 /** Whether the run has ended; `lock` takes the row lock (inside a step's transaction) so a cancel waits its turn. */
 async function runHasEnded(q: Queryable, runId: string, lock = false): Promise<boolean> {
   const rows = rowsOf<{ status: string }>(await q.execute(lock ? sql`SELECT status FROM workflow_runs WHERE id = ${runId} FOR UPDATE` : sql`SELECT status FROM workflow_runs WHERE id = ${runId}`));
-  return !rows[0] || ENDED_STATUSES.includes(rows[0].status);
+  return !rows[0] || ENDED_RUN.includes(rows[0].status);
 }
 
 class StepFailed extends Error {

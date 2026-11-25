@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ApplyRequest, MeResponse } from "./index";
+import { ApplyRequest, MeResponse, SIGN_IN_REFUSAL, signInRefusalLine } from "./index";
 import { DataRequestKind, accessDecisionsFor, adminCompanyStatus } from "./admin";
 import { ApplicationAction, BulkApplicationAction, CandidateListQuery } from "./candidates";
-import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, roleActions } from "./jobs";
+import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, draftStillNeeds, draftTitleOf, roleActions } from "./jobs";
 import { ALWAYS_EMAILED, NotificationKind, UpdateNotificationPreferences, emailsUpdate } from "./notifications";
 import { InviteMember, UpdateCompany, UpdateMember } from "./settings";
 import { appPaths } from "../domain/app-paths";
-import { MEMBERSHIP_ROLE_LABEL, MembershipRole, PlatformRole } from "../domain/company";
+import { MEMBERSHIP_ROLE_LABEL, MembershipRole, PlatformRole, isOwnerOrAdmin } from "../domain/company";
 import { JobPosts, PostChannel, RolePosts, SHARE_LINE, applyLinkFor, applySourceLabel } from "../domain/publishing";
 
 describe("who people are", () => {
@@ -17,10 +17,39 @@ describe("who people are", () => {
     expect(PlatformRole.safeParse("its_recruiter").success).toBe(false);
   });
 
+  it("an owner or an admin is told apart from a member in one place, and nobody else counts as either", () => {
+    expect(MembershipRole.options.filter(isOwnerOrAdmin)).toEqual(["owner", "admin"]);
+    for (const other of ["hiring_manager", "platform_admin", "Owner", "", null, undefined]) expect(isOwnerOrAdmin(other), String(other)).toBe(false);
+    // the same test words a job's actions: what a member may not press is what an owner or an admin may
+    const blocked = (role: MembershipRole) => roleActions({ status: "open", role, trialEnded: false }).filter((a) => a.reason === ROLE_ACTION_BLOCKED.ownerOrAdmin).map((a) => a.action);
+    for (const role of MembershipRole.options) expect(blocked(role), role).toEqual(isOwnerOrAdmin(role) ? [] : ["pause", "set_closing_date", "close"]);
+  });
+
   it("the signed-in person carries those roles", () => {
     const me = { user: { id: "u1", email: "sam@example.com", name: "Sam", platformRole: "none" }, auth: { provider: "google", aal: "aal1", mfaVerifiedAt: null }, memberships: [{ companyId: "c1", companyName: "Smile Dental", companySlug: "smile-dental", role: "hiring_manager" }], activeCompanyId: "c1", ai: { provider: "fake" } };
     expect(MeResponse.parse(me)).toEqual(me);
     expect(MeResponse.safeParse({ ...me, memberships: [{ ...me.memberships[0], role: "hr" }] }).success).toBe(false);
+  });
+});
+
+describe("a refused sign-in", () => {
+  it("has one sentence for each code, which the sign-in page reads by the code in its address", () => {
+    expect(Object.keys(SIGN_IN_REFUSAL)).toHaveLength(20);
+    for (const [code, sentence] of Object.entries(SIGN_IN_REFUSAL)) expect(signInRefusalLine(code), code).toBe(sentence);
+  });
+
+  // The sign-in page and the server each had a sentence for these, and the two differed until 25 November 2026.
+  it("says the sentence that tells the person what to do next, where the page and the server said two things", () => {
+    expect(SIGN_IN_REFUSAL.mfa_required).toBe("ITS staff need a second factor. Finish multi-factor sign-in with Microsoft and try again.");
+    expect(SIGN_IN_REFUSAL.identity_mismatch).toBe("This email address is already linked to a different Google or Microsoft account. Sign in with the account you used before, or contact ITS support to change it.");
+    expect(SIGN_IN_REFUSAL.invite_email_mismatch).toBe("That invitation was sent to a different email address. Sign in with the address the invitation was sent to, or continue without it.");
+    expect(SIGN_IN_REFUSAL.invite_expired).toBe("That invitation has expired or was withdrawn. Ask the person who invited you for a new one, then sign in as usual.");
+    expect(SIGN_IN_REFUSAL.invite_seats_full).toBe("This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again.");
+    expect(SIGN_IN_REFUSAL.expired).toBe("That sign-in link is invalid or has expired. Request a new one.");
+  });
+
+  it("gives a code it has no sentence for the general line, a name every object has included", () => {
+    for (const code of ["something_new", "", "constructor", "toString", "__proto__", "hasOwnProperty"]) expect(signInRefusalLine(code), code).toBe("Sign-in failed. Try again.");
   });
 });
 
@@ -69,6 +98,36 @@ describe("the job builder and the one editor", () => {
     expect(DraftFieldEdit.safeParse({ baseVersion: 1 }).success).toBe(false);
     expect(DraftFieldEdit.safeParse({ keepFlags: [{ flagId: "f1", reason: "A real requirement of the job" }] }).success).toBe(false);
     expect(DraftFieldEdit.safeParse({ description: "Too short." }).error?.issues[0]?.message).toBe("The job description needs at least 50 characters.");
+  });
+
+  it("names a draft one way everywhere: by the written job's title once it is written, by the title from the answers before, and by nothing until one is known", () => {
+    const answers = { title: "Hygienist" };
+    expect(draftTitleOf({ facts: answers, draft: null })).toBe("Hygienist");
+    expect(draftTitleOf({ facts: answers })).toBe("Hygienist");
+    // the written job's title wins, also when a person changed it in the editor and the answers still say the first one
+    expect(draftTitleOf({ facts: answers, draft: { identity: { title: "Senior Dental Hygienist" } } })).toBe("Senior Dental Hygienist");
+    expect(draftTitleOf({ facts: {}, draft: { identity: { title: " Dental Hygienist " } } })).toBe("Dental Hygienist");
+    expect(draftTitleOf({ facts: answers, draft: { identity: { title: " " } } })).toBe("Hygienist");
+    for (const none of [{ facts: {} }, { facts: { title: "  " }, draft: null }, { facts: { title: null }, draft: { identity: {} } }]) expect(draftTitleOf(none)).toBeNull();
+  });
+
+  it("says what a draft still needs one way: the essentials that are missing, and the pay while it is stated and nobody has confirmed it", () => {
+    // nothing stated yet: the missing essentials, as the server lists them
+    expect(draftStillNeeds({ missing: ["location", "compensation_range", "must_haves"], payConfirmed: false })).toEqual(["location", "compensation_range", "must_haves"]);
+    // the pay is stated (a pasted ad) and waits for a person: it is still needed, in the essentials' own place
+    expect(draftStillNeeds({ missing: ["location", "must_haves"], payConfirmed: false })).toEqual(["location", "compensation_range", "must_haves"]);
+    expect(draftStillNeeds({ missing: [], payConfirmed: false })).toEqual(["compensation_range"]);
+    // confirmed: only what is missing
+    expect(draftStillNeeds({ missing: ["schedule"], payConfirmed: true })).toEqual(["schedule"]);
+    expect(draftStillNeeds({ missing: [], payConfirmed: true })).toEqual([]);
+    // the pay is never counted twice, and what the server calls missing is never dropped
+    for (const missing of [[], ["compensation_range"], ["title", "schedule"]] as const) {
+      for (const payConfirmed of [true, false]) {
+        const needs = draftStillNeeds({ missing, payConfirmed });
+        expect(needs.filter((k) => k === "compensation_range").length).toBeLessThanOrEqual(1);
+        for (const key of missing) expect(needs).toContain(key);
+      }
+    }
   });
 
   it("closes a job only with a confirmation", () => {

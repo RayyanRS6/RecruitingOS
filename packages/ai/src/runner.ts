@@ -1,7 +1,7 @@
 import { aiRuns, isLockTimeout, uuidv7, withPlatform, withTenant, type Db, type Queryable } from "@ros/db";
 import { creditHoldUsd, estimateCostUsd } from "./pricing";
 import { promptHash, type PromptDef } from "./prompts/registry";
-import { ALLOWED_MODELS, TASK_TIER, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
+import { ALLOWED_MODELS, TASK_TIER, appRouting, effortForTask, effortsFromEnv, isAllowedModel, modelForTask, modelTableFromEnv, type Effort, type ModelTable } from "./routing";
 import type { AiProvider, StructuredResult, Tier } from "./types";
 
 /** An `ai_runs` row as it is written. */
@@ -20,8 +20,10 @@ export type AiCreditGate = {
 };
 
 /**
- * `efforts`: a tier's effort when the environment sets one (AI_EFFORT_*), in place of TIER_EFFORT. `credit`: the AI credit
- * (see `AiCreditGate`); left out, as in the evaluations and in tests that build a runtime by hand, nothing is metered.
+ * `efforts`: a tier's effort when the environment sets one (AI_EFFORT_*), in place of every effort of that tier's tasks
+ * (TIER_EFFORT, and a task's own in TASK_EFFORT). The app's runtime never carries one that would lower a scoring
+ * reading (`createAppRuntime`); an evaluation's may, to compare. `credit`: the AI credit (see `AiCreditGate`); left out,
+ * as in the evaluations and in tests that build a runtime by hand, nothing is metered.
  */
 export type AiRuntime = {
   provider: AiProvider;
@@ -180,7 +182,7 @@ async function callThenRecord<TInput, TOutput>(db: Db, rt: AiRuntime, prompt: Pr
 }
 
 /**
- * Several calls of one prompt on one input, side by side (the readings of a résumé or of a chat), with the AI credit asked
+ * Several calls of one prompt on one input, side by side (the readings of a resume or of a chat), with the AI credit asked
  * for all of them at once: they all go, or none does, so nobody is read once where the next applicant is read three
  * times because the credit ran out between two of them. Every call of the same prompt holds the same amount.
  */
@@ -248,10 +250,9 @@ export async function runPrompt<TInput, TOutput>(q: Queryable, rt: AiRuntime, pr
  * Builds the runtime for the configured provider: the deterministic fake (never in production) or the Anthropic SDK,
  * which is loaded lazily so the test path never imports it.
  */
-export async function createRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider): Promise<AiRuntime> {
+async function runtimeFor(env: Record<string, string | undefined>, fake: AiProvider | undefined, routing: { models: ModelTable; efforts: Partial<Record<Tier, Effort>> }): Promise<AiRuntime> {
   const providerId = env.AI_PROVIDER ?? "fake";
-  const models = modelTableFromEnv(env);
-  const efforts = effortsFromEnv(env);
+  const { models, efforts } = routing;
   if (providerId === "fake") {
     if (env.NODE_ENV === "production") throw new Error("AI_PROVIDER=fake is not allowed in production");
     if (!fake) throw new Error("fake provider requires an instance with registered handlers");
@@ -262,4 +263,25 @@ export async function createRuntime(env: Record<string, string | undefined> = pr
     return { provider: new AnthropicProvider(env.ANTHROPIC_API_KEY), models, efforts };
   }
   throw new Error(`unknown AI_PROVIDER ${providerId}`);
+}
+
+/**
+ * The runtime with the environment's models and efforts as they are (`modelTableFromEnv`, `effortsFromEnv`). For the
+ * evaluations: the fairness run names a model and an effort for the standard tier on purpose, to compare one with
+ * another. The app never calls this: it calls `createAppRuntime`.
+ */
+export async function createRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider): Promise<AiRuntime> {
+  return runtimeFor(env, fake, { models: modelTableFromEnv(env), efforts: effortsFromEnv(env) });
+}
+
+/**
+ * The app's own runtime, for the app and the worker (apps/api/src/container.ts): the same, on the app's routing
+ * (`appRouting`), so whatever the environment says the larger model runs only the writing of the job and the two
+ * scoring readings think at their own effort. Each setting that was ignored is said once, here, at start (`warn`: the
+ * log).
+ */
+export async function createAppRuntime(env: Record<string, string | undefined> = process.env, fake?: AiProvider, warn: (line: string) => void = console.warn): Promise<AiRuntime> {
+  const { models, efforts, ignored } = appRouting(env);
+  for (const line of ignored) warn(`[ai] ${line}`);
+  return runtimeFor(env, fake, { models, efforts });
 }

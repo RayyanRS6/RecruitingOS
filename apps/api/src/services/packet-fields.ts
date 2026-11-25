@@ -35,30 +35,44 @@ function requirement(text: string, before: Requirement | null, key: string): Req
   return before && untouched(text, before.text) ? { ...before, key, text } : { key, text };
 }
 
-/** A key for a new item, from its words, unlike every key the list has or had. */
-function keyFrom(prefix: string, words: string, taken: Set<string>): string {
-  const stem = `${prefix}_${normalizeCriterion(words).replace(/ /g, "_").slice(0, 30).replace(/_+$/, "") || "item"}`;
+/** `stem`, or `stem` with a short number after it ("_2", "_3"…), unlike every key the list has or had. */
+function freeKey(stem: string, taken: Set<string>): string {
   let key = stem;
   for (let n = 2; taken.has(key); n += 1) key = `${stem}_${n}`;
   taken.add(key);
   return key;
 }
 
+/** A key for a new item, from its words, unlike every key the list has or had. */
+function keyFrom(prefix: string, words: string, taken: Set<string>): string {
+  return freeKey(`${prefix}_${normalizeCriterion(words).replace(/ /g, "_").slice(0, 30).replace(/_+$/, "") || "item"}`, taken);
+}
+
 /**
- * A list as sent, each item matched to the one it was by its key. An item with no key is new; a key the list does not
- * have, or has twice, is refused; so is the same words twice.
+ * A list as sent, each item matched to the one it was by its key, and every item left with a key no other item of the
+ * list has: a stored reading's findings, and a form's answers, are matched to these items by key. An item with no key is
+ * new and gets one from its words. A key the list does not have is refused; so is a key sent more often than the list
+ * holds it, and the same words twice.
+ *
+ * A record saved before keys were held unique may hold one key twice. It is not refused for that (nobody could fix it:
+ * the editor shows no keys): the first item sent under the key is the first the record has under it and keeps the key,
+ * which stored readings point at; each later one is the record's next and gets a key of its own. Saved once, the list
+ * is like any other. The fairness guard does the same for the lists an edit did not send (`uniqueKeys` in packages/core).
  */
 function matched<S extends { key?: string }, B extends { key: string }>(what: string, base: readonly B[], sent: readonly S[], words: (item: S) => string, prefix: string): Array<{ sent: S; before: B | null; key: string }> {
   const taken = new Set(base.map((b) => b.key));
-  const seen = new Set<string>();
+  /** How many items sent so far carried each key. */
+  const sentUnder = new Map<string, number>();
   return sent.map((item, i) => {
     if (sent.some((other, j) => j < i && sameWords(words(other), words(item)))) throw new HttpError(400, "duplicate_item", `${what} ${i + 1} is the same as an earlier one.`);
     if (!item.key) return { sent: item, before: null, key: keyFrom(prefix, words(item), taken) };
-    const before = base.find((b) => b.key === item.key);
-    if (!before) throw new HttpError(409, "unknown_item", "One of these items is no longer on this job. Reload the page and try again.");
-    if (seen.has(item.key)) throw new HttpError(400, "duplicate_item", `${what} ${i + 1} is in the list twice.`);
-    seen.add(item.key);
-    return { sent: item, before, key: before.key };
+    const held = base.filter((b) => b.key === item.key);
+    if (!held.length) throw new HttpError(409, "unknown_item", "One of these items is no longer on this job. Reload the page and try again.");
+    const nth = sentUnder.get(item.key) ?? 0;
+    sentUnder.set(item.key, nth + 1);
+    const before = held[nth];
+    if (!before) throw new HttpError(400, "duplicate_item", `${what} ${i + 1} is in the list twice.`);
+    return { sent: item, before, key: nth === 0 ? before.key : freeKey(before.key, taken) };
   });
 }
 

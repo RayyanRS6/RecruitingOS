@@ -3,12 +3,12 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import {
   DraftRolePacket as DraftRolePacketSchema, EmploymentType, INTAKE_ESSENTIALS, IntakeServerState, RemotePolicy, RolePacket as RolePacketSchema, mustHaveOf, rulesOut,
   type Actor, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeExtraction, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeQuestionField, type IntakeRefusal,
-  type IntakeSessionView, type IntakeTurn, type LegalCheck, type PublishBlocker, type RolePacket,
+  type IntakeSessionView, type IntakeTurn, type LegalCheck, type PublishBlocker, type RolePacket, type WrittenJob,
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  BENEFITS_DESCRIPTION_JURISDICTIONS, applyAnswers, dealBreakerOffer, draftFactsKey, emit, formQuestionProblems, guardPacket, intakeReadiness, jobJurisdictions, namesWorkArrangement, normalizeCriterion,
-  normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
+  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, beginsWithState, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
+  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, saysState, screenCriterion, stateOfPlace, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -60,8 +60,11 @@ export function packetFingerprint(packet: unknown): string {
   return createHash("sha256").update(stableJson(packet)).digest("hex").slice(0, 16);
 }
 
-/** The fairness check the server applies to every answer a card offers, for the evaluation harness. */
-export { screenCriterion } from "@ros/core";
+/**
+ * For the evaluation harness: the fairness check the server applies to every answer a card offers, and the guard's
+ * wording check for a text written from a saved job (a LinkedIn post, an Indeed listing).
+ */
+export { screenCriterion, wordingProblems } from "@ros/core";
 
 type IntakeInputs = { company: typeof companies.$inferSelect; session: IntakeSessionRow; state: IntakeServerState };
 
@@ -72,8 +75,8 @@ async function loadIntakeInputs(q: Queryable, companyId: string, sessionId: stri
   return { company, session, state: stateOf(session) };
 }
 
-/** The confirmed pay the written job may carry, or null: never the model's figures, never a figure nobody confirmed. */
-function confirmedPayOf(facts: IntakeFacts, state: IntakeServerState): IntakeContext["confirmedPay"] {
+/** The pay the written job carries, or null: what a person set or confirmed, never a figure nobody confirmed. No model writes it. */
+function confirmedPayOf(facts: IntakeFacts, state: IntakeServerState): { basis: "hourly" | "salary"; min: number; max: number } | null {
   if (!payConfirmed(facts, state) || !state.pay) return null;
   return { basis: state.pay.basis, min: state.pay.min, max: state.pay.max };
 }
@@ -86,8 +89,7 @@ function contextFrom(inputs: IntakeInputs, facts = normalizeFacts(inputs.session
     facts,
     messages: session.messages,
     ad: adText ? { text: adText } : null,
-    confirmedPay: confirmedPayOf(facts, state),
-    alreadyAsked: settle(state.settledFields, fieldsKnownFromFacts(facts, payConfirmed(facts, state))),
+    alreadyAsked: alreadyAskedOf(facts, state),
   };
 }
 
@@ -96,7 +98,7 @@ function contextFrom(inputs: IntakeInputs, facts = normalizeFacts(inputs.session
 /* ------------------------------------------------------------------------------------------------------------------ */
 
 /** The field a card sets as the server keeps it: the pay card is always "compensation". */
-function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionField {
+export function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionField {
   return q.mode === "pay" || q.field === "compensation_basis" ? "compensation" : q.field;
 }
 
@@ -130,14 +132,15 @@ function cardFields(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): Intak
 }
 
 /**
- * Card fields the facts already answer, so a card would ask it again. The work arrangement and the kind of job count
- * only as a value the job can keep, the same test the essentials use (`intakeReadiness`): words that are neither
- * answered nor asked would block the job with nothing to tap.
+ * Card fields the facts already answer, so a card would ask it again. The place, the work arrangement and the kind of
+ * job count only as a value the job can keep, the same test the essentials use (`intakeReadiness`): words that are
+ * neither answered nor asked would block the job with nothing to tap. So a place with no state in it ("Denver") is not
+ * answered yet (`placeAnswered`), and the assistant may ask for the state.
  */
 export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean): IntakeQuestionField[] {
   const out: IntakeQuestionField[] = [];
   if (f.title) out.push("title");
-  if (f.locationText) out.push("location");
+  if (placeAnswered(f)) out.push("location");
   if (RemotePolicy.safeParse(f.remotePolicy).success) out.push("remote_policy");
   if (EmploymentType.safeParse(f.employmentType).success) out.push("employment_type");
   if (f.schedule) out.push("schedule");
@@ -151,6 +154,14 @@ export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean): I
 /** Adds fields to the settled list, once each, in the order first seen. */
 export function settle(settled: readonly IntakeQuestionField[], more: readonly IntakeQuestionField[]): IntakeQuestionField[] {
   return [...new Set([...settled, ...more])];
+}
+
+/**
+ * What the assistant is told never to ask again, on a card or in its message, and what the server drops a card of the
+ * assistant's for: the field of every card already shown in the draft, and what the facts already answer.
+ */
+export function alreadyAskedOf(facts: IntakeFacts, state: Pick<IntakeServerState, "settledFields" | "pay">): IntakeQuestionField[] {
+  return settle(state.settledFields, fieldsKnownFromFacts(facts, payConfirmed(facts, state)));
 }
 
 const WORD = /[a-z0-9]+/g;
@@ -235,6 +246,12 @@ const ESSENTIAL_CARD: Record<IntakeEssentialKey, Omit<IntakeQuestion, "id">> = {
 
 /** The card field that asks each essential. */
 const ESSENTIAL_FIELD: Record<IntakeEssentialKey, IntakeQuestionField> = { title: "title", location: "location", remote_policy: "remote_policy", compensation_range: "compensation", employment_type: "employment_type", schedule: "schedule", must_haves: "must_haves" };
+
+/** The essential a card asks for, or null: the benefits card and the server's own deal-breaker card ask for none. */
+export function essentialOfCard(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): IntakeEssentialKey | null {
+  if (isDealCard(q)) return null;
+  return INTAKE_ESSENTIALS.find((key) => ESSENTIAL_FIELD[key] === cardField(q)) ?? null;
+}
 
 const BENEFITS_CARD: Omit<IntakeQuestion, "id"> = { field: "benefits", prompt: "What benefits come with the job?", mode: "free", options: [], allowOwn: true, why: "The law where this job is asks the job ad to describe the benefits." };
 
@@ -378,14 +395,98 @@ export function withoutCardCount(message: string): string {
 }
 
 /**
- * The assistant's reply in the words the page uses. The model is told when a job is ready through a field named
- * readyToCompile and repeats the word to the owner ("the job is ready to compile"), who presses "Write the job"; and it
- * writes "résumé" where every page says "resume".
+ * The assistant's reply in the words the page uses. A model has told an owner "the job is ready to compile", who presses
+ * "Write the job" (the field that taught it the word is no longer asked for; the guard stays); and it writes "résumé"
+ * where every page says "resume".
  */
 export function inThePagesWords(message: string): string {
   return resumeAsWeWriteIt(message)
     .replace(/\bready\s+(?:to\s+(?:be\s+)?compiled?|for\s+compil(?:ing|ation))\b/gi, "ready to be written")
     .replace(/\bcompile\s+(the|this|your)\s+job\b/gi, (_all, the: string) => `write ${the} job`);
+}
+
+/** What the job is called when the assistant speaks of writing it. */
+const THE_JOB = "(?:the|this|your|a)\\s+(?:job(?!\\s+title)|posting|ad|advert|listing|description|draft)\\b";
+/** "Everything", "every essential", "all the details": the whole of what a job needs ("everything else" is the rest of it). */
+const ALL_OF_IT = "(?:everything(?!\\s+else\\b)|every\\s+essential|all(?:\\s+of)?(?:\\s+the|\\s+your|\\s+seven|\\s+7)*\\s+(?:essentials?|details|facts|basics|information|answers))";
+
+/**
+ * How the assistant says the job can be written, is ready, or that everything is in: "The job can be written now.",
+ * "You can now write the job.", "It is ready to be written.", "You're all set.", "Everything needed is in.", "I have all
+ * the essentials.", "That's everything I need.", "Press Write the job when you are ready." Read after
+ * `inThePagesWords`, so "ready to compile" is among them.
+ */
+const READY_CLAIMS: readonly RegExp[] = [
+  /\b(?:can|could|may)\s+(?:(?:now|already|all)\s+)*be\s+(?:written|drafted|created|generated)\b/i,
+  new RegExp(`\\b(?:I|we|you)\\s+(?:can|could|may)\\s+(?:(?:now|already|go\\s+ahead\\s+and)\\s+)*(?:write|draft|create|generate)\\s+(?:up\\s+)?${THE_JOB}`, "i"),
+  new RegExp(`\\bready\\s+(?:to\\s+be\\s+(?:written|drafted|created|generated)\\b|to\\s+(?:write|draft|create|generate)\\s+(?:up\\s+)?${THE_JOB}|for\\s+(?:writing|drafting)\\b)`, "i"),
+  /\b(?:job|draft|posting|ad|listing|it|this|that|everything|we)(?:\s+(?:is|are|looks|seems)|['’](?:s|re))\s+(?:(?:now|all)\s+)*(?:ready(?:\s+to\s+go)?|good\s+to\s+go)\s*(?:now)?\s*[.!]*$/i,
+  /\ball\s+set\b/i,
+  new RegExp(`\\b${ALL_OF_IT}\\b[^.!?]*?\\b(?:is|are|looks?|seems?)\\s+(?:(?:now|all|already)\\s+)*(?:in(?=\\s*(?:[.!,;:]|$|now\\b|so\\b|and\\b|place\\b))|(?:covered|complete|set|filled\\s+in|answered|accounted\\s+for)\\b)`, "i"),
+  new RegExp(`\\b(?:I|we)(?:\\s+(?:now\\s+)?have|['’]ve)(?:\\s+(?:now|got|already))*\\s+(?:${ALL_OF_IT}|all\\s+(?:I|we)\\s+need|enough|what\\s+(?:I|we|the\\s+job|it)\\s+needs?)\\b`, "i"),
+  new RegExp(`\\byou(?:['’]ve|\\s+have)\\s+(?:given|told)\\s+me\\s+(?:${ALL_OF_IT}|all\\s+I\\s+need)\\b`, "i"),
+  new RegExp(`\\bthat(?:['’]s|\\s+is|\\s+covers|\\s+completes|\\s+gives\\s+me)\\s+(?:${ALL_OF_IT}|all\\s+(?:I|we)\\s+need)\\b`, "i"),
+  /\b(?:press|click|tap|hit|use|select|choose)\s+(?:on\s+)?(?:the\s+)?["“”'‘’]?write\s+the\s+job\b/i,
+];
+
+/** The same claim made by saying nothing is left: "Nothing is missing.", "Nothing else is needed.", "There is nothing more to ask.", "I don't need anything else." */
+const NOTHING_LEFT = /\b(?:nothing|no\s+essentials?|none\s+of\s+the\s+essentials|no\s+(?:more|other|further)\s+(?:information|details|questions|answers))(?:\s+(?:else|more|further))?(?:\s+(?:is|are|seems?|looks?|remains?)|['’]s)?(?:\s+(?:still|now))?\s+(?:missing|needed|required|left|outstanding)\b|\bnothing\s+(?:(?:else|more|further|left)\s+)*to\s+(?:ask|add)\b|\b(?:I|we)\s+(?:do\s+not|don['’]t)\s+need\s+(?:anything|any\s+more|more)\b/i;
+
+/** What turns the claim round when it comes before it: "The job cannot be written yet.", "Not everything is in.", "Still needed before the job can be written: the pay." */
+const NOT_SO = /\b(?:not|cannot|never|almost|nearly|hardly|before|until)\b|n['’]t\b/i;
+/** A condition that waits for the owner, not for an answer: "when you are ready", "if you like", "once you're happy". */
+const FOR_THE_OWNER = "(?!\\s+(?:you(?:['’]re|\\s+are)\\s+(?:ready|happy|done|satisfied)|ready|you\\s+(?:like|want|wish)))";
+/**
+ * What makes the claim wait for an answer, in the claim's own part of the sentence: "Once the pay is in, the job can be
+ * written.", "Everything is in except the schedule.", "Everything but the pay is in.", "I still need the pay, then the
+ * job can be written."
+ */
+const WAITS_FOR = new RegExp(`\\b(?:still\\s+(?:need(?:s|ed)?|missing|required|to\\s+\\w+|outstanding|open|unanswered|unconfirmed)|need(?:s|ed)?\\s+(?:the|an?|your|one|two|three|to\\s+know)|missing|except|apart\\s+from|other\\s+than|but\\s+(?:the|for|your|an?|one|two|three)|as\\s+soon\\s+as|unless|(?:once|after|if|when(?:ever)?)${FOR_THE_OWNER})\\b`, "i");
+/** Where the claim's own part of a sentence ends, and an exception that may open the next part (", except the pay"). */
+const NEXT_PART = /[,;:]|\s(?:and|but|so)\s/;
+const AN_EXCEPTION = /^[,;:\s]*(?:but\s+)?(?:except|apart\s+from|other\s+than|besides|save\s+for|but\s+for|but\s+not)\b/i;
+
+/** What the assistant's reply is when nothing is left of it: the neutral word the AI interview's own code uses (`chatCodeLead`). */
+const NOTHING_TO_ADD = "Noted.";
+
+/**
+ * Whether a sentence of the assistant's says the job can be written, is ready, or that everything is in. A question
+ * never does; nor does a sentence that turns the claim round (`NOT_SO`) or makes it wait for an answer (`WAITS_FOR`),
+ * which says what is still needed. Words in a later part of the sentence ("…, and you can check it before you
+ * publish") are about something else and change nothing.
+ */
+function claimsReady(sentence: string): boolean {
+  const s = sentence.trim();
+  if (!s || /\?["”’)]*$/.test(s)) return false;
+  if (NOTHING_LEFT.test(s)) return true;
+  return READY_CLAIMS.some((claim) => {
+    const m = claim.exec(s);
+    if (!m) return false;
+    const end = m.index + m[0].length;
+    if (NOT_SO.test(s.slice(0, end))) return false;
+    const next = s.slice(end).search(NEXT_PART);
+    const own = next < 0 ? s : s.slice(0, end + next);
+    return !WAITS_FOR.test(own) && !(next >= 0 && AN_EXCEPTION.test(s.slice(end + next)));
+  });
+}
+
+/**
+ * The assistant's reply without any sentence that says the job can be written, is ready, or that everything is in.
+ * Whether that is so is worked out by the server after the model wrote its message (`intakeReadiness`), and the page
+ * shows it ("Everything needed is in", "Still needed"): the two disagreed on the live site (25 November 2026: "The job
+ * can be written now." beside a card asking for the work arrangement). The assistant is told never to say it; this
+ * holds it. A question, and a sentence that says what is still needed, stay. A reply with nothing left is "Noted."
+ */
+export function withoutReadyClaim(message: string): string {
+  // A new sentence starts with a capital, a quote or a bracket: "8 a.m. to 5 p.m." and "e.g. $20" are not cut in two.
+  const sentences = (line: string) => line.split(/(?<=[.!?]["”’)]*)\s+(?=["“‘'(\[]?[A-Z])/);
+  if (!message.split("\n").some((line) => sentences(line).some(claimsReady))) return message;
+  const lines = message.split("\n").flatMap((line) => {
+    if (!line.trim()) return [line];
+    const kept = sentences(line).filter((s) => !claimsReady(s)).join(" ");
+    return kept.trim() ? [kept] : [];
+  });
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() || NOTHING_TO_ADD;
 }
 
 /**
@@ -394,7 +495,8 @@ export function inThePagesWords(message: string): string {
  * guessing: the place (most of its words are the owner's) and the work arrangement (the owner named one in words they
  * typed, in any of the ordinary ways people say it, `namesWorkArrangement`; a pasted ad's mention is confirmed on a
  * card). Asked, never assumed. The arrangement the assistant wrote is read from its words ("On site", "Work from home")
- * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept.
+ * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept. The state of
+ * the place is the owner's to say as well (`placeAsSaid`).
  */
 export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: IntakeMessage[]): IntakeFacts {
   const out = { ...normalizeFacts(prev) } as Record<string, unknown>;
@@ -408,10 +510,32 @@ export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: Inta
     const words = ownerWordsOf(owner);
     const place = wordsOf(merged.locationText ?? "");
     if (merged.locationText !== prev.locationText && place.filter((w) => words.has(w)).length * 2 < place.length) merged.locationText = prev.locationText;
+    if (merged.locationText && merged.locationText !== prev.locationText) merged.locationText = placeAsSaid(merged.locationText, owner);
     if (merged.remotePolicy !== prev.remotePolicy && !owner.some((m) => (m.kind ?? "text") === "text" && namesWorkArrangement(m.content))) merged.remotePolicy = prev.remotePolicy;
   }
   if (!RemotePolicy.safeParse(merged.remotePolicy).success) delete merged.remotePolicy;
   return merged;
+}
+
+/**
+ * The place the assistant read, with a state only when the owner said it. The assistant is told to write what the owner
+ * gave, and it knows where cities are, so "Denver" can come back as "Denver, CO", and "Kansas City" with a guess. The
+ * state is on the job page and decides its notices: it is the owner's to say. A state written after the city is kept
+ * only when the owner's own words have that state after that city ("Denver, CO", "denver co", "Denver, Colorado"), or
+ * say it by itself ("It is in Colorado"); otherwise the city stands alone, and the card for the place asks for the state.
+ */
+function placeAsSaid(place: string, owner: readonly IntakeMessage[]): string {
+  const city = cityOf(place);
+  const state = city === place.trim() ? null : stateOfPlace(place);
+  if (!state) return place;
+  const c = city.toLowerCase();
+  const said = owner.some((m) => {
+    if (saysState(m.content, state)) return true;
+    const lower = m.content.toLowerCase();
+    for (let i = namedAt(lower, c, 0); i >= 0; i = namedAt(lower, c, i + 1)) if (beginsWithState(m.content.slice(i + c.length), state)) return true;
+    return false;
+  });
+  return said ? place : city;
 }
 
 function dedupe<T>(arr: T[]): T[] {
@@ -429,16 +553,68 @@ const actorOfTurn = (a: Actor): Actor => ({ kind: a.kind, id: a.id, ...(a.name ?
 /** Whether the law of the job's place asks the ad to describe the benefits, and nothing does yet. */
 function benefitsNeeded(facts: IntakeFacts, companyBenefits: string | undefined): boolean {
   if (facts.benefits?.trim() || companyBenefits?.trim()) return false;
-  const region = regionFromLocationText(facts.locationText);
+  const region = stateOfPlace(facts.locationText);
   const places = jobJurisdictions({ jobLocations: region ? [{ region, country: "US" }] : [], remotePolicy: facts.remotePolicy });
   return places.some((j) => BENEFITS_DESCRIPTION_JURISDICTIONS.includes(j));
 }
 
-/** Pay the owner typed in their own words counts as set by them; the confirmation is recorded with who and when. */
-async function confirmTypedPay(q: Tx, input: { companyId: string; sessionId: string; actor: Actor }, messages: IntakeMessage[], facts: IntakeFacts, state: IntakeServerState): Promise<void> {
-  if (!payTyped(messages, facts) || payConfirmed(facts, state)) return;
-  state.pay = { by: actorOfTurn(input.actor), at: new Date().toISOString(), via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax! };
-  await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: input.sessionId }, payload: { via: "typed" } });
+/** Pay the owner typed in their own words counts as set by them: the confirmation to record, with who and when, or null when there is none to make. */
+function typedPay(messages: IntakeMessage[], facts: IntakeFacts, state: IntakeServerState, actor: Actor, at: string): NonNullable<IntakeServerState["pay"]> | null {
+  if (!payTyped(messages, facts) || payConfirmed(facts, state)) return null;
+  return { by: actorOfTurn(actor), at, via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax! };
+}
+
+/** A draft as a turn leaves it, worked out with no database (`afterTurn`). */
+export type AfterTurn = {
+  facts: IntakeFacts;
+  state: IntakeServerState;
+  /** The cards as they are stored and shown (`prepareQuestions`). */
+  questions: IntakeQuestion[];
+  /** The assistant's reply as it is stored and shown. */
+  message: string;
+  /** What is still needed, and whether "Write the job" may run: the server's own answer, which the page shows. */
+  missing: IntakeEssentialKey[];
+  mayDraft: boolean;
+  /** What still needs a card: every essential missing, and the pay while it is stated and no person has confirmed it. */
+  toAsk: IntakeEssentialKey[];
+  notARole: boolean;
+  /** Pay the owner typed was counted as set by them on this turn. */
+  payTyped: boolean;
+};
+
+/**
+ * What the server makes of a turn the assistant answered: the facts it keeps (read only from words the owner typed or
+ * pasted since the last reply), pay the owner typed counted as theirs, what is still missing, the cards it shows, and
+ * the reply as it is stored. Nothing of this is the model's to decide. `runIntakeTurn` stores it; the evaluations judge
+ * it (packages/evals), so they judge what the app does and not a copy of it. `messages`: the conversation with the
+ * owner's latest message, before the assistant's reply. `companyBenefits`: the company's own benefits line (Settings).
+ */
+export function afterTurn(input: { turn: IntakeTurn; messages: IntakeMessage[]; facts: IntakeFacts; state: IntakeServerState; companyBenefits?: string; actor: Actor; at: string }): AfterTurn {
+  const { turn, messages } = input;
+  const state = structuredClone(input.state);
+  const before = normalizeFacts(input.facts);
+  const facts = typedSinceReply(messages) ? mergeFacts(before, turn.factsExtracted, messages) : before;
+  const offer = dealBreakerOffer(facts, state.dealBreakersOffered);
+  for (const d of offer.declined) if (!facts.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))) facts.declinedCriteria.push({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) });
+  const turnNo = messages.filter((m) => m.role === "owner").length;
+  const notARole = turnNo === 1 && turn.notARole;
+  const pay = typedPay(messages, facts, state, input.actor, input.at);
+  if (pay) state.pay = pay;
+  const confirmed = payConfirmed(facts, state);
+  const { missing, mayDraft } = intakeReadiness({ facts, state, draft: null });
+  // Pay that is stated but that nobody confirmed (read from a pasted ad) still needs its card.
+  const toAsk: IntakeEssentialKey[] = confirmed || missing.includes("compensation_range") ? missing : [...missing, "compensation_range"];
+  const questions = notARole ? [] : prepareQuestions(turn.questions, {
+    turnNo, payConfirmed: confirmed, dealBreakers: offer.offer, missing: toAsk, benefitsNeeded: !missing.length && benefitsNeeded(facts, input.companyBenefits),
+    settled: alreadyAskedOf(facts, state), ownerWords: ownerWordsOf(messages), askedPrompts: state.askedPrompts,
+  });
+  state.openQuestions = questions;
+  state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
+  state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
+  state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
+  if (state.ad && turn.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: turn.takenFromAd };
+  const message = withoutReadyClaim(inThePagesWords(withoutCardCount(turn.assistantMessage)));
+  return { facts, state, questions, message, missing, mayDraft, toAsk, notARole, payTyped: !!pay };
 }
 
 /**
@@ -459,7 +635,6 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
   });
   await readPastedAd(db, deps, input, deadlineAt);
   const inputs = await withTenant(db, input.companyId, (q) => loadIntakeInputs(q, input.companyId, input.sessionId));
-  const turnNo = inputs.session.messages.filter((m) => m.role === "owner").length;
   const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length }, deadlineAt });
   // The owner's words are saved above, and nothing failed: the route offers an upgrade.
   if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true, refusedHoldUsd: out.refusedHoldUsd };
@@ -473,43 +648,70 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
       return { error: out.error, aiRunId: out.runId };
     }
     if (session.status !== "active") return { error: "This draft is no longer open.", aiRunId: out.runId };
-    const state = stateOf(session);
-    const before = normalizeFacts(session.facts);
-    const facts = typedSinceReply(session.messages) ? mergeFacts(before, out.output.factsExtracted, session.messages) : before;
-    const offer = dealBreakerOffer(facts, state.dealBreakersOffered);
-    for (const d of offer.declined) if (!facts.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))) facts.declinedCriteria.push({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) });
-    const notARole = session.messages.filter((m) => m.role === "owner").length === 1 && out.output.notARole;
-    await confirmTypedPay(q, input, session.messages, facts, state);
-    const confirmed = payConfirmed(facts, state);
-    const missing = intakeReadiness({ facts, state, draft: null }).missing;
-    // Pay that is stated but that nobody confirmed (read from a pasted ad) still needs its card.
-    const toAsk: IntakeEssentialKey[] = confirmed || missing.includes("compensation_range") ? missing : [...missing, "compensation_range"];
-    const questions = notARole ? [] : prepareQuestions(out.output.questions, {
-      turnNo, payConfirmed: confirmed, dealBreakers: offer.offer, missing: toAsk, benefitsNeeded: !missing.length && benefitsNeeded(facts, loaded.company.settings.benefitsSummary),
-      settled: settle(state.settledFields, fieldsKnownFromFacts(facts, confirmed)), ownerWords: ownerWordsOf(session.messages), askedPrompts: state.askedPrompts,
-    });
-    state.openQuestions = questions;
-    state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
-    state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
-    state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
-    if (state.ad && out.output.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: out.output.takenFromAd };
-    const message = inThePagesWords(withoutCardCount(out.output.assistantMessage));
-    const messages = [...session.messages, { role: "assistant" as const, content: message, at: new Date().toISOString(), aiRunId: out.runId }];
+    const at = new Date().toISOString();
+    const { facts, state, questions, message, missing, notARole, payTyped: typed } = afterTurn({ turn: out.output, messages: session.messages, facts: session.facts, state: stateOf(session), companyBenefits: loaded.company.settings.benefitsSummary, actor: input.actor, at });
+    if (typed) await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed" } });
+    const messages = [...session.messages, { role: "assistant" as const, content: message, at, aiRunId: out.runId }];
     const draftPacket = !notARole && session.draftPacket ? draftByRule({ ...loaded, session, state }, facts, input.actor) : null;
-    await q.update(intakeSessions).set({ messages, facts, missingFacts: missing, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
+    // What is still missing is worked out from the facts each time it is needed (`intakeReadiness`) and never stored: the
+    // column `intake_sessions.missing_facts` was written here on every turn and read by nothing, so it went stale the
+    // moment an answer was tapped. It is no longer written and keeps its default, an empty list.
+    await q.update(intakeSessions).set({ messages, facts, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.turn_completed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { missing, questions: questions.map((x) => x.field) } });
     // Not about hiring: nothing is left behind as a draft; the conversation stays in the record.
     if (notARole) await emit(q, { type: "intake.abandoned", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: "not_a_role", turns: messages.length } });
-    return { turn: { ...out.output, assistantMessage: message, factsExtracted: facts, missingFacts: missing, questions, readyToCompile: !missing.length && confirmed }, aiRunId: out.runId, notARole };
+    // The turn as it stands on the page: the reply as stored, the facts as kept and the cards as shown. Whether the job
+    // can be written is not part of it: that is the draft's readiness, the one place the page reads it.
+    return { turn: { ...out.output, assistantMessage: message, factsExtracted: facts, questions }, aiRunId: out.runId, notARole };
   });
 }
 
 export type AnswersOutcome = { refused: IntakeRefusal[]; summary: string[] };
 
+/** A draft as tapped answers leave it, worked out with no database (`afterAnswers`). */
+export type AfterAnswers = AnswersOutcome & {
+  facts: IntakeFacts;
+  state: IntakeServerState;
+  /** The conversation with the summary of the answers, and any words typed beside the cards, as the owner's messages. */
+  messages: IntakeMessage[];
+  /** How these answers set or confirmed the pay, in order: on the pay card, then by words typed beside the cards. */
+  payConfirmed: Array<NonNullable<IntakeServerState["pay"]>["via"]>;
+};
+
 /**
- * Tapped answers. One summary goes into the conversation as the owner's message, words typed beside the cards go in as
- * their own message, the facts change as the cards say, and pay set on the pay card is recorded as set by this person.
- * Once the job is written, its parts set by rule follow the answers at once. The next turn is the caller's.
+ * What the server makes of tapped answers: the facts change as the cards say (`applyAnswers`, which refuses what the
+ * fairness check refuses), pay set on the pay card is recorded as set by this person, every answered card's field is
+ * settled and the card closed, one summary goes into the conversation as the owner's message, and words typed beside
+ * the cards go in as their own message (pay typed there counts as theirs too). `applyIntakeAnswers` stores it; the
+ * evaluations drive the card loop with it (packages/evals), so they judge what the app does and not a copy of it.
+ */
+export function afterAnswers(input: { answers: IntakeAnswer[]; note?: string; messages: IntakeMessage[]; facts: IntakeFacts; state: IntakeServerState; actor: Actor; at: string }): AfterAnswers {
+  const state = structuredClone(input.state);
+  const edit = applyAnswers(normalizeFacts(input.facts), state.openQuestions, input.answers);
+  const ways: AfterAnswers["payConfirmed"] = [];
+  if (edit.pay) {
+    state.pay = { by: actorOfTurn(input.actor), at: input.at, via: edit.pay.via, basis: edit.pay.basis, min: edit.pay.min, max: edit.pay.max };
+    ways.push(edit.pay.via);
+  }
+  const answered = new Set(input.answers.map((a) => a.questionId));
+  state.settledFields = settle(state.settledFields, state.openQuestions.filter((x) => answered.has(x.id)).flatMap(cardFields));
+  state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id));
+  state.answeredRounds += 1;
+  const lines = [...edit.summary, ...edit.refused.map((r) => `Not used: "${r.text}". ${r.reason}`)];
+  if (!lines.length) lines.push("Skipped those questions.");
+  const messages: IntakeMessage[] = [...input.messages, { role: "owner", content: lines.join("\n"), at: input.at, kind: "answers" }];
+  if (input.note) messages.push({ role: "owner", content: input.note, at: input.at, kind: "text" });
+  const typed = typedPay(messages, edit.facts, state, input.actor, input.at);
+  if (typed) {
+    state.pay = typed;
+    ways.push(typed.via);
+  }
+  return { facts: edit.facts, state, messages, refused: edit.refused, summary: edit.summary, payConfirmed: ways };
+}
+
+/**
+ * Tapped answers, stored (`afterAnswers`). Once the job is written, its parts set by rule follow the answers at once.
+ * The next turn is the caller's.
  */
 export async function applyIntakeAnswers(db: Db, input: { companyId: string; sessionId: string; actor: Actor; answers: IntakeAnswer[]; note?: string }): Promise<AnswersOutcome> {
   return withTenant(db, input.companyId, async (q) => {
@@ -517,26 +719,12 @@ export async function applyIntakeAnswers(db: Db, input: { companyId: string; ses
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
     if (!session) throw new IntakeSessionError("not_found");
     if (session.status !== "active") throw new IntakeSessionError("not_active");
-    const state = stateOf(session);
-    const edit = applyAnswers(normalizeFacts(session.facts), state.openQuestions, input.answers);
-    const now = new Date().toISOString();
-    if (edit.pay) {
-      state.pay = { by: actorOfTurn(input.actor), at: now, via: edit.pay.via, basis: edit.pay.basis, min: edit.pay.min, max: edit.pay.max };
-      await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: edit.pay.via } });
-    }
-    const answered = new Set(input.answers.map((a) => a.questionId));
-    state.settledFields = settle(state.settledFields, state.openQuestions.filter((x) => answered.has(x.id)).flatMap(cardFields));
-    state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id));
-    state.answeredRounds += 1;
-    const lines = [...edit.summary, ...edit.refused.map((r) => `Not used: "${r.text}". ${r.reason}`)];
-    if (!lines.length) lines.push("Skipped those questions.");
-    const messages: IntakeMessage[] = [...session.messages, { role: "owner", content: lines.join("\n"), at: now, kind: "answers" }];
-    if (input.note) messages.push({ role: "owner", content: input.note, at: now, kind: "text" });
-    await confirmTypedPay(q, input, messages, edit.facts, state);
-    const draftPacket = session.draftPacket ? draftByRule({ ...loaded, session: { ...session, messages }, state }, edit.facts, input.actor) : null;
-    await q.update(intakeSessions).set({ facts: edit.facts, messages, serverState: state, ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
-    await emit(q, { type: "intake.answered", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { questionIds: [...answered], refused: edit.refused.length } });
-    return { refused: edit.refused, summary: edit.summary };
+    const { facts, state, messages, refused, summary, payConfirmed: confirmed } = afterAnswers({ answers: input.answers, note: input.note, messages: session.messages, facts: session.facts, state: stateOf(session), actor: input.actor, at: new Date().toISOString() });
+    for (const via of confirmed) await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via } });
+    const draftPacket = session.draftPacket ? draftByRule({ ...loaded, session: { ...session, messages }, state }, facts, input.actor) : null;
+    await q.update(intakeSessions).set({ facts, messages, serverState: state, ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
+    await emit(q, { type: "intake.answered", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { questionIds: [...new Set(input.answers.map((a) => a.questionId))], refused: refused.length } });
+    return { refused, summary };
   });
 }
 
@@ -592,7 +780,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
     if (session.status !== "active") throw new IntakeSessionError("not_active");
     const state = stateOf(session);
     const facts = normalizeFacts(session.facts);
-    const draft = finalizeDraft(asAnswered(out.output, facts), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [] });
+    const draft = finalizeDraft(draftFromWritten(out.output, facts, ctx.company.name), { ...ctx, facts }, { sessionId: session.id, aiRunId: out.runId, state, actor: input.actor, previousFlags: session.draftPacket?.provenance.flags ?? [] });
     const at = new Date().toISOString();
     // The key is of the answers the model was given, so anything changed while it wrote shows the job as out of date.
     state.draft = { at, aiRunId: out.runId, by: actorOfTurn(input.actor), payKey: payConfirmed(facts, state) ? payKey(state) : null, factsKey: draftFactsKey(ctx.facts), edits: 0 };
@@ -603,19 +791,93 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
   });
 }
 
+/** A city as the assistant wrote it, without a state it added all the same ("Tustin, CA"): the state is the code's to read. */
+function cityOf(written: string): string {
+  const t = written.trim();
+  const tail = t.match(/,\s*([^,]+)$/);
+  return tail && stateOfPlace(`, ${tail[1]}`) ? t.slice(0, tail.index).trim() : t;
+}
+
+/** Where `city` is named in `lower` at or after `from`, as a word of its own ("reno", not the end of "moreno"); -1 when it is not. */
+function namedAt(lower: string, city: string, from: number): number {
+  const letter = (ch: string | undefined) => !!ch && /[a-z]/.test(ch);
+  for (let i = lower.indexOf(city, from); i >= 0; i = lower.indexOf(city, i + 1)) if (!letter(lower[i - 1]) && !letter(lower[i + city.length])) return i;
+  return -1;
+}
+
+/** What stands between two places in an owner's answer: "Tustin, CA and Reno, NV", "Tustin, CA; Reno, NV", "Tustin, CA / Reno, NV". */
+const BETWEEN_PLACES = /[;/&|\n]|\band\b/i;
+
 /**
- * A job just written, held to the owner's answers where the model must not decide: the work arrangement is the one the
- * owner gave, and a question for the application form that asks about a protected characteristic is left out (such a
- * question is never kept with a reason).
+ * The state of each city of a job, read from the owner's answer by the code's own reader of a job's place
+ * (`stateOfPlace`), never a guess. An answer that names one state gives it to every place ("Irvine and Tustin, CA").
+ * One that names several gives each city the state written after its name ("Tustin, CA and Reno, NV": California,
+ * Nevada), or else the next one written after it ("Irvine, Tustin, CA and Reno, NV": California for Irvine too); a
+ * city with none after it, or one the answer does not name, has no state.
  */
-function asAnswered(written: DraftRolePacket, facts: IntakeFacts): DraftRolePacket {
+function statesOf(cities: readonly string[], answer: string | undefined): Array<string | null> {
+  const text = (answer ?? "").trim();
+  const lower = text.toLowerCase();
+  // Each city is looked for after the one before it: the assistant mostly lists them in the order the owner wrote them.
+  let from = 0;
+  const at = cities.map((city) => {
+    const c = city.toLowerCase();
+    const after = namedAt(lower, c, from);
+    const i = after >= 0 ? after : namedAt(lower, c, 0);
+    if (i >= 0) from = i + c.length;
+    return i;
+  });
+  // The state written with a city: the first one between its name and the next place. The city's own name is left
+  // out of what is read, so a city named like a state is not taken for it ("Washington, DC" is not Washington state);
+  // one letter stands in for it, so a code written with no comma still follows a word ("Austin TX").
+  const own = at.map((i, n) => {
+    if (i < 0) return null;
+    const end = i + cities[n]!.length;
+    const next = text.slice(end).search(BETWEEN_PLACES);
+    const parts = text.slice(end, Math.min(next < 0 ? text.length : end + next, ...at.filter((j) => j > i))).split(",");
+    for (let k = 1; k <= parts.length; k += 1) {
+      const state = stateOfPlace(`x${parts.slice(0, k).join(",")}`);
+      if (state) return state;
+    }
+    return null;
+  });
+  const all = new Set([stateOfPlace(text), ...own].filter((s): s is string => !!s));
+  if (all.size <= 1) return at.map(() => [...all][0] ?? null);
+  const nextWritten = (i: number) => at.map((j, m) => ({ j, state: own[m] })).filter((x) => x.j > i && x.state).sort((a, b) => a.j - b.j)[0]?.state ?? null;
+  return at.map((i, n) => own[n] ?? (i < 0 ? null : nextWritten(i)));
+}
+
+/**
+ * The job record from the job as the assistant wrote it (`WrittenJob`). Everything the model is not asked for is set
+ * here from the owner's answers and the code's own words, so none of it can disagree with them:
+ * - the work arrangement is the one the owner gave (a record without one reads as on site, as the record's own rule
+ *   says, and cannot be published: the arrangement is an essential);
+ * - the state of each of the job's places is read from the owner's answer by the code's own reader (`statesOf`), the
+ *   reader the builder's benefits card and its checklist go by; it decides which notices and legal checks apply. The
+ *   job is written only once the answer says a state (`placeAnswered`), so a place has its state here; the one job
+ *   written without is a remote job whose owner named no place;
+ * - a question for the application form that asks about a protected characteristic is left out (never kept with a reason);
+ * - the three lines under a candidate email are the code's (packages/core/src/compliance.ts), as the guard writes them
+ *   on every save; the notices and their places are the guard's; the pay is `finishDraft`'s.
+ */
+export function draftFromWritten(written: WrittenJob, facts: IntakeFacts, companyName: string): DraftRolePacket {
+  const { cities, ...identity } = written.identity;
   const arrangement = RemotePolicy.safeParse(facts.remotePolicy);
+  const place = (city: string | undefined, region: string | null) => ({ ...(city ? { city } : {}), ...(region ? { region } : {}), country: "US" });
+  const named = cities.map(cityOf).filter(Boolean);
+  const states = statesOf(named, facts.locationText);
   const refused = new Set(formQuestionProblems(written.formQuestions).map((p) => p.index));
-  return {
-    ...written,
-    identity: arrangement.success ? { ...written.identity, remotePolicy: arrangement.data } : written.identity,
+  return DraftRolePacketSchema.parse({
+    identity: { ...identity, locations: named.length ? named.map((city, i) => place(city, states[i] ?? null)) : [place(undefined, stateOfPlace(facts.locationText))], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
+    description: written.description,
+    requirements: written.requirements,
+    competencies: written.competencies,
+    screening: written.screening,
     formQuestions: written.formQuestions.filter((_, i) => !refused.has(i)),
-  };
+    communication: { ...written.communication, signature: hiringTeamSignature(companyName), disclosureText: disclosureLine(companyName), humanAlternativeText: REACH_A_PERSON_LINE },
+    compliance: { jurisdictions: [], notices: [] },
+    provenance: { aiRunIds: [], assumptions: written.assumptions },
+  });
 }
 
 /**
@@ -639,7 +901,7 @@ function finishDraft(raw: DraftRolePacket, ctx: IntakeContext, prov: FinishInput
   const pay = confirmedPayOf(facts, prov.state);
   if (pay && prov.state.pay) {
     const benefits = facts.benefits?.trim() || packet.compensation?.benefitsSummary;
-    packet.compensation = { basis: pay.basis as "hourly" | "salary", currency: packet.compensation?.currency ?? "USD", min: pay.min, max: pay.max, ...(benefits ? { benefitsSummary: benefits } : {}), discloseRange: true };
+    packet.compensation = { basis: pay.basis, currency: packet.compensation?.currency ?? "USD", min: pay.min, max: pay.max, ...(benefits ? { benefitsSummary: benefits } : {}), discloseRange: true };
     packet.provenance.payConfirmedBy = { by: prov.state.pay.by, at: prov.state.pay.at, via: prov.state.pay.via };
     packet.provenance.payOrigin = prov.state.pay.via;
   } else {
@@ -669,17 +931,16 @@ function draftByRule(loaded: IntakeInputs, facts: IntakeFacts, actor: Actor): Dr
   }
 }
 
-/** The job as it is published, from a job the model wrote, outside a draft: for the evaluation harness, where the case's own pay counts as confirmed. */
-export function finalizePacket(raw: DraftRolePacket, ctx: IntakeContext, prov: { sessionId: string; aiRunId: string }): RolePacket {
+/**
+ * The job as it is published, from a job the model wrote, outside a draft: for the evaluation harness, where the pay in
+ * the case's answers counts as confirmed. A job whose answers hold no pay has none and cannot be published (it throws).
+ */
+export function finalizePacket(raw: WrittenJob, ctx: IntakeContext, prov: { sessionId: string; aiRunId: string }): RolePacket {
   const facts = normalizeFacts(ctx.facts);
   const state = IntakeServerState.parse({});
-  const basis = facts.compensationBasis ?? raw.compensation?.basis;
-  const min = facts.compensationMin ?? raw.compensation?.min;
-  const max = facts.compensationMax ?? raw.compensation?.max;
-  const paid = (basis === "hourly" || basis === "salary") && min !== undefined && max !== undefined;
-  if (paid) state.pay = { by: { kind: "system", id: "eval" }, at: new Date().toISOString(), via: "typed", basis, min, max };
-  const answered = paid ? { ...facts, compensationBasis: basis, compensationMin: min, compensationMax: max } : facts;
-  return RolePacketSchema.parse(finalizeDraft(asAnswered(raw, answered), { ...ctx, facts: answered }, { ...prov, state }));
+  const { compensationBasis: basis, compensationMin: min, compensationMax: max } = facts;
+  if ((basis === "hourly" || basis === "salary") && min !== undefined && max !== undefined) state.pay = { by: { kind: "system", id: "eval" }, at: new Date().toISOString(), via: "typed", basis, min, max };
+  return RolePacketSchema.parse(finalizeDraft(draftFromWritten(raw, facts, ctx.company.name), { ...ctx, facts }, { ...prov, state }));
 }
 
 /**
@@ -811,7 +1072,7 @@ export function sessionView(row: IntakeSessionRow, viewerUserId: string, more: {
   const state = stateOf(row);
   const facts = normalizeFacts(row.facts);
   const draft = row.draftPacket ?? null;
-  const owner = row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
+  const owner = draftOwnerId(row);
   return {
     id: row.id,
     status: row.status === "compiled" || row.status === "abandoned" ? row.status : "active",

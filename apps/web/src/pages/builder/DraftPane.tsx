@@ -20,6 +20,8 @@ import { PANE_HEIGHT } from "./look";
  */
 export function DraftPane(props: {
   view: IntakeSessionView;
+  /** The company's time zone, as the API sends it beside the draft: "today" for the closing date is counted in it. */
+  timeZone: string;
   guardChanges: string[];
   /** The address of the job page as candidates will see it. */
   previewHref: string;
@@ -84,7 +86,7 @@ export function DraftPane(props: {
                 <ul className="mt-1.5 grid list-disc gap-0.5 pl-[18px]">{props.guardChanges.map((g) => <li key={g}>{g}</li>)}</ul>
               </Alert>
             ) : null}
-            <ClosingDate key={view.closesOn ?? "none"} closesOn={view.closesOn} closing={props.closing} />
+            <ClosingDate key={view.closesOn ?? "none"} closesOn={view.closesOn} timeZone={props.timeZone} closing={props.closing} />
             {view.legalCheck ? <LegalCheckCard check={view.legalCheck} /> : null}
             <JobRecord packet={written} />
             {written.provenance.assumptions.length ? (
@@ -158,14 +160,17 @@ function WordingFlag(props: { flag: PacketFlag; onEdit: () => void; onKeep: (fla
   );
 }
 
-/** The closing date chosen for the job before it exists: a field for an owner or an admin, the date alone for anyone else. */
-function ClosingDate({ closesOn, closing }: { closesOn: string | null; closing: { onSave: (closesOn: string | null) => void; saving: boolean; error: string | null } | null }) {
+/**
+ * The closing date chosen for the job before it exists: a field for an owner or an admin, the date alone for anyone
+ * else. `timeZone`: the company's, in which the earliest day that may be chosen ("today") is counted, as on a job.
+ */
+function ClosingDate({ closesOn, timeZone, closing }: { closesOn: string | null; timeZone: string; closing: { onSave: (closesOn: string | null) => void; saving: boolean; error: string | null } | null }) {
   const [value, setValue] = useState(closesOn ?? "");
   const [problem, setProblem] = useState<string | null>(null);
   if (!closing) return closesOn ? <p className="small text-ink-2">Last day to apply: {calendarDay(closesOn)}</p> : null;
-  const today = todayIn(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const today = todayIn(timeZone);
   const save = () => {
-    const p = closingDateProblem(value, today);
+    const p = closingDateProblem(value, timeZone);
     setProblem(p);
     if (!p) closing.onSave(value);
   };

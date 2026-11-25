@@ -66,10 +66,15 @@ describe("the job builder's cards, sent as the page sends them", () => {
     // the owner answers the other two cards, leaves the pay card as it is drawn, and presses Send
     let state = togglePick(initialCards(), arrangement, "onsite");
     state = addOwn(setDraft(state, mustHaves, "Radiography certificate"), mustHaves);
-    expect(echoText(cards, state, view.pay)).toBe("Work arrangement: On site\nPay: $24–$28 an hour\nMust-haves: Radiography certificate");
+    const echoed = echoText(cards, state, view.pay);
+    expect(echoed).toBe("On site, hybrid or remote: On site\nPay: $24–$28 an hour\nMust-haves: Radiography certificate");
     const turn = await post<IntakeTurnResponse>(`${sessions}/${view.id}/answers`, { answers: answersPayload(cards, state, view.pay) });
     expect(turn.status, JSON.stringify(turn.body)).toBe(200);
     expect(turn.body.summary).toEqual(["On site, hybrid or remote: On site", "Pay: $24–$28 an hour", "Must-haves: Radiography certificate"]);
+    // the line the page showed at once is, word for word, the message the server then keeps in the conversation: both
+    // name each answer by the contracts' one table
+    expect(echoed.split("\n")).toEqual(turn.body.summary);
+    expect(turn.body.session.messages.filter((m) => m.kind === "answers").at(-1)?.content).toBe(echoed);
     view = turn.body.session;
     expect(view.pay.confirmed).toMatchObject({ via: "confirmed" });
     expect(view.readiness).toMatchObject({ payConfirmed: true, missing: [], mayDraft: true, draftBlocker: null });

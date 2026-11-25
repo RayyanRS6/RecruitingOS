@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
-import type { InviteAnswer, MemberChanged, TeamView } from "@ros/contracts";
+import { SIGN_IN_REFUSAL, type InviteAnswer, type MemberChanged, type TeamView } from "@ros/contracts";
 import { applications, auditRecords, candidates, communications, events, invitations, memberships, notifications, randomToken, users, withPlatform, withTenant } from "@ros/db";
 import type { FakeEmailAdapter, FakeIdentityProvider } from "@ros/integrations";
 import { createApp } from "./app";
@@ -155,7 +155,8 @@ describe("team invitations, members and roles", () => {
     const inviteCookie = cookieNamed(page, "ros_invite")!;
     const wrong = await session(idp().mint({ email: "stranger@elsewhere.test", name: "Someone Else", provider: "google" }), inviteCookie);
     expect(wrong.status).toBe(403);
-    expect(await errorCode(wrong)).toBe("invite_email_mismatch");
+    // the refusal says what the sign-in page says for its code: one table holds both (SIGN_IN_REFUSAL in packages/contracts)
+    expect(await wrong.json()).toMatchObject({ error: { code: "invite_email_mismatch", message: SIGN_IN_REFUSAL.invite_email_mismatch } });
     expect(cookieNamed(wrong, "ros_session")).toBeNull();
     expect(cleared(wrong, "ros_invite")).toBe(false);
     expect((await container.db.select().from(invitations).where(eq(invitations.email, "holly.hr@teamtest.test")))[0].status).toBe("pending");
@@ -205,7 +206,7 @@ describe("team invitations, members and roles", () => {
     expect(cookieNamed(expired, "ros_invite")).toBeNull();
     const r = await session(idp().mint({ email: "eve.late@teamtest.test", provider: "google" }), inviteCookie);
     expect(r.status).toBe(403);
-    expect(await errorCode(r)).toBe("invite_expired");
+    expect(await r.json()).toMatchObject({ error: { code: "invite_expired", message: SIGN_IN_REFUSAL.invite_expired } });
     expect(cookieNamed(r, "ros_session")).toBeNull();
     expect(cleared(r, "ros_invite")).toBe(true);
     // a plain sign-in opens a session with no membership: the lapsed invitation is not accepted
@@ -704,7 +705,8 @@ describe("people on the Trial plan", () => {
     const inviteCookie = cookieNamed(page, "ros_invite")!;
     const r = await session(idp().mint({ email: "jo@seats.test", name: "Jo", provider: "google" }), inviteCookie);
     expect(r.status).toBe(403);
-    expect(await r.json()).toMatchObject({ error: { code: "invite_seats_full", message: "This company's trial includes 3 people. Ask the person who invited you to choose a plan to add more." } });
+    // the sign-in page's one sentence for this refusal: the address the browser is sent back to carries the code alone
+    expect(await r.json()).toMatchObject({ error: { code: "invite_seats_full", message: "This company's plan is full. Ask the person who invited you to upgrade, then open the invitation link again." } });
     expect(cookieNamed(r, "ros_session")).toBeNull();
     expect(cleared(r, "ros_invite")).toBe(true);
     expect(await container.db.select().from(auditRecords).where(and(eq(auditRecords.action, "signin.refused"), eq(auditRecords.reason, "invite_seats_full")))).toHaveLength(1);

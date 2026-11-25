@@ -1,10 +1,11 @@
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { ApplicationStage, CandidateTab, ROLE_STATUS_LABEL, RolePacket as RolePacketSchema, RoleStatus, roleActions, tabOf, type CandidateCounts, type RoleDetail, type RolePacket, type RoleSummary } from "@ros/contracts";
-import { jobNoticesFor, lockedAndWaiting, notLocked, payShown, payTransparencyApplies } from "@ros/core";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { ROLE_STATUS_LABEL, RolePacket as RolePacketSchema, RoleStatus, roleActions, type CandidateCounts, type RoleDetail, type RolePacket, type RoleSummary } from "@ros/contracts";
+import { jobNoticesFor, payShown, payTransparencyApplies } from "@ros/core";
 import { applications, companies, rolePackets, roles, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import type { Tenant } from "../middleware/session";
-import { closingDateFor } from "./closing-date";
+import { candidateCounts, noCounts } from "./candidates";
+import { acceptingApplications, closingDateFor } from "./closing-date";
 import { jobUrls } from "./job-urls";
 import { currentVersionOf, type RoleRow } from "./packet-versions";
 import { legalCheckFor, publishCheckFor } from "./publish";
@@ -35,30 +36,14 @@ function lastActivityOf(role: RoleRow, newestApplication: string | null): string
 
 const iso = (at: string | null): string | null => (at ? new Date(at).toISOString() : null);
 
-const noCounts = (): CandidateCounts => ({ total: 0, byTab: Object.fromEntries(CandidateTab.options.map((tab) => [tab, 0])) as Record<CandidateTab, number>, locked: 0 });
-
 /**
- * How many people each job has in each tab, the people past the plan's candidates per job counted only in `total` and
- * `locked`, and each job's newest application. Three queries for the whole list, whatever its length.
+ * How many people each job has in each tab (the one count of them, `candidateCounts`, which a job's Candidates list and
+ * Home read too), and each job's newest application. Three queries for the whole list, whatever its length.
  */
 async function countsFor(tx: Tx, roleIds: string[]): Promise<Map<string, { counts: CandidateCounts; newest: string | null }>> {
-  const out = new Map(roleIds.map((id) => [id, { counts: noCounts(), newest: null as string | null }]));
+  const counts = await candidateCounts(tx, roleIds);
+  const out = new Map(roleIds.map((id) => [id, { counts: counts.get(id) ?? noCounts(), newest: null as string | null }]));
   if (!roleIds.length) return out;
-  const byStage = await tx.select({ roleId: applications.roleId, stage: applications.stage, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), notLocked())).groupBy(applications.roleId, applications.stage);
-  for (const row of byStage) {
-    const stage = ApplicationStage.safeParse(row.stage);
-    const entry = out.get(row.roleId);
-    if (!entry) continue;
-    entry.counts.total += Number(row.n);
-    if (stage.success) entry.counts.byTab[tabOf(stage.data)] += Number(row.n);
-  }
-  const locked = await tx.select({ roleId: applications.roleId, n: count() }).from(applications).where(and(inArray(applications.roleId, roleIds), lockedAndWaiting())).groupBy(applications.roleId);
-  for (const row of locked) {
-    const entry = out.get(row.roleId);
-    if (!entry) continue;
-    entry.counts.locked = Number(row.n);
-    entry.counts.total += Number(row.n);
-  }
   const newest = await tx.select({ roleId: applications.roleId, at: sql<string | Date | null>`max(${applications.createdAt})` }).from(applications).where(inArray(applications.roleId, roleIds)).groupBy(applications.roleId);
   // a raw max() may come back from the driver as a Date or as text
   for (const row of newest) {
@@ -82,7 +67,7 @@ function summaryOf(role: RoleRow, place: string | null, counted: { counts: Candi
     daysOpen: role.openedAt ? Math.max(0, Math.floor((now.getTime() - Date.parse(role.openedAt)) / 86_400_000)) : null,
     lastActivityAt: lastActivityOf(role, counted.newest),
     closesOn: role.applicationsCloseOn ? role.applicationsCloseOn.slice(0, 10) : null,
-    acceptingApplications: status === "open" && role.acceptingApplications,
+    acceptingApplications: acceptingApplications(role),
     counts: counted.counts,
   };
 }
