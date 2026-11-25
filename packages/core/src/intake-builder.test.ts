@@ -188,7 +188,7 @@ describe("answers to the question cards", () => {
     ];
     const edit = applyAnswers(facts(), cards, [answer("t", { own: ["Software Engineer"] }), answer("l", { own: ["Austin, TX"] }), answer("q1", { selected: ["hybrid"] }), answer("s", { own: ["Monday to Friday, 9 to 5"] }), answer("b", { own: ["Health cover"] }), answer("e", { own: ["Part-time, mornings"] })]);
     expect(edit.facts).toMatchObject({ title: "Software Engineer", locationText: "Austin, TX", remotePolicy: "hybrid", schedule: "Monday to Friday, 9 to 5", benefits: "Health cover", employmentType: "part_time" });
-    expect(edit.summary).toEqual(["Job title: Software Engineer", "Where the job is: Austin, TX", "On site, hybrid or remote: Hybrid", "Schedule: Monday to Friday, 9 to 5", "Benefits: Health cover", "Full or part time: Part-time, mornings"]);
+    expect(edit.summary).toEqual(["Job title: Software Engineer", "Where the job is: Austin, TX", "On site, hybrid or remote: Hybrid", "Schedule: Monday to Friday, 9 to 5", "Benefits: Health cover", "Full time or part time: Part-time, mornings"]);
     expect(edit.refused).toEqual([]);
     expect(edit.pay).toBeNull();
   });

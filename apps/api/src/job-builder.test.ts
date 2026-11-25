@@ -125,7 +125,7 @@ describe("the job builder", () => {
     expect(draft.readiness).toMatchObject({ missing: [], mayDraft: true, draftBlocker: null });
     expect(draft.questions).toEqual([]);
     expect(two.reply).not.toHaveProperty("readyToCompile");
-    expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Austin, TX\nOn site, hybrid or remote: Hybrid\nPay: $120,000–$150,000 a year", "Full or part time: Full time\nSchedule: Monday to Friday, 9 to 5"]);
+    expect(draft.messages.filter((m) => m.kind === "answers").map((m) => m.content)).toEqual(["Where the job is: Austin, TX\nOn site, hybrid or remote: Hybrid\nPay: $120,000–$150,000 a year", "Full time or part time: Full time\nSchedule: Monday to Friday, 9 to 5"]);
 
     // written
     const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);

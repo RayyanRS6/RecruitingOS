@@ -220,14 +220,7 @@ export type FactsEdit = {
   summary: string[];
 };
 
-/**
- * How each answer is named in the summary line written into the conversation: the contracts' one table
- * (`INTAKE_FIELD_LABEL`), which the page's own echo of the answers reads too. One name here is still this file's own:
- * the kind of job is "Full or part time", as every summary written so far says it, where the contracts say "Full time
- * or part time". It takes the contracts' name when the two tests that pin these words are changed with it
- * (apps/api/src/job-builder.test.ts, and intake-builder.test.ts beside this file).
- */
-const FIELD_LABEL: Record<IntakeQuestion["field"], string> = { ...INTAKE_FIELD_LABEL, employment_type: "Full or part time" };
+const FIELD_LABEL = INTAKE_FIELD_LABEL;
 
 const LIST_OF: Partial<Record<IntakeQuestion["field"], "mustHaves" | "dealBreakers">> = { must_haves: "mustHaves", deal_breakers: "dealBreakers" };
 
