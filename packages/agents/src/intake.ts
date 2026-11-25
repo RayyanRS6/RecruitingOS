@@ -8,7 +8,7 @@ import {
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
   BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, beginsWithState, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
-  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, screenCriterion, stateOfPlace, unresolvedFlags,
+  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, saysState, screenCriterion, stateOfPlace, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -530,7 +530,7 @@ function placeAsSaid(place: string, owner: readonly IntakeMessage[]): string {
   if (!state) return place;
   const c = city.toLowerCase();
   const said = owner.some((m) => {
-    if (stateOfPlace(m.content) === state) return true;
+    if (saysState(m.content, state)) return true;
     const lower = m.content.toLowerCase();
     for (let i = namedAt(lower, c, 0); i >= 0; i = namedAt(lower, c, i + 1)) if (beginsWithState(m.content.slice(i + c.length), state)) return true;
     return false;

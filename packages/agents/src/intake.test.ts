@@ -542,6 +542,50 @@ describe("the place of a job: its state is the owner's to say, and the card come
     expect(merged(assistantIn("Portland, Oregon"), "Portland, OR")).toBe("Portland, OR");
   });
 
+  // The same principle for a state's name. Fort Washington is in Maryland and in Pennsylvania, Port Washington in New
+  // York and in Wisconsin: a name at the end of a longer place name is not the state, and asking again costs one tap.
+  // "Washington" by itself is the state or the capital, so it says neither.
+  it("reads no state from 'Fort Washington', 'East Texas', 'Reno Nevada' or 'Washington' alone, and reads it once the name stands after its comma", async () => {
+    for (const place of ["Fort Washington", "Port Washington", "Mount Washington", "East Texas", "Reno Nevada", "Washington"]) {
+      const messages = [said(assistantIn(place))];
+      const t = await turn(ctx(messages));
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      expect(server.facts.locationText, place).toBe(place);
+      expect(server.missing, place).toEqual(["location"]);
+      expect(server.mayDraft, place).toBe(false);
+      expect(server.questions.map((q) => q.prompt), place).toEqual([PLACE_CARD]);
+    }
+    for (const [place, state] of [["Fort Washington, Maryland", "MD"], ["Fort Washington, PA", "PA"], ["Reno, Nevada", "NV"], ["Seattle, Washington", "WA"], ["Washington, DC", "DC"]] as const) {
+      const messages = [said(assistantIn(place))];
+      const t = await turn(ctx(messages));
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      expect(server.facts.locationText, place).toBe(place);
+      expect(server.missing, place).toEqual([]);
+      const job = await places(server.facts, messages);
+      expect(job.locations.map((l) => l.region), place).toEqual([state]);
+      expect(job.jurisdictions, place).toContain(`US-${state}`);
+    }
+  });
+
+  // A state the owner says away from the city, in a typed message, keeps the state the assistant then writes with the
+  // city. That holds for every state but a bare "Washington", which is the state or the capital.
+  it("keeps a state the owner said by itself in a typed message, but never on a bare 'Washington'", () => {
+    const merged = (ownerSaid: string[], assistantRead: string, before: string) => mergeFacts(facts({ locationText: before }), facts({ locationText: assistantRead }), ownerSaid.map((s) => said(s))).locationText;
+    expect(merged([assistantIn("Denver"), "It is in Colorado."], "Denver, CO", "Denver")).toBe("Denver, CO");
+    expect(merged([assistantIn("Fort Washington"), "It is in Maryland."], "Fort Washington, MD", "Fort Washington")).toBe("Fort Washington, MD");
+    expect(merged([assistantIn("Charleston"), "That is West Virginia."], "Charleston, WV", "Charleston")).toBe("Charleston, WV");
+    expect(merged([assistantIn("Reno"), "Nevada"], "Reno, NV", "Reno")).toBe("Reno, NV");
+    // a bare "Washington" keeps neither the state nor the capital, and a name inside a longer one keeps nothing
+    expect(merged([assistantIn("Seattle"), "It is in Washington."], "Seattle, WA", "Seattle")).toBe("Seattle");
+    expect(merged([assistantIn("Georgetown"), "It is in Washington."], "Georgetown, DC", "Georgetown")).toBe("Georgetown");
+    expect(merged([assistantIn("Fort Washington")], "Fort Washington, WA", "")).toBe("Fort Washington");
+    expect(merged([assistantIn("Reno Nevada")], "Reno, Nevada", "")).toBe("Reno");
+    // said so that it can only be one of the two, it is kept
+    expect(merged([assistantIn("Seattle"), "It is in WA."], "Seattle, WA", "Seattle")).toBe("Seattle, WA");
+    expect(merged([assistantIn("Georgetown"), "It is in Washington DC."], "Georgetown, DC", "Georgetown")).toBe("Georgetown, DC");
+    expect(merged([assistantIn("Seattle, Washington")], "Seattle, WA", "")).toBe("Seattle, WA");
+  });
+
   // As before this rule: a remote job whose owner names no place has no state of its own, and is not asked for one.
   it("asks a remote job with no place for no state, and writes it with no state of its own", async () => {
     const sentence = "I need a support agent, remote, full time, Monday to Friday, $20 to $24 an hour. Must-haves: two years in customer support.";

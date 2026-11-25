@@ -152,6 +152,17 @@ describe("readiness: what a job needs before it is written and published", () =>
     for (const said of ["Baton Rouge, LA", "Tulsa, OK", "Portland, OR", "Austin TX", "Los Angeles, CA", "New Orleans, Louisiana"]) expect(answered(said), said).toEqual({ done: true, missing: [], mayDraft: true });
   });
 
+  // The same principle for a state's name: Fort Washington is in Maryland and in Pennsylvania, never in Washington. A
+  // name counts only as the whole of a part between commas, and "Washington" by itself is the state or the capital.
+  it("takes no state from a state's name at the end or the beginning of a longer part, nor from 'Washington' by itself", () => {
+    const answered = (locationText: string) => {
+      const r = intakeReadiness({ facts: complete({ locationText }), state: state(paid), draft: null });
+      return { done: r.essentials.find((e) => e.key === "location")!.done, missing: r.missing, mayDraft: r.mayDraft };
+    };
+    for (const said of ["Fort Washington", "Port Washington", "Mount Washington", "East Texas", "Reno Nevada", "Reno, Nevada area", "Washington"]) expect(answered(said), said).toEqual({ done: false, missing: ["location"], mayDraft: false });
+    for (const said of ["Reno, Nevada", "New York", "Boulder, Colorado 80302", "Fort Washington, Maryland", "Indiana, Pennsylvania", "Fort Washington, PA", "Austin TX", "Seattle, Washington", "Washington, DC"]) expect(answered(said), said).toEqual({ done: true, missing: [], mayDraft: true });
+  });
+
   // The one way out, as before this rule: a job the owner said is remote, when the answer names no place at all.
   it("asks a remote job for no state when its answer names no place, and for the state when it names one", () => {
     const remote = (locationText: string) => placeAnswered({ locationText, remotePolicy: "remote" });
@@ -278,6 +289,21 @@ describe("answers to the question cards", () => {
     // the other codes that are also words are still a state when they are the whole answer on the card
     expect(after("Tulsa", "OK").locationText).toBe("Tulsa, OK");
     expect(placeAnswered(after("Tulsa", "OK"))).toBe(true);
+  });
+
+  // "Washington" by itself is the state or the capital: on the card it completes nothing either. "WA" and "DC" do.
+  it("never takes 'Washington' alone for a state on the card: 'WA' and 'DC' say which", () => {
+    const where = card({ id: "l", field: "location" });
+    const after = (before: string | undefined, own: string) => applyAnswers(facts({ locationText: before }), [where], [answer("l", { own: [own] })]).facts;
+    for (const before of ["Seattle", "Washington", "Fort Washington", undefined]) {
+      expect(after(before, "Washington").locationText, String(before)).toBe("Washington");
+      expect(placeAnswered(after(before, "Washington")), String(before)).toBe(false);
+    }
+    expect(after("Seattle", "WA").locationText).toBe("Seattle, WA");
+    expect(after("Washington", "WA").locationText).toBe("Washington, WA");
+    expect(after("Washington", "DC").locationText).toBe("Washington, DC");
+    expect(after("Fort Washington", "Maryland").locationText).toBe("Fort Washington, Maryland");
+    for (const [before, own] of [["Seattle", "WA"], ["Washington", "WA"], ["Washington", "DC"], ["Fort Washington", "Maryland"], ["Washington", "Seattle, Washington"]] as const) expect(placeAnswered(after(before, own)), `${before} + ${own}`).toBe(true);
   });
 
   it("sets the pay from the pay card as set by a person, and as confirmed when the figures were already there", () => {

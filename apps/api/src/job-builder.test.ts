@@ -535,6 +535,33 @@ describe("the job builder", () => {
     expect(louisiana.readiness).toMatchObject({ mayDraft: true, missing: [] });
   });
 
+  // The same principle for a state's name: Fort Washington is in Maryland and in Pennsylvania, never in Washington
+  // state, and "Washington" by itself is the state or the capital. Neither says a state; asking again costs one tap.
+  it("reads no state from 'Fort Washington' or from 'Washington' on the card, and writes a Maryland job once the owner says Maryland", async () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    let draft = await start(owner, "Dental assistant in Fort Washington, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(draft.facts.locationText).toBe("Fort Washington");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // "Washington" on the card completes nothing: the place is "Washington", with no state, and the card is there again
+    draft = (await answerCards(owner, draft, { location: "Washington" })).session;
+    expect(draft.facts.locationText).toBe("Washington");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the city again, then the state by its name: Maryland, whose own rule brings the benefits card
+    draft = (await answerCards(owner, draft, { location: "Fort Washington" })).session;
+    expect(draft.readiness.missing).toEqual(["location"]);
+    draft = (await answerCards(owner, draft, { location: "Maryland" })).session;
+    expect(draft.facts.locationText).toBe("Fort Washington, Maryland");
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+    const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const session = ((await w.json()) as { session: IntakeSessionView }).session;
+    expect(session.draft?.identity.locations).toEqual([{ city: "Fort Washington", region: "MD", country: "US" }]);
+    expect(session.legalCheck?.jurisdictions).toEqual(["US-MD"]);
+  });
+
   it("holds a Colorado job until the ad describes the benefits, and gives it a closing date when it is published", async () => {
     let draft = await start(owner, "Dental assistant in Denver, CO, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     // the essentials are in; the law of the job's place asks the ad to describe the benefits, so the builder asks once

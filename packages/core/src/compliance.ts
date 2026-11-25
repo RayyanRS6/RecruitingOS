@@ -117,6 +117,10 @@ const CODE_AFTER_COMMA = new RegExp(String.raw`,\s*([A-Za-z]{2})${AFTER_STATE_CO
 const CODE_AS_LAST_WORD = new RegExp(String.raw`[^\s,]\s+([A-Z]{2})${AFTER_STATE_CODE}`);
 /** Codes that are also an everyday word or a city's short name in capitals ("Downtown LA", "Remote OK"): a wrong state is worse than none, so they count only after a comma. */
 const CODES_THAT_ARE_WORDS: ReadonlySet<string> = new Set(["LA", "OK", "OR", "IN", "ME", "HI"]);
+/** "Washington" with nothing else is the state or the capital, so by itself it says no state. */
+const BARE_WASHINGTON = "washington";
+/** The state a full name is ("colorado"), or undefined; never a property every object has ("constructor"). */
+const stateNamed = (name: string): string | undefined => (Object.hasOwn(STATE_CODES, name) ? STATE_CODES[name] : undefined);
 const stateCodeOf = (found: RegExpMatchArray | null): string | null => {
   const code = found?.[1]?.toUpperCase();
   return code && STATE_CODE_SET.has(code) ? code : null;
@@ -149,10 +153,12 @@ export function regionFromLocationText(text: string | null | undefined): string 
  * - the two-letter code after a comma, in any case, or in capitals as the last word after another word ("Austin TX");
  *   a ZIP code and the country may follow it. Six codes count only after the comma (`CODES_THAT_ARE_WORDS`): "Downtown
  *   LA" is Los Angeles, not Louisiana, and "Remote OK" is not Oklahoma; "Baton Rouge, LA" and "Tulsa, OK" are;
- * - the full name where it ends one of the parts that commas separate ("New York", "Reno Nevada", "Boulder, Colorado
- *   80302"), or begins a part after the first ("Reno, Nevada area").
- * The last part that names a state is the one ("Indiana, Pennsylvania" is Pennsylvania), and within a part the longest
- * name ("West Virginia" is not Virginia).
+ * - the full name only when it is the whole of one of the parts that commas separate, a ZIP code after it aside ("New
+ *   York", "Reno, Nevada", "Boulder, Colorado 80302", "Fort Washington, Maryland"). Never as the end or the beginning
+ *   of a longer part: "Fort Washington", "Port Washington", "East Texas", "Reno Nevada" and "Reno, Nevada area" say no
+ *   state, and the builder asks. The last part that is a state is the one ("Indiana, Pennsylvania" is Pennsylvania).
+ * - "Washington" is the state or the capital: it is the state only as a part after the first ("Seattle, Washington").
+ *   By itself it says neither, and the owner says "WA", "DC", "Seattle, WA" or "Washington, DC".
  */
 export function stateOfPlace(text: string | null | undefined): string | null {
   const t = (text ?? "").trim();
@@ -160,36 +166,57 @@ export function stateOfPlace(text: string | null | undefined): string | null {
   const lastWord = stateCodeOf(t.match(CODE_AS_LAST_WORD));
   const code = stateCodeOf(t.match(CODE_AFTER_COMMA)) ?? (lastWord && !CODES_THAT_ARE_WORDS.has(lastWord) ? lastWord : null);
   if (code) return code;
-  const letter = (ch: string) => /[a-z]/.test(ch);
   const parts = t.toLowerCase().split(",").map((part) => part.trim().replace(/\s+\d{5}(?:-\d{4})?$/, "").replace(/\.$/, ""));
   for (let i = parts.length - 1; i >= 0; i -= 1) {
-    const part = parts[i]!;
-    const named = STATE_NAMES.find((name) => (part.endsWith(name) && !letter(part.charAt(part.length - name.length - 1))) || (i > 0 && part.startsWith(name) && !letter(part.charAt(name.length))));
-    if (named) return STATE_CODES[named]!;
+    const named = stateNamed(parts[i]!);
+    if (named && !(parts[i] === BARE_WASHINGTON && i === 0)) return named;
   }
   return null;
 }
 
 /**
  * The state a text is, when it is a state and nothing else: its code in any case, or its full name ("CO", "co.",
- * "Colorado"). Not "LA" by itself, which is Los Angeles as often as Louisiana: the owner then says which ("California",
- * "CA", "Louisiana", "New Orleans, LA").
+ * "Colorado"). Not "LA" by itself, which is Los Angeles as often as Louisiana, and not "Washington" by itself, which
+ * is the state or the capital: the owner then says which ("California", "CA", "Louisiana", "New Orleans, LA"; "WA",
+ * "DC").
  */
 export function stateAlone(text: string | null | undefined): string | null {
   const t = (text ?? "").trim().replace(/\.$/, "");
   const code = t.toUpperCase();
-  return STATE_CODES[t.toLowerCase()] ?? (STATE_CODE_SET.has(code) && code !== "LA" ? code : null);
+  if (t.toLowerCase() === BARE_WASHINGTON) return null;
+  return stateNamed(t.toLowerCase()) ?? (STATE_CODE_SET.has(code) && code !== "LA" ? code : null);
 }
 
 /**
- * Whether words begin with this state, as its code in any case or its full name: what follows a city in a person's own
- * words when they wrote the state with it ("Denver, CO", "denver co", "Denver, Colorado"). A code that is also a word
- * counts only after their own comma here too ("Baton Rouge, LA", never "Downtown LA").
+ * Whether words begin with this state: what follows a city in a person's own words when they wrote the state with it
+ * ("Denver, CO", "denver co", "Denver, Colorado"). The full name, and a code that is also a word, count only after
+ * their own comma, as in `stateOfPlace` ("Reno, Nevada" and "Baton Rouge, LA"; never "Reno Nevada" or "Downtown LA").
  */
 export function beginsWithState(words: string, state: string): boolean {
+  const afterComma = /^\s*,/.test(words);
   const t = words.replace(/^[\s,.(]+/, "").toLowerCase();
-  const code = CODES_THAT_ARE_WORDS.has(state) && !/^\s*,/.test(words) ? [] : [state.toLowerCase()];
-  return [...code, ...STATE_NAMES.filter((name) => STATE_CODES[name] === state)].some((s) => t.startsWith(s) && !/[a-z]/.test(t.charAt(s.length)));
+  const code = afterComma || !CODES_THAT_ARE_WORDS.has(state) ? [state.toLowerCase()] : [];
+  const names = afterComma ? STATE_NAMES.filter((name) => STATE_CODES[name] === state) : [];
+  return [...code, ...names].some((s) => t.startsWith(s) && !/[a-z]/.test(t.charAt(s.length)));
+}
+
+/** The words that lead in to a state in a person's sentence: "It is in Colorado.", "That's Texas", "We are based in the state of Ohio". */
+const LEAD_IN: ReadonlySet<string> = new Set(["it", "its", "it's", "that", "that's", "this", "is", "in", "the", "job", "we", "we're", "are", "located", "based", "state", "of"]);
+
+/**
+ * Whether a person's own words say this state away from the city: the words are a place that reads as it ("Denver,
+ * CO", "Colorado", "It is in WA."), or one part of a sentence is the state's full name after a lead-in ("It is in
+ * Colorado.", "That is West Virginia, by the way"). As in `stateOfPlace`, never the end of a longer name ("We are in
+ * Kansas City", "the office in Reno Nevada"), and never a bare "Washington", the state or the capital.
+ */
+export function saysState(text: string, state: string): boolean {
+  if (stateOfPlace(text) === state) return true;
+  return text.toLowerCase().split(/[.,;:!?()\n]+/).some((part) => {
+    const words = part.trim().split(/\s+/).filter(Boolean);
+    while (words.length && LEAD_IN.has(words[0]!)) words.shift();
+    const named = words.join(" ");
+    return named !== BARE_WASHINGTON && stateNamed(named) === state;
+  });
 }
 
 /** Whether a decision message carries Colorado's line: the job is in Colorado, or the candidate wrote a Colorado location. */
