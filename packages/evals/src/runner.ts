@@ -89,7 +89,7 @@ async function main() {
     const ext: CaseResult[] = [];
     const hall: CaseResult[] = [];
     for (const c of resumeCases) {
-      const r = await runPrompt(q, rt, resumeExtractPrompt, { text: c.text, filename: `${c.id}.txt` }, { companyId: null, inputRef: { eval: c.id } });
+      const r = await runPrompt(q, rt, resumeExtractPrompt, { text: c.text }, { companyId: null, inputRef: { eval: c.id } });
       if (!r.ok) { ext.push({ id: c.id, pass: false, failures: [r.error] }); hall.push({ id: c.id, pass: false, failures: [r.error] }); continue; }
       const verified = verifyQuotes(r.output, c.text);
       const f = c.expect(verified, c.text);
@@ -122,7 +122,7 @@ async function main() {
       `${label}: resume score ${scoreOf(a, job).score ?? "none"}; ${a.requirementFindings.map((x) => `${x.requirementKey}=${x.met}${x.evidence?.quote ? ` ("${x.evidence.quote}")` : ""}`).join("; ")} | skills: ${a.competencyFindings.map((x) => `${x.competencyKey}=${x.finding}${x.evidence?.quote ? ` ("${x.evidence.quote.slice(0, 50)}")` : ""}`).join("; ")}`;
     /** The CV read for its facts, from the original text, as the app does: the record is filled from it. */
     const extract = async (id: string, text: string): Promise<ResumeExtraction | null> => {
-      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text, filename: `${id}.txt` }, { companyId: null, inputRef: { eval: id } });
+      const ex = await runPrompt(q, rt, resumeExtractPrompt, { text }, { companyId: null, inputRef: { eval: id } });
       return ex.ok ? verifyQuotes(ex.output, text) : null;
     };
     /**
