@@ -1,31 +1,34 @@
 /// <reference path="./pdf-parse.d.ts" />
+import { inspectResumeFile } from "@ros/contracts";
+
 /**
  * Turns an uploaded resume into text. PDF via pdf-parse, DOCX via mammoth, text/markdown as-is.
+ * Which of the three a file is, is decided in one place, from its bytes: `inspectResumeFile` in @ros/contracts. The
+ * worker hands over the type that inspection gave the file (`mime`), and the same inspection says here how to read it,
+ * so the file's name never overrules it: a Word file named "resume.pdf" is read as the Word file it is. A file the
+ * inspection would not keep yields no text.
  * Scanned PDFs with no text layer return an empty string; the workflow records `resume.extraction_failed`
  * and the application continues (the candidate can still be screened by their answers).
  */
 export async function documentToText(bytes: Uint8Array, mime: string, filename: string): Promise<string> {
-  const lower = filename.toLowerCase();
-  const isPdf = mime === "application/pdf" || lower.endsWith(".pdf");
-  const isDocx = mime.includes("wordprocessingml") || lower.endsWith(".docx");
-  const isText = mime.startsWith("text/") || lower.endsWith(".txt") || lower.endsWith(".md");
+  const look = inspectResumeFile(bytes, { mime, filename });
+  if (!look.ok) return "";
   try {
-    if (isPdf) {
+    if (look.kind === "pdf") {
       const mod = await import("pdf-parse/lib/pdf-parse.js");
       const pdfParse = (mod as unknown as { default?: (b: Uint8Array) => Promise<{ text: string }> }).default ?? (mod as unknown as (b: Uint8Array) => Promise<{ text: string }>);
       const res = await pdfParse(ownBytes(bytes));
       return (res.text ?? "").trim();
     }
-    if (isDocx) {
+    if (look.kind === "docx") {
       const mammoth = await import("mammoth");
       const res = await mammoth.extractRawText({ buffer: Buffer.from(bytes) });
       return (res.value ?? "").trim();
     }
-    if (isText) return Buffer.from(bytes).toString("utf8").trim();
+    return Buffer.from(bytes).toString("utf8").trim();
   } catch {
     return "";
   }
-  return "";
 }
 
 /**

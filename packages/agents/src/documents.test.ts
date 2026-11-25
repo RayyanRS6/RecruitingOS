@@ -35,8 +35,28 @@ describe("documentToText", () => {
   it("the builders that made the fixtures still produce files that extract the same way", async () => {
     expect(flat(await documentToText(buildResumePdf(), "application/pdf", "built.pdf"))).toContain("Registered Dental Hygienist at Harbor Point Dental");
     expect(flat(await documentToText(buildResumeDocx(), DOCX, "built.docx"))).toContain("Registered Dental Hygienist at Harbor Point Dental");
-    // documentToText trusts the declared type (inspectResumeFile upstream is what checks the bytes); a one-line document extracts exactly its one line
+    // a one-line document extracts exactly its one line
     expect(flat(await documentToText(buildResumeDocx(["Only one line here"]), DOCX, "one.docx"))).toBe("Only one line here");
+  });
+
+  // The code check of 25 November 2026: a file's kind was decided twice, from its bytes when it was inspected and from
+  // its name when it was read, so a Word file named "resume.pdf" came out as "Resume could not be read".
+  it("reads a file as what the inspection found in its bytes, whatever its name says", async () => {
+    /** The file as the worker reads it: inspected first, then read with the type the inspection gave it. */
+    const read = async (bytes: Uint8Array, declared: { mime: string; filename: string }) => {
+      const look = inspectResumeFile(bytes, declared);
+      if (!look.ok) throw new Error(`the inspection refused the file: ${look.reason}`);
+      return { kind: look.kind, text: flat(await documentToText(bytes, look.mime, declared.filename)) };
+    };
+    expect(await read(buildResumeDocx(["A Word file that was named as a PDF"]), { mime: DOCX, filename: "resume.pdf" })).toEqual({ kind: "docx", text: "A Word file that was named as a PDF" });
+    expect(await read(buildResumePdf(["A PDF that was named as a Word file"]), { mime: "application/pdf", filename: "resume.docx" })).toEqual({ kind: "pdf", text: "A PDF that was named as a Word file" });
+    expect(await read(new TextEncoder().encode("Plain words in a file named as a PDF"), { mime: "text/plain", filename: "resume.pdf" })).toEqual({ kind: "text", text: "Plain words in a file named as a PDF" });
+    // a markdown file sent with no type of its own is still read by what the inspection says it is
+    expect(await read(new TextEncoder().encode("# Dana"), { mime: "application/octet-stream", filename: "dana.md" })).toEqual({ kind: "text", text: "# Dana" });
+    // and a file the inspection would not keep is never read by its name: Word bytes sent as plain text
+    const wordSentAsText = buildResumeDocx(["Sent as plain text"]);
+    expect(inspectResumeFile(wordSentAsText, { mime: "text/plain", filename: "resume.docx" })).toMatchObject({ ok: false, reason: "type_mismatch" });
+    expect(await documentToText(wordSentAsText, "text/plain", "resume.docx")).toBe("");
   });
 
   it("a scanned PDF with no text layer is a valid file that yields no text", async () => {
