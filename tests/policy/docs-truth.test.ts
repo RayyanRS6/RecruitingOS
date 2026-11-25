@@ -81,7 +81,7 @@ describe("the fairness runbook", () => {
       return at < 0 ? "" : yml.slice(at, yml.indexOf(next, at + 1));
     };
     const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(input("tests", "\n      screening_model:\n"))?.[1] ?? "[]");
-    expect(choices).toContain("intake");
+    expect(choices).toContain("intake,job");
     const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
     const runIt = runbook.slice(runbook.indexOf("## Run it"), runbook.indexOf("## If a check fails"));
     expect(runIt).toContain("**Which tests**");
@@ -104,7 +104,7 @@ describe("the fairness runbook", () => {
     const yml = read(".github/workflows/fairness.yml").replace(/\r\n/g, "\n");
     const tests = yml.slice(yml.indexOf("\n      tests:\n"), yml.indexOf("\n      screening_model:\n"));
     const choices: string[] = JSON.parse(/\n\s+options: (\[.*\])/.exec(tests)?.[1] ?? "[]");
-    expect(choices).toEqual(expect.arrayContaining(["resume,triage", "screen,chat", "intake"]));
+    expect(choices).toEqual(expect.arrayContaining(["resume,triage", "screen,chat", "intake,job"]));
     const runbook = read("docs/runbooks/fairness-tests.md").replace(/\r\n/g, "\n");
     const checks = runbook.slice(runbook.indexOf("## What it checks"), runbook.indexOf("## Set it up once"));
     for (const rowName of ["| Twin resumes |", "| The AI interview |", "| Job builder |"]) expect(checks, rowName).toContain(rowName);

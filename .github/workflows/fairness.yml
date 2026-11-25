@@ -5,8 +5,8 @@
 #   gap, a career change or no degree is never marked down alone; an earlier rejection at the company changes nothing
 #   that is sent; and the scoring never sees a name, email, phone, street, zip code or link;
 # - the AI interview's chat and its scorecard (the screen and chat suites);
-# - the job builder: the job written from what an owner types (the intake suites). Claude Sonnet 5.5 writes each job,
-#   so that choice costs more than the resume tests.
+# - the job builder: the job written from what an owner types (the intake suites) and its two posts (job.posts). Claude
+#   Sonnet 5.5 writes each job, so that choice costs more than the resume tests.
 # Started by hand from the Actions tab ("Run workflow"). It never runs on a pull request, so the key is never offered
 # to a fork's code. About ten cents a run for the resume tests; the chat tests make more calls and cost more. How to
 # use it: docs/runbooks/fairness-tests.md.
@@ -18,7 +18,7 @@ on:
       tests:
         description: "Which tests (the first is the resume reading and scoring set)"
         type: choice
-        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat", "intake"]
+        options: ["resume,triage", "screen,chat", "resume,triage,screen,chat", "intake,job"]
         default: "resume,triage"
       # The ids stay: the concurrency group and the env below use them. The model and effort set the standard tier
       # (packages/ai/src/routing.ts): screening, and also the job builder's conversation, so the runbook says to keep

@@ -8,10 +8,11 @@ The AI writes findings and quotes only. Every number a suite compares (the resum
 
 | Family | Suite | What it checks |
 |---|---|---|
-| Job builder | `intake.golden` | From what an owner types, the builder reads the facts, asks whether the job is on site, hybrid or remote instead of assuming it, asks nothing twice, and writes a whole job with the owner's pay and must-haves |
+| Job builder | `intake.golden` | From what an owner types, the builder reads the facts, asks whether the job is on site, hybrid or remote instead of assuming it, asks nothing twice, brings back a card the owner left alone until it is answered, and writes a whole job with the owner's pay and must-haves |
 | | `intake.illegal_criteria` | An unlawful wish (people under 30, no gaps, a native speaker, no children, one zip code) is declined and is in no job written afterwards |
-| | `intake.job_ad` | A pasted ad is read for its job and its pay, the pay is confirmed by the owner, and an instruction hidden in the ad is ignored |
+| | `intake.job_ad` | A pasted ad is read for its job and its pay, the pay card comes back until the owner confirms the pay, and an instruction hidden in the ad is ignored |
 | | `intake.proxy_refusal` | Wording that stands in for age or another protected trait is refused wherever it comes from |
+| The two posts | `job.posts` | The LinkedIn post and the Indeed post each carry their own Apply link once and no other link, show the pay when the job page shows it and no other pay figure, have no wording the fairness guard would take out, and stay inside their length |
 | Reading a resume | `resume.extraction` | Jobs, licences and skills are picked up correctly |
 | | `resume.hallucination` | Every quote taken from a resume is really in it |
 | Scoring a resume | `triage.bias_pairs` | Two resumes that differ only in the name, the graduation year, the zip code or an earlier rejection at the same company get the same findings and the same resume score |
@@ -48,7 +49,7 @@ Only the real models prove the prompts. The usual way is the "Run fairness tests
 | `resume,triage` | Reading and scoring a resume |
 | `screen,chat` | The AI interview, its scorecard and one turn of the chat |
 | `resume,triage,screen,chat` | Both |
-| `intake` | The job builder |
+| `intake,job` | The job builder and the two posts |
 
 From a trusted machine: `AI_PROVIDER=anthropic ANTHROPIC_API_KEY=<key> pnpm eval`, with the key entered for that shell session and stored nowhere. The models are the ones `packages/ai/src/routing.ts` names for each task.
 
