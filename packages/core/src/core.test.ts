@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MembershipRole, isOwnerOrAdmin } from "@ros/contracts";
 import { dedupeKey, normalizePhone } from "./dedupe";
 import { can } from "./permissions";
 import { noticesFor, resolveJurisdictions } from "./compliance";
@@ -29,6 +30,12 @@ describe("permissions", () => {
     expect(can(null, "role.read")).toBe(false);
     expect(can(undefined, "company.read")).toBe(false);
     expect(can("recruiter" as never, "application.read")).toBe(false);
+  });
+
+  it("gives the three managing permissions to exactly the roles the contracts call an owner or an admin", () => {
+    for (const role of MembershipRole.options) {
+      for (const p of ["role.manage", "company.update", "members.manage"] as const) expect(can(role, p), `${role} ${p}`).toBe(isOwnerOrAdmin(role));
+    }
   });
 });
 

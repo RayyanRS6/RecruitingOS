@@ -6,7 +6,7 @@ import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_
 import { ALWAYS_EMAILED, NotificationKind, UpdateNotificationPreferences, emailsUpdate } from "./notifications";
 import { InviteMember, UpdateCompany, UpdateMember } from "./settings";
 import { appPaths } from "../domain/app-paths";
-import { MEMBERSHIP_ROLE_LABEL, MembershipRole, PlatformRole } from "../domain/company";
+import { MEMBERSHIP_ROLE_LABEL, MembershipRole, PlatformRole, isOwnerOrAdmin } from "../domain/company";
 import { JobPosts, PostChannel, RolePosts, SHARE_LINE, applyLinkFor, applySourceLabel } from "../domain/publishing";
 
 describe("who people are", () => {
@@ -15,6 +15,14 @@ describe("who people are", () => {
     for (const gone of ["hr", "interviewer", "recruiter"]) expect(MembershipRole.safeParse(gone).success, gone).toBe(false);
     expect(PlatformRole.options).toEqual(["none", "platform_admin"]);
     expect(PlatformRole.safeParse("its_recruiter").success).toBe(false);
+  });
+
+  it("an owner or an admin is told apart from a member in one place, and nobody else counts as either", () => {
+    expect(MembershipRole.options.filter(isOwnerOrAdmin)).toEqual(["owner", "admin"]);
+    for (const other of ["hiring_manager", "platform_admin", "Owner", "", null, undefined]) expect(isOwnerOrAdmin(other), String(other)).toBe(false);
+    // the same test words a job's actions: what a member may not press is what an owner or an admin may
+    const blocked = (role: MembershipRole) => roleActions({ status: "open", role, trialEnded: false }).filter((a) => a.reason === ROLE_ACTION_BLOCKED.ownerOrAdmin).map((a) => a.action);
+    for (const role of MembershipRole.options) expect(blocked(role), role).toEqual(isOwnerOrAdmin(role) ? [] : ["pause", "set_closing_date", "close"]);
   });
 
   it("the signed-in person carries those roles", () => {

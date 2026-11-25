@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import {
-  AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine,
+  AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine, isOwnerOrAdmin,
   type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
@@ -34,7 +34,6 @@ const NOT_ACTIVE = () => new HttpError(409, "not_active", "This draft has alread
 const NO_DRAFT = () => new HttpError(409, "no_draft", "Write the job first; then you can change it.");
 
 const ownerOf = (row: Pick<IntakeSessionRow, "createdByUserId" | "createdBy">): string | null => row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
-const managesDrafts = (t: Tenant): boolean => t.role === "owner" || t.role === "admin";
 
 /** Whether this person started the draft before an owner or admin took it over (the take-over event names them). */
 async function startedBeforeTakeOver(tx: Tx, sessionId: string, userId: string): Promise<boolean> {
@@ -50,7 +49,7 @@ export async function loadDraft(c: Context<Vars>, sessionId: string): Promise<In
   const found = await withTenant(c.get("container").db, t.companyId, async (tx) => {
     const [row] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
     if (!row) return null;
-    const allowed = ownerOf(row) === t.userId || managesDrafts(t);
+    const allowed = ownerOf(row) === t.userId || isOwnerOrAdmin(t.role);
     return { row, allowed, takenFromMe: !allowed && (await startedBeforeTakeOver(tx, row.id, t.userId)) };
   });
   if (!found) throw NOT_FOUND();
@@ -169,7 +168,7 @@ function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSu
 intakeRoutes.get("/sessions", requireTenant, async (c) => {
   const t = c.get("tenant")!;
   assertCan(t.role, "role.create");
-  const everyone = !["1", "true"].includes(c.req.query("mine") ?? "") && managesDrafts(t);
+  const everyone = !["1", "true"].includes(c.req.query("mine") ?? "") && isOwnerOrAdmin(t.role);
   const container = c.get("container");
   const out = await withTenant(container.db, t.companyId, async (tx): Promise<IntakeSessionList> => {
     const own = or(eq(intakeSessions.createdByUserId, t.userId), sql`${intakeSessions.createdBy}->>'id' = ${t.userId}`);

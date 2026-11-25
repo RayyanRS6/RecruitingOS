@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  appPaths,
+  appPaths, isOwnerOrAdmin,
   type IntakeAnswer, type IntakeAnswersRequest, type IntakeDraftAnswer, type IntakeMessageRequest, type IntakeSessionResponse, type IntakeTurnReply, type IntakeTurnResponse,
   type KeepPacketFlag, type PublishResult, type SetClosingDate,
 } from "@ros/contracts";
@@ -18,7 +18,6 @@ import { Upgrade } from "../../components/Upgrade";
 import { dockFocusDue, focusLost } from "../../focus-after";
 import { Link, useNavigate } from "../../nav";
 import { activeCompanyOf } from "../../rail";
-import { managesCompany } from "../../roles";
 import { toast } from "../../toast";
 import { JobEditor } from "../job/JobEditor";
 import { Composer } from "./Composer";
@@ -51,8 +50,9 @@ export function Builder({ sessionId }: { sessionId: string }) {
   const loaded = session.data ?? null;
   const view = loaded?.session ?? null;
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<Me>("/api/v1/auth/me") });
-  // an owner or an admin sets the closing date and may take over a draft someone else started
-  const manages = managesCompany(activeCompanyOf(me.data).role);
+  // An owner or an admin sets the closing date and may take over a draft someone else started. The API sends no action
+  // list for a draft, so the page asks the contracts' one test of it; the API checks again on every request.
+  const manages = isOwnerOrAdmin(activeCompanyOf(me.data).role);
 
   const [problem, setProblem] = useState<Problem | null>(() => turnProblem(qc.getQueryData<IntakeTurnReply>(firstReplyKey(sessionId)) ?? null));
   const [notUsed, setNotUsed] = useState<string[]>([]);

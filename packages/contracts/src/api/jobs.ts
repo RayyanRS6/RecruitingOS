@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
-import type { MembershipRole } from "../domain/company";
+import { isOwnerOrAdmin, type MembershipRole } from "../domain/company";
 import { INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
 import { POST_TEXT_MAX, type ClosingDateView, type JobUrls, type LegalCheck, type PostChannel, type PostsState, type PublishCheck } from "../domain/publishing";
 import { CompensationBasis, EmploymentType, RemotePolicy, type PacketFlag, type RolePacket } from "../domain/role-packet";
@@ -175,7 +175,7 @@ export const ROLE_ACTION_BLOCKED = {
 export function roleActions(f: { status: RoleStatus; role: MembershipRole; trialEnded: boolean }): RoleActionState[] {
   const state = (action: RoleActionKey, reason: string | null = null): RoleActionState => ({ action, label: ROLE_ACTION_LABEL[action], allowed: reason === null, reason });
   if (f.status === "closed") return [state("edit", ROLE_ACTION_BLOCKED.closed)];
-  const manages = f.role === "owner" || f.role === "admin" ? null : ROLE_ACTION_BLOCKED.ownerOrAdmin;
+  const manages = isOwnerOrAdmin(f.role) ? null : ROLE_ACTION_BLOCKED.ownerOrAdmin;
   const out: RoleActionState[] = [state("edit")];
   if (f.status === "draft") out.push(state("publish", f.trialEnded ? ROLE_ACTION_BLOCKED.trialEnded : null));
   if (f.status === "open") out.push(state("pause", manages));

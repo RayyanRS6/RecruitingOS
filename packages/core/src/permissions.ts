@@ -1,4 +1,4 @@
-import type { MembershipRole } from "@ros/contracts";
+import { MembershipRole, isOwnerOrAdmin } from "@ros/contracts";
 
 /**
  * What each team role may do. A member (`hiring_manager`) sees the company's jobs and candidates, builds, edits and
@@ -25,18 +25,14 @@ export type Permission =
   /** Ask ITS for a bigger plan (the Upgrade button). */
   | "plan.request";
 
-const MEMBER: readonly Permission[] = ["company.read", "role.create", "role.read", "role.publish", "packet.edit", "application.read", "application.act", "plan.request"];
-const MANAGER: readonly Permission[] = [...MEMBER, "company.update", "members.manage", "role.manage"];
+const MEMBER: ReadonlySet<Permission> = new Set<Permission>(["company.read", "role.create", "role.read", "role.publish", "packet.edit", "application.read", "application.act", "plan.request"]);
+/** What an owner or an admin may do: everything a member may, and the three that manage. */
+const MANAGER: ReadonlySet<Permission> = new Set<Permission>([...MEMBER, "company.update", "members.manage", "role.manage"]);
 
-const MATRIX: Record<MembershipRole, ReadonlySet<Permission>> = {
-  owner: new Set(MANAGER),
-  admin: new Set(MANAGER),
-  hiring_manager: new Set(MEMBER),
-};
-
+/** Who is an owner or an admin is asked of the contracts' one test (`isOwnerOrAdmin`); a role the product does not have may do nothing. */
 export function can(role: MembershipRole | null | undefined, permission: Permission): boolean {
-  if (!role) return false;
-  return MATRIX[role]?.has(permission) ?? false;
+  if (!role || !MembershipRole.options.includes(role)) return false;
+  return (isOwnerOrAdmin(role) ? MANAGER : MEMBER).has(permission);
 }
 
 export function assertCan(role: MembershipRole | null | undefined, permission: Permission): void {
