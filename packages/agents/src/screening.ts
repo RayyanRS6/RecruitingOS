@@ -416,8 +416,49 @@ const FILLER = /^(?:(?:ok(?:ay)?|great|good|excellent|awesome|perfect|wonderful|
 const PRAISE = /\b(?:great|excellent|impressive|amazing|fantastic|wonderful|brilliant|outstanding|strong|solid|clear(?:ly)?|well done|nicely|good job|good work)\b/i;
 const INFERENCE = /^(?:it sounds like|it seems|it looks like|that suggests|this suggests|clearly|obviously|you must|you clearly|you obviously|i can tell|that shows|this shows|so it was|so that was|it must have)\b|\b(?:which|that|this) (?:shows|proves|demonstrates)\b|\byou(?:'re| are) clearly\b/i;
 
+/** An abbreviation whose full stop ends no sentence: a title before a name ("Dr. Lee"), or Latin before what it introduces ("e.g. Dentrix"). Not "1st.". */
+const NEVER_ENDS_A_SENTENCE = /(?:^|[^\p{L}\p{N}])(?:dr|mr|mrs|ms|st|vs|e\.g|i\.e)\.$/iu;
+/** A time of day ("8 a.m.", "5 p.m.") and "etc.": a sentence may end with one, or go on after it. */
+const A_TIME = /(?:^|[^\p{L}])[ap]\.m\.$/iu;
+const AND_SO_ON = /(?:^|[^\p{L}])etc\.$/iu;
+/** How a new sentence opens after one of those: with a capital letter, with or without an opening quote. */
+const OPENS_A_SENTENCE = /^["“'‘(]?\p{Lu}/u;
+/** A day of the week, which goes on with the sentence after a time ("8 a.m. to 5 p.m. Monday to Friday"). */
+const A_DAY = /^(?:Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)s?\b/;
+
+/**
+ * Whether the sentence goes on after a full stop: `head` is the text up to and with it, `rest` what follows the space.
+ * After a title or "e.g." always. After a time, unless a new sentence opens ("… to 5 p.m. What does it pay?"), which a
+ * day of the week does not ("… 5 p.m. Monday to Friday"); so before a small letter or a digit it goes on ("8 a.m. to 5
+ * p.m."). After "etc." unless a new sentence opens.
+ */
+function goesOnAfter(head: string, rest: string): boolean {
+  if (!head.endsWith(".")) return false;
+  if (NEVER_ENDS_A_SENTENCE.test(head)) return true;
+  if (A_TIME.test(head)) return !OPENS_A_SENTENCE.test(rest) || A_DAY.test(rest);
+  return AND_SO_ON.test(head) && !OPENS_A_SENTENCE.test(rest);
+}
+
+/**
+ * The sentences of a text, the assistant's or the candidate's. A sentence ends at ".", "!" or "?" followed by a space,
+ * and at a line break; not at the full stop of an abbreviation (`goesOnAfter`). On the live site on 25 November 2026
+ * "… Monday to Friday, 8 a.m. to 5 p.m." was read as two sentences, and the restatement, which keeps one, reached the
+ * candidate as "… 8 a.m.". Everywhere else a full stop ends a sentence as before, also before a small letter:
+ * candidates type in a chat without capitals ("yes. what does it pay?"), and the question in such a reply must still be
+ * told from the answer.
+ */
 function sentencesOf(text: string): string[] {
-  return text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (const line of text.split(/\n+/)) {
+    let from = 0;
+    for (const gap of line.matchAll(/(?<=[.!?])\s+/g)) {
+      if (goesOnAfter(line.slice(from, gap.index), line.slice(gap.index + gap[0].length))) continue;
+      out.push(line.slice(from, gap.index));
+      from = gap.index + gap[0].length;
+    }
+    out.push(line.slice(from));
+  }
+  return out.map((s) => s.trim()).filter(Boolean);
 }
 
 /**

@@ -6,7 +6,7 @@ import { SAMPLE_QUESTIONS } from "./fixtures/sample-questions";
 import { unfairQuestion } from "./fair-question";
 import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, formAnswersSent, gapQuestion,
-  nextQuestion, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending, yesNoFormAnswers,
+  nextQuestion, onlyQuestions, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending, yesNoFormAnswers,
 } from "./screening";
 
 /**
@@ -1197,6 +1197,95 @@ describe("what each turn of the chat is held to", () => {
       expect(shown[2]).toBe(`You told me what you did.\n\n${CPR_ASK}`);
       expect(shown[3]).toBe(`You told me what you did.\n\n${gapQuestion("Explaining technical ideas in English")}`);
       expect(shown[4]).toBe(CHAT_WRAP_QUESTION);
+    });
+  });
+
+  /**
+   * The live site, 25 November 2026: the assistant's "You can work the on-site schedule, Monday to Friday, 8 a.m. to 5
+   * p.m." reached the candidate as "... 8 a.m.". A sentence was taken to end at every full stop followed by a space, so
+   * "8 a.m. to 5 p.m.", "e.g. Dentrix" and "Dr. Lee" each ended one, and a restatement keeps its first sentence only.
+   */
+  describe("a sentence does not end at the full stop of an abbreviation (the live site, 25 November 2026)", () => {
+    const job = jobWith([{ key: "wq_hours", question: "Which hours can you work?" }, { key: "wq_tools", question: "Which software have you used?" }]);
+    const NEXT = "Which software have you used?";
+    const onHours = () => askingNow(planOf(job, []), "wq_hours", ["wq_hours"]);
+    /** What the candidate is shown when the model says this and moves on to the next question. */
+    const shown = (messageToCandidate: string) => {
+      const p = onHours();
+      return enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_tools", messageToCandidate }), chatPacket(job, p), p, {}, { transcript: said("Q", "Weekdays, eight to five."), latest: "Weekdays, eight to five." }).turn.messageToCandidate;
+    };
+    const LIVE = "You can work the on-site schedule, Monday to Friday, 8 a.m. to 5 p.m.";
+
+    it("the assistant's restatement keeps its whole sentence: the live sentence, a time, e.g., a title before a name", () => {
+      expect(shown(`${LIVE}\n\n${NEXT}`)).toBe(`${LIVE}\n\n${NEXT}`);
+      for (const lead of [
+        "You can start by 7:30 a.m. most days.",
+        "You start at 8 A.M. on weekdays.",
+        // the days after the hours: a day goes on with the sentence
+        "You can work 8 a.m. to 5 p.m. Monday to Friday.",
+        "You can start at 9 a.m. Saturdays.",
+        "You chart in practice software, e.g. Dentrix and Eaglesoft.",
+        "You assisted Dr. Lee with implants for two years.",
+        "You worked for Mr. Ortega and Mrs. Chen at the front desk.",
+        "You reported to Ms. Alvarez on the hygiene team.",
+        "You moved from St. Clare Dental to Harbor Dental.",
+        "You have used Dentrix vs. Eaglesoft, i.e. two charting systems.",
+        "You order gloves, masks, etc. for the whole office.",
+      ]) expect(shown(`${lead}\n\n${NEXT}`), lead).toBe(`${lead}\n\n${NEXT}`);
+    });
+
+    it("a sentence still ends after a time when the next one starts with a capital letter, so the restatement stays one sentence and the question stays apart", () => {
+      // the restatement and the question in one paragraph
+      expect(shown(`${LIVE} ${NEXT}`)).toBe(`${LIVE}\n\n${NEXT}`);
+      // a second restatement in one breath is still left out
+      expect(shown(`You are free until 5 p.m. You then tidy the rooms.\n\n${NEXT}`)).toBe(`You are free until 5 p.m.\n\n${NEXT}`);
+      expect(shown(`You order gloves, masks, etc. You also book the repairs.\n\n${NEXT}`)).toBe(`You order gloves, masks, etc.\n\n${NEXT}`);
+    });
+
+    it("a question of the model's that holds times, and a close, keep every word", () => {
+      const TIMES = "Do you prefer 8 a.m. to 4 p.m. or 9 a.m. to 5 p.m. on weekdays?";
+      const p = onHours();
+      const push = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: `You can work weekdays.\n\n${TIMES}` }), chatPacket(job, p), p, {}, { transcript: said("Q", "Weekdays"), latest: "Weekdays" });
+      expect(push.turn.messageToCandidate).toBe(`You can work weekdays.\n\n${TIMES}`);
+      const w = askingNow(planOf(job, []), CHAT_WRAP_KEY, ["wq_hours", "wq_tools", CHAT_WRAP_KEY]);
+      const close = enforceChatTurn(turnOf({ done: true, messageToCandidate: "Thank you, Meerub. You can start at 8 a.m. on weekdays, e.g. this Monday." }), chatPacket(job, w), w, {}, { transcript: said("Q", "No, nothing else."), latest: "No, nothing else." });
+      expect(close.turn.messageToCandidate).toBe("Thank you, Meerub. You can start at 8 a.m. on weekdays, e.g. this Monday.");
+    });
+
+    it("a candidate's reply that holds a time or a title is read whole: a question is a question, and an answer keeps its words", () => {
+      // only a question, so never an answer
+      for (const asks of ["Is 8 a.m. to 5 p.m. ok?", "Are the hours 8 a.m. to 5 p.m.?", "Would I work with Dr. Lee?", "Is it Dentrix, e.g. the newest version?"]) expect(onlyQuestions(asks), asks).toBe(true);
+      const p = onHours();
+      const asked = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_tools", messageToCandidate: `You asked about the hours.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", "Is 8 a.m. to 5 p.m. ok?"), latest: "Is 8 a.m. to 5 p.m. ok?" });
+      expect(asked.move).toBeNull();
+      expect(asked.turn.answerRecorded).toBeNull();
+      // an answer with a time, and a question after it: the answer is theirs, whole, and the question is left out
+      for (const [reply, answer] of [
+        ["I can work 8 a.m. to 5 p.m. What does it pay?", "I can work 8 a.m. to 5 p.m."],
+        ["Yes, from 8 a.m. Is parking free?", "Yes, from 8 a.m."],
+        ["I assisted Dr. Lee for two years. What does it pay?", "I assisted Dr. Lee for two years."],
+      ] as const) {
+        expect(onlyQuestions(reply), reply).toBe(false);
+        const r = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "wq_tools", messageToCandidate: `The hiring team can discuss pay with you.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", reply), latest: reply });
+        expect(r.turn.answerRecorded, reply).toEqual({ questionKey: "wq_hours", answer, complete: true });
+      }
+      const whole = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_tools", messageToCandidate: `You can work 8 a.m. to 5 p.m.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", "I can work 8 a.m. to 5 p.m. on weekdays, e.g. this Monday."), latest: "I can work 8 a.m. to 5 p.m. on weekdays, e.g. this Monday." });
+      expect(whole.turn.answerRecorded?.answer).toBe("I can work 8 a.m. to 5 p.m. on weekdays, e.g. this Monday.");
+      expect(whole.turn.messageToCandidate).toBe(`You can work 8 a.m. to 5 p.m.\n\n${NEXT}`);
+    });
+
+    it("anything else is read as before: a full stop still ends a sentence, also before a small letter, as people type in a chat", () => {
+      expect(onlyQuestions("ok. what are the hours?")).toBe(true);
+      expect(onlyQuestions("yes. what does it pay?")).toBe(false);
+      expect(onlyQuestions("No. What does it pay?")).toBe(false);
+      const p = onHours();
+      const lower = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "wq_tools", messageToCandidate: `The hiring team can discuss pay with you.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", "mornings mostly. what does it pay?"), latest: "mornings mostly. what does it pay?" });
+      expect(lower.turn.answerRecorded).toEqual({ questionKey: "wq_hours", answer: "mornings mostly.", complete: true });
+      // "1st." is no "St.": the sentence ends there, and their question is still told from their answer
+      const first = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "wq_tools", messageToCandidate: `The hiring team can discuss pay with you.\n\n${NEXT}` }), chatPacket(job, p), p, {}, { transcript: said("Q", "I can start on the 1st. What does it pay?"), latest: "I can start on the 1st. What does it pay?" });
+      expect(first.turn.answerRecorded?.answer).toBe("I can start on the 1st.");
+      // and two sentences of the assistant's are still two
+      expect(shown(`You work mornings. You like the early shift.\n\n${NEXT}`)).toBe(`You work mornings.\n\n${NEXT}`);
     });
   });
 
