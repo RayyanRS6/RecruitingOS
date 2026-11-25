@@ -60,12 +60,19 @@ export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
  */
 export type IntakeTurnReply = { assistantMessage: string; takenFromAd: string[]; notARole: boolean } | { error: string; recovery: string; upgrade: boolean; ask: { label: string; reason: string } | null; unavailable?: boolean };
 
+/**
+ * A draft in an answer of the job builder's routes: the draft, and beside it the company's time zone. `timeZone` is the
+ * one "today" is counted in for the closing date chosen on a draft, as the server checks that date (never the device's
+ * own zone). Every answer that carries a draft carries both.
+ */
+export type IntakeDraftAnswer = { session: IntakeSessionView; timeZone: string };
+
 /** POST /api/v1/intake/sessions: the new draft and its first turn; `session` is null when the message was not about hiring someone. */
-export type IntakeStartResponse = { session: IntakeSessionView | null; notARole: boolean; reply: IntakeTurnReply };
+export type IntakeStartResponse = (IntakeDraftAnswer | { session: null }) & { notARole: boolean; reply: IntakeTurnReply };
 /** POST .../messages and .../answers: the draft as it now stands, the next turn, anything refused by the fairness check, and the summary of what was taken. */
-export type IntakeTurnResponse = { session: IntakeSessionView; reply: IntakeTurnReply; refused: IntakeRefusal[]; summary: string[] };
+export type IntakeTurnResponse = IntakeDraftAnswer & { reply: IntakeTurnReply; refused: IntakeRefusal[]; summary: string[] };
 /** GET /api/v1/intake/sessions/:id, and every builder answer that changes the draft without a turn. */
-export type IntakeSessionResponse = { session: IntakeSessionView };
+export type IntakeSessionResponse = IntakeDraftAnswer;
 /** GET /api/v1/intake/sessions: the drafts this person may continue, and the plan's room for another job. */
 export type IntakeSessionList = { sessions: IntakeSessionSummary[]; room: PlanRoom };
 
@@ -135,7 +142,7 @@ export type DraftFieldEdit = z.infer<typeof DraftFieldEdit>;
 export type FormQuestionRefusal = { index: number; key: string | null; part: "question" | "help" | "option"; rule: string; text: string; reason: string; alternative: string; words: string };
 
 /** What saving the draft answers. `guardChanges`: what the fairness guard fixed by rule on saving, in plain words. */
-export type DraftSaved = { session: IntakeSessionView; guardChanges: string[] };
+export type DraftSaved = IntakeDraftAnswer & { guardChanges: string[] };
 
 /* ------------------------------------------------------------------------------------------------------------ */
 /* Jobs.                                                                                                          */

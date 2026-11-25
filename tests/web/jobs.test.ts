@@ -186,10 +186,16 @@ describe("the closing date", () => {
   });
 
   it("takes today or a later day, on the company's calendar", () => {
-    expect(closingDateProblem("2026-11-18", "2026-11-18")).toBeNull();
-    expect(closingDateProblem("2026-12-01", "2026-11-18")).toBeNull();
-    expect(closingDateProblem("2026-11-17", "2026-11-18")).toBe("Choose today or a later date.");
-    expect(closingDateProblem("", "2026-11-18")).toBe("Choose a date.");
+    // 9:30 in the evening of 18 November in Los Angeles, already the 19th in New York and on a device set to UTC
+    const lateEvening = new Date("2026-11-19T05:30:00.000Z");
+    const pacific = "America/Los_Angeles";
+    expect(closingDateProblem("2026-11-18", pacific, lateEvening)).toBeNull();
+    expect(closingDateProblem("2026-12-01", pacific, lateEvening)).toBeNull();
+    expect(closingDateProblem("2026-11-17", pacific, lateEvening)).toBe("Choose today or a later date.");
+    expect(closingDateProblem("", pacific, lateEvening)).toBe("Choose a date.");
+    // the company's zone decides what "today" is, never the device's: the same moment, a company in New York
+    expect(closingDateProblem("2026-11-18", "America/New_York", lateEvening)).toBe("Choose today or a later date.");
+    expect(closingDateProblem("2026-11-19", "America/New_York", lateEvening)).toBeNull();
   });
 });
 

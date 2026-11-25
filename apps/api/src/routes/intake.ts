@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import {
   AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine,
-  type Actor, type DraftSaved, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeSessionView, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
+  type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeSessionSummary, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
 import { IntakeEditError, aiCreditStanding, assertCan, can, closingDateProblem, emit, entitlements, looksLikePastedAd, normalizeFacts, notify } from "@ros/core";
@@ -61,13 +61,15 @@ export async function loadDraft(c: Context<Vars>, sessionId: string): Promise<In
 
 /**
  * The draft as the builder reads it, read afresh: with the legal check of the written job, the plan's room and the
- * closing date chosen for it, so `readiness.publish` lists every reason it cannot be published yet.
+ * closing date chosen for it, so `readiness.publish` lists every reason it cannot be published yet. Beside it, the
+ * company's time zone, in which the page counts "today" for that closing date, as the closing-date route below checks it.
  */
-async function viewOf(container: Container, t: Tenant, sessionId: string): Promise<IntakeSessionView> {
+async function draftAnswer(container: Container, t: Tenant, sessionId: string): Promise<IntakeDraftAnswer> {
   return withTenant(container.db, t.companyId, async (tx) => {
     const [row] = await tx.select().from(intakeSessions).where(eq(intakeSessions.id, sessionId)).limit(1);
     if (!row) throw NOT_FOUND();
-    return sessionView(row, t.userId, await draftChecks(tx, { companyId: t.companyId, sessionId: row.id, active: row.status === "active", draft: row.draftPacket ?? null, now: container.engine.clock() }));
+    const checks = await draftChecks(tx, { companyId: t.companyId, sessionId: row.id, active: row.status === "active", draft: row.draftPacket ?? null, now: container.engine.clock() });
+    return { session: sessionView(row, t.userId, checks), timeZone: checks.timeZone };
   });
 }
 
@@ -141,7 +143,7 @@ intakeRoutes.post("/sessions", requireTenant, async (c) => {
   const started = await withTenant(container.db, t.companyId, (tx) => startIntakeSession(tx, { companyId: t.companyId, actor, userId: t.userId, message: { content: body.initialMessage, kind: looksLikePastedAd(body.initialMessage) ? "pasted_ad" : "text" } }));
   const r = await turn(container, { companyId: t.companyId, sessionId: started.id, actor });
   if (!("error" in r) && r.notARole) return c.json({ session: null, notARole: true, reply: turnReply(r, t) } satisfies IntakeStartResponse, 200);
-  return c.json({ session: await viewOf(container, t, started.id), notARole: false, reply: turnReply(r, t) } satisfies IntakeStartResponse, 201);
+  return c.json({ ...(await draftAnswer(container, t, started.id)), notARole: false, reply: turnReply(r, t) } satisfies IntakeStartResponse, 201);
 });
 
 function summaryOf(row: IntakeSessionRow, viewerUserId: string): IntakeSessionSummary {
@@ -179,7 +181,7 @@ intakeRoutes.get("/sessions", requireTenant, async (c) => {
 
 intakeRoutes.get("/sessions/:id", requireTenant, async (c) => {
   const row = await loadDraft(c, c.req.param("id"));
-  return c.json({ session: await viewOf(c.get("container"), c.get("tenant")!, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(c.get("container"), c.get("tenant")!, row.id)) satisfies IntakeSessionResponse);
 });
 
 intakeRoutes.post("/sessions/:id/messages", requireTenant, async (c) => {
@@ -188,7 +190,7 @@ intakeRoutes.post("/sessions/:id/messages", requireTenant, async (c) => {
   const body = IntakeMessageRequest.parse(await c.req.json());
   const container = c.get("container");
   const r = await turn(container, { companyId: t.companyId, sessionId: row.id, message: { content: body.message, kind: "text" }, actor: actorOf(c) });
-  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: [], summary: [] } satisfies IntakeTurnResponse);
+  return c.json({ ...(await draftAnswer(container, t, row.id)), reply: turnReply(r, t), refused: [], summary: [] } satisfies IntakeTurnResponse);
 });
 
 /**
@@ -209,7 +211,7 @@ intakeRoutes.post("/sessions/:id/answers", requireTenant, async (c) => {
     return sessionErrors(err);
   }
   const r = await turn(container, { companyId: t.companyId, sessionId: row.id, actor });
-  return c.json({ session: await viewOf(container, t, row.id), reply: turnReply(r, t), refused: edit.refused, summary: edit.summary } satisfies IntakeTurnResponse);
+  return c.json({ ...(await draftAnswer(container, t, row.id)), reply: turnReply(r, t), refused: edit.refused, summary: edit.summary } satisfies IntakeTurnResponse);
 });
 
 /**
@@ -227,7 +229,7 @@ intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
   if (row.status !== "active") throw NOT_ACTIVE();
   await assertRoom(c);
   const container = c.get("container");
-  const view = await viewOf(container, t, row.id);
+  const { session: view } = await draftAnswer(container, t, row.id);
   if (!view.readiness.mayDraft) throw new HttpError(409, "not_ready", view.readiness.draftBlocker ?? "The job cannot be written yet.", { readiness: view.readiness });
   let out: Awaited<ReturnType<typeof draftIntake>>;
   try {
@@ -242,7 +244,7 @@ intakeRoutes.post("/sessions/:id/draft", requireTenant, async (c) => {
     throw new HttpError(502, "ai_failed", "The assistant could not write the job. Everything you confirmed is kept. Try again.", { aiRunId: out.aiRunId });
   }
   await assistantAnswered(container);
-  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);
 });
 
 /**
@@ -282,7 +284,7 @@ intakeRoutes.patch("/sessions/:id/draft", requireTenant, async (c) => {
   } catch (err) {
     return sessionErrors(err);
   }
-  return c.json({ session: await viewOf(container, t, row.id), guardChanges: saved.guardChanges } satisfies DraftSaved);
+  return c.json({ ...(await draftAnswer(container, t, row.id)), guardChanges: saved.guardChanges } satisfies DraftSaved);
 });
 
 /** Keeps a flagged phrase in the written job, with the person's reason; publishing no longer waits on it. */
@@ -298,7 +300,7 @@ intakeRoutes.post("/sessions/:id/flags/keep", requireTenant, async (c) => {
     return sessionErrors(err);
   }
   if (!kept.found) throw new HttpError(404, "flag_not_found", "That flagged wording is no longer on the job.");
-  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);
 });
 
 /**
@@ -322,7 +324,7 @@ intakeRoutes.put("/sessions/:id/closing-date", requireTenant, async (c) => {
     const previous = await draftClosingDate(tx, row.id);
     if (previous !== body.closesOn) await emit(tx, { type: "role.closing_date_set", companyId: t.companyId, actor: actorOf(c), subject: { type: "intake_session", id: row.id }, payload: { closesOn: body.closesOn, previous, draft: true } });
   });
-  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);
 });
 
 /**
@@ -340,7 +342,7 @@ intakeRoutes.post("/sessions/:id/publish", requireTenant, async (c) => {
   if (!row.roleId) {
     if (row.status !== "active") throw NOT_ACTIVE();
     await assertRoom(c);
-    const { blockers } = (await viewOf(container, t, row.id)).readiness.publish;
+    const { blockers } = (await draftAnswer(container, t, row.id)).session.readiness.publish;
     if (blockers.length) throw new HttpError(409, "not_ready", `This job cannot be published yet. ${blockers.map((b) => b.message).join(" ")}`, { blockers });
   }
   let result: Awaited<ReturnType<typeof publishRole>>;
@@ -379,7 +381,7 @@ intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
     const title = normalizeFacts(row.facts).title ?? row.draftPacket?.identity.title ?? null;
     if (fromUserId) await notify(tx, { companyId: t.companyId, kind: "intake.taken_over", title: `${actor.name ?? "An owner or admin"} took over your draft${title ? `: ${title}` : ""}`, body: "They continue it from here. Nothing was sent to anyone, and the conversation so far is kept with the draft.", userIds: [fromUserId] });
   });
-  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);
 });
 
 /** "Discard": the draft is set aside; the conversation stays in the record but no longer resumes. */
@@ -391,5 +393,5 @@ intakeRoutes.post("/sessions/:id/abandon", requireTenant, async (c) => {
     const [updated] = await tx.update(intakeSessions).set({ status: "abandoned" }).where(and(eq(intakeSessions.id, row.id), eq(intakeSessions.status, "active"))).returning({ id: intakeSessions.id });
     if (updated) await emit(tx, { type: "intake.abandoned", companyId: t.companyId, actor: actorOf(c), subject: { type: "intake_session", id: row.id }, payload: { turns: row.messages.length } });
   });
-  return c.json({ session: await viewOf(container, t, row.id) } satisfies IntakeSessionResponse);
+  return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);
 });

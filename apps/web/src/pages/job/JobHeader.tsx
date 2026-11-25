@@ -174,7 +174,7 @@ function ClosingDateDialog({ role, onClose, onDone }: { role: RoleDetail; onClos
     onError: (err) => setProblem(errorWords(err, "Could not save the date. Try again.")),
   });
   const submit = () => {
-    const p = closingDateProblem(value, today);
+    const p = closingDateProblem(value, c.timeZone);
     setProblem(p);
     if (!p) save.mutate(value);
   };

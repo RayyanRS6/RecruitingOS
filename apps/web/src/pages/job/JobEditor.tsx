@@ -4,7 +4,7 @@ import { type ReactNode, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   EMPLOYMENT_TYPE_LABEL, FORM_QUESTION_KIND_LABEL, FORM_QUESTIONS_MAX, IMPORTANCE_LABEL, MUST_HAVES_MAX, REMOTE_POLICY_LABEL, SCREENING_QUESTIONS_MAX, COMPETENCIES_MAX,
-  type DraftFieldEdit, type DraftRolePacket, type DraftSaved, type EmploymentType, type FormQuestionKind, type Importance, type PacketFieldEdit, type PacketSaved,
+  type DraftFieldEdit, type DraftRolePacket, type DraftSaved, type EmploymentType, type FormQuestionKind, type Importance, type IntakeSessionResponse, type PacketFieldEdit, type PacketSaved,
   type RemotePolicy, type RolePacket,
 } from "@ros/contracts";
 import { Alert, Button, cn, Drawer, Field, IconButton, Segmented } from "@ros/ui";
@@ -54,7 +54,7 @@ export function JobEditor({ packet, target, onClose, onSaved }: { packet: RolePa
     mutationFn: async (): Promise<string[]> => {
       if (target.kind === "draft") {
         const r = await api.patch<DraftSaved>(`/api/v1/intake/sessions/${target.sessionId}/draft`, edit);
-        qc.setQueryData(sessionKey(target.sessionId), { session: r.session });
+        qc.setQueryData<IntakeSessionResponse>(sessionKey(target.sessionId), { session: r.session, timeZone: r.timeZone });
         return r.guardChanges;
       }
       const keepFlags = keepFlagsOf(keep);

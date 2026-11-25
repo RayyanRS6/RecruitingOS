@@ -59,9 +59,10 @@ function client(role: MembershipRole, seed: Array<[unknown[], unknown]> = []): Q
   return qc;
 }
 const render = (qc: QueryClient, node: ReactNode) => renderToStaticMarkup(createElement(QueryClientProvider, { client: qc }, node));
-const builder = (view: IntakeSessionView, role: MembershipRole = "owner") => {
+/** The builder on a draft, as the API answers it: the draft, and the company's time zone beside it. */
+const builder = (view: IntakeSessionView, role: MembershipRole = "owner", timeZone = "America/Los_Angeles") => {
   nav.search = `session=${view.id}`;
-  return render(client(role, [[["intake", "session", view.id], { session: view }]]), createElement(JobBuilder));
+  return render(client(role, [[["intake", "session", view.id], { session: view, timeZone }]]), createElement(JobBuilder));
 };
 /** The page's one main button, as drawn. */
 const mainButton = (html: string) => /<button type="button" class="btn primary"([^>]*)>(Write the job|Publish job)<\/button>/.exec(html);
@@ -248,6 +249,18 @@ describe("a written job, before it is published", () => {
     const member = builder(written({ closesOn: "2026-11-30" }), "hiring_manager");
     expect(member).not.toContain('id="draft-closes-on"');
     expect(text(member)).toContain("Last day to apply: November 30, 2026");
+  });
+
+  it("counts the earliest day that may be chosen in the company's time zone, as the server checks it, never in the device's", () => {
+    // 9:30 in the evening of 18 November in Los Angeles: already the 19th in New York, and on a device set to UTC
+    vi.useFakeTimers({ now: new Date("2026-11-19T05:30:00.000Z") });
+    try {
+      const earliest = (timeZone: string) => /<input id="draft-closes-on"[^>]* min="([^"]+)"/.exec(builder(written(), "owner", timeZone))?.[1];
+      expect(earliest("America/Los_Angeles")).toBe("2026-11-18");
+      expect(earliest("America/New_York")).toBe("2026-11-19");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows what the law of the job's places asks of the ad, item by item, as the server checked it", () => {

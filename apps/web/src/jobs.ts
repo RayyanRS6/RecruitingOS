@@ -4,7 +4,7 @@ import {
   type RoleActionState, type RolePacket, type RoleStatus, type RoleSummary, type SharePost, type ShareView,
 } from "@ros/contracts";
 import type { Tone } from "@ros/ui";
-import { calendarDay, shortDay } from "./dates";
+import { calendarDay, shortDay, todayIn } from "./dates";
 
 /**
  * The Jobs page and a job's own page (its header, its Job tab and its Share tab), the parts that need no browser, kept
@@ -167,10 +167,13 @@ export function closingDateLine(c: Pick<ClosingDateView, "closesOn" | "applyBy" 
   return "No closing date";
 }
 
-/** Why a closing date cannot be saved, or null. `today` is today in the company's time zone (YYYY-MM-DD). */
-export function closingDateProblem(value: string, today: string): string | null {
+/**
+ * Why a closing date cannot be saved, or null. "Today" is today in the company's time zone (`todayIn`, the one place
+ * the pages work it out), as the server checks the date: `timeZone` is the one the API sends with the job or the draft.
+ */
+export function closingDateProblem(value: string, timeZone: string, now: Date = new Date()): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "Choose a date.";
-  if (value < today) return "Choose today or a later date.";
+  if (value < todayIn(timeZone, now)) return "Choose today or a later date.";
   return null;
 }
 
