@@ -109,11 +109,29 @@ describe("the AI interviewer is given the job and states pay as the job page doe
     const text = system(ctx(true));
     expect(text).not.toMatch(/answerRecorded|\brecord/i);
     // the rules that named it say the rest of what they said
-    expect(text).toContain('Where ladder is false, "No" is a full answer: move on.\n');
+    expect(text).toContain("Where ladder is false, any reply is a full answer");
     expect(text).toContain("Then go back to the current item (questionKey null): ask it again briefly.\n");
     expect(text).toContain("set sentiment=confused and ask the same question again in plainer words (questionKey null, followUpReason set).");
     // and it still says how the model reads a reply, which the code uses
     expect(text).toContain('- reading: how the candidate\'s latest reply answers the current item: "concrete"');
+  });
+
+  // After the real models passed every chat check on this prompt, two of its sentences were made plain. Where an item has
+  // no ladder the code takes any reply as its answer, a bare "Yes" included (`chatNextMove`), so the prompt no longer asks
+  // for a push the code throws away. And the one thing a candidate must never read from the chat is said outright, as a
+  // bullet of its own: the other lines imply it, but nothing in code and no evaluation holds a message to it.
+  it("says that any reply settles an item with no ladder, and never to state that the candidate is rejected or hired", () => {
+    const rules = screenTurnPrompt.system(ctx(true))[0]!.text;
+    expect(rules).toContain('Where ladder is false, any reply is a full answer, a bare "Yes" or "No" included: no push, move on.\n');
+    expect(rules).not.toContain('"No" is a full answer: move on.');
+    expect(rules).toContain("\n- Never state that the candidate is rejected or hired, or how likely either is.\n");
+    expect(rules.match(/rejected or hired/g)).toHaveLength(1);
+    // it stands after the bullet about the close, which says the close is no judgement of them or of their chances
+    const at = (bullet: string) => rules.indexOf(bullet);
+    expect(at("\n- Wrapping up: ")).toBeGreaterThan(-1);
+    expect(at("\n- Never state that the candidate is rejected or hired")).toBeGreaterThan(at("\n- Wrapping up: "));
+    expect(at('\n- "modelAnswer" in the plan')).toBeGreaterThan(at("\n- Never state that the candidate is rejected or hired"));
+    expect(screenTurnPrompt.version).toBe(10);
   });
 });
 
@@ -134,7 +152,7 @@ describe("the AI interview's stand-ins write what the prompts ask for, and no mo
     communication: { candidateMayBeTold: [], tone: "warm", humanAlternativeText: "Reply to reach a person." },
   } as unknown as ScreenContext["packet"];
   const transcript = [{ role: "assistant" as const, content: "Tell me about your most recent work.", at, questionKey: "recent" }, { role: "candidate" as const, content: "I see nine patients a day and chart in Dentrix.", at }];
-  const item = (key: string, state: "asking" | "open", question: string) => ({ key, kind: "question" as const, required: true, state, step: "direct" as const, pushes: 0, question, ladder: key === "recent" });
+  const item = (key: string, state: "asking" | "open" | "covered", question: string) => ({ key, kind: "question" as const, required: true, state, step: "direct" as const, pushes: 0, question, ladder: key === "recent" });
 
   it("a turn carries the message and what the code reads of it, and no record of the answer", () => {
     const chat: ScreenContext = {
@@ -153,6 +171,32 @@ describe("the AI interview's stand-ins write what the prompts ask for, and no mo
     // every part of it is a part of the shape the prompt sends
     expect(Object.keys(turn).filter((key) => !(key in ScreenTurn.shape))).toEqual([]);
     expect(turn).not.toHaveProperty("answerRecorded");
+  });
+
+  // The prompt: "Where ladder is false, any reply is a full answer, a bare "Yes" or "No" included: no push, move on." The
+  // stand-in reads `ladder` from the plan it is given, as the model does, and does what that sentence says.
+  it("a bare Yes or No to an item with no ladder gets no push from the stand-in, and a bare Yes to one with a ladder still gets its one", () => {
+    const RECENT = "Tell me about your most recent work.";
+    const PAY = "What hourly range are you looking for?";
+    const on = (current: "recent" | "pay", said: string): ScreenContext => ({
+      company: { name: "Harbor Dental" },
+      packet,
+      candidate: { firstName: "Dana" },
+      progress: { askedKeys: current === "pay" ? ["recent", "pay"] : ["recent"], currentQuestionKey: current, followUps: {}, confusedTurns: 0, failures: 0 },
+      answers: {},
+      transcript: [{ role: "assistant", content: current === "pay" ? PAY : RECENT, at, questionKey: current }, { role: "candidate", content: said, at }],
+      latestCandidateMessage: said,
+      payShown: true,
+      chat: { section: "required", sectionLabel: "Required questions", current, items: [item("recent", current === "pay" ? "covered" : "asking", RECENT), item("pay", current === "pay" ? "asking" : "open", PAY)], wrap: { key: "wrap_up", question: "Is there anything else you would like the hiring team to know before we finish?" }, cv: [] },
+    });
+    const turnOn = (current: "recent" | "pay", said: string) => {
+      const chat = on(current, said);
+      return fakeScreenTurn({ system: screenTurnPrompt.system(chat), messages: screenTurnPrompt.messages(chat) } as never);
+    };
+    // the plan the stand-in was given says which item has a ladder
+    expect(screenTurnPrompt.system(on("pay", "Yes"))[3]!.text).toMatch(/"key":"recent".*"ladder":true.*"key":"pay".*"ladder":false/);
+    for (const said of ["Yes", "No"]) expect(turnOn("pay", said), said).toEqual({ messageToCandidate: `You said "${said}".`, questionKey: "wrap_up", followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" });
+    expect(turnOn("recent", "Yes")).toEqual({ messageToCandidate: 'You said "Yes".\n\nCould you tell me about one specific time: what you did, and what came of it?', questionKey: null, followUpReason: "nothing specific yet", candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "vague" });
   });
 
   it("a scorecard carries one finding for each question asked, and no word on whether it was answered", () => {
