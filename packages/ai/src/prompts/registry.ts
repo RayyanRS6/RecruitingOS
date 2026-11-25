@@ -31,8 +31,21 @@ export function withoutTag(text: string, tag: string): string {
 }
 
 /**
- * The instructions every candidate-facing or candidate-evaluating prompt includes.
- * Tested by the evaluation suite (docs/11).
+ * The one fairness rule every prompt carries, as one bullet for its own list of rules: what may never be considered,
+ * inferred or mentioned about a person. Tested by the evaluation suite (docs/11).
+ */
+export const PROTECTED_TRAITS_RULE = `- Never consider, infer, or mention a person's age, race, ethnicity, national origin, sex, gender, sexual orientation, religion, disability, pregnancy, family status, genetic information, or veteran status, nor proxies for them such as graduation years, names, photos, zip codes, gaps explained by family or health, or accent.`;
+
+/**
+ * For the two readings only (the resume reading and the AI interview's scorecard), as one bullet: what is never a
+ * concern by itself. What a reading may claim without a quote, and that it never gives a verdict, is said once, in
+ * each reading's own rules.
+ */
+export const READING_FAIRNESS_RULE = `- Employment gaps, career changes, non-traditional paths, and missing degrees are not concerns by themselves; evaluate demonstrated skills and evidence.`;
+
+/**
+ * The older shared block. It said things two prompts contradict ("You recommend", "list it under unknowns") and was
+ * most of the shortest prompt. Each prompt now takes the bullets above that apply to it; this goes when none uses it.
  */
 export const FAIRNESS_RULES = `Rules that always apply:
 - Never consider, infer, or mention a person's age, race, ethnicity, national origin, sex, gender, sexual orientation, religion, disability, pregnancy, family status, genetic information, or veteran status, nor proxies for them such as graduation years, names, photos, zip codes, gaps explained by family or health, or accent.
