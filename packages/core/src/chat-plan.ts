@@ -111,9 +111,10 @@ export function syncChatPlan(plan: ChatPlan, progress: Pick<ScreenProgress, "ask
  * The one line above the chat: which question is being asked, of how many the chat asks ("Question 2 of 6"), and "All 6
  * questions done" once every one is closed (answered, settled as not known, or skipped) and only the closing question
  * is left. Every item of the plan counts, the job's interview questions and the must-haves asked about alike; the
- * closing question never does. On the closing question an item the chat passed over without asking (the model never
- * asks again what the form already asked) is not one of the questions it asked, so it is not counted: the line says how
- * many are done, never "Question 8 of 8" above the closing question. Null before the chat has a plan.
+ * closing question never does. On the closing question an item the chat passed over without asking (only in a chat
+ * stored before the code held the plan's order, when the model could still pass over an item) is not one of the
+ * questions it asked, so it is not counted: the line says how many are done, never "Question 8 of 8" above the closing
+ * question. Null before the chat has a plan.
  */
 export function chatCounter(plan: ChatPlan | null | undefined): ChatCounter | null {
   if (!plan) return null;
