@@ -83,7 +83,7 @@ describe("screen.conversation", () => {
     // the model reads it: the code shows how to choose a person and closes nothing, whatever else the model's turn said
     const closing = await runConversation(persona("asks_for_a_person"), job, async (ctx) => {
       const turn = await run(ctx);
-      return typeof turn === "string" || !turn.humanRequested ? turn : { ...turn, done: true, answerRecorded: { questionKey: ctx.progress.currentQuestionKey ?? "", answer: "wants a person", complete: true } };
+      return typeof turn === "string" || !turn.humanRequested ? turn : { ...turn, done: true, questionKey: CHAT_WRAP_KEY };
     });
     expect(persona("asks_for_a_person").expect(closing.conversation)).toEqual([]);
     expect(closing.conversation.turns.at(-1)?.shown).toContain(PERSON_OFFER);
@@ -100,7 +100,7 @@ describe("screen.conversation", () => {
 
   it("says why a model call failed, and keeps the record of a failing persona", async () => {
     const job = await goldenJob();
-    const { cases } = await runConversationSuite(job, async (ctx, p) => (p.id === "confused" ? "invalid: no valid output" : p.id === "asks_about_pay" ? { messageToCandidate: "We pay well.", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false } : run(ctx)));
+    const { cases } = await runConversationSuite(job, async (ctx, p) => (p.id === "confused" ? "invalid: no valid output" : p.id === "asks_about_pay" ? { messageToCandidate: "We pay well.", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false } : run(ctx)));
     const confused = cases.find((c) => c.id === "confused");
     expect(confused?.failures).toEqual(["the model call failed: invalid: no valid output"]);
     const pay = cases.find((c) => c.id === "asks_about_pay");

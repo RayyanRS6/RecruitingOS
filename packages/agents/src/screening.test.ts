@@ -348,7 +348,11 @@ describe("what each turn of the chat is held to", () => {
   });
   const start = (gaps: string[]) => planOf(role, gaps);
 
-  const turnOf = (over: Partial<ScreenTurn>): ScreenTurn => ({ messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
+  /**
+   * A turn as the model returns it. `answerRecorded`: the model's own record of the answer, which an earlier build asked
+   * for and a turn may still carry (the real model wrote it wrongly more than once): the code never reads it.
+   */
+  const turnOf = (over: Partial<ScreenTurn> & { answerRecorded?: { questionKey: string; answer: string; complete: boolean; status?: string } }): ScreenTurn => ({ messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, ...over });
   /** The progress with the chat asking `key`, with the item's ladder where given. */
   const askingNow = (progress: ScreenProgress, key: string, asked: string[], item: Partial<{ step: "direct" | "analog" | "smaller"; pushes: number }> = {}): ScreenProgress => {
     const p = advanceProgress({ ...progress, askedKeys: asked.slice(0, -1) }, turnOf({ questionKey: key, messageToCandidate: "x" }));
@@ -378,20 +382,26 @@ describe("what each turn of the chat is held to", () => {
 
   // Seen with the real model on 19 November 2026: it recorded two replies joined its own way ("… | …"), which is not
   // what the candidate sent, and it wrote "résumé" where every page says "resume". On 25 November 2026 it recorded only
-  // the latest of two replies, and the first one's words about their work were gone from the record. The stand-in does
-  // none of these. The record is every reply of theirs about the question, whatever the model kept.
-  it("records every reply of the candidate's about a question, as they sent them, whatever the model's own record holds, and says resume as the pages do", () => {
+  // the latest of two replies, and the first one's words about their work were gone from the record. Since the code
+  // check of that day the model is not asked for a record at all: the answer is every reply of theirs about the
+  // question, built in code, and a record that a turn still carries is never read.
+  it("records every reply of the candidate's about a question, as they sent them: the model returns no record, one that a turn still carries is never read; and says resume as the pages do", () => {
     const p = askingNow(start([]), "wq_explain", ["wq_explain"], { pushes: 1 });
     const first = "I show them a light sensor.";
     const second = "Last week a class covered it with a hand and saw the lamp go on.";
     const transcript = said("Q", first, second);
-    const settle = (answer: string) => enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer, complete: true }, messageToCandidate: "You showed them a light sensor. Several kits fail at once in a class of twenty. How do you handle the room?" }), chatPacket(role, p), p, {}, { transcript, latest: second }).turn.answerRecorded;
-    // joined the model's own way, or reworded in their name: their two replies stand, joined as the code joins them
-    expect(settle(`${first} | ${second}`)).toMatchObject({ questionKey: "wq_explain", answer: `${first} ${second}` });
+    const MOVES_ON = { reading: "concrete" as const, questionKey: "wq_room", messageToCandidate: "You showed them a light sensor. Several kits fail at once in a class of twenty. How do you handle the room?" };
+    // the turn as the model returns it now, with no record: their two replies are the answer, joined as the code joins them
+    expect(enforceChatTurn(turnOf(MOVES_ON), chatPacket(role, p), p, {}, { transcript, latest: second }).turn.answerRecorded).toEqual({ questionKey: "wq_explain", answer: `${first} ${second}`, complete: true });
+    const settle = (answer: string, questionKey = "wq_explain") => enforceChatTurn(turnOf({ ...MOVES_ON, answerRecorded: { questionKey, answer, complete: true, status: "answered" } }), chatPacket(role, p), p, {}, { transcript, latest: second }).turn.answerRecorded;
+    // a turn that still carries a record, joined the model's own way or reworded in their name: none of its words is used
+    expect(settle(`${first} | ${second}`)).toEqual({ questionKey: "wq_explain", answer: `${first} ${second}`, complete: true });
     expect(settle("The candidate demonstrates a light sensor to the class.")?.answer).toBe(`${first} ${second}`);
-    // their own words in full: the same when the model recorded both replies, and when it kept only the latest one
+    // their own words in full: the same when it carried both replies, and when it kept only the latest one
     expect(settle(`${first} ${second}`)?.answer).toBe(`${first} ${second}`);
     expect(settle(second)).toMatchObject({ questionKey: "wq_explain", answer: `${first} ${second}`, complete: true });
+    // nor is the question it names: the answer is recorded for the question that was being asked
+    expect(settle("I would calm the room first.", "wq_room")).toEqual({ questionKey: "wq_explain", answer: `${first} ${second}`, complete: true });
     // and the assistant's own message says "resume" (a first push, on a question not pushed yet)
     const fresh = askingNow(start([]), "wq_explain", ["wq_explain"]);
     const spelt = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "no detail", messageToCandidate: "Your résumé lists a robotics club. What did you build there?" }), chatPacket(role, fresh), fresh, {}, { transcript: said("Q", "A few things"), latest: "A few things" });
@@ -901,7 +911,7 @@ describe("what each turn of the chat is held to", () => {
       expect(again.turn.answerRecorded, smaller).toEqual({ questionKey: "licence", answer: "I don't", complete: true });
     }
     // a model that takes the answer: its calm line stands, the next item is asked, and the "No" is on record
-    const taken = enforceChatTurn(turnOf({ reading: "not_done", questionKey: "english", answerRecorded: { questionKey: "licence", answer: "No", complete: true }, messageToCandidate: `${CHAT_CALM_LINE}\n\n${ENGLISH_ASK}` }), pk, onLicence, {}, { transcript: said("Q", "No"), latest: "No" });
+    const taken = enforceChatTurn(turnOf({ reading: "not_done", questionKey: "english", messageToCandidate: `${CHAT_CALM_LINE}\n\n${ENGLISH_ASK}` }), pk, onLicence, {}, { transcript: said("Q", "No"), latest: "No" });
     expect(taken.move).toEqual({ key: "licence", move: "covered" });
     expect(taken.turn.answerRecorded).toEqual({ questionKey: "licence", answer: "No", complete: true });
     expect(taken.turn.messageToCandidate).toBe(`${CHAT_CALM_LINE}\n\n${ENGLISH_ASK}`);
@@ -920,7 +930,7 @@ describe("what each turn of the chat is held to", () => {
     expect(open.turn.answerRecorded).toBeNull();
   });
 
-  it("records nothing while an item is still being asked, whatever the model put in answerRecorded (Wave S9: the real model recorded a bare 'yes' on the push)", () => {
+  it("records nothing while an item is still being asked, whatever a turn still carries in answerRecorded (Wave S9: the real model recorded a bare 'yes' on the push)", () => {
     const p = askingNow(start(["arduino", "english"]), "arduino", ["arduino"]);
     const push = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: false }, messageToCandidate: "You said yes.\n\nCould you tell me about one specific time?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Yes"), latest: "Yes" });
     expect(push.move).toEqual({ key: "arduino", move: "push" });
@@ -965,6 +975,61 @@ describe("what each turn of the chat is held to", () => {
     expect(advanceProgress(p, asks.turn, asks.move).chat?.items.find((i) => i.key === "wq_explain")).toMatchObject({ state: "asking", pushes: 0 });
   });
 
+  // The code check of 25 November 2026: the model was asked for a record of each answer, and the code used it only when
+  // no reply of the candidate's was usable. It is asked for none now, so with no usable reply nothing is recorded.
+  it("with no usable reply nothing is recorded, whatever a turn still carries: one of the job's questions then shows as not answered on check-your-answers", () => {
+    const p = askingNow(start([]), "wq_explain", ["wq_explain"], { pushes: 1 });
+    // a reply that only shows they did not follow, which the model read as frustration and as an answer
+    const r = enforceChatTurn(turnOf({ sentiment: "frustrated", reading: "concrete", questionKey: "wq_room", answerRecorded: { questionKey: "wq_explain", answer: "They would explain it with an example.", complete: true }, messageToCandidate: "You would explain it with an example.\n\nSeveral kits fail at once in a class of twenty. How do you handle the room?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "Huh"), latest: "Huh" });
+    expect(r.move).toEqual({ key: "wq_explain", move: "covered" });
+    expect(r.turn.answerRecorded).toBeNull();
+    expect(r.turn.questionKey).toBe("wq_room");
+    expect(reviewItems({ answers: {}, progress: advanceProgress(p, r.turn, r.move) }, role).map((i) => [i.key, i.status, i.answer])).toEqual([["wq_explain", "unanswered", null], ["wq_room", "unanswered", null]]);
+  });
+
+  // "Their question is never their answer", and what else the same message says is still theirs. The model used to be
+  // asked to record that part ("record only that part, in their words"); the code keeps it now.
+  it("a message that answers and also asks something: the answer is kept as theirs, the question left out, whether the turn stays on the question or leaves it", () => {
+    const job = { ...role, screening: { questions: [{ key: "weekends", question: "Can you work weekends?", kind: "availability" }, { key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
+    const p = askingNow(planOf(job, []), "weekends", ["weekends"]);
+    const pk = chatPacket(job, p);
+    const both = "Yes, both days. What does it pay?";
+    const ANSWERS = "The hiring team can discuss pay with you.";
+    // the model answers their question and asks the same question again: their words are kept while it is asked
+    const stays = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", followUpReason: "back to the question", messageToCandidate: `${ANSWERS}\n\nCan you work weekends?` }), pk, p, {}, { transcript: said("Q", both), latest: both });
+    expect(stays.move).toBeNull();
+    expect(stays.turn).toMatchObject({ questionKey: null, done: false, answerRecorded: { questionKey: "weekends", answer: "Yes, both days.", complete: false } });
+    expect(stays.turn.messageToCandidate).toBe(`${ANSWERS}\n\nCan you work weekends?`);
+    // and when they answer again the answer is every reply of theirs, the question they asked still left out
+    const again = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "pay", messageToCandidate: "You can work both days.\n\nWhat pay range are you looking for?" }), pk, advanceProgress(p, stays.turn, stays.move), { weekends: "Yes, both days." }, { transcript: said("Q", both, "Saturdays and Sundays."), latest: "Saturdays and Sundays." });
+    expect(again.turn.answerRecorded).toEqual({ questionKey: "weekends", answer: "Yes, both days. Saturdays and Sundays.", complete: true });
+    // the model answers their question and moves on: their words are the answer
+    const leaves = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "pay", messageToCandidate: `${ANSWERS}\n\nWhat pay range are you looking for?` }), pk, p, {}, { transcript: said("Q", both), latest: both });
+    expect(leaves.turn).toMatchObject({ questionKey: "pay", answerRecorded: { questionKey: "weekends", answer: "Yes, both days.", complete: true } });
+    // a message that only asks is no answer, whatever the turn does or still carries
+    const asks = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "pay", answerRecorded: { questionKey: "weekends", answer: "What does it pay?", complete: true }, messageToCandidate: `${ANSWERS}\n\nWhat pay range are you looking for?` }), pk, p, {}, { transcript: said("Q", "What does it pay?"), latest: "What does it pay?" });
+    expect(asks.turn.answerRecorded).toBeNull();
+    // a plain "No" about a skill, said beside a question, is never kept as its answer (as on the ladder)
+    const g = askingNow(start(["arduino", "english"]), "english", ["arduino", "english"]);
+    const no = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "wq_explain", messageToCandidate: `${ANSWERS}\n\nHow would you explain what a sensor is to six-year-olds?` }), chatPacket(role, g), g, {}, { transcript: said("Q", "No. What does it pay?"), latest: "No. What does it pay?" });
+    expect(no.turn).toMatchObject({ questionKey: "wq_explain", answerRecorded: null });
+    // while "No" to a yes-or-no question is its answer there too
+    const plainNo = enforceChatTurn(turnOf({ candidateAskedAbout: "pay", questionKey: "pay", messageToCandidate: `${ANSWERS}\n\nWhat pay range are you looking for?` }), pk, p, {}, { transcript: said("Q", "No. What does it pay?"), latest: "No. What does it pay?" });
+    expect(plainNo.turn.answerRecorded).toEqual({ questionKey: "weekends", answer: "No.", complete: true });
+  });
+
+  it("the closing answer is every usable reply since the closing question was asked, never a question they asked on the way", () => {
+    const p = askingNow(start([]), CHAT_WRAP_KEY, ["wq_explain", "wq_room", CHAT_WRAP_KEY]);
+    const transcript: ScreenTranscriptEntry[] = [
+      { role: "assistant", content: CHAT_WRAP_QUESTION, at, questionKey: CHAT_WRAP_KEY },
+      { role: "candidate", content: "When will I hear back?", at },
+      { role: "assistant", content: `The hiring team can tell you that.\n\n${CHAT_WRAP_QUESTION}`, at },
+      { role: "candidate", content: "I can start in two weeks. Is that soon enough?", at },
+    ];
+    const end = enforceChatTurn(turnOf({ done: true, answerRecorded: { questionKey: CHAT_WRAP_KEY, answer: "Can start soon.", complete: true }, messageToCandidate: "Thank you, Meerub. You explained sensors as a thirsty finger." }), chatPacket(role, p), p, {}, { transcript, latest: "I can start in two weeks. Is that soon enough?" });
+    expect(end.turn).toMatchObject({ done: true, questionKey: null, answerRecorded: { questionKey: CHAT_WRAP_KEY, answer: "I can start in two weeks.", complete: true } });
+  });
+
   it("a written question: the analog, then not known, keeping their own words; a yes-or-no question takes 'No' as its answer", () => {
     const p = askingNow(start([]), "wq_room", ["wq_explain", "wq_room"], { step: "analog" });
     const r = enforceChatTurn(turnOf({ followUpReason: "again", reading: "not_done", messageToCandidate: "Could you try once more?" }), chatPacket(role, p), p, {}, { transcript: said("Q", "No", "No"), latest: "No" });
@@ -972,7 +1037,7 @@ describe("what each turn of the chat is held to", () => {
     expect(r.turn).toMatchObject({ questionKey: CHAT_WRAP_KEY, answerRecorded: { questionKey: "wq_room", answer: "No No", complete: false } });
     const old = { ...role, screening: { questions: [{ key: "weekends", question: "Can you work weekends?", kind: "availability" }, { key: "pay", question: "What pay range are you looking for?", kind: "compensation" }], maxMinutes: 10 } } as unknown as RolePacket;
     const q = askingNow(planOf(old, []), "weekends", ["weekends"]);
-    const yn = enforceChatTurn(turnOf({ questionKey: "pay", reading: "not_done", answerRecorded: { questionKey: "weekends", answer: "No", complete: true }, messageToCandidate: "Noted, weekends are out." }), chatPacket(old, q), q, {}, { transcript: said("Q", "No"), latest: "No" });
+    const yn = enforceChatTurn(turnOf({ questionKey: "pay", reading: "not_done", messageToCandidate: "Noted, weekends are out." }), chatPacket(old, q), q, {}, { transcript: said("Q", "No"), latest: "No" });
     expect(yn.move).toEqual({ key: "weekends", move: "covered" });
     expect(yn.turn.answerRecorded).toEqual({ questionKey: "weekends", answer: "No", complete: true });
     expect(yn.turn.messageToCandidate).toBe("Noted, weekends are out.\n\nWhat pay range are you looking for?");

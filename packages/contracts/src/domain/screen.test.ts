@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { EvidenceAssessment, ResumeExtraction, ScreenAssessment } from "./assessment";
 import { EventType } from "./events";
-import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, ScreenProgress, ScreenStatus, ScreenTranscriptEntry, aiInterviewStatusOf } from "./screen";
+import { SCREEN_ACTIVE_STATUSES, SCREEN_LINK_OPEN_DAYS, SCREEN_REMINDER_AFTER_HOURS, ScreenProgress, ScreenStatus, ScreenTranscriptEntry, ScreenTurn, aiInterviewStatusOf } from "./screen";
 
 describe("where an AI interview stands for the team", () => {
   it("comes from its stored status: sent, started, link closed, chose not to do it, done", () => {
@@ -28,6 +28,18 @@ describe("where an AI interview stands for the team", () => {
     expect(ScreenTranscriptEntry.safeParse({ role: "candidate", content: "Hello", at: "2026-11-18T10:00:00.000Z", source: "sms" }).success).toBe(false);
     const progress = ScreenProgress.parse({ flow: "one_visit", pausedAt: "2026-11-01T00:00:00.000Z", writeup: { v: 1 }, focusQuestions: [{ key: "unknown_1", question: "x" }], asks: "written", submittedAt: "2026-11-18T10:00:00.000Z" });
     expect(progress).toEqual({ askedKeys: [], currentQuestionKey: null, followUps: {}, confusedTurns: 0, failures: 0, submittedAt: "2026-11-18T10:00:00.000Z" });
+  });
+
+  // The code check of 25 November 2026: the model was asked to record each answer (its words, whether it was complete, a
+  // status) and the code used none of it, building the answer on record from the candidate's own replies.
+  it("a turn as the model writes it carries no record of an answer: the model is not asked for one, and a turn written before still parses, without it", () => {
+    const written = { messageToCandidate: "You see nine patients a day.\n\nWhich software do you chart in?", questionKey: "software", followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete" };
+    expect(ScreenTurn.parse({ ...written, answerRecorded: { questionKey: "recent", answer: "I see nine patients a day.", complete: true, status: "answered" } })).toEqual(written);
+    expect(ScreenTurn.parse({ ...written, answerRecorded: null })).toEqual(written);
+    // the shape the model is sent: the message, and what the code reads of the turn
+    const asked = z.toJSONSchema(ScreenTurn) as { properties?: Record<string, unknown> };
+    expect(Object.keys(asked.properties ?? {}).sort()).toEqual(["candidateAskedAbout", "done", "followUpReason", "humanRequested", "messageToCandidate", "questionKey", "reading", "sentiment"]);
+    expect(JSON.stringify(asked)).not.toMatch(/"(?:answerRecorded|answer|complete|status)"/);
   });
 });
 

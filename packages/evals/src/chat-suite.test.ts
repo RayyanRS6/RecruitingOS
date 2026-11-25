@@ -52,16 +52,16 @@ describe("chat.* suites", () => {
   });
 
   it("catches a model that breaks the rules the code cannot fix", () => {
-    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
     const bareYes = chatCases.find((c) => c.id === "bare_yes_gets_one_push")!;
-    // moving on after a bare "yes" (the code accepts moving on early; the eval says the model did not push)
-    expect(chatCaseFailures(bareYes, { ...base, questionKey: "english", reading: "concrete", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, messageToCandidate: "Noted." })).toEqual(expect.arrayContaining(["a bare yes did not get a push for specifics", "a bare yes was recorded as the answer"]));
-    // a push that carries the bare "Yes" as its answer, as a real model may write it: the code records nothing while it asks
-    expect(chatCaseFailures(bareYes, { ...base, reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: false }, messageToCandidate: "Could you tell me about one specific time: what you did, and what came of it?" })).toEqual([]);
-    // a failing case says what the model did and what the code made of it
-    const notes = chatCaseNotes(bareYes, { ...base, questionKey: "english", reading: "concrete", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, messageToCandidate: "Noted." });
+    // moving on after a bare "yes" (the code accepts moving on early, so the bare "Yes" stands as the answer; the eval says the model did not push)
+    expect(chatCaseFailures(bareYes, { ...base, questionKey: "english", reading: "concrete", messageToCandidate: "Noted." })).toEqual(expect.arrayContaining(["a bare yes did not get a push for specifics", "a bare yes was recorded as the answer"]));
+    // a push: the code records nothing while it asks
+    expect(chatCaseFailures(bareYes, { ...base, reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: "Could you tell me about one specific time: what you did, and what came of it?" })).toEqual([]);
+    // a failing case says what the model did and what the code made of it (the answer on record is the code's)
+    const notes = chatCaseNotes(bareYes, { ...base, questionKey: "english", reading: "concrete", messageToCandidate: "Noted." });
     expect(notes[0]).toBe("item: arduino (gap, step direct, pushes 0); prompt screen.turn v10");
-    expect(notes.some((n) => n.startsWith("model: {") && n.includes('"answer":"Yes"'))).toBe(true);
+    expect(notes.some((n) => n.startsWith("model: {") && n.includes('"reading":"concrete"') && !n.includes("answerRecorded"))).toBe(true);
     expect(notes.at(-1)).toBe("turn: move=covered questionKey=wrap_up recorded=arduino: Yes done=false | Is there anything else you would like the hiring team to know before we finish?");
     const analog = chatCases.find((c) => c.id === "no_gets_the_analog")!;
     expect(chatCaseFailures(analog, { ...base, questionKey: "wq_explain", reading: "concrete", messageToCandidate: "Fine." })).toContain("the model moved on instead of asking for something similar");
@@ -77,14 +77,14 @@ describe("chat.* suites", () => {
   // What the candidate already said is never asked again, while a correct move to the next item passes whatever its own
   // question asks ("what came of it", "how long"), and a thin must-have still gets its push
   it("tells asking again from moving on, and keeps the push on a thin must-have", () => {
-    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
-    const toEnglish = (c: (typeof chatCases)[number], messageToCandidate: string): ScreenTurn => ({ ...base, reading: "concrete", questionKey: "english", answerRecorded: { questionKey: "arduino", answer: c.transcript.at(-1)!.content, complete: true }, messageToCandidate });
+    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const toEnglish = (messageToCandidate: string): ScreenTurn => ({ ...base, reading: "concrete", questionKey: "english", messageToCandidate });
     const justSaid = chatCases.find((c) => c.id === "just_said_not_asked_again")!;
     // moving on correctly: the restatement names the fault, the next item's question may say "what came of it" or "how long"
-    expect(chatCaseFailures(justSaid, toEnglish(justSaid, "You traced the dropouts to a loose ground wire and resoldered it.\n\nTell me about one time you explained a technical idea in English to beginners: what did you do, and what came of it?"))).toEqual([]);
-    expect(chatCaseFailures(justSaid, toEnglish(justSaid, "You traced the dropouts to a loose ground wire and resoldered it.\n\nHow long have you been explaining technical ideas in English, and to whom?"))).toEqual([]);
+    expect(chatCaseFailures(justSaid, toEnglish("You traced the dropouts to a loose ground wire and resoldered it.\n\nTell me about one time you explained a technical idea in English to beginners: what did you do, and what came of it?"))).toEqual([]);
+    expect(chatCaseFailures(justSaid, toEnglish("You traced the dropouts to a loose ground wire and resoldered it.\n\nHow long have you been explaining technical ideas in English, and to whom?"))).toEqual([]);
     // moving on, but asking about the fault again
-    expect(chatCaseFailures(justSaid, toEnglish(justSaid, "You traced the dropouts to a loose ground wire.\n\nWhat was the cause of the dropouts?"))).toEqual([expect.stringMatching(/^asks again what was just said: /)]);
+    expect(chatCaseFailures(justSaid, toEnglish("You traced the dropouts to a loose ground wire.\n\nWhat was the cause of the dropouts?"))).toEqual([expect.stringMatching(/^asks again what was just said: /)]);
     // staying on the item to ask how they found it and the fix, which the reply already gave
     expect(chatCaseFailures(justSaid, { ...base, reading: "vague", followUpReason: "how they found it", messageToCandidate: "You mentioned the soil sensor readings dropping out.\n\nHow did you find the cause, and what did you do to fix it?" })).toEqual([
       expect.stringMatching(/^the model pushed for what the reply already gave: /),
@@ -93,24 +93,24 @@ describe("chat.* suites", () => {
     ]);
     const earlier = chatCases.find((c) => c.id === "earlier_reply_not_asked_again")!;
     // no question of the model's: the code asks the item's own question word for word, which the reply already answered
-    expect(chatCaseFailures(earlier, toEnglish(earlier, "You built a soil-moisture pump on an Arduino."))).toEqual([expect.stringMatching(/^asks the next item again after the reply gave it: [\s\S]*from your own work\?$/)]);
-    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years.\n\nHow long have you been explaining technical ideas in English?"))).toEqual([expect.stringMatching(/^asks the next item again after the reply gave it: /)]);
+    expect(chatCaseFailures(earlier, toEnglish("You built a soil-moisture pump on an Arduino."))).toEqual([expect.stringMatching(/^asks the next item again after the reply gave it: [\s\S]*from your own work\?$/)]);
+    expect(chatCaseFailures(earlier, toEnglish("You ran a weekend robotics club for two years.\n\nHow long have you been explaining technical ideas in English?"))).toEqual([expect.stringMatching(/^asks the next item again after the reply gave it: /)]);
     // one short check on what they said passes
-    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years, explaining technical ideas in English to beginners.\n\nWhat did the beginners find hardest to follow?"))).toEqual([]);
+    expect(chatCaseFailures(earlier, toEnglish("You ran a weekend robotics club for two years, explaining technical ideas in English to beginners.\n\nWhat did the beginners find hardest to follow?"))).toEqual([]);
     // however it is worded, and whatever words the restatement uses (the code never swaps a short check for the item's question)
-    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend club for beginners for two years.\n\nHow did that go?"))).toEqual([]);
-    expect(chatCaseFailures(earlier, toEnglish(earlier, "You ran a weekend robotics club for two years, telling beginners a sensor is like a finger.\n\nWhat came of it?"))).toEqual([]);
+    expect(chatCaseFailures(earlier, toEnglish("You ran a weekend club for beginners for two years.\n\nHow did that go?"))).toEqual([]);
+    expect(chatCaseFailures(earlier, toEnglish("You ran a weekend robotics club for two years, telling beginners a sensor is like a finger.\n\nWhat came of it?"))).toEqual([]);
     // a restatement that opens with a word like "Explained" is no request, so it is never read as asking
-    expect(chatCaseFailures(justSaid, toEnglish(justSaid, "Explained the dropouts: a loose ground wire, resoldered.\n\nTell me about one time you explained a technical idea in English to beginners: what did you do, and what came of it?"))).toEqual([]);
+    expect(chatCaseFailures(justSaid, toEnglish("Explained the dropouts: a loose ground wire, resoldered.\n\nTell me about one time you explained a technical idea in English to beginners: what did you do, and what came of it?"))).toEqual([]);
     // a reply that names the must-have without showing it, taken as covered: the eval says the push was lost
     const thin = chatCases.find((c) => c.id === "thin_must_have_still_pushed")!;
-    expect(chatCaseFailures(thin, toEnglish(thin, "You have done some Arduino work."))).toEqual(["a reply that names the must-have without showing it did not get its push", "expected one push, got covered", "a thin reply was recorded as a full answer"]);
+    expect(chatCaseFailures(thin, toEnglish("You have done some Arduino work."))).toEqual(["a reply that names the must-have without showing it did not get its push", "expected one push, got covered", "a thin reply was recorded as a full answer"]);
   });
 
   // The "no question" check reads a request as the shaping does (`asksByRequest` from @ros/agents): "Think of a time…" and
   // a restatement that only looks like a request ask nothing. Here no item's question stands in, so the words are shown as written.
   it("fails a message with no question, and a request counts as one", () => {
-    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
     const offPlan = { ...chatCases.find((c) => c.id === "bare_yes_gets_one_push")!, asking: "not_on_the_plan", expect: () => [] };
     const shown = (messageToCandidate: string) => chatCaseFailures(offPlan, { ...base, messageToCandidate });
     for (const none of ["Think of a time you made a mistake.", "Test, think of a time you made a mistake.", "Picture a class of twenty.", "Explained it as a thirsty finger.", "Described the fix to the team.", "Shared a list with the team.", "Tell users to restart.", "Give a warm welcome."]) expect(shown(none), none).toEqual([`no question: ${none}`]);
@@ -128,16 +128,17 @@ describe("chat.* suites", () => {
   // A failing case keeps its full record in the result file (the chat, the model's turn and the turn after the rules); a
   // passing case keeps nothing, and a failed call says why
   it("keeps the record of a failing case only", async () => {
-    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
-    const moveOn: ScreenTurn = { ...base, questionKey: "english", reading: "concrete", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, messageToCandidate: "Noted." };
+    const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+    const moveOn: ScreenTurn = { ...base, questionKey: "english", reading: "concrete", messageToCandidate: "Noted." };
     const results = await runChatSuite(async (ctx, c) => (c.id === "bare_yes_gets_one_push" ? moveOn : c.id === "restates_then_asks" ? "invalid: no valid output" : run(ctx)), (s) => s === "chat.ladder" || s === "chat.shape");
     const bareYes = results["chat.ladder"]?.cases.find((x) => x.id === "bare_yes_gets_one_push");
     expect(bareYes?.pass).toBe(false);
     expect(bareYes?.diagnostics?.transcript).toEqual([{ role: "assistant", text: expect.stringContaining("Hands-on Arduino"), questionKey: "arduino" }, { role: "candidate", text: "Yes" }]);
     expect(bareYes?.diagnostics?.turns).toEqual([
       {
-        model: { questionKey: "english", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete", message: "Noted." },
-        afterRules: expect.objectContaining({ questionKey: "wrap_up", answerRecorded: expect.objectContaining({ questionKey: "arduino", answer: "Yes" }), message: "Is there anything else you would like the hiring team to know before we finish?" }),
+        // the model's turn as it returned it: no record of an answer; the turn after the rules: what the code recorded
+        model: { questionKey: "english", followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false, reading: "concrete", message: "Noted." },
+        afterRules: expect.objectContaining({ questionKey: "wrap_up", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, message: "Is there anything else you would like the hiring team to know before we finish?" }),
         move: "covered",
       },
     ]);

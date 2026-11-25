@@ -55,6 +55,19 @@ describe("the AI interviewer is given the job and states pay as the job page doe
     expect(blocks).toHaveLength(4);
     expect(blocks[3]).toMatch(/^Chat plan \(JSON\): \{.*\}\n<cv>\n\(no CV details\)\n<\/cv>$/);
   });
+
+  // The code check of 25 November 2026: the answer on record is built in code from the candidate's own replies, so the
+  // model is no longer asked to record one (its record was the longest rule of the prompt, and was wrong more than once).
+  it("is not asked to record the candidate's answer: no rule about recording, and no word of it elsewhere", () => {
+    const text = system(ctx(true));
+    expect(text).not.toMatch(/answerRecorded|\brecord/i);
+    // the rules that named it say the rest of what they said
+    expect(text).toContain('Where ladder is false, "No" is a full answer: move on.\n');
+    expect(text).toContain("Then go back to the current item (questionKey null): ask it again briefly.\n");
+    expect(text).toContain("set sentiment=confused and ask the same question again in plainer words (questionKey null, followUpReason set).");
+    // and it still says how the model reads a reply, which the code uses
+    expect(text).toContain('- reading: how the candidate\'s latest reply answers the current item: "concrete"');
+  });
 });
 
 describe("verifyQuotes", () => {

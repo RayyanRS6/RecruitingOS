@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScreenTurn } from "@ros/contracts";
+import type { ChatTurn } from "@ros/agents";
 import { TRACE_CHARS, clipDeep, clipText, traceOutcome, traceTranscript, traceTurn } from "./diagnostics";
 
 /** The full record a failing case keeps in the result file: every text cut, the shape and the decisions kept. */
@@ -20,10 +21,15 @@ describe("a failing case's record", () => {
     ]);
   });
 
-  it("keeps a turn's decisions and its message", () => {
-    const t: ScreenTurn = { messageToCandidate: long, questionKey: null, answerRecorded: { questionKey: "pay", answer: "What does it pay?", complete: true }, followUpReason: "asked about pay", candidateAskedAbout: "pay", sentiment: "confused", done: false, humanRequested: true };
-    expect(traceTurn(t)).toEqual({ questionKey: null, answerRecorded: { questionKey: "pay", answer: "What does it pay?", complete: true }, followUpReason: "asked about pay", candidateAskedAbout: "pay", sentiment: "confused", done: false, humanRequested: true, message: `${"a".repeat(TRACE_CHARS)}…` });
+  it("keeps a turn's decisions and its message, and on a turn after the code's rules the answer the code recorded", () => {
+    // the model's own turn: it returns no record of an answer, so the record keeps none
+    const t: ScreenTurn = { messageToCandidate: long, questionKey: null, followUpReason: "asked about pay", candidateAskedAbout: "pay", sentiment: "confused", done: false, humanRequested: true };
+    expect(traceTurn(t)).toEqual({ questionKey: null, followUpReason: "asked about pay", candidateAskedAbout: "pay", sentiment: "confused", done: false, humanRequested: true, message: `${"a".repeat(TRACE_CHARS)}…` });
     expect(traceTurn({ ...t, reading: "vague" }).reading).toBe("vague");
+    // the turn after the rules: what the code recorded from the candidate's replies, its words cut like any other, or that it recorded nothing
+    const held: ChatTurn = { ...t, answerRecorded: { questionKey: "pay", answer: long, complete: true } };
+    expect(traceTurn(held).answerRecorded).toEqual({ questionKey: "pay", answer: `${"a".repeat(TRACE_CHARS)}…`, complete: true });
+    expect(traceTurn({ ...t, answerRecorded: null })).toMatchObject({ answerRecorded: null });
   });
 
   it("keeps what a call returned, or why it returned nothing usable", () => {

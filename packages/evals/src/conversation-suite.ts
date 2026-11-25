@@ -1,6 +1,6 @@
 import { CHAT_WRAP_KEY, type RolePacket, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
 import type { ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate } from "@ros/agents";
+import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate, type ChatTurn } from "@ros/agents";
 import { promisesATime } from "./chat-suite";
 import { clipText, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 import { COOPERATIVE_PAY, cooperativeReply } from "./suites";
@@ -31,8 +31,8 @@ export type Persona = {
   job?: (job: RolePacket) => RolePacket;
 };
 
-/** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules, and the message they were shown. */
-export type ConversationTurn = { said: string; asking: string; raw: ScreenTurn; turn: ScreenTurn; shown: string; stayed: boolean };
+/** One reply of the candidate and what came of it: the model's own turn, the turn after the code's rules (with the answer the code recorded), and the message they were shown. */
+export type ConversationTurn = { said: string; asking: string; raw: ScreenTurn; turn: ChatTurn; shown: string; stayed: boolean };
 
 export type Conversation = {
   job: RolePacket;
@@ -49,7 +49,7 @@ export type Conversation = {
 const AT = "2026-11-18T10:00:00.000Z";
 const COMPANY = "Eval Dental";
 const FIRST_NAME = "Alex";
-const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
 /** What the chat may know of the candidate: a few lines of their CV. */
 const CV = ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"];

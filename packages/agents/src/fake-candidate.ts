@@ -145,13 +145,14 @@ function quoteOf(text: string): string {
  * an open question (the analog, then for a must-have the smaller version, then the item is settled with the calm line);
  * every reply is read (`reading`). A question about pay is answered from the posted range; someone who asks for a
  * person, or says they are struggling, is flagged for one; a confused reply gets the question again. The closing
- * question's answer brings the close, naming the longest thing the candidate said, in their own words.
+ * question's answer brings the close, naming the longest thing the candidate said, in their own words. It returns what
+ * the prompt asks for and no more: no record of an answer, which the code builds from the candidate's own replies.
  */
 export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const s = parseTurn(req);
   const user = req.messages[0]?.content ?? "";
   const said = (user.match(/Candidate's latest message: ([\s\S]*?)\n\nProduce the next turn\./)?.[1] ?? "").trim();
-  const base: ScreenTurn = { messageToCandidate: "", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+  const base: ScreenTurn = { messageToCandidate: "", questionKey: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
   const current = s.progress.currentQuestionKey;
   const asked = new Set(s.progress.askedKeys);
   const declined = new Set(s.progress.declined ?? []);
@@ -168,7 +169,7 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
   const theirs = [...user.matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim());
   if (current === s.wrap.key) {
     const longest = theirs.filter((x) => x.length >= 25 && redactProtected(x) === x).sort((a, b) => b.length - a.length)[0];
-    return { ...base, done: true, answerRecorded: said ? { questionKey: s.wrap.key, answer: redactProtected(said), complete: true } : null, messageToCandidate: longest ? `Thank you, ${s.name}. You told me "${quoteOf(longest)}".` : `Thank you, ${s.name}.` };
+    return { ...base, done: true, messageToCandidate: longest ? `Thank you, ${s.name}. You told me "${quoteOf(longest)}".` : `Thank you, ${s.name}.` };
   }
   const item = s.items.find((i) => i.key === current);
   if (!item) return { ...base, questionKey: next?.key ?? null, done: !next, messageToCandidate: "Noted." };
@@ -185,13 +186,9 @@ export function fakeScreenTurn(req: StructuredRequest<unknown>): ScreenTurn {
     }) ?? null;
   };
   const moveOn = (reading: "concrete" | "vague" | "not_done"): ScreenTurn => {
-    // Their words about this item since it was asked, verbatim and in order; a keyword command is not an answer.
-    const at = user.lastIndexOf(item.question);
-    const replies = [...(at >= 0 ? user.slice(at) : user).matchAll(/^candidate: (.*)$/gm)].map((m) => m[1].trim()).filter((x) => x && !/^(?:human|person|a person|a human|agent|representative|withdraw(?: my application)?|confirm)[.!]?$/i.test(x)).join(" ");
-    const recorded = reading === "not_done" && item.kind === "gap" ? null : { questionKey: item.key, answer: redactProtected(replies || said), complete: reading === "concrete" };
     const already = reading === "concrete" ? saidAlready(next?.key) : null;
     const message = reading === "not_done" ? "Understood, thanks for saying so." : already ? `You also said "${quoteOf(already)}".\n\nIs there one thing you would add about that?` : `You said "${quoteOf(said)}".`;
-    return { ...base, reading, questionKey: next?.key ?? null, done: !next, answerRecorded: recorded, messageToCandidate: message };
+    return { ...base, reading, questionKey: next?.key ?? null, done: !next, messageToCandidate: message };
   };
   if (item.ladder && said.length < 60 && /^(no|nope|not really|never|i haven'?t|i have not)\b/i.test(said) && !/\bbut\b/i.test(said)) {
     if (item.step === "direct") return { ...base, reading: "not_done", followUpReason: "the analog", messageToCandidate: "Not done that exactly? Tell me about something similar from your own work." };

@@ -733,23 +733,19 @@ const sentenceKey = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").rep
 const plainKey = (s: string) => sentenceKey(s).replace(/,/g, "");
 
 /**
- * The recorded answer held to the candidate's latest message: a question they asked in it is never part of
- * the answer (that sentence is left out), and a turn that answers their question records only words of that message
- * that are not a question (an answer given in the same message, "Yes, active in CA. What does it pay?"). Null when
- * nothing is left.
+ * The answer on record for a question after a turn: the candidate's own replies about it, as they sent them, put
+ * together in code (`enforceChatTurn`), never the model's words. `complete`: false while the chat still asks about the
+ * question (the push, the analog, the smaller version, or after answering a question of theirs), so their words are
+ * kept if they move on from there.
  */
-function answerAgainstLatest(t: ScreenTurn, latest: string): ScreenTurn["answerRecorded"] {
-  const a = t.answerRecorded;
-  if (!a) return null;
-  const said = sentencesOf(latest);
-  const asked = new Set(said.filter(asksAssistant).map(sentenceKey));
-  const statements = said.filter((s) => !asksAssistant(s) && !FILLER.test(s)).map(sentenceKey).join(" ");
-  const all = sentencesOf(a.answer);
-  const kept = all.filter((s) => !asked.has(sentenceKey(s)));
-  if (t.candidateAskedAbout && !kept.every((s) => statements.includes(sentenceKey(s)))) return null;
-  if (!kept.length) return null;
-  return kept.length === all.length ? a : { ...a, answer: kept.join(" ") };
-}
+export type RecordedAnswer = { questionKey: string; answer: string; complete: boolean };
+
+/**
+ * A turn as the code leaves it: the model's turn held to the rules (`enforceChatTurn`), or one worked out in code
+ * (`turnWithoutModel`), with the answer the code recorded with it, if any. The model's own turn (`ScreenTurn`) carries no
+ * record of an answer.
+ */
+export type ChatTurn = ScreenTurn & { answerRecorded: RecordedAnswer | null };
 
 /** Replies without what is never an answer: one that only shows confusion or only asks the assistant something, and a question asked inside a longer one. */
 function usableReplies(replies: ReadonlyArray<string>): string[] {
@@ -764,11 +760,14 @@ function modelWordsOf(packet: RolePacket, text: string): string {
 /**
  * The code's rules for a turn, after the model answered. What the candidate wrote decides what is recorded, and the
  * code, not the model's labels, decides what kind of turn it is:
+ * - the answer on record is built here, from the candidate's own replies about the question (`RecordedAnswer`): the
+ *   model is not asked for one, and returns none;
  * - only this chat's own questions count, and a skipped one is never asked again;
  * - a turn that asks for a person closes nothing: the candidate is shown how to choose one on the page, and the question
  *   stays (choosing not to do the interview is theirs to do, never the model's to read into their words);
  * - a reply that only asks the assistant something, or only shows confusion, is never an answer, nor is a question asked
- *   inside a longer reply; a confused candidate gets the same question again and is shown how to choose a person;
+ *   inside a longer reply (what else that reply says is kept as theirs); a confused candidate gets the same question
+ *   again and is shown how to choose a person;
  * - the model's own words never touch a protected trait (`unfairQuestion`): on a hit the chat moves on in the job's words;
  * - the ladder: how the latest reply reads (a plain "No" climbs it whatever the model read) and what comes next
  *   (`chatNextMove`): a follow-up the ladder allows passes, one it does not is replaced by the next question; moving on
@@ -785,7 +784,7 @@ function modelWordsOf(packet: RolePacket, text: string): string {
  *   for a question (`modelAnswer`), even in part.
  * Returns the turn and the step taken on the item, for the plan (`advanceProgress`).
  */
-export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } {
+export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: ScreenProgress, answers: Record<string, string>, input: { transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ChatTurn; move: { key: string; move: ChatMove } | null } {
   const plan = progress.chat;
   const keys = packet.screening.questions.map((x) => x.key);
   const q = (key: string | null | undefined) => (key ? packet.screening.questions.find((x) => x.key === key) : undefined);
@@ -793,17 +792,13 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   const asked = new Set(progress.askedKeys);
   const current = progress.currentQuestionKey;
   const reply = input.latest;
-  let t: ScreenTurn = { ...raw };
-  // How an answer was recorded is the code's to say: the model only ever answers.
-  if (t.answerRecorded) t = { ...t, answerRecorded: { questionKey: t.answerRecorded.questionKey, answer: t.answerRecorded.answer, complete: t.answerRecorded.complete } };
+  // The answer on record is the code's to build (`record` below): the model's turn carries none, and one that an
+  // earlier build's turn still holds is never read.
+  let t: ChatTurn = { ...raw, answerRecorded: null };
   if (t.questionKey && (!keys.includes(t.questionKey) || declined.has(t.questionKey))) t = { ...t, questionKey: null };
-  if (t.answerRecorded && !keys.includes(t.answerRecorded.questionKey)) t = { ...t, answerRecorded: null };
-  if (t.humanRequested) return { turn: { ...t, humanRequested: false, done: false, questionKey: null, followUpReason: "shown how to choose a person", answerRecorded: null, messageToCandidate: PERSON_REPLY }, move: null };
+  if (t.humanRequested) return { turn: { ...t, humanRequested: false, done: false, questionKey: null, followUpReason: "shown how to choose a person", messageToCandidate: PERSON_REPLY }, move: null };
 
   if (t.sentiment !== "distressed" && t.sentiment !== "frustrated" && seemsConfused(reply)) t = { ...t, sentiment: "confused" };
-  if (t.sentiment === "confused" || onlyQuestions(reply)) t = { ...t, answerRecorded: null };
-  else if (t.answerRecorded) t = { ...t, answerRecorded: answerAgainstLatest(t, reply) };
-  if (t.answerRecorded && !t.answerRecorded.answer.trim()) t = { ...t, answerRecorded: null };
   if (current && t.sentiment === "confused") {
     // A confused candidate gets help with the same question, never a move on or a close.
     if (t.done || (t.questionKey && t.questionKey !== current)) t = { ...t, done: false, messageToCandidate: `No problem. ${q(current)?.question ?? ""}`.trim() };
@@ -828,7 +823,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   const experience = plan?.section === "experience";
   // A message the code put together here (the model's restatement, then the next question in the job's words) is final.
   let composed = false;
-  const moveOn = (lead: string, recorded: ScreenTurn["answerRecorded"]): ScreenTurn => {
+  const moveOn = (lead: string, recorded: RecordedAnswer | null): ChatTurn => {
     composed = true;
     return next ? { ...t, questionKey: next.key, followUpReason: null, done: false, answerRecorded: recorded, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question } : { ...t, questionKey: null, followUpReason: null, done: true, answerRecorded: recorded, messageToCandidate: lead };
   };
@@ -837,27 +832,27 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   let move: { key: string; move: ChatMove } | null = null;
   let calm = false;
   let ladderQuestion: string | null = null;
+  // Their replies about the question being asked, without a confused reply or a question of their own on the way: neither
+  // is ever part of the answer, and neither keeps a bare "yes" on the push from reading as one.
+  const replies = current ? usableReplies(replyListSince(input.transcript, current)) : [];
+  const said = replies.join(" ");
+  // The answer on record is their replies about the question, every one of them, as they sent them (`said`), with
+  // anything personal left out. The model is not asked for a record of it: while it was, the real model recorded two
+  // replies joined its own way ("… | …", 19 November 2026), and only the latest of two (25 November 2026), so that what
+  // the candidate had said about their work in the first one was gone from what the team reads and the scorecard scores.
+  // With no usable reply nothing is recorded: one of the job's own questions then shows as not answered on "Check your
+  // answers", where the candidate can answer it.
+  const record = (complete: boolean): RecordedAnswer | null => (current && said ? { questionKey: current, answer: redactProtected(said), complete } : null);
 
   if (current === CHAT_WRAP_KEY && replied) {
     // The closing question was answered: the close follows, whatever the model wanted to ask next.
-    const own = reply.trim();
-    t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: t.answerRecorded ?? (own ? { questionKey: CHAT_WRAP_KEY, answer: own, complete: true } : null) };
+    t = { ...t, done: true, questionKey: null, followUpReason: null, answerRecorded: record(true) };
   } else if (item && replied) {
     const ladder = ladderApplies(packet, item);
     const modelStays = !!t.followUpReason && !t.questionKey && !t.done;
     const reading = ladder && saysNotDone(reply) ? "not_done" : t.reading === "not_done" && !ladder ? "concrete" : (t.reading ?? (modelStays ? "vague" : "concrete"));
     const expected = chatNextMove(item, reading, ladder);
-    // Their replies about the item, without a confused reply or a question of their own on the way: neither is ever part
-    // of the answer, and neither keeps a bare "yes" on the push from reading as one.
-    const replies = usableReplies(replyListSince(input.transcript, item.key));
-    const said = replies.join(" ");
-    // The answer is their replies about the item, every one of them, as they sent them (`said`): the words of the model's
-    // own record of the answer are never used. The real model has recorded two replies joined its own way ("… | …", 19
-    // November 2026), and only the latest of two replies (25 November 2026), so that what the candidate had said about
-    // their work in the first one was gone from what the team reads and the scorecard scores. Only when no reply of
-    // theirs is usable does the model's record stand as it wrote it.
-    const record = (complete: boolean): ScreenTurn["answerRecorded"] => (said ? { questionKey: item.key, answer: redactProtected(said), complete } : t.answerRecorded);
-    const answerFor = (m: ChatMove): ScreenTurn["answerRecorded"] => (m === "unknown" && item.kind === "gap" ? null : record(m === "covered"));
+    const answerFor = (m: ChatMove): RecordedAnswer | null => (m === "unknown" && item.kind === "gap" ? null : record(m === "covered"));
     if (chatMoveStays(expected) && modelStays) {
       move = { key: item.key, move: expected };
       ladderQuestion = CHAT_LADDER_QUESTION[expected as "push" | "analog" | "smaller"];
@@ -878,7 +873,6 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
       if (modelStays || (!t.questionKey && !t.done)) t = moveOn(chatLead(t.messageToCandidate, { experience, calm, answering: false, known: q(item.key)?.question }), answerFor(expected));
       else t = { ...t, answerRecorded: answerFor(expected) };
     }
-    if (move.move === "unknown" && item.kind === "gap" && t.answerRecorded?.questionKey === item.key) t = { ...t, answerRecorded: null };
   }
 
   // The plan is the code's. Wherever else the model's turn went (an item out of its turn, one already asked, the closing
@@ -897,6 +891,14 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     composed = true;
     if (current === CHAT_WRAP_KEY) t = { ...t, questionKey: null, followUpReason: t.candidateAskedAbout ? t.followUpReason : t.followUpReason ?? "asked again", messageToCandidate: lead ? `${lead}\n\n${CHAT_WRAP_QUESTION}` : CHAT_WRAP_QUESTION };
     else t = { ...t, questionKey: null, followUpReason: null, done: true, messageToCandidate: lead };
+  }
+  // A turn that answers a question of the candidate's takes no reply to the question being asked (`replied`). When the
+  // same message also said something about it ("Yes, active in CA. What does it pay?"), those words are still theirs:
+  // they are kept, the question left out, as the answer when the turn leaves the question, and as words to keep while it
+  // is asked again. A bare "yes" or a plain "No" to a question with a ladder is kept by neither, as on the push.
+  if (current && t.candidateAskedAbout && t.sentiment !== "confused" && usableReplies([reply]).length) {
+    const bare = !!item && ladderApplies(packet, item) && replies.every(bareReply);
+    t = { ...t, answerRecorded: bare ? null : record(t.done || !!t.questionKey) };
   }
   // Five words in a row of a private standard are never said, whichever question it belongs to: the model is given every one.
   const notes = packet.screening.questions.flatMap((x) => (x.modelAnswer ? [x.modelAnswer] : []));
@@ -919,7 +921,7 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
 /* ------------------------------------------------------------------------------------------------------------ */
 
 /** A turn with nothing in it, for the steps code takes on its own (the first question, a skip, a tap). */
-const SILENT_TURN: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
+const SILENT_TURN: ChatTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
 /**
  * "Start" on the introduction: the chat gets its plan, the first question appears in the job's own words with no model
@@ -1117,7 +1119,7 @@ export function chatCodeLead(tapped: string | null, kept = false): string {
  * - No next question: the end of the questions (`done`).
  * Null with no current question: the caller ends the chat as it does at the turn cap.
  */
-export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenProgress; answers: Record<string, string>; transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ScreenTurn; move: { key: string; move: ChatMove } | null } | null {
+export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenProgress; answers: Record<string, string>; transcript: ReadonlyArray<ScreenTranscriptEntry>; latest: string }): { turn: ChatTurn; move: { key: string; move: ChatMove } | null } | null {
   const { packet, progress, answers, transcript, latest } = input;
   const current = progress.currentQuestionKey;
   const question = currentQuestion(packet, progress);
@@ -1128,7 +1130,7 @@ export function turnWithoutModel(input: { packet: RolePacket; progress: ScreenPr
   }
   const item = progress.chat?.items.find((i) => i.key === current) ?? null;
   const unknown = item?.kind === "gap" && ladderApplies(packet, item) && saysNotDone(latest);
-  const answerRecorded: ScreenTurn["answerRecorded"] = unknown ? null : { questionKey: current, answer: said, complete: true };
+  const answerRecorded: RecordedAnswer | null = unknown ? null : { questionKey: current, answer: said, complete: true };
   const move = item ? { key: current, move: (unknown ? "unknown" : "covered") as ChatMove } : null;
   // The question being asked is among those asked already, so this is the one after it.
   const next = nextQuestion(packet, progress, answers);
