@@ -7,7 +7,7 @@ import {
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, dealBreakerOffer, disclosureLine, draftFactsKey, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
+  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
   namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
@@ -1045,7 +1045,7 @@ export function sessionView(row: IntakeSessionRow, viewerUserId: string, more: {
   const state = stateOf(row);
   const facts = normalizeFacts(row.facts);
   const draft = row.draftPacket ?? null;
-  const owner = row.createdByUserId ?? (row.createdBy.kind === "user" ? row.createdBy.id : null);
+  const owner = draftOwnerId(row);
   return {
     id: row.id,
     status: row.status === "compiled" || row.status === "abandoned" ? row.status : "active",
