@@ -94,6 +94,11 @@ describe("intake.golden: the conversation", () => {
       "the page shows no card for the work arrangement",
       "no card asks whether the job is on site, hybrid or remote",
     ]);
+    // the three answers are judged by their words: the model is asked for an option's value in words, not as a code
+    const worded = (labels: string[]) => card({ options: labels.map((label) => ({ label, value: label, origin: "assistant" as const })) });
+    expect(judge(id, turn({ questions: [worded(["On site", "Hybrid", "Remote"])] }))).toEqual([]);
+    expect(judge(id, turn({ questions: [worded(["On-site", "Hybrid", "Remote"])] }))).toEqual([]);
+    expect(judge(id, turn({ questions: [worded(["In the office", "Hybrid", "Remote"])] }))).toEqual(["the work arrangement card does not offer exactly On site, Hybrid and Remote"]);
     expect(judge(id, turn({ questions: [card({ allowOwn: true })] }))).toEqual(["the work arrangement card does not offer exactly On site, Hybrid and Remote"]);
     expect(judge(id, turn({ questions: [card({ options: [{ label: "On site", value: "onsite", origin: "assistant" }, { label: "Remote", value: "remote", origin: "assistant" }] })] }))).toEqual(["the work arrangement card does not offer exactly On site, Hybrid and Remote"]);
   });

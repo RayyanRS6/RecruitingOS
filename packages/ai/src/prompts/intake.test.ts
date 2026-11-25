@@ -57,6 +57,16 @@ describe("intake.turn: the builder's conversation", () => {
     expect(t).toContain("Only the owner states pay; never suggest or invent a figure");
   });
 
+  // Still version 9 (25 November 2026, before the real models saw it). The same bullet said an option's value is "the
+  // words the job keeps", and then asked for two cards' values as codes ("values onsite, hybrid, remote", "values
+  // full_time, part_time"). Nothing reads them as codes: the server draws the work arrangement's three answers itself,
+  // and reads the kind of job from the words (`applyAnswers` in packages/core). So an option's value is words, always.
+  it("asks for an option's value in words, and for none as a code", () => {
+    const bullet = turn().split("\n").find((line) => line.startsWith("- Options:"));
+    expect(bullet).toBe('- Options: origin "owner" when the words are the owner\'s own, "assistant" when the idea is yours. An option\'s value is the words the job keeps when it is ticked, usually the same as the label. For the work arrangement offer exactly On site, Hybrid and Remote with allowOwn false. For full or part time offer Full time and Part time. For pay use mode "pay" with no options: the product draws the pay card, where the owner sets hourly or salary and the range.');
+    expect(turn()).not.toMatch(/\(values |onsite|full_time, part_time/);
+  });
+
   it("asks with at most three cards, of the fields and modes the product has", () => {
     const t = turn();
     expect(t).toContain("at most three per turn");

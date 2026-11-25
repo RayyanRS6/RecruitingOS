@@ -286,7 +286,9 @@ export const intakeGolden: IntakeCase[] = [
       if (!after.questions.some((q) => q.field === "remote_policy")) f.push("the page shows no card for the work arrangement");
       const card = t.questions.find((q) => q.field === "remote_policy");
       if (!card) f.push("no card asks whether the job is on site, hybrid or remote");
-      else if (card.allowOwn || card.options.map((o) => o.value).join(",") !== "onsite,hybrid,remote") f.push("the work arrangement card does not offer exactly On site, Hybrid and Remote");
+      // The three answers by their words, however they are spelled ("On site", "On-site", "Onsite"): the model is asked
+      // for words, not for codes, and the page draws this card's answers itself.
+      else if (card.allowOwn || card.options.map((o) => o.label.toLowerCase().replace(/[^a-z]/g, "")).join(",") !== "onsite,hybrid,remote") f.push("the work arrangement card does not offer exactly On site, Hybrid and Remote");
       return f;
     },
   },

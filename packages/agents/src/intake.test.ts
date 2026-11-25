@@ -337,6 +337,25 @@ describe("tapped answers and the turn after them, with no database", () => {
     expect(second.facts).toEqual(answered.facts);
   });
 
+  // The assistant is asked for an option's value in words, never a code ("Full time", not "full_time"): nothing reads
+  // one as a code. The server draws the work arrangement's three answers itself, whatever the assistant offered, and
+  // reads the kind of job from the words of the answer that was ticked.
+  it("takes a ticked answer whose value is words: the kind of job is read from them, and the work arrangement's answers are the server's own", async () => {
+    const messages = [said(OWNERS_SENTENCE)];
+    const t = await turn(ctx(messages, facts(), { alreadyAsked: ["location", "compensation", "compensation_basis"] }));
+    // as the stand-in writes its cards, the way the prompt asks: the value is the label's words
+    expect(t.questions.map((q) => [q.field, q.options.map((o) => o.value)])).toEqual([["remote_policy", ["On site", "Hybrid", "Remote"]], ["employment_type", ["Full time", "Part time"]], ["schedule", ["Monday to Friday, daytime"]]]);
+    const shown = prepareQuestions(t.questions, { turnNo: 2, payConfirmed: true, dealBreakers: [] });
+    expect(shown.map((q) => [q.field, q.options.map((o) => o.value)])).toEqual([["remote_policy", ["onsite", "hybrid", "remote"]], ["employment_type", ["Full time", "Part time"]], ["schedule", ["Monday to Friday, daytime"]]]);
+    const answered = afterAnswers({
+      answers: [{ questionId: shown[0].id, selected: ["hybrid"], own: [], skipped: false }, { questionId: shown[1].id, selected: ["Full time"], own: [], skipped: false }, { questionId: shown[2].id, selected: [], own: [], skipped: true }],
+      messages, facts: facts({ title: "Software Engineer" }), state: IntakeServerState.parse({ openQuestions: shown }), actor: dana, at,
+    });
+    expect(answered.facts).toMatchObject({ remotePolicy: "hybrid", employmentType: "full_time" });
+    expect(answered.summary).toEqual(["On site, hybrid or remote: Hybrid", "Full time or part time: Full time"]);
+    expect(answered.refused).toEqual([]);
+  });
+
   it("records pay set on the pay card as set by that person, the same figures as an ad's as confirmed, and pay typed beside the cards as typed", () => {
     const payCard = IntakeQuestion.parse({ id: "q1_1", field: "compensation", prompt: "What will you pay?", mode: "pay" });
     const open = IntakeServerState.parse({ openQuestions: [payCard] });
