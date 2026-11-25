@@ -86,7 +86,7 @@ function contextFrom(inputs: IntakeInputs, facts = normalizeFacts(inputs.session
     facts,
     messages: session.messages,
     ad: adText ? { text: adText } : null,
-    alreadyAsked: settle(state.settledFields, fieldsKnownFromFacts(facts, payConfirmed(facts, state))),
+    alreadyAsked: alreadyAskedOf(facts, state),
   };
 }
 
@@ -95,7 +95,7 @@ function contextFrom(inputs: IntakeInputs, facts = normalizeFacts(inputs.session
 /* ------------------------------------------------------------------------------------------------------------------ */
 
 /** The field a card sets as the server keeps it: the pay card is always "compensation". */
-function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionField {
+export function cardField(q: Pick<IntakeQuestion, "field" | "mode">): IntakeQuestionField {
   return q.mode === "pay" || q.field === "compensation_basis" ? "compensation" : q.field;
 }
 
@@ -150,6 +150,14 @@ export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean): I
 /** Adds fields to the settled list, once each, in the order first seen. */
 export function settle(settled: readonly IntakeQuestionField[], more: readonly IntakeQuestionField[]): IntakeQuestionField[] {
   return [...new Set([...settled, ...more])];
+}
+
+/**
+ * What the assistant is told never to ask again, on a card or in its message, and what the server drops a card of the
+ * assistant's for: the field of every card already shown in the draft, and what the facts already answer.
+ */
+export function alreadyAskedOf(facts: IntakeFacts, state: Pick<IntakeServerState, "settledFields" | "pay">): IntakeQuestionField[] {
+  return settle(state.settledFields, fieldsKnownFromFacts(facts, payConfirmed(facts, state)));
 }
 
 const WORD = /[a-z0-9]+/g;
@@ -234,6 +242,12 @@ const ESSENTIAL_CARD: Record<IntakeEssentialKey, Omit<IntakeQuestion, "id">> = {
 
 /** The card field that asks each essential. */
 const ESSENTIAL_FIELD: Record<IntakeEssentialKey, IntakeQuestionField> = { title: "title", location: "location", remote_policy: "remote_policy", compensation_range: "compensation", employment_type: "employment_type", schedule: "schedule", must_haves: "must_haves" };
+
+/** The essential a card asks for, or null: the benefits card and the server's own deal-breaker card ask for none. */
+export function essentialOfCard(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): IntakeEssentialKey | null {
+  if (isDealCard(q)) return null;
+  return INTAKE_ESSENTIALS.find((key) => ESSENTIAL_FIELD[key] === cardField(q)) ?? null;
+}
 
 const BENEFITS_CARD: Omit<IntakeQuestion, "id"> = { field: "benefits", prompt: "What benefits come with the job?", mode: "free", options: [], allowOwn: true, why: "The law where this job is asks the job ad to describe the benefits." };
 
@@ -523,14 +537,6 @@ function typedPay(messages: IntakeMessage[], facts: IntakeFacts, state: IntakeSe
   return { by: actorOfTurn(actor), at, via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax! };
 }
 
-/** `typedPay`, recorded on the draft's state with its event. */
-async function confirmTypedPay(q: Tx, input: { companyId: string; sessionId: string; actor: Actor }, messages: IntakeMessage[], facts: IntakeFacts, state: IntakeServerState): Promise<void> {
-  const pay = typedPay(messages, facts, state, input.actor, new Date().toISOString());
-  if (!pay) return;
-  state.pay = pay;
-  await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: input.sessionId }, payload: { via: "typed" } });
-}
-
 /** A draft as a turn leaves it, worked out with no database (`afterTurn`). */
 export type AfterTurn = {
   facts: IntakeFacts;
@@ -542,6 +548,8 @@ export type AfterTurn = {
   /** What is still needed, and whether "Write the job" may run: the server's own answer, which the page shows. */
   missing: IntakeEssentialKey[];
   mayDraft: boolean;
+  /** What still needs a card: every essential missing, and the pay while it is stated and no person has confirmed it. */
+  toAsk: IntakeEssentialKey[];
   notARole: boolean;
   /** Pay the owner typed was counted as set by them on this turn. */
   payTyped: boolean;
@@ -571,7 +579,7 @@ export function afterTurn(input: { turn: IntakeTurn; messages: IntakeMessage[]; 
   const toAsk: IntakeEssentialKey[] = confirmed || missing.includes("compensation_range") ? missing : [...missing, "compensation_range"];
   const questions = notARole ? [] : prepareQuestions(turn.questions, {
     turnNo, payConfirmed: confirmed, dealBreakers: offer.offer, missing: toAsk, benefitsNeeded: !missing.length && benefitsNeeded(facts, input.companyBenefits),
-    settled: settle(state.settledFields, fieldsKnownFromFacts(facts, confirmed)), ownerWords: ownerWordsOf(messages), askedPrompts: state.askedPrompts,
+    settled: alreadyAskedOf(facts, state), ownerWords: ownerWordsOf(messages), askedPrompts: state.askedPrompts,
   });
   state.openQuestions = questions;
   state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
@@ -579,7 +587,7 @@ export function afterTurn(input: { turn: IntakeTurn; messages: IntakeMessage[]; 
   state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
   if (state.ad && turn.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: turn.takenFromAd };
   const message = withoutReadyClaim(inThePagesWords(withoutCardCount(turn.assistantMessage)));
-  return { facts, state, questions, message, missing, mayDraft, notARole, payTyped: !!pay };
+  return { facts, state, questions, message, missing, mayDraft, toAsk, notARole, payTyped: !!pay };
 }
 
 /**
@@ -633,10 +641,50 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
 
 export type AnswersOutcome = { refused: IntakeRefusal[]; summary: string[] };
 
+/** A draft as tapped answers leave it, worked out with no database (`afterAnswers`). */
+export type AfterAnswers = AnswersOutcome & {
+  facts: IntakeFacts;
+  state: IntakeServerState;
+  /** The conversation with the summary of the answers, and any words typed beside the cards, as the owner's messages. */
+  messages: IntakeMessage[];
+  /** How these answers set or confirmed the pay, in order: on the pay card, then by words typed beside the cards. */
+  payConfirmed: Array<NonNullable<IntakeServerState["pay"]>["via"]>;
+};
+
 /**
- * Tapped answers. One summary goes into the conversation as the owner's message, words typed beside the cards go in as
- * their own message, the facts change as the cards say, and pay set on the pay card is recorded as set by this person.
- * Once the job is written, its parts set by rule follow the answers at once. The next turn is the caller's.
+ * What the server makes of tapped answers: the facts change as the cards say (`applyAnswers`, which refuses what the
+ * fairness check refuses), pay set on the pay card is recorded as set by this person, every answered card's field is
+ * settled and the card closed, one summary goes into the conversation as the owner's message, and words typed beside
+ * the cards go in as their own message (pay typed there counts as theirs too). `applyIntakeAnswers` stores it; the
+ * evaluations drive the card loop with it (packages/evals), so they judge what the app does and not a copy of it.
+ */
+export function afterAnswers(input: { answers: IntakeAnswer[]; note?: string; messages: IntakeMessage[]; facts: IntakeFacts; state: IntakeServerState; actor: Actor; at: string }): AfterAnswers {
+  const state = structuredClone(input.state);
+  const edit = applyAnswers(normalizeFacts(input.facts), state.openQuestions, input.answers);
+  const ways: AfterAnswers["payConfirmed"] = [];
+  if (edit.pay) {
+    state.pay = { by: actorOfTurn(input.actor), at: input.at, via: edit.pay.via, basis: edit.pay.basis, min: edit.pay.min, max: edit.pay.max };
+    ways.push(edit.pay.via);
+  }
+  const answered = new Set(input.answers.map((a) => a.questionId));
+  state.settledFields = settle(state.settledFields, state.openQuestions.filter((x) => answered.has(x.id)).flatMap(cardFields));
+  state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id));
+  state.answeredRounds += 1;
+  const lines = [...edit.summary, ...edit.refused.map((r) => `Not used: "${r.text}". ${r.reason}`)];
+  if (!lines.length) lines.push("Skipped those questions.");
+  const messages: IntakeMessage[] = [...input.messages, { role: "owner", content: lines.join("\n"), at: input.at, kind: "answers" }];
+  if (input.note) messages.push({ role: "owner", content: input.note, at: input.at, kind: "text" });
+  const typed = typedPay(messages, edit.facts, state, input.actor, input.at);
+  if (typed) {
+    state.pay = typed;
+    ways.push(typed.via);
+  }
+  return { facts: edit.facts, state, messages, refused: edit.refused, summary: edit.summary, payConfirmed: ways };
+}
+
+/**
+ * Tapped answers, stored (`afterAnswers`). Once the job is written, its parts set by rule follow the answers at once.
+ * The next turn is the caller's.
  */
 export async function applyIntakeAnswers(db: Db, input: { companyId: string; sessionId: string; actor: Actor; answers: IntakeAnswer[]; note?: string }): Promise<AnswersOutcome> {
   return withTenant(db, input.companyId, async (q) => {
@@ -644,26 +692,12 @@ export async function applyIntakeAnswers(db: Db, input: { companyId: string; ses
     const [session] = await q.select().from(intakeSessions).where(eq(intakeSessions.id, input.sessionId)).limit(1).for("update");
     if (!session) throw new IntakeSessionError("not_found");
     if (session.status !== "active") throw new IntakeSessionError("not_active");
-    const state = stateOf(session);
-    const edit = applyAnswers(normalizeFacts(session.facts), state.openQuestions, input.answers);
-    const now = new Date().toISOString();
-    if (edit.pay) {
-      state.pay = { by: actorOfTurn(input.actor), at: now, via: edit.pay.via, basis: edit.pay.basis, min: edit.pay.min, max: edit.pay.max };
-      await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: edit.pay.via } });
-    }
-    const answered = new Set(input.answers.map((a) => a.questionId));
-    state.settledFields = settle(state.settledFields, state.openQuestions.filter((x) => answered.has(x.id)).flatMap(cardFields));
-    state.openQuestions = state.openQuestions.filter((x) => !answered.has(x.id));
-    state.answeredRounds += 1;
-    const lines = [...edit.summary, ...edit.refused.map((r) => `Not used: "${r.text}". ${r.reason}`)];
-    if (!lines.length) lines.push("Skipped those questions.");
-    const messages: IntakeMessage[] = [...session.messages, { role: "owner", content: lines.join("\n"), at: now, kind: "answers" }];
-    if (input.note) messages.push({ role: "owner", content: input.note, at: now, kind: "text" });
-    await confirmTypedPay(q, input, messages, edit.facts, state);
-    const draftPacket = session.draftPacket ? draftByRule({ ...loaded, session: { ...session, messages }, state }, edit.facts, input.actor) : null;
-    await q.update(intakeSessions).set({ facts: edit.facts, messages, serverState: state, ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
-    await emit(q, { type: "intake.answered", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { questionIds: [...answered], refused: edit.refused.length } });
-    return { refused: edit.refused, summary: edit.summary };
+    const { facts, state, messages, refused, summary, payConfirmed: confirmed } = afterAnswers({ answers: input.answers, note: input.note, messages: session.messages, facts: session.facts, state: stateOf(session), actor: input.actor, at: new Date().toISOString() });
+    for (const via of confirmed) await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via } });
+    const draftPacket = session.draftPacket ? draftByRule({ ...loaded, session: { ...session, messages }, state }, facts, input.actor) : null;
+    await q.update(intakeSessions).set({ facts, messages, serverState: state, ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
+    await emit(q, { type: "intake.answered", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { questionIds: [...new Set(input.answers.map((a) => a.questionId))], refused: refused.length } });
+    return { refused, summary };
   });
 }
 

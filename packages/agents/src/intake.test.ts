@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type I
 import { IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import { cvScoreFromReading, unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
-import { afterTurn, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
+import { afterAnswers, afterTurn, alreadyAskedOf, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
 const OWNERS_SENTENCE = "Software Engineer required with 3 years of hands-on experience in Python and Flask";
 const HYGIENIST = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
@@ -304,6 +304,53 @@ describe("the facts after a turn", () => {
     expect(typedSinceReply([said("A job ad", "pasted_ad")])).toBe(true);
     expect(typedSinceReply([said("An idea"), replied("Got it."), said("Where the job is: Irvine, CA", "answers")])).toBe(false);
     expect(typedSinceReply([said("An idea"), replied("Got it."), said("Where the job is: Irvine, CA", "answers"), said("And it is hybrid.")])).toBe(true);
+  });
+});
+
+// The two halves of the card loop with no database, as the app runs them (`applyIntakeAnswers`, `runIntakeTurn`) and as
+// the evaluations drive them: tapped answers, then the assistant's next turn with no new words typed.
+describe("tapped answers and the turn after them, with no database", () => {
+  const dana = { kind: "user" as const, id: "u1", name: "Dana" };
+  const at = "2026-11-25T09:05:00.000Z";
+
+  it("closes the cards that were sent, settles their fields, puts one summary in the conversation, and brings a skipped essential's card back", async () => {
+    const idea = [said("We need a dental assistant.")];
+    const first = after(await turn(ctx(idea)), idea);
+    expect(first.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+    const [place, arrangement, pay] = first.questions;
+    const conversation = [...idea, replied(first.message)];
+    const answered = afterAnswers({ answers: [{ questionId: place.id, selected: [], own: ["Irvine, CA"], skipped: false }, { questionId: arrangement.id, selected: ["onsite"], own: [], skipped: false }, { questionId: pay.id, selected: [], own: [], skipped: true }], messages: conversation, facts: first.facts, state: first.state, actor: dana, at });
+    expect(answered.facts).toMatchObject({ title: "dental assistant", locationText: "Irvine, CA", remotePolicy: "onsite" });
+    expect(answered.summary).toEqual(["Where the job is: Irvine, CA", "On site, hybrid or remote: On site"]);
+    expect(answered.messages.at(-1)).toEqual({ role: "owner", content: "Where the job is: Irvine, CA\nOn site, hybrid or remote: On site", at, kind: "answers" });
+    expect(answered.state).toMatchObject({ openQuestions: [], answeredRounds: 1, settledFields: ["location", "remote_policy", "compensation", "compensation_basis"] });
+    expect(answered.payConfirmed).toEqual([]);
+    // the assistant is told all of it was asked or answered, the title included; the server asks for the pay again all the same
+    const asked = alreadyAskedOf(answered.facts, answered.state);
+    expect(asked).toEqual(["location", "remote_policy", "compensation", "compensation_basis", "title"]);
+    const next = await turn(ctx(answered.messages, answered.facts, { alreadyAsked: asked }));
+    expect(next.questions.map((q) => q.field)).toEqual(["employment_type", "schedule", "must_haves"]);
+    const second = afterTurn({ turn: next, messages: answered.messages, facts: answered.facts, state: answered.state, actor: dana, at });
+    expect(second.questions.map((q) => [q.field, q.mode])).toEqual([["compensation", "pay"], ["employment_type", "single"], ["schedule", "single"]]);
+    expect(second.toAsk).toEqual(["compensation_range", "employment_type", "schedule", "must_haves"]);
+    // nothing was typed since the last reply, so the facts stay exactly as the answers set them
+    expect(second.facts).toEqual(answered.facts);
+  });
+
+  it("records pay set on the pay card as set by that person, the same figures as an ad's as confirmed, and pay typed beside the cards as typed", () => {
+    const payCard = IntakeQuestion.parse({ id: "q1_1", field: "compensation", prompt: "What will you pay?", mode: "pay" });
+    const open = IntakeServerState.parse({ openQuestions: [payCard] });
+    const base = { messages: [said("We need a dental assistant.")], actor: dana, at };
+    const set = afterAnswers({ ...base, answers: [{ questionId: "q1_1", selected: [], own: [], skipped: false, pay: { basis: "hourly", min: 24, max: 28 } }], facts: facts({ title: "Dental Assistant" }), state: open });
+    expect(set.payConfirmed).toEqual(["pay_card"]);
+    expect(set.state.pay).toEqual({ by: dana, at, via: "pay_card", basis: "hourly", min: 24, max: 28 });
+    const fromAd = facts({ title: "Dental Assistant", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28 });
+    expect(afterAnswers({ ...base, answers: [{ questionId: "q1_1", selected: [], own: [], skipped: false, pay: { basis: "hourly", min: 24, max: 28 } }], facts: fromAd, state: open }).payConfirmed).toEqual(["confirmed"]);
+    // the pay card skipped, and the figures the draft holds typed in the box beside the cards: typed by them, so theirs too
+    const skipped = afterAnswers({ ...base, answers: [{ questionId: "q1_1", selected: [], own: [], skipped: true }], note: "It pays $24 to $28 an hour.", facts: fromAd, state: open });
+    expect(skipped.messages.slice(-2).map((m) => [m.kind, m.content])).toEqual([["answers", "Skipped those questions."], ["text", "It pays $24 to $28 an hour."]]);
+    expect(skipped.payConfirmed).toEqual(["typed"]);
+    expect(skipped.state.pay).toMatchObject({ via: "typed", min: 24, max: 28 });
   });
 });
 

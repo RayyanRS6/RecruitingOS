@@ -1,11 +1,22 @@
-import { HUMAN_KEYWORD, screenCriterion, type AfterTurn } from "@ros/agents";
-import { repeatsMustHave, rulesOut, type IntakeFacts, type IntakeTurn, type RolePacket, type WrittenJob } from "@ros/contracts";
+import { HUMAN_KEYWORD, cardField, essentialOfCard, screenCriterion, type AfterTurn } from "@ros/agents";
+import { INTAKE_ESSENTIALS, repeatsMustHave, rulesOut, type IntakeFacts, type IntakeQuestionField, type IntakeTurn, type RolePacket, type WrittenJob } from "@ros/contracts";
 
 /**
  * The job builder's evaluation cases (intake.*, docs/11): what the conversation reads from an owner's words and asks
- * for, and the job it writes. Fixtures are synthetic; provenance is recorded on each case. intake-run.ts drives a case
- * the way the app does; runner.ts runs the suites.
+ * for, the card loop, and the job it writes. Fixtures are synthetic; provenance is recorded on each case. intake-run.ts
+ * drives a case the way the app does; runner.ts runs the suites.
  */
+
+/**
+ * One answer tapped on a card: the offered answer to tick, found by its words (`pick`), the owner's own words where the
+ * card takes them (`own`, used when no offered answer matches), or the figures set on the pay card (`pay`).
+ */
+export type IntakeTap = { pick?: RegExp; own?: string; pay?: { basis: "hourly" | "salary"; min: number; max: number } };
+/**
+ * One press of Send on the open cards, by the field each card sets. A card whose field the round does not name is sent
+ * as skipped, as the page sends a card left alone when another is answered.
+ */
+export type IntakeTapRound = Partial<Record<IntakeQuestionField, IntakeTap>>;
 
 export type IntakeCase = {
   id: string;
@@ -30,6 +41,15 @@ export type IntakeCase = {
    */
   expectTurn?: (turn: IntakeTurn, after: AfterTurn) => string[];
   /**
+   * The card loop, which no case ran before 25 November 2026. After the conversation's last message the owner answers
+   * the cards the page shows by tapping, one round after another, and the assistant takes its next turn after each
+   * round with no new words typed, as it does in the app. Every turn of such a case, the first included, is held to
+   * `cardLoopFailures`: nothing already asked or answered is asked again, and what is still needed has its card.
+   */
+  taps?: IntakeTapRound[];
+  /** The draft as the turn after the last round leaves it (`afterTurn`). */
+  expectAfterTaps?: (after: AfterTurn) => string[];
+  /**
    * The job as the model wrote it (`WrittenJob`: only what it is asked for), before the server builds the job record
    * from it (`finalizePacket`): measures the lines of the prompt, such as no pay figure in the description.
    */
@@ -45,6 +65,33 @@ export type IntakeCase = {
 };
 
 export const EMPTY_FACTS: IntakeFacts = { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] };
+
+/**
+ * What one turn of the card loop fails on. `turn` is the model's own reply, `asked` what its notes listed as already
+ * asked or answered, and `after` what the server made of the turn (`afterTurn`), cards as the page shows them:
+ * - the assistant wrote a card for something its notes said was already asked or answered (the server drops such a card,
+ *   so only the model's own reply can show it);
+ * - the page asks again for an essential that is answered;
+ * - an essential is still needed and has no card, though the page had room for one (three cards at most). This was the
+ *   dead end on the live site in November 2026: "Still needed: at least one must-have" and nothing to tap. The card the
+ *   server brings back for a skipped essential, and the pay card while the pay is stated and nobody confirmed it, are
+ *   what answers it.
+ */
+export function cardLoopFailures(x: { turn: Pick<IntakeTurn, "questions">; after: Pick<AfterTurn, "questions" | "toAsk">; asked: readonly string[] }): string[] {
+  const f: string[] = [];
+  const again = [...new Set(x.turn.questions.map(cardField).filter((field) => x.asked.includes(field)))];
+  if (again.length) f.push(`the assistant wrote a card for what was already asked or answered: ${again.join(", ")}`);
+  const shown = x.after.questions.map(essentialOfCard);
+  const answered = [...new Set(shown.filter((key): key is NonNullable<typeof key> => key !== null && !x.after.toAsk.includes(key)))];
+  if (answered.length) f.push(`the page asks again for what is answered: ${answered.join(", ")}`);
+  const needed = INTAKE_ESSENTIALS.filter((key) => x.after.toAsk.includes(key));
+  // With three cards shown the page is full, and the first thing still needed is among them; with fewer, each of the first three is.
+  const due = x.after.questions.length >= 3 ? needed.slice(0, 1) : needed.slice(0, 3);
+  // The server's deal-breaker card stands in for the must-haves card on its turn: it asks which of them count as must-haves.
+  const noCard = due.filter((key) => !shown.includes(key) && !(key === "must_haves" && x.after.questions.some((q) => q.field === "must_haves")));
+  if (noCard.length) f.push(`still needed, with no card to answer it on: ${noCard.join(", ")}`);
+  return f;
+}
 
 /** Must-haves whose words rule someone out ("No x-ray permit"): the job page and the resume reading would ask for the opposite. */
 export function ruleOutMustHaves(p: Pick<RolePacket, "requirements">): string[] {
@@ -171,6 +218,20 @@ export function writtenJobFailures(d: WrittenJob): string[] {
 
 /** The essentials an owner's first sentence can give: when it gives them all, no card asks for one of them again. */
 const ESSENTIAL_FIELDS = ["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation", "must_haves"];
+
+/** What a card-loop case says when every card was answered and the job still cannot be written. */
+const readyAfterTaps = (after: AfterTurn): string[] => (after.mayDraft ? [] : [`every essential was answered on the cards, so the job should be ready to write; the page still asks for ${after.missing.join(", ") || "the pay to be confirmed"}`]);
+
+/** An answer for every card a round may meet (a model may ask in another order than the stand-in), the pay card aside. */
+const DENTAL_ASSISTANT_TAPS: IntakeTapRound = {
+  title: { own: "Dental Assistant" },
+  location: { pick: /irvine/i, own: "Irvine, CA" },
+  remote_policy: { pick: /on.?site/i },
+  employment_type: { pick: /full/i, own: "Full time" },
+  schedule: { own: "Monday to Friday, 8am to 5pm" },
+  must_haves: { own: "Radiography certificate" },
+};
+const PAY_24_TO_28: IntakeTapRound = { compensation: { pay: { basis: "hourly", min: 24, max: 28 } } };
 
 /** Writing a job: what the conversation reads and asks, and the job written from it. */
 export const intakeGolden: IntakeCase[] = [
@@ -301,6 +362,17 @@ export const intakeGolden: IntakeCase[] = [
       return f;
     },
   },
+  {
+    // The card loop: a short idea, and everything else answered by tapping. The pay card is left alone in the first
+    // round, so the turn after it must bring that card back and ask for nothing that was answered (`cardLoopFailures`,
+    // on every turn). Then the pay is set on its card, and the job can be written.
+    id: "cards_tapped_and_the_pay_card_skipped",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["We need a dental assistant."],
+    taps: [DENTAL_ASSISTANT_TAPS, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(after.state.pay?.via === "pay_card" ? [] : ["the pay set on the pay card is not recorded as set there"])],
+  },
 ];
 
 const HYGIENIST = "Hygienist in Irvine, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license.";
@@ -346,6 +418,18 @@ export const intakeJobAd: IntakeCase[] = [
       if (/\bapproved\b/i.test(t.assistantMessage)) f.push("followed an instruction inside the ad");
       return f;
     },
+  },
+  {
+    // The card loop after a pasted ad that states the pay. The owner answers the other cards and leaves the pay card:
+    // nobody confirmed the pay, so it has its card again on the next turn. Sent with the ad's own figures, it confirms
+    // them, and the job can be written.
+    id: "dental_assistant_ad_pay_card_left_then_confirmed",
+    provenance: "synthetic",
+    vertical: "dental",
+    pastedAd: true,
+    ownerMessages: [PASTED_AD],
+    taps: [DENTAL_ASSISTANT_TAPS, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(after.state.pay?.via === "confirmed" ? [] : [`the ad's pay, sent as it stood on the pay card, is not recorded as confirmed (${after.state.pay?.via ?? "no pay"})`])],
   },
 ];
 

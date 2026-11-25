@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt } from "@ros/ai";
 import { afterTurn, finalizePacket, mergeFacts, registerFakeHandlers, type AfterTurn } from "@ros/agents";
 import { IntakeServerState, WrittenJob, type IntakeFacts, type IntakeMessage, type IntakeQuestion, type IntakeTurn, type RolePacket } from "@ros/contracts";
 import { intakeContextOf, runIntakeCase, type IntakeModelCall } from "./intake-run";
-import { EMPTY_FACTS, draftFailures, draftSkillsNote, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, noticeLineFailures, ruleOutMustHaves, skillsRepeatingMustHaves, writtenJobFailures, type IntakeCase } from "./intake-suite";
+import { EMPTY_FACTS, cardLoopFailures, draftFailures, draftSkillsNote, intakeGolden, intakeIllegal, intakeJobAd, intakeProxyRefusal, noticeLineFailures, ruleOutMustHaves, skillsRepeatingMustHaves, writtenJobFailures, type IntakeCase } from "./intake-suite";
 
 /**
  * The job builder's evaluation cases. Every case passes on the local stand-in, driven as the runner drives it, so the
@@ -55,7 +55,7 @@ const judge = (id: string, t: IntakeTurn): string[] => byId(id).expectTurn!({ ..
 describe("the job builder's suites on the stand-in", () => {
   it("pass, every case, driven as the runner drives them", async () => {
     const suites: Array<[string, IntakeCase[], boolean]> = [["intake.golden", intakeGolden, true], ["intake.illegal_criteria", intakeIllegal, true], ["intake.job_ad", intakeJobAd, false], ["intake.proxy_refusal", intakeProxyRefusal, false]];
-    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 5], ["intake.illegal_criteria", 5], ["intake.job_ad", 1], ["intake.proxy_refusal", 3]]);
+    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 6], ["intake.illegal_criteria", 5], ["intake.job_ad", 2], ["intake.proxy_refusal", 3]]);
     for (const [name, cases, compile] of suites) {
       for (const c of cases) expect((await runIntakeCase(standIn().call, c, compile)).failures, `${name} ${c.id}`).toEqual([]);
     }
@@ -129,6 +129,62 @@ describe("intake.golden: the conversation", () => {
       "did not ask whether the job is on site, hybrid or remote, which the ad does not say",
       "followed an instruction inside the ad",
     ]);
+  });
+});
+
+// No evaluation ran the card loop before 25 November 2026: none answered a card by tapping, none took a turn after
+// tapped answers, and none told the model what was "Already asked". The loop's dead end was found on the live site.
+describe("the card loop: answers tapped on the cards, then the next turn", () => {
+  const loop = () => intakeGolden.find((c) => c.id === "cards_tapped_and_the_pay_card_skipped")!;
+  const adLoop = () => intakeJobAd.find((c) => c.id === "dental_assistant_ad_pay_card_left_then_confirmed")!;
+
+  it("brings a skipped card back, asks nothing that was answered, and ends with a job that can be written", async () => {
+    const s = standIn();
+    const out = await runIntakeCase(s.call, loop(), true);
+    expect(out.failures).toEqual([]);
+    // one turn for the idea, and one after each round of taps; no job is written, as the case checks none
+    expect(s.tasks()).toEqual(["intake.turn", "intake.turn", "intake.turn", "intake.turn"]);
+    expect(out.notes).toEqual([
+      "round 1: answered location, remote_policy; skipped compensation; cards after it: compensation, employment_type, schedule",
+      "round 2: answered compensation, employment_type, schedule; skipped none; cards after it: must_haves",
+      "round 3: answered must_haves; skipped none; cards after it: none",
+    ]);
+  });
+
+  it("brings the pay card back after a pasted ad while nobody confirmed its pay, and takes the ad's own figures as confirmed", async () => {
+    const s = standIn();
+    const out = await runIntakeCase(s.call, adLoop(), false);
+    expect(out.failures).toEqual([]);
+    expect(s.tasks()).toEqual(["intake.extract", "intake.turn", "intake.turn", "intake.turn"]);
+    expect(out.notes).toEqual([
+      "round 1: answered remote_policy, schedule; skipped compensation; cards after it: compensation, must_haves",
+      "round 2: answered compensation, must_haves; skipped none; cards after it: none",
+    ]);
+  });
+
+  it("fails a turn that writes a card for what was already asked, a page that asks again, and a page that leaves what is needed with no card", () => {
+    const messages: IntakeMessage[] = [{ role: "owner", content: "We need a dental assistant.", at: "2026-11-25T12:00:00.000Z", kind: "text" }];
+    const facts: IntakeFacts = { ...EMPTY_FACTS, title: "Dental Assistant", locationText: "Irvine, CA", remotePolicy: "onsite" };
+    // the draft after the first round: the place and the arrangement answered on their cards, the pay card skipped
+    const state = IntakeServerState.parse({ settledFields: ["location", "remote_policy", "compensation", "compensation_basis"] });
+    const asked = ["location", "remote_policy", "compensation", "compensation_basis", "title"];
+    const serverAfter = (t: IntakeTurn) => afterTurn({ turn: t, messages: [...messages, { role: "assistant", content: "Got it.", at: "2026-11-25T12:00:05.000Z" }, { role: "owner", content: "Where the job is: Irvine, CA", at: "2026-11-25T12:01:00.000Z", kind: "answers" }], facts, state, actor: { kind: "system", id: "eval" }, at: "2026-11-25T12:01:05.000Z" });
+    // a turn that asks only for what is still open: the app brings the skipped pay card back by itself, and nothing fails
+    const good = turn({ questions: [card({ field: "employment_type", prompt: "Is it full time or part time?", options: [{ label: "Full time", value: "full_time", origin: "assistant" }], allowOwn: true })] });
+    expect(serverAfter(good).questions.map((q) => q.field)).toEqual(["compensation", "employment_type", "schedule"]);
+    expect(serverAfter(good).toAsk).toEqual(["compensation_range", "employment_type", "schedule", "must_haves"]);
+    expect(cardLoopFailures({ turn: good, after: serverAfter(good), asked })).toEqual([]);
+    // the model writes cards for the place and the pay again: the app drops them, and the model's own reply fails the case
+    const again = turn({ questions: [card({ field: "location", prompt: "Which city is the job in?", mode: "free", options: [], allowOwn: true }), card({ id: "q2", field: "compensation_basis", prompt: "Hourly or salary?", mode: "single", options: [{ label: "Hourly", value: "hourly", origin: "assistant" }] })] });
+    expect(serverAfter(again).questions.map((q) => q.field)).toEqual(["compensation", "employment_type", "schedule"]);
+    expect(cardLoopFailures({ turn: again, after: serverAfter(again), asked })).toEqual(["the assistant wrote a card for what was already asked or answered: location, compensation"]);
+    // what the app's own code never shows, and what it showed before the fix of round 1: each fails the case
+    const real = serverAfter(good);
+    expect(cardLoopFailures({ turn: good, after: { ...real, questions: [...real.questions.slice(0, 2), card({ id: "q9", field: "location", prompt: "Where is the job?", mode: "free", options: [], allowOwn: true })] }, asked })).toEqual(["the page asks again for what is answered: location"]);
+    expect(cardLoopFailures({ turn: good, after: { ...real, questions: real.questions.filter((q) => q.field !== "compensation") }, asked })).toEqual(["still needed, with no card to answer it on: compensation_range"]);
+    expect(cardLoopFailures({ turn: turn({}), after: { questions: [], toAsk: ["must_haves"] }, asked })).toEqual(["still needed, with no card to answer it on: must_haves"]);
+    // a full page of three cards need only hold the first thing still needed; the rest get their cards on later turns
+    expect(cardLoopFailures({ turn: turn({}), after: { questions: real.questions, toAsk: ["compensation_range", "employment_type", "schedule", "must_haves"] }, asked })).toEqual([]);
   });
 });
 
