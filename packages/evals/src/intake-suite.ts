@@ -1,4 +1,4 @@
-import { HUMAN_KEYWORD, screenCriterion } from "@ros/agents";
+import { HUMAN_KEYWORD, screenCriterion, type AfterTurn } from "@ros/agents";
 import { repeatsMustHave, rulesOut, type DraftRolePacket, type IntakeFacts, type IntakeTurn, type RolePacket } from "@ros/contracts";
 
 /**
@@ -22,8 +22,13 @@ export type IntakeCase = {
   facts?: Partial<IntakeFacts>;
   /** How many times the job is written from the same answers (once unless set): "Write the job" writes it afresh each time. */
   compiles?: number;
-  /** The model's reply to the last message, with the facts as the builder keeps them after it. Returns failure messages. */
-  expectTurn?: (turn: IntakeTurn) => string[];
+  /**
+   * The model's reply to the last message, with the facts as the builder keeps them after it; and `after`, what the
+   * server itself makes of that turn (`afterTurn` in packages/agents, the code the app runs): what is still needed,
+   * whether the job can be written, the cards the page shows and the reply as stored. The model is asked for none of
+   * those, so a check of them judges the app, not a field the app ignores. Returns failure messages.
+   */
+  expectTurn?: (turn: IntakeTurn, after: AfterTurn) => string[];
   /**
    * The job as the model wrote it, before the server's own rules (`finalizePacket`): measures a line of the prompt that
    * code would make true anyway, such as no pay figure in the description.
@@ -162,7 +167,7 @@ export const intakeGolden: IntakeCase[] = [
     provenance: "synthetic",
     vertical: "dental",
     ownerMessages: ["I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting."],
-    expectTurn: (t) => {
+    expectTurn: (t, after) => {
       const f: string[] = [];
       const x = t.factsExtracted;
       if (!/hygienist/i.test(x.title ?? "")) f.push("the title was not read");
@@ -172,7 +177,7 @@ export const intakeGolden: IntakeCase[] = [
       if (!/monday/i.test(x.schedule ?? "")) f.push("the schedule was not read");
       if (x.compensationBasis !== "hourly" || x.compensationMin !== 45 || x.compensationMax !== 55) f.push("the pay was not read as $45 to $55 an hour");
       if (x.mustHaves.length < 2) f.push("the two must-haves were not read");
-      if (t.readyToCompile !== true) f.push("every essential was given, so the job should be ready to write");
+      if (!after.mayDraft) f.push(`every essential was given, so the job should be ready to write; the page still asks for ${after.missing.join(", ") || "the pay to be confirmed"}`);
       const again = t.questions.filter((q) => ESSENTIAL_FIELDS.includes(q.field));
       if (again.length) f.push(`asked again for what the owner already said: ${again.map((q) => q.field).join(", ")}`);
       return f;
@@ -197,10 +202,11 @@ export const intakeGolden: IntakeCase[] = [
     provenance: "synthetic",
     vertical: "dental",
     ownerMessages: ["Front office coordinator in Tustin, CA, $22 to $26 an hour, full time, Tuesday to Saturday. Must-haves: two years at a dental front desk."],
-    expectTurn: (t) => {
+    expectTurn: (t, after) => {
       const f: string[] = [];
       if (t.factsExtracted.remotePolicy) f.push(`the work arrangement was assumed (${t.factsExtracted.remotePolicy}); the owner did not say it`);
-      if (t.readyToCompile) f.push("the job is ready to write without the work arrangement");
+      if (after.mayDraft || !after.missing.includes("remote_policy")) f.push("the job is ready to write without the work arrangement");
+      if (!after.questions.some((q) => q.field === "remote_policy")) f.push("the page shows no card for the work arrangement");
       const card = t.questions.find((q) => q.field === "remote_policy");
       if (!card) f.push("no card asks whether the job is on site, hybrid or remote");
       else if (card.allowOwn || card.options.map((o) => o.value).join(",") !== "onsite,hybrid,remote") f.push("the work arrangement card does not offer exactly On site, Hybrid and Remote");

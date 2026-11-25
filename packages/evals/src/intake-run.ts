@@ -1,14 +1,18 @@
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext, type PromptDef, type RunOutcome } from "@ros/ai";
-import { INTAKE_COMPILE_MAX_TOKENS, factsFromExtraction, finalizePacket, mergeFacts } from "@ros/agents";
-import type { IntakeFacts, IntakeMessage, IntakeTurn, RolePacket } from "@ros/contracts";
+import { INTAKE_COMPILE_MAX_TOKENS, afterTurn, factsFromExtraction, finalizePacket, mergeFacts, type AfterTurn } from "@ros/agents";
+import { IntakeServerState, type Actor, type IntakeFacts, type IntakeMessage, type IntakeTurn, type RolePacket } from "@ros/contracts";
 import { EMPTY_FACTS, draftFailures, draftSkillsNote, type IntakeCase } from "./intake-suite";
 
 /**
  * One case of the job builder's suites (intake.*), driven as the runner drives it (runner.ts, which runs on import). Kept
  * here so a test can drive it with a scripted stand-in and pin the steps a run on the real models rests on: the check of
  * the job as the model wrote it, each job written afresh, a case set from its answers asking no turn, and the check of
- * every written job's skills, with the notes the result file keeps of them (`intakeCaseResult`).
+ * every written job's skills, with the notes the result file keeps of them (`intakeCaseResult`). After each turn the
+ * server's own work is done as the app does it (`afterTurn`), so a case can judge what the page would show.
  */
+
+/** Who the case's owner is, for pay they typed (counted as set by them, as in the app). */
+const EVAL_OWNER: Actor = { kind: "system", id: "eval" };
 
 /** One model call, as the runner makes and records it (`runPrompt`); `meta` says what the call is for. */
 export type IntakeModelCall = <TInput, TOutput>(prompt: PromptDef<TInput, TOutput>, input: TInput, meta: { inputRef: Record<string, unknown>; maxTokens?: number }) => Promise<RunOutcome<TOutput>>;
@@ -41,6 +45,9 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
   let facts: IntakeFacts = { ...EMPTY_FACTS, ...c.facts };
   const messages: IntakeMessage[] = [];
   let lastTurn: IntakeTurn | null = null;
+  // The server's own record of the draft, and what it made of the last turn.
+  let state = IntakeServerState.parse({});
+  let after: AfterTurn | null = null;
   // A case with its answers set is written straight from them: its messages are the conversation and no intake.turn
   // call reads them, so the job is given exactly those answers. It has no turn, so nothing of a turn can be checked.
   if (c.facts) {
@@ -65,12 +72,17 @@ export async function runIntakeCase(call: IntakeModelCall, c: IntakeCase, compil
       failures.push(`turn failed: ${r.error}`);
       break;
     }
-    // The facts as the builder keeps them: a place or a work arrangement the owner did not say is not kept.
+    // What the server makes of the turn, by the app's own code: what is still needed, whether the job can be written,
+    // the cards and the reply as stored. Then the facts as the builder keeps them from the model's reading: a place or a
+    // work arrangement the owner did not say is not kept (and nothing the server declined by itself is added, so a case
+    // that checks a refusal checks the model's).
+    after = afterTurn({ turn: r.output, messages, facts, state, actor: EVAL_OWNER, at: new Date().toISOString() });
+    state = after.state;
     facts = mergeFacts(facts, r.output.factsExtracted, messages);
-    messages.push({ role: "assistant", content: r.output.assistantMessage, at: new Date().toISOString() });
+    messages.push({ role: "assistant", content: after.message, at: new Date().toISOString() });
     lastTurn = r.output;
   }
-  if (lastTurn && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn, factsExtracted: facts }));
+  if (lastTurn && after && c.expectTurn) failures.push(...c.expectTurn({ ...lastTurn, factsExtracted: facts }, after));
   if (compile && (c.expectPacket || c.expectDraft) && failures.length === 0) {
     const { ctx } = intakeContextOf(c, facts, messages);
     // As many jobs as the case asks for, each written afresh from the same answers and judged on its own: first as

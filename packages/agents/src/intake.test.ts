@@ -3,7 +3,7 @@ import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type I
 import { DraftRolePacket, IntakeQuestion, IntakeServerState, IntakeTurn, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import { unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
-import { fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount } from "./intake";
+import { afterTurn, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
 const OWNERS_SENTENCE = "Software Engineer required with 3 years of hands-on experience in Python and Flask";
 const HYGIENIST = "I need a registered dental hygienist in Tustin, CA, on site, full time, Monday to Friday, $45 to $55 an hour. Must-haves: active CA RDH license, periodontal charting.";
@@ -30,6 +30,9 @@ async function written(c: IntakeContext): Promise<DraftRolePacket> {
   return DraftRolePacket.parse(r.result.output);
 }
 
+/** What the server makes of a turn the assistant answered to these messages, in a draft with nothing in it yet (the real `afterTurn`). */
+const after = (t: IntakeTurn, messages: IntakeMessage[], f: IntakeFacts = facts()) => afterTurn({ turn: t, messages, facts: f, state: IntakeServerState.parse({}), actor: { kind: "user", id: "u1", name: "Dana" }, at: "2026-11-25T09:00:00.000Z" });
+
 describe("the stand-in assistant's turn (intake.turn)", () => {
   it("reads the owner's sentence and asks for the place, the work arrangement and the pay first", async () => {
     const t = await turn(ctx([said(OWNERS_SENTENCE)]));
@@ -39,20 +42,26 @@ describe("the stand-in assistant's turn (intake.turn)", () => {
     expect(t.factsExtracted.locationText).toBeUndefined();
     expect(t.factsExtracted.remotePolicy).toBeUndefined();
     expect(t.factsExtracted.compensationMin).toBeUndefined();
-    expect(t.missingFacts).toEqual(["location", "remote_policy", "compensation_range", "employment_type", "schedule"]);
     expect(t.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
     expect(t.questions[2].mode).toBe("pay");
-    expect(t.readyToCompile).toBe(false);
     expect(t.notARole).toBe(false);
+    // what is still missing, and whether the job can be written, is the server's to say from the facts: the assistant is not asked
+    expect(t).not.toHaveProperty("missingFacts");
+    expect(t).not.toHaveProperty("readyToCompile");
+    expect(after(t, [said(OWNERS_SENTENCE)])).toMatchObject({ missing: ["location", "remote_policy", "compensation_range", "employment_type", "schedule"], mayDraft: false });
   });
 
-  it("has nothing left to ask after one sentence that names every essential", async () => {
+  it("has nothing left to ask after one sentence that names every essential, and does not say that the job can be written", async () => {
     const t = await turn(ctx([said(HYGIENIST)]));
     expect(t.factsExtracted).toMatchObject({ title: "registered dental hygienist", locationText: "Tustin, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55 });
     expect(t.factsExtracted.mustHaves).toEqual(["Active CA RDH license", "Periodontal charting"]);
-    expect(t.missingFacts).toEqual([]);
     expect(t.questions).toEqual([]);
-    expect(t.readyToCompile).toBe(true);
+    // the server finds every essential in and the pay typed by the owner, so the page says the job can be written; the reply does not
+    expect(after(t, [said(HYGIENIST)])).toMatchObject({ missing: [], mayDraft: true, payTyped: true, questions: [], message: "Got it: registered dental hygienist in Tustin, CA." });
+    expect(withoutReadyClaim(t.assistantMessage)).toBe(t.assistantMessage);
+    // a later turn with nothing to ask and nothing new understood says no more than that it was noted
+    const later = await turn(ctx([said(HYGIENIST), replied("Got it."), said("Thanks.")], t.factsExtracted));
+    expect(later.assistantMessage).toBe("Noted.");
   });
 
   it("never asks again what the notes list as already asked", async () => {
@@ -176,6 +185,60 @@ describe("the cards as the server stores them", () => {
     expect(inThePagesWords("Must-have noted: can compile and ship a C++ service.")).toBe("Must-have noted: can compile and ship a C++ service.");
     // and it says "resume", the page's word, however the model spelt it
     expect(inThePagesWords("Applicants send a résumé. Résumés are read once; work can resume on Monday.")).toBe("Applicants send a resume. Resumes are read once; work can resume on Monday.");
+  });
+});
+
+// Seen on the live site on 25 November 2026: the assistant wrote "The job can be written now." while the page still
+// asked for the work arrangement. The model wrote its message before the server worked out what is missing; it is no
+// longer asked, is told never to say it, and the code holds that: the page alone says whether the job can be written.
+describe("the assistant's reply never says that the job can be written: the page does", () => {
+  const LIVE = "The job can be written now.";
+
+  it("takes out a sentence that says the job can be written, is ready, or that everything is in", () => {
+    expect(withoutReadyClaim(`Got it: a front desk coordinator in Tustin. ${LIVE}`)).toBe("Got it: a front desk coordinator in Tustin.");
+    for (const claim of [
+      LIVE, "The job can now be written.", "You can now write the job.", "I can write the job now.", "The job is ready to be written.", "I'm ready to write the job.", "The job is ready.", "Your job is good to go.",
+      "You're all set.", "Everything is in.", "Everything needed is in.", "All the essentials are in place.", "All the essentials are covered, so you can press Write the job.", "I have everything I need.",
+      "I have what the job needs.", "I now have all the essentials.", "That's everything I need to write the job.", "You've given me everything.", "Nothing is missing.", "Nothing else is needed.",
+      "I don't need anything else.", "Press Write the job when you are ready.", "If you're happy with that, press Write the job.",
+      // what follows in a later part of the sentence is about something else, and does not turn the claim round
+      "The job can be written now, and you can check every word before you publish.", "Everything is in, but you can still add nice-to-haves.",
+    ]) expect(withoutReadyClaim(`Thanks for the schedule. ${claim}`), claim).toBe("Thanks for the schedule.");
+    // "ready to compile" is put in the page's words first, and then goes the same way
+    expect(withoutReadyClaim(inThePagesWords("Thanks. All the essentials are in place, so the job is ready to compile."))).toBe("Thanks.");
+  });
+
+  it("keeps a question, and a sentence that says what is still needed", () => {
+    for (const stays of [
+      "Is the job on site, hybrid or remote?", "What is still missing?", "Can the job be written without a schedule?",
+      "Still needed before the job can be written: the work arrangement.", "Still needed before the job can be written: on site, hybrid or remote, pay. You can type them here.",
+      "Once you confirm the pay, the job can be written.", "The job can be written once the pay is confirmed.", "The job cannot be written yet.", "The job can't be written until the pay is confirmed.",
+      "The job isn't ready to be written yet.", "Not everything is in yet.", "Everything is in except the schedule.", "Everything is in, except the schedule.", "Everything but the pay is in.", "Everything else is in.",
+      "I have everything except the pay.", "I still need the pay before I can write the job.", "I need the schedule, then the job can be written.", "When you add the pay, press Write the job.",
+      "The pay is missing, otherwise everything is in.", "I've put what's still missing beside this. Tap an answer, add your own, or just type.",
+      // words that only look like the claim
+      "You can write the job title in your own words.", "You can type them here.", "Got it: must be ready to write reports every week.", "Everything is done on site.", "Monday to Friday, 8 a.m. to 5 p.m. is noted.",
+      "That doesn't sound like a job to fill, so I haven't started a draft. When you're ready to hire, describe the job: the title, where it is and what the person needs.",
+    ]) expect(withoutReadyClaim(stays), stays).toBe(stays);
+    expect(withoutReadyClaim(`${LIVE} Is the job on site, hybrid or remote?`)).toBe("Is the job on site, hybrid or remote?");
+  });
+
+  it("says only that it was noted when nothing else is left, and keeps the rest of a longer reply as it was written", () => {
+    expect(withoutReadyClaim(LIVE)).toBe("Noted.");
+    expect(withoutReadyClaim("I have what the job needs. Press Write the job when you are ready.")).toBe("Noted.");
+    expect(withoutReadyClaim(`I took these from your ad: Job title: Dental Assistant; Where: Irvine, CA.\n\n${LIVE}\n\nThe hours are 8 a.m. to 5 p.m. as the ad says.`)).toBe("I took these from your ad: Job title: Dental Assistant; Where: Irvine, CA.\n\nThe hours are 8 a.m. to 5 p.m. as the ad says.");
+    expect(withoutReadyClaim("Got it.\n- Title: Dental Assistant\n- Pay: to confirm")).toBe("Got it.\n- Title: Dental Assistant\n- Pay: to confirm");
+  });
+
+  it("is held on the turn as it is stored: the live reply, beside what the server itself still asks for", () => {
+    const t = IntakeTurn.parse({ assistantMessage: `Got it: a software engineer. ${LIVE}`, factsExtracted: { title: "Software Engineer", mustHaves: ["3 years of hands-on experience in Python and Flask"] }, questions: [] });
+    const done = after(t, [said(OWNERS_SENTENCE)]);
+    expect(done.message).toBe("Got it: a software engineer.");
+    expect(done).toMatchObject({ mayDraft: false, missing: ["location", "remote_policy", "compensation_range", "employment_type", "schedule"] });
+    // the server's own cards ask for what is missing, whatever the reply said
+    expect(done.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
+    // and the reply that says nothing else is only "Noted."
+    expect(after(IntakeTurn.parse({ assistantMessage: LIVE, factsExtracted: {}, questions: [] }), [said(OWNERS_SENTENCE)]).message).toBe("Noted.");
   });
 });
 

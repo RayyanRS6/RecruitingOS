@@ -201,10 +201,6 @@ export function askedKind(question: string): "schedule_availability" | "work_aut
   return null;
 }
 
-/** What the assistant thinks is still missing after a turn. The server decides with `IntakeReadiness`; this only steers the next cards. */
-export const IntakeMissingFact = z.enum(["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation_range", "must_haves"]);
-export type IntakeMissingFact = z.infer<typeof IntakeMissingFact>;
-
 /** Which fact a card's answer sets. Cards ask only for what a job cannot be written without, and for the benefits line the law may ask for. */
 export const IntakeQuestionField = z.enum(["title", "location", "remote_policy", "employment_type", "schedule", "compensation_basis", "compensation", "must_haves", "deal_breakers", "benefits"]);
 export type IntakeQuestionField = z.infer<typeof IntakeQuestionField>;
@@ -233,15 +229,16 @@ export const IntakeQuestion = z.object({
 });
 export type IntakeQuestion = z.infer<typeof IntakeQuestion>;
 
-/** One assistant turn of the builder's conversation (AI task `intake.turn`). */
+/**
+ * One assistant turn of the builder's conversation (AI task `intake.turn`): everything here is asked of the model, and
+ * everything here is used. What is still missing, and whether the job can be written, are not here: the server works
+ * them out from the facts (`IntakeReadiness`), and the page shows only that.
+ */
 export const IntakeTurn = z.object({
   assistantMessage: z.string().min(1),
   factsExtracted: IntakeFacts,
-  missingFacts: z.array(IntakeMissingFact),
   /** Up to three question cards, the most important first. The owner can always ignore them and type. */
   questions: z.array(IntakeQuestion).max(3).default([]),
-  /** The assistant's view that there is enough to write the job. The server decides with `readiness`. */
-  readyToCompile: z.boolean(),
   /** The first message is not about hiring someone (a question about the day, say): the session is not kept as a draft. */
   notARole: z.boolean().default(false),
   /** What was taken from a pasted job ad, one plain line each ("Title: Front desk coordinator"). */

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { IntakeTurn } from "@ros/contracts";
 import { ASKED_WORDS, CARRY_ON_NOTE, intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, type IntakeContext } from "./intake";
 import { withoutTag } from "./registry";
 
@@ -15,17 +16,30 @@ const compile = (more: Partial<IntakeContext> = {}) => text(intakeCompilePrompt.
 const GONE = /playbook|benchmark|market pay|ceiling|why (?:you|they) are hiring|reason for the hire|who interviews|interview plan|scorecard|decision[- ]?maker|final decision|evaluation|red flags|sourcing|approval|eligibility rule|knockout|draft it/i;
 
 describe("intake.turn: the builder's conversation", () => {
-  it("is version 8 on the standard tier's task", () => {
-    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 8, task: "intake.turn", agent: "intake" });
+  it("is version 9 on the standard tier's task", () => {
+    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 9, task: "intake.turn", agent: "intake" });
   });
 
   // Version 8, after the real models' first run on the builder (19 November 2026): they wrote "Full time" for the kind
-  // of job, held a job back for the hours when the owner gave the days, and told the owner the job was "ready to compile".
-  it("names the values of the facts kept as codes, takes the days alone as a schedule, and never says compile to the owner", () => {
+  // of job, and held a job back for the hours when the owner gave the days.
+  it("names the values of the facts kept as codes, and takes the days alone as a schedule", () => {
     const t = turn();
     expect(t).toContain("employmentType (full_time, part_time, contract, temporary, per_diem or internship) and compensationBasis (hourly or salary)");
     expect(t).toContain("The days alone are enough: once the owner gave them the schedule is answered, and you never hold the job back or ask again for the hours");
-    expect(t).toContain('say then that the job can be written; never use the word "compile" with the owner');
+  });
+
+  // Version 9 (25 November 2026). The model was asked what is still missing and whether the job can be written, and
+  // told to say so; the server works both out itself, after the message is written, so on the live site the message
+  // said "The job can be written now." beside a card asking for the work arrangement. It is asked neither now, and told
+  // once never to say it. The word "compile" came from the field's name and went with it.
+  it("is not asked what is missing or whether the job can be written, and is told once never to say that it can", () => {
+    const t = turn();
+    expect(t).toContain("- Never say that the job can be written or is ready, or that everything is in: the page shows that itself.");
+    expect(t.match(/can be written/g)).toHaveLength(1);
+    expect(t).not.toMatch(/missingFacts|readyToCompile|compile/i);
+    // the output shape is sent to the model as well: it holds only what the code uses
+    expect(intakeTurnPrompt.schema).toBe(IntakeTurn);
+    expect(Object.keys(IntakeTurn.shape).sort()).toEqual(["assistantMessage", "factsExtracted", "notARole", "questions", "takenFromAd"]);
   });
 
   it("names the seven essentials and asks the work arrangement instead of assuming it", () => {

@@ -190,9 +190,15 @@ describe("what the job builder needs and keeps", () => {
 
   it("takes a turn of the assistant with up to three cards, and no card about who interviews or who decides", () => {
     const card = { id: "q1", field: "remote_policy", prompt: "Is this job on site, hybrid or remote?", mode: "single", options: [{ label: "On site", value: "onsite", origin: "assistant" }] };
-    const turn = IntakeTurn.parse({ assistantMessage: "Two things are missing.", factsExtracted: { title: "Software engineer" }, missingFacts: ["location", "remote_policy", "compensation_range"], questions: [card], readyToCompile: false });
+    const turn = IntakeTurn.parse({ assistantMessage: "Two things are missing.", factsExtracted: { title: "Software engineer" }, questions: [card] });
     expect(turn.questions[0]).toMatchObject({ field: "remote_policy", allowOwn: true });
     expect(turn.notARole).toBe(false);
+    // What is still missing and whether the job can be written are the server's to work out (`IntakeReadiness`): the
+    // model is not asked for either, and a reply that still carries them loses them.
+    expect(Object.keys(IntakeTurn.shape).sort()).toEqual(["assistantMessage", "factsExtracted", "notARole", "questions", "takenFromAd"]);
+    const older = IntakeTurn.parse({ ...turn, missingFacts: ["location"], readyToCompile: true });
+    expect(older).not.toHaveProperty("missingFacts");
+    expect(older).not.toHaveProperty("readyToCompile");
     expect(IntakeTurn.safeParse({ ...turn, questions: [card, card, card, card] }).success).toBe(false);
     for (const field of ["interviewers", "decision_maker", "reason_for_hire", "timeline"]) expect(IntakeQuestion.safeParse({ ...card, field }).success, field).toBe(false);
     expect(IntakeQuestion.safeParse({ ...card, mode: "team" }).success).toBe(false);

@@ -316,7 +316,7 @@ describe("the job builder", () => {
   // Found by an audit in November 2026. The real model writes facts in plain words ("On site"); the stand-in writes
   // codes and reads fewer ways of saying it, so these turns are scripted with what the real model would answer.
   it("knows the work arrangement when the assistant writes it in words and the owner said it as people do, and still asks when nobody said it", async () => {
-    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, missingFacts: [], questions: [], readyToCompile: true });
+    const assistantAnswers = (read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage: "Got it.", factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions: [] });
     const arrangementOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "remote_policy");
     // "On site", as the model wrote it
     assistantAnswers({ title: "Front desk coordinator", locationText: "Tustin, CA", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "per hour", compensationMin: 22, compensationMax: 26, mustHaves: ["Two years at a front desk"] });
@@ -340,6 +340,31 @@ describe("the job builder", () => {
     expect(guessed.questions.map((q) => q.field)).toEqual(["location", "remote_policy", "compensation"]);
   });
 
+  // Seen on the live site on 25 November 2026: the assistant's first message said "The job can be written now." while the
+  // page still asked for the work arrangement. The real model wrote it; the stand-in never does, so the turn is scripted.
+  it("never shows the assistant saying the job can be written: the page says it, from the draft's own readiness", async () => {
+    const says = (assistantMessage: string, read: Record<string, unknown>) => container.fake!.scriptNext("intake.turn", { assistantMessage, factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions: [] });
+    const lastReply = (draft: IntakeSessionView) => draft.messages.filter((m) => m.role === "assistant").at(-1)?.content;
+    says("Got it: a software engineer who knows Python and Flask. The job can be written now.", { title: "Software Engineer", mustHaves: ["3 years of hands-on experience in Python and Flask"] });
+    const r = await json(owner, "POST", sessions, { initialMessage: OWNERS_SENTENCE });
+    const first = (await r.json()) as IntakeStartResponse;
+    const draft = first.session!;
+    // the page: the job cannot be written yet, and a card asks for the work arrangement
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location", "remote_policy", "compensation_range", "employment_type", "schedule"] });
+    expect(draft.questions.map((q) => q.field)).toContain("remote_policy");
+    // the reply, as stored and as answered: what the assistant understood, and no word about whether the job can be written
+    expect(lastReply(draft)).toBe("Got it: a software engineer who knows Python and Flask.");
+    expect(first.reply).toMatchObject({ assistantMessage: "Got it: a software engineer who knows Python and Flask." });
+    // a reply that says nothing else is only "Noted.", and one that says what is still needed keeps it
+    says("Everything is in. You can press Write the job now.", {});
+    const two = ((await (await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "It is in Austin, TX." })).json()) as IntakeTurnResponse).session;
+    expect(lastReply(two)).toBe("Noted.");
+    expect(two.readiness.mayDraft).toBe(false);
+    says("Still needed before the job can be written: the pay and the schedule. You can type them here.", {});
+    const three = ((await (await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message: "Full time." })).json()) as IntakeTurnResponse).session;
+    expect(lastReply(three)).toBe("Still needed before the job can be written: the pay and the schedule. You can type them here.");
+  });
+
   // Found by an audit in November 2026: "45-55k" was read as 45 and 55,000, so pay the owner had just typed was held as
   // unconfirmed, the pay card asked for it again, and "Write the job" waited.
   it("counts pay typed as '45-55k' as set by the owner: no pay card, and the job can be written", async () => {
@@ -352,7 +377,7 @@ describe("the job builder", () => {
     expect(draft.questions).toEqual([]);
     // without one the stand-in reads no pay at all, so this turn is scripted with what the real model answers
     container.fake!.scriptNext("intake.turn", {
-      assistantMessage: "Got it.", missingFacts: [], questions: [], readyToCompile: true,
+      assistantMessage: "Got it.", questions: [],
       factsExtracted: { title: "Office manager", locationText: "Irvine, CA", remotePolicy: "onsite", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "salary", compensationMin: 45000, compensationMax: 55000, mustHaves: ["Two years running an office"], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [] },
     });
     const plain = await start(owner, words("45-55k"));

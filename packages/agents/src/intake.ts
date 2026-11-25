@@ -378,14 +378,98 @@ export function withoutCardCount(message: string): string {
 }
 
 /**
- * The assistant's reply in the words the page uses. The model is told when a job is ready through a field named
- * readyToCompile and repeats the word to the owner ("the job is ready to compile"), who presses "Write the job"; and it
- * writes "résumé" where every page says "resume".
+ * The assistant's reply in the words the page uses. A model has told an owner "the job is ready to compile", who presses
+ * "Write the job" (the field that taught it the word is no longer asked for; the guard stays); and it writes "résumé"
+ * where every page says "resume".
  */
 export function inThePagesWords(message: string): string {
   return resumeAsWeWriteIt(message)
     .replace(/\bready\s+(?:to\s+(?:be\s+)?compiled?|for\s+compil(?:ing|ation))\b/gi, "ready to be written")
     .replace(/\bcompile\s+(the|this|your)\s+job\b/gi, (_all, the: string) => `write ${the} job`);
+}
+
+/** What the job is called when the assistant speaks of writing it. */
+const THE_JOB = "(?:the|this|your|a)\\s+(?:job(?!\\s+title)|posting|ad|advert|listing|description|draft)\\b";
+/** "Everything", "every essential", "all the details": the whole of what a job needs ("everything else" is the rest of it). */
+const ALL_OF_IT = "(?:everything(?!\\s+else\\b)|every\\s+essential|all(?:\\s+of)?(?:\\s+the|\\s+your|\\s+seven|\\s+7)*\\s+(?:essentials?|details|facts|basics|information|answers))";
+
+/**
+ * How the assistant says the job can be written, is ready, or that everything is in: "The job can be written now.",
+ * "You can now write the job.", "It is ready to be written.", "You're all set.", "Everything needed is in.", "I have all
+ * the essentials.", "That's everything I need.", "Press Write the job when you are ready." Read after
+ * `inThePagesWords`, so "ready to compile" is among them.
+ */
+const READY_CLAIMS: readonly RegExp[] = [
+  /\b(?:can|could|may)\s+(?:(?:now|already|all)\s+)*be\s+(?:written|drafted|created|generated)\b/i,
+  new RegExp(`\\b(?:I|we|you)\\s+(?:can|could|may)\\s+(?:(?:now|already|go\\s+ahead\\s+and)\\s+)*(?:write|draft|create|generate)\\s+(?:up\\s+)?${THE_JOB}`, "i"),
+  new RegExp(`\\bready\\s+(?:to\\s+be\\s+(?:written|drafted|created|generated)\\b|to\\s+(?:write|draft|create|generate)\\s+(?:up\\s+)?${THE_JOB}|for\\s+(?:writing|drafting)\\b)`, "i"),
+  /\b(?:job|draft|posting|ad|listing|it|this|that|everything|we)(?:\s+(?:is|are|looks|seems)|['’](?:s|re))\s+(?:(?:now|all)\s+)*(?:ready(?:\s+to\s+go)?|good\s+to\s+go)\s*(?:now)?\s*[.!]*$/i,
+  /\ball\s+set\b/i,
+  new RegExp(`\\b${ALL_OF_IT}\\b[^.!?]*?\\b(?:is|are|looks?|seems?)\\s+(?:(?:now|all|already)\\s+)*(?:in(?=\\s*(?:[.!,;:]|$|now\\b|so\\b|and\\b|place\\b))|(?:covered|complete|set|filled\\s+in|answered|accounted\\s+for)\\b)`, "i"),
+  new RegExp(`\\b(?:I|we)(?:\\s+(?:now\\s+)?have|['’]ve)(?:\\s+(?:now|got|already))*\\s+(?:${ALL_OF_IT}|all\\s+(?:I|we)\\s+need|enough|what\\s+(?:I|we|the\\s+job|it)\\s+needs?)\\b`, "i"),
+  new RegExp(`\\byou(?:['’]ve|\\s+have)\\s+(?:given|told)\\s+me\\s+(?:${ALL_OF_IT}|all\\s+I\\s+need)\\b`, "i"),
+  new RegExp(`\\bthat(?:['’]s|\\s+is|\\s+covers|\\s+completes|\\s+gives\\s+me)\\s+(?:${ALL_OF_IT}|all\\s+(?:I|we)\\s+need)\\b`, "i"),
+  /\b(?:press|click|tap|hit|use|select|choose)\s+(?:on\s+)?(?:the\s+)?["“”'‘’]?write\s+the\s+job\b/i,
+];
+
+/** The same claim made by saying nothing is left: "Nothing is missing.", "Nothing else is needed.", "There is nothing more to ask.", "I don't need anything else." */
+const NOTHING_LEFT = /\b(?:nothing|no\s+essentials?|none\s+of\s+the\s+essentials|no\s+(?:more|other|further)\s+(?:information|details|questions|answers))(?:\s+(?:else|more|further))?(?:\s+(?:is|are|seems?|looks?|remains?)|['’]s)?(?:\s+(?:still|now))?\s+(?:missing|needed|required|left|outstanding)\b|\bnothing\s+(?:(?:else|more|further|left)\s+)*to\s+(?:ask|add)\b|\b(?:I|we)\s+(?:do\s+not|don['’]t)\s+need\s+(?:anything|any\s+more|more)\b/i;
+
+/** What turns the claim round when it comes before it: "The job cannot be written yet.", "Not everything is in.", "Still needed before the job can be written: the pay." */
+const NOT_SO = /\b(?:not|cannot|never|almost|nearly|hardly|before|until)\b|n['’]t\b/i;
+/** A condition that waits for the owner, not for an answer: "when you are ready", "if you like", "once you're happy". */
+const FOR_THE_OWNER = "(?!\\s+(?:you(?:['’]re|\\s+are)\\s+(?:ready|happy|done|satisfied)|ready|you\\s+(?:like|want|wish)))";
+/**
+ * What makes the claim wait for an answer, in the claim's own part of the sentence: "Once the pay is in, the job can be
+ * written.", "Everything is in except the schedule.", "Everything but the pay is in.", "I still need the pay, then the
+ * job can be written."
+ */
+const WAITS_FOR = new RegExp(`\\b(?:still\\s+(?:need(?:s|ed)?|missing|required|to\\s+\\w+|outstanding|open|unanswered|unconfirmed)|need(?:s|ed)?\\s+(?:the|an?|your|one|two|three|to\\s+know)|missing|except|apart\\s+from|other\\s+than|but\\s+(?:the|for|your|an?|one|two|three)|as\\s+soon\\s+as|unless|(?:once|after|if|when(?:ever)?)${FOR_THE_OWNER})\\b`, "i");
+/** Where the claim's own part of a sentence ends, and an exception that may open the next part (", except the pay"). */
+const NEXT_PART = /[,;:]|\s(?:and|but|so)\s/;
+const AN_EXCEPTION = /^[,;:\s]*(?:but\s+)?(?:except|apart\s+from|other\s+than|besides|save\s+for|but\s+for|but\s+not)\b/i;
+
+/** What the assistant's reply is when nothing is left of it: the neutral word the AI interview's own code uses (`chatCodeLead`). */
+const NOTHING_TO_ADD = "Noted.";
+
+/**
+ * Whether a sentence of the assistant's says the job can be written, is ready, or that everything is in. A question
+ * never does; nor does a sentence that turns the claim round (`NOT_SO`) or makes it wait for an answer (`WAITS_FOR`),
+ * which says what is still needed. Words in a later part of the sentence ("…, and you can check it before you
+ * publish") are about something else and change nothing.
+ */
+function claimsReady(sentence: string): boolean {
+  const s = sentence.trim();
+  if (!s || /\?["”’)]*$/.test(s)) return false;
+  if (NOTHING_LEFT.test(s)) return true;
+  return READY_CLAIMS.some((claim) => {
+    const m = claim.exec(s);
+    if (!m) return false;
+    const end = m.index + m[0].length;
+    if (NOT_SO.test(s.slice(0, end))) return false;
+    const next = s.slice(end).search(NEXT_PART);
+    const own = next < 0 ? s : s.slice(0, end + next);
+    return !WAITS_FOR.test(own) && !(next >= 0 && AN_EXCEPTION.test(s.slice(end + next)));
+  });
+}
+
+/**
+ * The assistant's reply without any sentence that says the job can be written, is ready, or that everything is in.
+ * Whether that is so is worked out by the server after the model wrote its message (`intakeReadiness`), and the page
+ * shows it ("Everything needed is in", "Still needed"): the two disagreed on the live site (25 November 2026: "The job
+ * can be written now." beside a card asking for the work arrangement). The assistant is told never to say it; this
+ * holds it. A question, and a sentence that says what is still needed, stay. A reply with nothing left is "Noted."
+ */
+export function withoutReadyClaim(message: string): string {
+  // A new sentence starts with a capital, a quote or a bracket: "8 a.m. to 5 p.m." and "e.g. $20" are not cut in two.
+  const sentences = (line: string) => line.split(/(?<=[.!?]["”’)]*)\s+(?=["“‘'(\[]?[A-Z])/);
+  if (!message.split("\n").some((line) => sentences(line).some(claimsReady))) return message;
+  const lines = message.split("\n").flatMap((line) => {
+    if (!line.trim()) return [line];
+    const kept = sentences(line).filter((s) => !claimsReady(s)).join(" ");
+    return kept.trim() ? [kept] : [];
+  });
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() || NOTHING_TO_ADD;
 }
 
 /**
@@ -434,11 +518,69 @@ function benefitsNeeded(facts: IntakeFacts, companyBenefits: string | undefined)
   return places.some((j) => BENEFITS_DESCRIPTION_JURISDICTIONS.includes(j));
 }
 
-/** Pay the owner typed in their own words counts as set by them; the confirmation is recorded with who and when. */
+/** Pay the owner typed in their own words counts as set by them: the confirmation to record, with who and when, or null when there is none to make. */
+function typedPay(messages: IntakeMessage[], facts: IntakeFacts, state: IntakeServerState, actor: Actor, at: string): NonNullable<IntakeServerState["pay"]> | null {
+  if (!payTyped(messages, facts) || payConfirmed(facts, state)) return null;
+  return { by: actorOfTurn(actor), at, via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax! };
+}
+
+/** `typedPay`, recorded on the draft's state with its event. */
 async function confirmTypedPay(q: Tx, input: { companyId: string; sessionId: string; actor: Actor }, messages: IntakeMessage[], facts: IntakeFacts, state: IntakeServerState): Promise<void> {
-  if (!payTyped(messages, facts) || payConfirmed(facts, state)) return;
-  state.pay = { by: actorOfTurn(input.actor), at: new Date().toISOString(), via: "typed", basis: facts.compensationBasis as "hourly" | "salary", min: facts.compensationMin!, max: facts.compensationMax! };
+  const pay = typedPay(messages, facts, state, input.actor, new Date().toISOString());
+  if (!pay) return;
+  state.pay = pay;
   await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: input.sessionId }, payload: { via: "typed" } });
+}
+
+/** A draft as a turn leaves it, worked out with no database (`afterTurn`). */
+export type AfterTurn = {
+  facts: IntakeFacts;
+  state: IntakeServerState;
+  /** The cards as they are stored and shown (`prepareQuestions`). */
+  questions: IntakeQuestion[];
+  /** The assistant's reply as it is stored and shown. */
+  message: string;
+  /** What is still needed, and whether "Write the job" may run: the server's own answer, which the page shows. */
+  missing: IntakeEssentialKey[];
+  mayDraft: boolean;
+  notARole: boolean;
+  /** Pay the owner typed was counted as set by them on this turn. */
+  payTyped: boolean;
+};
+
+/**
+ * What the server makes of a turn the assistant answered: the facts it keeps (read only from words the owner typed or
+ * pasted since the last reply), pay the owner typed counted as theirs, what is still missing, the cards it shows, and
+ * the reply as it is stored. Nothing of this is the model's to decide. `runIntakeTurn` stores it; the evaluations judge
+ * it (packages/evals), so they judge what the app does and not a copy of it. `messages`: the conversation with the
+ * owner's latest message, before the assistant's reply. `companyBenefits`: the company's own benefits line (Settings).
+ */
+export function afterTurn(input: { turn: IntakeTurn; messages: IntakeMessage[]; facts: IntakeFacts; state: IntakeServerState; companyBenefits?: string; actor: Actor; at: string }): AfterTurn {
+  const { turn, messages } = input;
+  const state = structuredClone(input.state);
+  const before = normalizeFacts(input.facts);
+  const facts = typedSinceReply(messages) ? mergeFacts(before, turn.factsExtracted, messages) : before;
+  const offer = dealBreakerOffer(facts, state.dealBreakersOffered);
+  for (const d of offer.declined) if (!facts.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))) facts.declinedCriteria.push({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) });
+  const turnNo = messages.filter((m) => m.role === "owner").length;
+  const notARole = turnNo === 1 && turn.notARole;
+  const pay = typedPay(messages, facts, state, input.actor, input.at);
+  if (pay) state.pay = pay;
+  const confirmed = payConfirmed(facts, state);
+  const { missing, mayDraft } = intakeReadiness({ facts, state, draft: null });
+  // Pay that is stated but that nobody confirmed (read from a pasted ad) still needs its card.
+  const toAsk: IntakeEssentialKey[] = confirmed || missing.includes("compensation_range") ? missing : [...missing, "compensation_range"];
+  const questions = notARole ? [] : prepareQuestions(turn.questions, {
+    turnNo, payConfirmed: confirmed, dealBreakers: offer.offer, missing: toAsk, benefitsNeeded: !missing.length && benefitsNeeded(facts, input.companyBenefits),
+    settled: settle(state.settledFields, fieldsKnownFromFacts(facts, confirmed)), ownerWords: ownerWordsOf(messages), askedPrompts: state.askedPrompts,
+  });
+  state.openQuestions = questions;
+  state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
+  state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
+  state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
+  if (state.ad && turn.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: turn.takenFromAd };
+  const message = withoutReadyClaim(inThePagesWords(withoutCardCount(turn.assistantMessage)));
+  return { facts, state, questions, message, missing, mayDraft, notARole, payTyped: !!pay };
 }
 
 /**
@@ -459,7 +601,6 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
   });
   await readPastedAd(db, deps, input, deadlineAt);
   const inputs = await withTenant(db, input.companyId, (q) => loadIntakeInputs(q, input.companyId, input.sessionId));
-  const turnNo = inputs.session.messages.filter((m) => m.role === "owner").length;
   const out = await runPromptDetached(db, deps.ai, intakeTurnPrompt, contextFrom(inputs), { companyId: input.companyId, inputRef: { sessionId: input.sessionId, turn: inputs.session.messages.length }, deadlineAt });
   // The owner's words are saved above, and nothing failed: the route offers an upgrade.
   if (outOfCredit(out)) return { error: out.error, aiRunId: out.runId, noCredit: true, refusedHoldUsd: out.refusedHoldUsd };
@@ -473,34 +614,18 @@ export async function runIntakeTurn(db: Db, deps: IntakeDeps, input: IntakeTurnI
       return { error: out.error, aiRunId: out.runId };
     }
     if (session.status !== "active") return { error: "This draft is no longer open.", aiRunId: out.runId };
-    const state = stateOf(session);
-    const before = normalizeFacts(session.facts);
-    const facts = typedSinceReply(session.messages) ? mergeFacts(before, out.output.factsExtracted, session.messages) : before;
-    const offer = dealBreakerOffer(facts, state.dealBreakersOffered);
-    for (const d of offer.declined) if (!facts.declinedCriteria.some((x) => normalizeCriterion(x.requested) === normalizeCriterion(d.requested))) facts.declinedCriteria.push({ requested: d.requested, reason: d.reason, ...(d.alternative ? { alternative: d.alternative } : {}) });
-    const notARole = session.messages.filter((m) => m.role === "owner").length === 1 && out.output.notARole;
-    await confirmTypedPay(q, input, session.messages, facts, state);
-    const confirmed = payConfirmed(facts, state);
-    const missing = intakeReadiness({ facts, state, draft: null }).missing;
-    // Pay that is stated but that nobody confirmed (read from a pasted ad) still needs its card.
-    const toAsk: IntakeEssentialKey[] = confirmed || missing.includes("compensation_range") ? missing : [...missing, "compensation_range"];
-    const questions = notARole ? [] : prepareQuestions(out.output.questions, {
-      turnNo, payConfirmed: confirmed, dealBreakers: offer.offer, missing: toAsk, benefitsNeeded: !missing.length && benefitsNeeded(facts, loaded.company.settings.benefitsSummary),
-      settled: settle(state.settledFields, fieldsKnownFromFacts(facts, confirmed)), ownerWords: ownerWordsOf(session.messages), askedPrompts: state.askedPrompts,
-    });
-    state.openQuestions = questions;
-    state.settledFields = settle(state.settledFields, questions.flatMap(cardFields));
-    state.askedPrompts = rememberPrompts(state.askedPrompts, questions);
-    state.dealBreakersOffered = [...state.dealBreakersOffered, ...offer.offer];
-    if (state.ad && out.output.takenFromAd.length && !state.ad.takenFromAd.length) state.ad = { ...state.ad, takenFromAd: out.output.takenFromAd };
-    const message = inThePagesWords(withoutCardCount(out.output.assistantMessage));
-    const messages = [...session.messages, { role: "assistant" as const, content: message, at: new Date().toISOString(), aiRunId: out.runId }];
+    const at = new Date().toISOString();
+    const { facts, state, questions, message, missing, notARole, payTyped: typed } = afterTurn({ turn: out.output, messages: session.messages, facts: session.facts, state: stateOf(session), companyBenefits: loaded.company.settings.benefitsSummary, actor: input.actor, at });
+    if (typed) await emit(q, { type: "intake.pay_confirmed", companyId: input.companyId, actor: input.actor, subject: { type: "intake_session", id: session.id }, payload: { via: "typed" } });
+    const messages = [...session.messages, { role: "assistant" as const, content: message, at, aiRunId: out.runId }];
     const draftPacket = !notARole && session.draftPacket ? draftByRule({ ...loaded, session, state }, facts, input.actor) : null;
     await q.update(intakeSessions).set({ messages, facts, missingFacts: missing, serverState: state, ...(notARole ? { status: "abandoned" } : {}), ...(draftPacket ? { draftPacket } : {}) }).where(eq(intakeSessions.id, session.id));
     await emit(q, { type: "intake.turn_completed", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { missing, questions: questions.map((x) => x.field) } });
     // Not about hiring: nothing is left behind as a draft; the conversation stays in the record.
     if (notARole) await emit(q, { type: "intake.abandoned", companyId: input.companyId, actor: agent, subject: { type: "intake_session", id: session.id }, payload: { reason: "not_a_role", turns: messages.length } });
-    return { turn: { ...out.output, assistantMessage: message, factsExtracted: facts, missingFacts: missing, questions, readyToCompile: !missing.length && confirmed }, aiRunId: out.runId, notARole };
+    // The turn as it stands on the page: the reply as stored, the facts as kept and the cards as shown. Whether the job
+    // can be written is not part of it: that is the draft's readiness, the one place the page reads it.
+    return { turn: { ...out.output, assistantMessage: message, factsExtracted: facts, questions }, aiRunId: out.runId, notARole };
   });
 }
 

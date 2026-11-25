@@ -1,4 +1,4 @@
-import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeMissingFact, type IntakeQuestion, type IntakeTurn, type JobPosts } from "@ros/contracts";
+import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type DraftRolePacket, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type JobPosts } from "@ros/contracts";
 import { ASKED_WORDS, type StructuredRequest } from "@ros/ai";
 import { REACH_A_PERSON_LINE, disclosureLine, normalizeCriterion } from "@ros/core";
 
@@ -93,7 +93,8 @@ function placeIn(text: string): string | undefined {
 /**
  * intake.turn: the facts read from the owner's own words, and up to three cards for the essentials still missing, in
  * their order, never one the notes list as already asked. Nothing is assumed: the place and the work arrangement are
- * taken only from what the owner wrote.
+ * taken only from what the owner wrote. As the prompt asks, the reply never says that the job can be written or that
+ * everything is in (the page shows that); it does say which essentials are still needed once their cards were asked.
  */
 export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   const c = contextFrom(req);
@@ -105,7 +106,7 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   const firstTurn = c.ownerMessages.length === 1;
 
   if (firstTurn && !c.ad && notAJob(last, facts)) {
-    return { assistantMessage: "That doesn't sound like a job to fill, so I haven't started a draft. When you're ready to hire, describe the job: the title, where it is and what the person needs.", factsExtracted: facts, missingFacts: [], questions: [], readyToCompile: false, notARole: true, takenFromAd: [] };
+    return { assistantMessage: "That doesn't sound like a job to fill, so I haven't started a draft. When you're ready to hire, describe the job: the title, where it is and what the person needs.", factsExtracted: facts, questions: [], notARole: true, takenFromAd: [] };
   }
 
   if (!facts.title) {
@@ -180,7 +181,7 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
     title: !!facts.title, location: !!facts.locationText, remote_policy: !!facts.remotePolicy, compensation_range: facts.compensationMin !== undefined && !!facts.compensationBasis,
     employment_type: !!facts.employmentType, schedule: !!facts.schedule, must_haves: facts.mustHaves.length > 0,
   };
-  const missing: IntakeMissingFact[] = INTAKE_ESSENTIALS.filter((e) => !has[e]);
+  const missing = INTAKE_ESSENTIALS.filter((e) => !has[e]);
 
   const fromAd = !!c.ad && facts.compensationMin !== undefined && !c.ownerMessages.slice(firstTurn ? 1 : 0).some((m) => /\$\s?\d/.test(m));
   const questions: IntakeQuestion[] = [];
@@ -210,10 +211,11 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   for (const d of declinedNow) lines.push(`I can't build "${d.requested}" into the requirements. ${d.reason} ${d.alternative}`);
   if (takenFromAd.length) lines.push(`I took these from your ad: ${takenFromAd.join("; ")}. I'll only ask about what's missing.`);
   else if (firstTurn && facts.title) lines.push(`Got it: ${facts.title}${facts.locationText ? ` in ${facts.locationText}` : ""}.`);
-  if (!missing.length && !questions.length) lines.push("I have what the job needs. Press Write the job when you are ready.");
-  else if (questions.length) lines.push("I've put what's still missing beside this. Tap an answer, add your own, or just type.");
-  else lines.push(`Still needed before the job can be written: ${missing.map((m) => m.replace(/_/g, " ")).join(", ")}. You can type them here.`);
-  return { assistantMessage: lines.join("\n\n"), factsExtracted: facts, missingFacts: missing, questions, readyToCompile: missing.length === 0, notARole: false, takenFromAd };
+  if (questions.length) lines.push("I've put what's still missing beside this. Tap an answer, add your own, or just type.");
+  else if (missing.length) lines.push(`Still needed before the job can be written: ${missing.map((m) => m.replace(/_/g, " ")).join(", ")}. You can type them here.`);
+  // Nothing to ask: only what it understood, never that the job can be written (the page says that).
+  else if (!lines.length) lines.push("Noted.");
+  return { assistantMessage: lines.join("\n\n"), factsExtracted: facts, questions, notARole: false, takenFromAd };
 }
 
 /** intake.extract: what a pasted ad states plainly, read with simple rules. */
