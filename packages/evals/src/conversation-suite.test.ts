@@ -105,6 +105,40 @@ describe("screen.conversation", () => {
     expect(shown.conversation.questions.map((q) => q.key)).not.toContain(licence);
   });
 
+  // The persona's own setup must not be what fails on a real model. What the model is told of their resume names no
+  // licence and no licensed title, so a "No" about it contradicts nothing; and a model that words the question "Can you
+  // tell me whether you hold …?" still asks yes or no, where "Could you tell me about your licence?" asks for an account.
+  it("gives the model a resume with no licence on it for that persona, and reads 'Can you tell me whether you hold it?' as a yes-or-no question", async () => {
+    const job = await goldenJob();
+    const [licence = ""] = job.requirements.mustHaves.map((m) => m.key);
+    const p = persona("licence_not_on_the_resume");
+    const seen: ScreenContext[] = [];
+    const { conversation: c } = await runConversation(p, job, async (ctx) => {
+      seen.push(ctx);
+      return run(ctx);
+    });
+    expect(seen).toHaveLength(c.turns.length);
+    for (const ctx of seen) expect(ctx.chat.cv).toEqual(["Dental assistant at Harbor Dental (2019 to now)", "Skills: Dentrix, chairside assisting"]);
+    expect(c.transcript[0]?.content.startsWith("Hi Alex. Your resume shows your work as Dental assistant at Harbor Dental (2019 to now).\n\n")).toBe(true);
+    // every other persona's resume shows the licence, as the reading their plan is built from found
+    const others: ScreenContext[] = [];
+    await runConversation(persona("cooperative"), job, async (ctx) => {
+      others.push(ctx);
+      return run(ctx);
+    });
+    expect(others[0]?.chat.cv[0]).toBe("Registered Dental Hygienist at Harbor Dental (2019 to now)");
+    // the model's own wording of the licence question, as the candidate is shown it
+    const asksAs = (question: string) => runConversation(p, job, async (ctx) => {
+      const turn = await run(ctx);
+      return typeof turn === "string" || turn.questionKey !== licence ? turn : { ...turn, messageToCandidate: `You see nine patients a day.\n\n${question}` };
+    });
+    const whether = await asksAs("Can you tell me whether you hold an active California RDH license?");
+    expect(whether.conversation.transcript.find((t) => t.role === "assistant" && t.questionKey === licence)?.content).toMatch(/\n\nCan you tell me whether you hold an active California RDH license\?$/);
+    expect(p.expect(whether.conversation)).toEqual([]);
+    const account = await asksAs("Could you tell me about your RDH license?");
+    expect(p.expect(account.conversation)).toEqual(["the licence was not asked as one yes-or-no question: Could you tell me about your RDH license?"]);
+  });
+
   it("catches a model that does not read a request for a person, and one that closes on it", async () => {
     const job = await goldenJob();
     // the model moves on as if the request were an answer

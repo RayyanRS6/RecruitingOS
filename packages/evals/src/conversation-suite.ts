@@ -59,16 +59,23 @@ const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, followU
 
 /** What the chat may know of the candidate: a few lines of their CV. */
 const CV = ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"];
+/**
+ * The same for a candidate whose resume does not show the job's licence (`licenceOnResume` false): no line names the
+ * licence or a licensed title, so their "No" about it contradicts nothing the model was told of them.
+ */
+const CV_WITHOUT_LICENCE = ["Dental assistant at Harbor Dental (2019 to now)", "Skills: Dentrix, chairside assisting"];
 
 /**
  * One conversation, driven as the app drives a chat: Start asks the first question in code; then, for each reply, the
  * model's turn, the code's rules, the answer recorded (never a personal sentence), the plan moved on, and the message
  * shown. The CV reading found the job's licence shown and nothing else, so the chat asks about every other must-have;
- * for a persona whose resume does not show the licence (`licenceOnResume` false) it found nothing shown, and the chat
- * asks about the licence too. `failed`: why a model call gave no turn.
+ * for a persona whose resume does not show the licence (`licenceOnResume` false) it found nothing shown, the chat asks
+ * about the licence too, and the CV lines the model is given name none (`CV_WITHOUT_LICENCE`). `failed`: why a model
+ * call gave no turn.
  */
 export async function runConversation(persona: Persona, job: RolePacket, run: (ctx: ScreenContext) => Promise<ScreenTurn | string>): Promise<{ conversation: Conversation; failed: string | null }> {
   const shownOnCv = persona.licenceOnResume === false ? [] : [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
+  const cv = persona.licenceOnResume === false ? CV_WITHOUT_LICENCE : CV;
   let progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(job, { requirementFindings: shownOnCv }, AT) };
   const asked = () => chatPacket(job, progress);
   let answers: Record<string, string> = {};
@@ -78,7 +85,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
   const conversation = (done: boolean): Conversation => ({ job, questions: asked().screening.questions, turns, answers, done, progress, transcript });
   const first = nextQuestion(asked(), progress, answers);
   if (!first) return { conversation: conversation(false), failed: "the job asks nothing" };
-  const opening = chatOpening({ firstName: FIRST_NAME, cv: CV, question: first.question });
+  const opening = chatOpening({ firstName: FIRST_NAME, cv, question: first.question });
   transcript.push({ role: "assistant", content: opening, at: AT, questionKey: first.key, source: "system" });
   progress = advanceProgress(progress, { ...SILENT, messageToCandidate: opening, questionKey: first.key });
   let stayed = false;
@@ -93,7 +100,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
     if (said === null) break;
     replied.push(asking);
     transcript.push({ role: "candidate", content: said, at: AT, source: "chat" });
-    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, CV) });
+    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, cv) });
     if (typeof raw === "string") return { conversation: conversation(false), failed: raw };
     const { turn, move } = enforceChatTurn(raw, asked(), progress, answers, { transcript, latest: said });
     if (turn.answerRecorded) answers = { ...answers, [turn.answerRecorded.questionKey]: redactProtected(turn.answerRecorded.answer) };
@@ -124,8 +131,11 @@ const withoutQuotes = (message: string): string => message.replace(/"[^"]*"/g, "
 const cooperative: Persona["reply"] = ({ asking, kind, followUp }) => (kind === "closing" ? "No, that is everything, thank you." : cooperativeReply(asking, followUp));
 /** The chat's question about a licence or certificate the resume does not show, in the code's words: held or not (`gapQuestion` in packages/agents). */
 const asksIfTheyHoldIt = (q: Pick<ScreeningQuestion, "question">): boolean => /Do you have it\?$/.test(q.question);
-/** Asking for an account of something, which a licence does not have: it is held or it is not. */
-const ASKS_FOR_AN_ACCOUNT = /\b(?:tell (?:me|us)|describe|walk (?:me|us) through|from your own work|an example|what can you tell)\b/i;
+/**
+ * Asking for an account of something, which a licence does not have: it is held or it is not. "Can you tell me whether
+ * you hold one?" still asks yes or no, so "tell me whether" and "tell me if" are not read as asking for an account.
+ */
+const ASKS_FOR_AN_ACCOUNT = /\b(?:tell (?:me|us)(?!\s+(?:whether|if)\b)|describe|walk (?:me|us) through|from your own work|an example|what can you tell)\b/i;
 /** The ladder's own words for someone who said "No" about a skill: never said about a licence. */
 const SOMETHING_LIKE_IT = /\b(?:not done that exactly|something similar|small moment|something like it)\b/i;
 /** The question a message asks, without the restatement before it (which may quote anything the candidate said). */
