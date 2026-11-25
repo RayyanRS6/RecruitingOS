@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adverseDecisionLineApplies, jobNoticesFor, regionFromLocationText, stateAlone, stateOfPlace } from "./compliance";
+import { adverseDecisionLineApplies, beginsWithState, jobNoticesFor, regionFromLocationText, stateAlone, stateOfPlace } from "./compliance";
 
 /**
  * The state of a job's place is read from the owner's own words and from nowhere else: since 25 November 2026 the AI is
@@ -14,9 +14,19 @@ describe("the state of a job's place, as its owner wrote it", () => {
   });
 
   it("reads the code in capitals as the last word when no comma was typed, and only after another word", () => {
-    for (const [place, state] of [["Austin TX", "TX"], ["Boulder CO 80302", "CO"], ["Kansas City MO", "MO"], ["Portland OR", "OR"], ["Washington DC", "DC"]] as const) expect(stateOfPlace(place), place).toBe(state);
+    for (const [place, state] of [["Austin TX", "TX"], ["Boulder CO 80302", "CO"], ["Kansas City MO", "MO"], ["Washington DC", "DC"], ["Brooklyn NY", "NY"]] as const) expect(stateOfPlace(place), place).toBe(state);
     // in small letters it is only a word ("come in", "that is ok"), and alone it is no place
     for (const place of ["austin tx", "anywhere is ok", "TX", "Remote US", "Remote USA"]) expect(stateOfPlace(place), place).toBeNull();
+  });
+
+  // A wrong state is worse than none: it puts another state's notices on the job and leaves the right ones off, and
+  // nothing on the page shows the owner how the place was read. "LA" is Los Angeles as often as Louisiana, and "OK",
+  // "OR", "IN", "ME" and "HI" are everyday words in capitals. Without a comma those six say no state; the builder asks.
+  it("takes a code that is also a word, or a city's short name, only after a comma", () => {
+    for (const place of ["Downtown LA", "East LA", "LA", "Remote OK", "Hybrid OK", "Portland OR", "Gary IN", "Bangor ME", "Honolulu HI", "Downtown LA 90012"]) expect(stateOfPlace(place), place).toBeNull();
+    for (const [place, state] of [["Baton Rouge, LA", "LA"], ["New Orleans, LA 70112", "LA"], ["Tulsa, OK", "OK"], ["Portland, OR", "OR"], ["Gary, IN", "IN"], ["Bangor, ME", "ME"], ["Honolulu, HI", "HI"], ["tulsa, ok", "OK"]] as const) expect(stateOfPlace(place), place).toBe(state);
+    // the full name is the state however the place is written, and every other code still reads as the last word
+    for (const [place, state] of [["New Orleans Louisiana", "LA"], ["Tulsa Oklahoma", "OK"], ["Los Angeles, California", "CA"], ["Los Angeles CA", "CA"], ["Austin TX", "TX"]] as const) expect(stateOfPlace(place), place).toBe(state);
   });
 
   it("reads a state's full name where it ends the place or stands after a comma", () => {
@@ -56,8 +66,23 @@ describe("the state of a job's place, as its owner wrote it", () => {
 
 describe("a state and nothing else", () => {
   it("is a code in any case or a full name", () => {
-    for (const [text, state] of [["CO", "CO"], ["co", "CO"], ["Co.", "CO"], ["Colorado", "CO"], [" new york ", "NY"], ["West Virginia", "WV"], ["DC", "DC"]] as const) expect(stateAlone(text), text).toBe(state);
+    for (const [text, state] of [["CO", "CO"], ["co", "CO"], ["Co.", "CO"], ["Colorado", "CO"], [" new york ", "NY"], ["West Virginia", "WV"], ["DC", "DC"], ["OK", "OK"], ["CA", "CA"]] as const) expect(stateAlone(text), text).toBe(state);
     for (const text of ["Denver", "Denver, CO", "US", "Colorado Springs", "ok then", "", null, undefined]) expect(stateAlone(text), String(text)).toBeNull();
+  });
+
+  // "LA" by itself is Los Angeles as often as Louisiana, so it is no state: the owner says which.
+  it("is never 'LA' by itself, in any case, with or without a full stop; Louisiana by its name is", () => {
+    for (const text of ["LA", "la", "La", "LA.", "la.", " LA "]) expect(stateAlone(text), text).toBeNull();
+    expect(stateAlone("Louisiana")).toBe("LA");
+    expect(stateAlone("louisiana.")).toBe("LA");
+  });
+});
+
+describe("a state written after a city, in a person's own words", () => {
+  it("is its code in any case or its name, and for a code that is also a word only after their own comma", () => {
+    for (const [after, state] of [[", CO, on site", "CO"], [" co, on site", "CO"], [", Colorado", "CO"], [" Colorado 80302", "CO"], [", LA, on site", "LA"], [", ok", "OK"], [" Louisiana", "LA"], [", Oregon", "OR"]] as const) expect(beginsWithState(after, state), after).toBe(true);
+    // "Downtown LA", "Remote OK", "Gary in the mornings": the word is no state
+    for (const [after, state] of [[" LA, on site", "LA"], [" OK", "OK"], [" in the mornings", "IN"], [" or Salem", "OR"], [", on site", "CO"], [" Colorado Springs", "CA"], ["", "CO"]] as const) expect(beginsWithState(after, state), after).toBe(false);
   });
 });
 

@@ -475,6 +475,73 @@ describe("the place of a job: its state is the owner's to say, and the card come
     expect(guessed.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
   });
 
+  // A wrong state is worse than none: it puts another state's notices on the job and leaves the right ones off, and
+  // nothing on the page shows the owner how the place was read. "LA" is Los Angeles as often as Louisiana, and "OK" and
+  // "OR" are everyday words in capitals: without a comma they say no state, and the card for the place asks.
+  it("reads no state from 'Downtown LA', 'East LA', 'LA', 'Remote OK' or 'Portland OR': the place card comes back for each", async () => {
+    for (const place of ["Downtown LA", "East LA", "LA", "Remote OK", "Portland OR"]) {
+      const messages = [said(assistantIn(place))];
+      const t = await turn(ctx(messages));
+      // the assistant read the place as the owner wrote it; the rest is in the sentence
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      expect(server.facts.locationText, place).toBe(place);
+      expect(server.missing, place).toEqual(["location"]);
+      expect(server.mayDraft, place).toBe(false);
+      expect(server.questions.map((q) => q.prompt), place).toEqual([PLACE_CARD]);
+    }
+    // with the comma the same codes are the state, and so is any other code as the last word
+    for (const [place, state] of [["Baton Rouge, LA", "LA"], ["Tulsa, OK", "OK"], ["Austin TX", "TX"]] as const) {
+      const messages = [said(assistantIn(place))];
+      const t = await turn(ctx(messages));
+      const server = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: place, remotePolicy: "On site" } }, messages);
+      expect(server.missing, place).toEqual([]);
+      const job = await places(server.facts, messages);
+      expect(job.locations.map((l) => l.region), place).toEqual([state]);
+      expect(job.jurisdictions, place).toContain(`US-${state}`);
+    }
+  });
+
+  it("keeps asking through 'LA' given twice on the card, and takes California once the owner says Los Angeles and then CA", async () => {
+    const { messages, t, server } = await first(assistantIn("Downtown LA"));
+    expect(t.factsExtracted.locationText).toBe("Downtown LA");
+    expect(server).toMatchObject({ missing: ["location"], mayDraft: false });
+    /** The place card answered with these words, and the turn after it. */
+    const answer = async (from: { server: ReturnType<typeof afterTurn>; messages: IntakeMessage[] }, own: string) => {
+      const answered = afterAnswers({ answers: [{ questionId: from.server.questions[0].id, selected: [], own: [own], skipped: false }], messages: [...from.messages, replied(from.server.message)], facts: from.server.facts, state: from.server.state, actor: dana, at });
+      const next = afterTurn({ turn: await turn(ctx(answered.messages, answered.facts, { alreadyAsked: alreadyAskedOf(answered.facts, answered.state) })), messages: answered.messages, facts: answered.facts, state: answered.state, actor: dana, at });
+      return { server: next, messages: answered.messages };
+    };
+    // "LA" completes nothing and says no state, the first time and the second
+    let draft = await answer({ server, messages }, "LA");
+    expect(draft.server.facts.locationText).toBe("LA");
+    expect(draft.server.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    draft = await answer(draft, "LA");
+    expect(draft.server.facts.locationText).toBe("LA");
+    expect(draft.server).toMatchObject({ missing: ["location"], mayDraft: false });
+    expect(draft.server.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the city by its name is still no state
+    draft = await answer(draft, "Los Angeles");
+    expect(draft.server.facts.locationText).toBe("Los Angeles");
+    expect(draft.server.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // "CA" completes it: California, and the job can be written
+    draft = await answer(draft, "CA");
+    expect(draft.server.facts.locationText).toBe("Los Angeles, CA");
+    expect(draft.server).toMatchObject({ missing: [], mayDraft: true });
+    const job = await places(draft.server.facts, draft.messages);
+    expect(job.locations).toEqual([{ city: "Los Angeles", region: "CA", country: "US" }]);
+    expect(job.jurisdictions).toEqual(["US-CA"]);
+  });
+
+  // The assistant may put the comma in itself ("Downtown, LA"): the owner's own words still have no comma, so no state.
+  it("does not let a comma the assistant added turn 'Downtown LA' into Louisiana", () => {
+    const merged = (ownerSaid: string, assistantRead: string) => mergeFacts(facts(), facts({ locationText: assistantRead }), [said(ownerSaid)]).locationText;
+    expect(merged(assistantIn("Downtown LA"), "Downtown, LA")).toBe("Downtown");
+    expect(merged(assistantIn("Portland OR"), "Portland, OR")).toBe("Portland");
+    // the owner's own comma, or the state's name, says it
+    expect(merged(assistantIn("Baton Rouge, LA"), "Baton Rouge, LA")).toBe("Baton Rouge, LA");
+    expect(merged(assistantIn("Portland, Oregon"), "Portland, OR")).toBe("Portland, OR");
+  });
+
   // As before this rule: a remote job whose owner names no place has no state of its own, and is not asked for one.
   it("asks a remote job with no place for no state, and writes it with no state of its own", async () => {
     const sentence = "I need a support agent, remote, full time, Monday to Friday, $20 to $24 an hour. Must-haves: two years in customer support.";

@@ -504,6 +504,37 @@ describe("the job builder", () => {
     expect(draft.legalCheck?.items.map((i) => i.key)).toEqual(["pay_range", "benefits", "closing_date"]);
   });
 
+  // A wrong state is worse than none: it would put another state's notices on the job and leave the right ones off.
+  // "LA" is Los Angeles as often as Louisiana, so without a comma it says no state, on the place and on its card.
+  it("reads no state from 'Downtown LA' or from 'LA' on the card, and writes a California job once the owner says Los Angeles and then CA", async () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    let draft = await start(owner, "Dental assistant in Downtown LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(draft.facts.locationText).toBe("Downtown LA");
+    expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // "LA" on the card, twice: the place is "LA", it still has no state, and the card is there again
+    for (let n = 0; n < 2; n += 1) {
+      draft = (await answerCards(owner, draft, { location: "LA" })).session;
+      expect(draft.facts.locationText).toBe("LA");
+      expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    }
+    draft = (await answerCards(owner, draft, { location: "Los Angeles" })).session;
+    expect(draft.readiness.missing).toEqual(["location"]);
+    draft = (await answerCards(owner, draft, { location: "CA" })).session;
+    expect(draft.facts.locationText).toBe("Los Angeles, CA");
+    expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+    expect(w.status, await w.clone().text()).toBe(200);
+    const job = ((await w.json()) as { session: IntakeSessionView }).session.draft;
+    expect(job?.identity.locations).toEqual([{ city: "Los Angeles", region: "CA", country: "US" }]);
+    expect(job?.compliance.jurisdictions).toEqual(["US-CA"]);
+    // with the owner's comma the same letters are Louisiana
+    const louisiana = await start(owner, "Dental assistant in Baton Rouge, LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
+    expect(louisiana.facts.locationText).toBe("Baton Rouge, LA");
+    expect(louisiana.readiness).toMatchObject({ mayDraft: true, missing: [] });
+  });
+
   it("holds a Colorado job until the ad describes the benefits, and gives it a closing date when it is published", async () => {
     let draft = await start(owner, "Dental assistant in Denver, CO, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     // the essentials are in; the law of the job's place asks the ad to describe the benefits, so the builder asks once

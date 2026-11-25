@@ -141,6 +141,17 @@ describe("readiness: what a job needs before it is written and published", () =>
     expect(placeAnswered({})).toBe(false);
   });
 
+  // A wrong state is worse than none: another state's notices would be on the job and the right ones off. "LA" is Los
+  // Angeles as often as Louisiana, and "OK" and "OR" are words: without a comma they answer nothing, and the card asks.
+  it("takes no state from a code that is also a word or a city's short name, unless it stands after a comma", () => {
+    const answered = (locationText: string) => {
+      const r = intakeReadiness({ facts: complete({ locationText }), state: state(paid), draft: null });
+      return { done: r.essentials.find((e) => e.key === "location")!.done, missing: r.missing, mayDraft: r.mayDraft };
+    };
+    for (const said of ["Downtown LA", "East LA", "LA", "Remote OK", "Portland OR"]) expect(answered(said), said).toEqual({ done: false, missing: ["location"], mayDraft: false });
+    for (const said of ["Baton Rouge, LA", "Tulsa, OK", "Portland, OR", "Austin TX", "Los Angeles, CA", "New Orleans, Louisiana"]) expect(answered(said), said).toEqual({ done: true, missing: [], mayDraft: true });
+  });
+
   // The one way out, as before this rule: a job the owner said is remote, when the answer names no place at all.
   it("asks a remote job for no state when its answer names no place, and for the state when it names one", () => {
     const remote = (locationText: string) => placeAnswered({ locationText, remotePolicy: "remote" });
@@ -243,6 +254,30 @@ describe("answers to the question cards", () => {
     expect(after("Denver", "Denver, CO").facts.locationText).toBe("Denver, CO");
     expect(after("Denver", "Boulder").facts.locationText).toBe("Boulder");
     expect(after(undefined, "Colorado").facts.locationText).toBe("Colorado");
+  });
+
+  // "LA" by itself is Los Angeles as often as Louisiana: it completes nothing and says no state, however often it is
+  // given. The owner says which: the state by a code that is not a word, by its name, or after the city and a comma.
+  it("never takes 'LA' alone for a state: the place still has none, until the owner says California or Louisiana", () => {
+    const where = card({ id: "l", field: "location" });
+    const after = (before: string | undefined, own: string) => applyAnswers(facts({ locationText: before }), [where], [answer("l", { own: [own] })]).facts;
+    for (const before of ["LA", "Downtown LA", "Los Angeles", "New Orleans", undefined]) {
+      for (const own of ["LA", "la", "LA."]) {
+        expect(after(before, own).locationText, `${before} + ${own}`).toBe(own);
+        expect(placeAnswered(after(before, own)), `${before} + ${own}`).toBe(false);
+      }
+    }
+    // Los Angeles, then the state: California
+    expect(after("Los Angeles", "CA").locationText).toBe("Los Angeles, CA");
+    expect(after("Los Angeles", "California").locationText).toBe("Los Angeles, California");
+    expect(placeAnswered(after("Los Angeles", "CA"))).toBe(true);
+    // and Louisiana, said so that it can only be the state
+    expect(after("New Orleans", "Louisiana").locationText).toBe("New Orleans, Louisiana");
+    expect(after("LA", "New Orleans, LA").locationText).toBe("New Orleans, LA");
+    expect(placeAnswered(after("LA", "New Orleans, LA"))).toBe(true);
+    // the other codes that are also words are still a state when they are the whole answer on the card
+    expect(after("Tulsa", "OK").locationText).toBe("Tulsa, OK");
+    expect(placeAnswered(after("Tulsa", "OK"))).toBe(true);
   });
 
   it("sets the pay from the pay card as set by a person, and as confirmed when the figures were already there", () => {
