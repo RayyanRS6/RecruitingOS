@@ -19,18 +19,13 @@ export function fakeResumeExtract(req: StructuredRequest<unknown>): ResumeExtrac
   }
   const licenses: ResumeExtraction["licenses"] = [];
   for (const l of lines) {
-    const m = l.match(/\b(RDH|RDA|DDS|DMD|RN|LVN|CNA|EPA 608|CDL)\b[^\n]*?(?:license|lic\.?|#|no\.?)?\s*([A-Z]{0,3}\d{3,8})?/i);
-    if (m && /licen|RDH|RDA|DDS|DMD/i.test(l)) licenses.push({ name: m[1].toUpperCase(), jurisdiction: l.match(/\b(CA|AZ|NV|TX|NY|FL|WA|OR|CO)\b/)?.[1], number: m[2], quote: l });
+    const m = l.match(/\b(RDH|RDA|DDS|DMD|RN|LVN|CNA|EPA 608|CDL)\b/i);
+    if (m && /licen|RDH|RDA|DDS|DMD/i.test(l)) licenses.push({ name: m[1].toUpperCase(), jurisdiction: l.match(/\b(CA|AZ|NV|TX|NY|FL|WA|OR|CO)\b/)?.[1], quote: l });
   }
   const certifications: ResumeExtraction["certifications"] = [];
   for (const l of lines) if (/\b(BLS|CPR|ACLS|OSHA|HIPAA)\b/i.test(l) && !/licen/i.test(l)) certifications.push({ name: l.match(/\b(BLS|CPR|ACLS|OSHA|HIPAA)\b/i)![1].toUpperCase(), quote: l });
-  const years = positions.reduce((n, p) => {
-    const s = Number(p.startDate?.slice(0, 4));
-    const e = p.endDate ? Number(p.endDate.slice(0, 4)) : new Date().getFullYear();
-    return Number.isFinite(s) && Number.isFinite(e) ? n + Math.max(0, e - s) : n;
-  }, 0);
   const skills = [...new Set((text.match(/\b(Dentrix|Eaglesoft|Open Dental|perio(?:dontal)?|radiograph|x-ray|scaling|root planing|scheduling|insurance|billing|Salesforce|Excel|HVAC|EPA 608|welding)\b/gi) ?? []).map((s) => s.toLowerCase()))];
-  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, positions, licenses, certifications, skills, yearsOfExperienceEstimate: years || undefined };
+  return { fullName: lines[0]?.length < 60 ? lines[0] : undefined, positions, licenses, certifications, skills };
 }
 
 const STOP = new Set(["with", "that", "this", "from", "have", "your", "their", "will", "able", "must", "need", "work", "experience", "years", "year", "active", "current", "relevant", "setting", "posted", "schedule", "reliable", "availability", "the", "and", "for"]);
