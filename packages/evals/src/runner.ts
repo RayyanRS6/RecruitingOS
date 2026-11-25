@@ -185,8 +185,9 @@ async function main() {
       const shared = pair.a === pair.b ? { extraction: await extract(`${pair.id}_resume`, pair.a) } : {};
       const a = await assess(`${pair.id}_a`, pair.a, { candidate: pair.candidates[0], earlier: pair.earlier?.[0], ...shared });
       const b = await assess(`${pair.id}_b`, pair.b, { candidate: pair.candidates[1], earlier: pair.earlier?.[1], ...shared });
-      // With two CV files each has its own extraction, which a real model may word differently from one read to the
-      // next: then the candidate's texts are compared as the model reads them (the input without the extraction).
+      // The reading is never sent the CV's facts as another model read them, but they tell the scoring view which name to
+      // hide and which words to keep, and with two CV files each has its own, which a real model may word differently
+      // from one read to the next: then the candidate's texts are compared as the reading gets them with none behind the view.
       const inputDiff = !pair.sameModelInput ? [] : "extraction" in shared ? modelInputDifference(a.modelInput, b.modelInput) : modelInputDifference(triageModelInput({ ...a.app, extraction: null }).text, triageModelInput({ ...b.app, extraction: null }).text);
       const ra = a.combined;
       const rb = b.combined;

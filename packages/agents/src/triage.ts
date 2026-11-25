@@ -44,6 +44,10 @@ export type AssessInput = {
    * this candidate answered them (the version they applied to), which the form's answers are read with.
    */
   packet: RolePacket;
+  /**
+   * The CV's facts as `extractResume` read them. The reading is never given them: only the name they found, which is
+   * hidden, and their job titles, employers and skills, which are never hidden as a name (`scoringInput`).
+   */
   extraction: ResumeExtraction | null;
   /** The CV's own text. An application whose file has no readable text is never read. */
   resumeText: string;
@@ -70,17 +74,18 @@ export function jobWords(packet: Partial<Pick<RolePacket, "identity" | "requirem
 }
 
 /**
- * What the CV reading is given: the CV, the form's answers and the extraction as the scoring view shows them (name,
- * email, phone, street address and links replaced by placeholders), with the scoring view itself, which maps a quote
- * back to the original words and counts what was hidden. The form's answers go to the model as plain sentences, the
- * question and the candidate's answer (`formAnswerLines`), never as the form's field names. The sentences are the
- * candidate's own words for the evidence rules (`assessmentSources`).
+ * What the CV reading is given: the CV and the form's answers, the only texts it may quote, as the scoring view shows
+ * them (name, email, phone, street address and links replaced by placeholders), with the scoring view itself, which maps
+ * a quote back to the original words and counts what was hidden. The CV's facts as another model read them
+ * (`input.extraction`) are not given to it: a quote taken from them is not the candidate's words, so it failed the quote
+ * check and took the finding down with it. They only tell the view which name to hide and which words to keep. The
+ * form's answers go to the model as plain sentences, the question and the candidate's answer (`formAnswerLines`), never
+ * as the form's field names. The sentences are the candidate's own words for the evidence rules (`assessmentSources`).
  */
 export function scoringInput(input: Pick<AssessInput, "packet" | "extraction" | "resumeText" | "formAnswers" | "identity">): { promptInput: TriageInput; view: ScoringView } {
   const view = scoringView({ ...input.identity, fullName: input.identity.fullName ?? input.extraction?.fullName ?? null, keep: [...(input.identity.keep ?? []), ...jobWords(input.packet, input.extraction)] });
   const promptInput: TriageInput = {
     packet: input.packet,
-    extraction: input.extraction ? view.deep(input.extraction) : null,
     resumeText: view.text(input.resumeText),
     // the questions are the company's words; the answers go through the scoring view
     answerSentences: formAnswerLines(input.packet, view.deep(input.formAnswers)),
@@ -119,7 +124,7 @@ export function assessmentSources(input: Pick<AssessInput, "resumeText" | "formA
 export async function assessApplication(db: Db, ai: AiRuntime, input: AssessInput): Promise<RunOutcome<EvidenceAssessment>> {
   const { promptInput, view } = scoringInput(input);
   // The record says which view the reading used and how many details it hid: counts only, never the values.
-  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText.length, hasExtraction: !!input.extraction, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
+  const inputRef = { applicationId: input.applicationId, resumeChars: input.resumeText.length, scoringView: SCORING_VIEW_VERSION, hidden: view.counts() };
   const meta = (reading: number): RunMeta => ({ companyId: input.companyId, workflowRunId: input.workflowRunId ?? null, inputRef: { ...inputRef, reading } });
   const runs = await runPromptsDetached(db, ai, triageAssessPrompt, promptInput, Array.from({ length: TRIAGE_READINGS }, (_, i) => meta(i + 1)));
   // A reading lost to an outage is asked once more; one still lost fails the step, which the engine retries, rather than

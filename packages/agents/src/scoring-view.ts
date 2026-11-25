@@ -71,7 +71,7 @@ const NOT_A_PLACE_AFTER = String.raw`(?!,?[ \t]+(?:(?:${STATE_CODES})\b|City\b|C
 export type ScoringView = {
   /** The text as the scoring reading sees it. */
   text(original: string): string;
-  /** Every string inside a value (answers, an extraction) as the scoring reading sees it; keys and other values unchanged. */
+  /** Every string inside a value (the form's answers) as the scoring reading sees it; keys and other values unchanged. */
   deep<T>(value: T): T;
   /** How many details of each kind were replaced so far, for the record. Counts only, never the values. */
   counts(): Record<HiddenKind, number>;
