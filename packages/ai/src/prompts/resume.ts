@@ -2,10 +2,10 @@ import { ResumeExtraction } from "@ros/contracts";
 import { PROTECTED_TRAITS_RULE, withoutTag, type PromptDef } from "./registry";
 
 /**
- * `text`: the resume's own text. `filename` is not read: the model is asked for nothing that needs the file's name, and
- * a name is whatever the candidate typed. The field stays only while callers still pass it.
+ * `text`: the resume's own text, and nothing else: the model is asked for nothing that needs the file's name, and a name
+ * is whatever the candidate typed.
  */
-export type ResumeInput = { text: string; filename?: string };
+export type ResumeInput = { text: string };
 
 /**
  * "Extract only what is written" is this prompt's own word against inventing, so the old shared block's "Never invent
