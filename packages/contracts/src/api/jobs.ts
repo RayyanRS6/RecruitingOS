@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Location } from "../domain/common";
 import { isOwnerOrAdmin, type MembershipRole } from "../domain/company";
-import { INTAKE_ESSENTIALS, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeEssentialKey, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
+import { INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, type IntakeEssentialKey, type IntakeQuestionField, type IntakeRefusal, type IntakeSessionSummary, type IntakeSessionView, type PlanRoom } from "../domain/intake";
 import { POST_TEXT_MAX, type ClosingDateView, type JobUrls, type LegalCheck, type PostChannel, type PostsState, type PublishCheck } from "../domain/publishing";
 import { CompensationBasis, EmploymentType, RemotePolicy, type PacketFlag, type RolePacket } from "../domain/role-packet";
 import { Importance } from "../domain/score";
@@ -50,6 +50,27 @@ export type IntakeAnswersRequest = z.infer<typeof IntakeAnswersRequest>;
 /** Keep a flagged phrase, with the reason. It is recorded with who kept it and when. */
 export const KeepPacketFlag = z.object({ flagId: z.string().min(1).max(300), reason: z.string().trim().min(5, "Say why in a few words (at least five characters).").max(500) });
 export type KeepPacketFlag = z.infer<typeof KeepPacketFlag>;
+
+/**
+ * How each question card's answer is named in the one-line summary of tapped answers ("Where the job is: Austin, TX"):
+ * the words the server writes into the conversation, and the words the page shows at once, before the server's copy of
+ * the message arrives. A fact that is one of the job's essentials takes its name from the essentials' own table
+ * (`INTAKE_ESSENTIAL_LABEL`), so the checklist and the summary call it the same. That table has no name for the other
+ * three (how the pay is counted, the deal-breakers, the benefits), and names the must-haves as a checklist line ("At
+ * least one must-have"), not as the list a summary gives, so those four are named here.
+ */
+export const INTAKE_FIELD_LABEL: Readonly<Record<IntakeQuestionField, string>> = {
+  title: INTAKE_ESSENTIAL_LABEL.title,
+  location: INTAKE_ESSENTIAL_LABEL.location,
+  remote_policy: INTAKE_ESSENTIAL_LABEL.remote_policy,
+  employment_type: INTAKE_ESSENTIAL_LABEL.employment_type,
+  schedule: INTAKE_ESSENTIAL_LABEL.schedule,
+  compensation: INTAKE_ESSENTIAL_LABEL.compensation_range,
+  compensation_basis: "Paid",
+  must_haves: "Must-haves",
+  deal_breakers: "Deal-breakers",
+  benefits: "Benefits",
+};
 
 /**
  * The assistant's turn as the builder reads it, or what went wrong and what to do next. On a failure `upgrade` is true

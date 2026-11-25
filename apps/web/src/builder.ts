@@ -1,5 +1,5 @@
 import {
-  draftStillNeeds, formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
+  draftStillNeeds, formatPayRange, INTAKE_FIELD_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
   type IntakeAnswer, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
   type IntakeReadiness, type IntakeRefusal, type IntakeSessionView, type IntakeTurnReply,
 } from "@ros/contracts";
@@ -16,20 +16,6 @@ import type { StepState } from "@ros/ui";
 /** Where the pages keep a draft once it is read, and the first reply that came with a new draft (their query keys). */
 export const sessionKey = (id: string) => ["intake", "session", id];
 export const firstReplyKey = (id: string) => ["intake", "first-reply", id];
-
-/** How the summary of tapped answers names each question, until the server's own copy of the message replaces it. */
-export const FIELD_LABEL: Readonly<Record<IntakeQuestionField, string>> = {
-  title: "Job title",
-  location: "Where",
-  remote_policy: "Work arrangement",
-  employment_type: "Full time or part time",
-  schedule: "Schedule",
-  compensation_basis: "Paid",
-  compensation: "Pay",
-  must_haves: "Must-haves",
-  deal_breakers: "Deal-breakers",
-  benefits: "Benefits",
-};
 
 /** Questions whose answer is a list (several picks become several lines of the job). */
 const LIST_FIELDS: ReadonlySet<IntakeQuestionField> = new Set<IntakeQuestionField>(["must_haves", "deal_breakers"]);
@@ -203,19 +189,23 @@ export function payCardProblem(questions: readonly IntakeQuestion[], state: Card
   return null;
 }
 
-/** The picks as the one short message the conversation shows straight away; the server's own copy replaces it when the answer comes back. `stated`: see `answerPayload`. */
+/**
+ * The picks as the one short message the conversation shows straight away; the server's own copy replaces it when the
+ * answer comes back. Each answer is named by the contracts' one table (`INTAKE_FIELD_LABEL`), which the server's copy
+ * reads too, so the names stay as they are when that copy arrives. `stated`: see `answerPayload`.
+ */
 export function echoText(questions: readonly IntakeQuestion[], state: CardState, stated?: StatedPay | null): string {
   const lines: string[] = [];
   for (const q of questions) {
     const a = answerPayload(q, answerOf(state, q), stated);
     if (a.skipped) continue;
     if (a.pay) {
-      lines.push(`${FIELD_LABEL.compensation}: ${formatPayRange(a.pay)}`);
+      lines.push(`${INTAKE_FIELD_LABEL.compensation}: ${formatPayRange(a.pay)}`);
       continue;
     }
     const label = (v: string) => q.options.find((o) => o.value === v)?.label ?? v;
     const values = [...a.selected, ...a.own].map(label);
-    lines.push(`${FIELD_LABEL[q.field]}: ${LIST_FIELDS.has(q.field) ? values.join("; ") : values[0]}`);
+    lines.push(`${INTAKE_FIELD_LABEL[q.field]}: ${LIST_FIELDS.has(q.field) ? values.join("; ") : values[0]}`);
   }
   return lines.length ? lines.join("\n") : "Skipped those questions.";
 }

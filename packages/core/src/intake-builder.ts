@@ -1,5 +1,5 @@
 import {
-  EMPLOYMENT_TYPE_LABEL, EmploymentType, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, IntakeFacts as IntakeFactsSchema, MUST_HAVES_MAX, REMOTE_POLICY_LABEL, RemotePolicy, formatPayRange, mustHaveOf,
+  EMPLOYMENT_TYPE_LABEL, EmploymentType, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIELD_LABEL, IntakeFacts as IntakeFactsSchema, MUST_HAVES_MAX, REMOTE_POLICY_LABEL, RemotePolicy, formatPayRange, mustHaveOf,
   type DeclinedCriterion, type DraftRolePacket, type IntakeAnswer, type IntakeEssentialKey, type IntakeFacts, type IntakeMessage, type IntakePayCard, type IntakeQuestion, type IntakeReadiness, type IntakeRefusal,
   type IntakeServerState, type PayOrigin, type PublishBlocker,
 } from "@ros/contracts";
@@ -220,18 +220,14 @@ export type FactsEdit = {
   summary: string[];
 };
 
-const FIELD_LABEL: Record<IntakeQuestion["field"], string> = {
-  title: "Job title",
-  location: "Where the job is",
-  remote_policy: "On site, hybrid or remote",
-  employment_type: "Full or part time",
-  schedule: "Schedule",
-  compensation_basis: "Paid",
-  compensation: "Pay",
-  must_haves: "Must-haves",
-  deal_breakers: "Deal-breakers",
-  benefits: "Benefits",
-};
+/**
+ * How each answer is named in the summary line written into the conversation: the contracts' one table
+ * (`INTAKE_FIELD_LABEL`), which the page's own echo of the answers reads too. One name here is still this file's own:
+ * the kind of job is "Full or part time", as every summary written so far says it, where the contracts say "Full time
+ * or part time". It takes the contracts' name when the two tests that pin these words are changed with it
+ * (apps/api/src/job-builder.test.ts, and intake-builder.test.ts beside this file).
+ */
+const FIELD_LABEL: Record<IntakeQuestion["field"], string> = { ...INTAKE_FIELD_LABEL, employment_type: "Full or part time" };
 
 const LIST_OF: Partial<Record<IntakeQuestion["field"], "mustHaves" | "dealBreakers">> = { must_haves: "mustHaves", deal_breakers: "dealBreakers" };
 
@@ -295,7 +291,7 @@ function setPay(edit: FactsEdit, pay: { basis: "hourly" | "salary"; min: number;
   f.compensationMax = pay.max;
   // The same figures that were already there (read from a pasted ad) are confirmed; new ones are set.
   edit.pay = { ...pay, via: unchanged ? "confirmed" : "pay_card" };
-  edit.summary.push(`Pay: ${formatPayRange(pay)}`);
+  edit.summary.push(`${FIELD_LABEL.compensation}: ${formatPayRange(pay)}`);
 }
 
 /** A fact kept as one of a few values, from the option's value or the words the person read; refused when it names none. */

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, draftStillNeeds, draftTitleOf,
+  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIELD_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, draftStillNeeds, draftTitleOf,
   type IntakeQuestion, type IntakeReadiness, type IntakeSessionView,
 } from "../../packages/contracts/src/index";
 import {
-  DRAFT_STEP_LABELS, FIELD_LABEL, addOwn, answerOf, answerPayload, answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps,
+  DRAFT_STEP_LABELS, addOwn, answerOf, answerPayload, answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps,
   draftingNow, echoText, enterSends, essentialsList, firstReplyKey, goTo, initialCards, isAnswered, messageLimit, messageProblem, nextLabel, parseAmount, payCardProblem, payFormFrom, payFormShown,
   payPayload, payProblem, pickHint, publishHelp, redraftWarning, refusedLines, removeOwn, replyWords, sessionKey, setDraft, setPayForm, togglePick, turnProblem, typeInstead, typedWithCards, writeHelp,
   type CardState, type Deck, type PayForm,
@@ -100,8 +100,8 @@ describe("question cards", () => {
     const untouched: Deck = { key: "", state: togglePick(initialCards(), arrangement, "hybrid"), closed: false };
     expect(isAnswered(pay, answerOf(untouched.state, pay))).toBe(false);
     expect(answersToCarry([arrangement, pay], untouched)?.answers).toEqual([{ questionId: "q1_1", selected: ["hybrid"], own: [], skipped: false }]);
-    expect(typedWithCards([arrangement, pay], typeInstead(untouched), "The office is in Irvine.")?.echo).toBe("Work arrangement: Hybrid\nThe office is in Irvine.");
-    expect(carriedLine([arrangement, pay], typeInstead(untouched))).toBe("Sent with your message: Work arrangement: Hybrid");
+    expect(typedWithCards([arrangement, pay], typeInstead(untouched), "The office is in Irvine.")?.echo).toBe("On site, hybrid or remote: Hybrid\nThe office is in Irvine.");
+    expect(carriedLine([arrangement, pay], typeInstead(untouched))).toBe("Sent with your message: On site, hybrid or remote: Hybrid");
     expect(answersToCarry([pay], { key: "", state: initialCards(), closed: false })).toBeNull();
   });
 
@@ -134,15 +134,15 @@ describe("question cards", () => {
     expect(typedWithCards([arrangement, must], d, "The office is in Irvine.")).toEqual({
       answers: [{ questionId: "q1_1", selected: ["hybrid"], own: [], skipped: false }],
       note: "The office is in Irvine.",
-      echo: "Work arrangement: Hybrid\nThe office is in Irvine.",
+      echo: "On site, hybrid or remote: Hybrid\nThe office is in Irvine.",
     });
-    expect(carriedLine([arrangement, must], d)).toBe("Sent with your message: Work arrangement: Hybrid");
+    expect(carriedLine([arrangement, must], d)).toBe("Sent with your message: On site, hybrid or remote: Hybrid");
     // words added on a card are an answer too, and pay once it can be set
     const s = setPayForm(addOwn(setDraft(d.state, must, "Local anesthesia permit"), must), pay, { basis: "hourly", min: "45", max: "55" });
     d = { ...d, state: s };
     const sent = typedWithCards([arrangement, must, pay], d, "Start soon.");
     expect(sent?.answers.map((a) => a.questionId)).toEqual(["q1_1", "q1_2", "q2_2"]);
-    expect(sent?.echo).toBe("Work arrangement: Hybrid\nMust-haves: Local anesthesia permit\nPay: $45–$55 an hour\nStart soon.");
+    expect(sent?.echo).toBe("On site, hybrid or remote: Hybrid\nMust-haves: Local anesthesia permit\nPay: $45–$55 an hour\nStart soon.");
     // the request is one the API accepts
     expect(IntakeAnswersRequest.parse({ answers: sent?.answers, note: sent?.note })).toMatchObject({ note: "Start soon." });
     // nothing on any card: a plain message, and no line
@@ -184,7 +184,7 @@ describe("question cards", () => {
     // a pick-one or a free card has no Add: the words in the box are the answer, and the line names them before Send
     const words = typeInstead(openDeck(setDraft(setDraft(initialCards(), arrangement, "Two days in the office"), schedule, "Weekdays, 8 to 5")));
     expect(typedWithCards([arrangement, schedule], words, "Hello")?.answers).toEqual([{ questionId: "q1_1", selected: [], own: ["Two days in the office"], skipped: false }, { questionId: "q1_4", selected: [], own: ["Weekdays, 8 to 5"], skipped: false }]);
-    expect(carriedLine([arrangement, schedule], words)).toBe("Sent with your message: Work arrangement: Two days in the office · Schedule: Weekdays, 8 to 5");
+    expect(carriedLine([arrangement, schedule], words)).toBe("Sent with your message: On site, hybrid or remote: Two days in the office · Schedule: Weekdays, 8 to 5");
   });
 
   it("'Write the job' takes what is answered on the open cards with it, only the cards answered, and never what the X left on a card", () => {
@@ -211,9 +211,13 @@ describe("the picks echoed as one message", () => {
     s = setDraft(s, must, "Local anesthesia permit");
     s = setPayForm(s, pay, { basis: "hourly", min: "45", max: "55" });
     s = togglePick(s, type, "full_time");
-    expect(echoText([arrangement, must, pay, type], s)).toBe("Work arrangement: Hybrid\nMust-haves: Active RDH license; Local anesthesia permit\nPay: $45–$55 an hour\nFull time or part time: Full time");
-    // every question the builder can ask has its words
-    expect(Object.keys(FIELD_LABEL).sort()).toEqual(["benefits", "compensation", "compensation_basis", "deal_breakers", "employment_type", "location", "must_haves", "remote_policy", "schedule", "title"]);
+    expect(echoText([arrangement, must, pay, type], s)).toBe("On site, hybrid or remote: Hybrid\nMust-haves: Active RDH license; Local anesthesia permit\nPay: $45–$55 an hour\nFull time or part time: Full time");
+    // every question the builder can ask has its words, in the contracts' one table of them
+    expect(Object.keys(INTAKE_FIELD_LABEL).sort()).toEqual(["benefits", "compensation", "compensation_basis", "deal_breakers", "employment_type", "location", "must_haves", "remote_policy", "schedule", "title"]);
+    // a fact that is one of the job's essentials is named as the checklist beside the conversation names it
+    expect([INTAKE_FIELD_LABEL.title, INTAKE_FIELD_LABEL.location, INTAKE_FIELD_LABEL.remote_policy, INTAKE_FIELD_LABEL.employment_type, INTAKE_FIELD_LABEL.schedule, INTAKE_FIELD_LABEL.compensation]).toEqual([INTAKE_ESSENTIAL_LABEL.title, INTAKE_ESSENTIAL_LABEL.location, INTAKE_ESSENTIAL_LABEL.remote_policy, INTAKE_ESSENTIAL_LABEL.employment_type, INTAKE_ESSENTIAL_LABEL.schedule, INTAKE_ESSENTIAL_LABEL.compensation_range]);
+    const place = q({ id: "q9", field: "location", mode: "free" });
+    expect(echoText([place], setDraft(initialCards(), place, "Austin, TX"))).toBe("Where the job is: Austin, TX");
   });
 
   it("says the questions were skipped when nothing was picked", () => {
