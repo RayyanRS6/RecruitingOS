@@ -251,9 +251,9 @@ export type IntakeTurn = z.infer<typeof IntakeTurn>;
  * The job as the assistant writes it (AI task `intake.compile`): the parts of the job record that are words to write,
  * each in the record's own shape and under the record's own limits. This shape is what the model is asked for, so
  * nothing the server sets by rule is in it: the work arrangement (the owner's answer), the state of each place (read
- * from the owner's words by the code, `regionFromLocationText`), the pay (what a person set or confirmed), the notices
- * and the places they follow from, the three lines under a candidate email (packages/core/src/compliance.ts), and the
- * record of who did what. The server builds the job record from this and the answers (`draftFromWritten` in
+ * from the owner's words by the code, `stateOfPlace` in packages/core), the pay (what a person set or confirmed), the
+ * notices and the places they follow from, the three lines under a candidate email (packages/core/src/compliance.ts),
+ * and the record of who did what. The server builds the job record from this and the answers (`draftFromWritten` in
  * packages/agents); the record itself, and every stored version of it, parses as before (`DraftRolePacket`).
  */
 export const WrittenJob = z.object({

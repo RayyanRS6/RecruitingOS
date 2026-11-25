@@ -55,7 +55,7 @@ const judge = (id: string, t: IntakeTurn): string[] => byId(id).expectTurn!({ ..
 describe("the job builder's suites on the stand-in", () => {
   it("pass, every case, driven as the runner drives them", async () => {
     const suites: Array<[string, IntakeCase[], boolean]> = [["intake.golden", intakeGolden, true], ["intake.illegal_criteria", intakeIllegal, true], ["intake.job_ad", intakeJobAd, false], ["intake.proxy_refusal", intakeProxyRefusal, false]];
-    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 6], ["intake.illegal_criteria", 5], ["intake.job_ad", 2], ["intake.proxy_refusal", 3]]);
+    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 7], ["intake.illegal_criteria", 5], ["intake.job_ad", 2], ["intake.proxy_refusal", 3]]);
     for (const [name, cases, compile] of suites) {
       for (const c of cases) expect((await runIntakeCase(standIn().call, c, compile)).failures, `${name} ${c.id}`).toEqual([]);
     }
@@ -185,6 +185,29 @@ describe("the card loop: answers tapped on the cards, then the next turn", () =>
     expect(cardLoopFailures({ turn: turn({}), after: { questions: [], toAsk: ["must_haves"] }, asked })).toEqual(["still needed, with no card to answer it on: must_haves"]);
     // a full page of three cards need only hold the first thing still needed; the rest get their cards on later turns
     expect(cardLoopFailures({ turn: turn({}), after: { questions: real.questions, toAsk: ["compensation_range", "employment_type", "schedule", "must_haves"] }, asked })).toEqual([]);
+  });
+
+  // Until 25 November 2026 the model filled in the state of the place when it wrote the job. Nothing does now, so a
+  // city alone is not the place yet: the job waits, the place keeps its card, and the state is the owner's to give.
+  it("holds the job while the place has no state, and takes the state the owner gives on the place's card", async () => {
+    const id = "city_alone_then_its_state_on_the_card";
+    const s = standIn();
+    const out = await runIntakeCase(s.call, byId(id), true);
+    expect(out.failures).toEqual([]);
+    expect(s.tasks()).toEqual(["intake.turn", "intake.turn", "intake.turn"]);
+    // the state completes the place; Colorado's law asks for the benefits on the ad, so that card follows, and is left alone
+    expect(out.notes).toEqual(["round 1: answered location; skipped none; cards after it: benefits", "round 2: answered none; skipped benefits; cards after it: none"]);
+    // a model that adds the state itself changes nothing: the app leaves it off, still needs the place and shows its card
+    const read = { ...EMPTY_FACTS, title: "Dental assistant", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28, mustHaves: ["Radiography certificate"] };
+    const guessed = serverOf(id, turn({ factsExtracted: { ...read, locationText: "Denver, CO" } }));
+    expect(guessed.facts.locationText).toBe("Denver");
+    expect(guessed).toMatchObject({ missing: ["location"], mayDraft: false });
+    expect(judge(id, turn({ factsExtracted: { ...read, locationText: "Denver, CO" } }))).toEqual([]);
+    // and were the app ever to take the city alone as answered, as it did before, or to show no card, each fails the case
+    expect(byId(id).expectTurn!(turn({}), { ...guessed, mayDraft: true, missing: [], questions: [] })).toEqual([
+      'the owner named a city and no state, so the place is still needed; the page takes "Denver" as answered',
+      "the place is still needed and the page shows no card for it",
+    ]);
   });
 });
 

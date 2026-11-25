@@ -232,6 +232,8 @@ const DENTAL_ASSISTANT_TAPS: IntakeTapRound = {
   must_haves: { own: "Radiography certificate" },
 };
 const PAY_24_TO_28: IntakeTapRound = { compensation: { pay: { basis: "hourly", min: 24, max: 28 } } };
+/** The state alone, on the card for the place: an offered answer that names Colorado, else the owner's own "CO". Every other card is left alone. */
+const PLACE_IN_COLORADO: IntakeTapRound = { location: { pick: /colorado|\bco\b/i, own: "CO" } };
 
 /** Writing a job: what the conversation reads and asks, and the job written from it. */
 export const intakeGolden: IntakeCase[] = [
@@ -372,6 +374,24 @@ export const intakeGolden: IntakeCase[] = [
     ownerMessages: ["We need a dental assistant."],
     taps: [DENTAL_ASSISTANT_TAPS, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }, { ...DENTAL_ASSISTANT_TAPS, ...PAY_24_TO_28 }],
     expectAfterTaps: (after) => [...readyAfterTaps(after), ...(after.state.pay?.via === "pay_card" ? [] : ["the pay set on the pay card is not recorded as set there"])],
+  },
+  {
+    // The owner names the city and not the state. Until 25 November 2026 the model filled the state in when it wrote the
+    // job, so the job still got its state's notices. It is no longer asked, and a state it adds to the place it reads is
+    // left off: the state is the owner's to say. So after this sentence the place is still needed, it has its card and
+    // the job cannot be written; the state given on that card completes the place, and then it can.
+    id: "city_alone_then_its_state_on_the_card",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: ["I need a dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate."],
+    expectTurn: (_t, after) => {
+      const f: string[] = [];
+      if (after.mayDraft || !after.missing.includes("location")) f.push(`the owner named a city and no state, so the place is still needed; the page takes "${after.facts.locationText ?? ""}" as answered`);
+      if (!after.questions.some((q) => q.field === "location")) f.push("the place is still needed and the page shows no card for it");
+      return f;
+    },
+    taps: [PLACE_IN_COLORADO, PLACE_IN_COLORADO, PLACE_IN_COLORADO],
+    expectAfterTaps: (after) => [...readyAfterTaps(after), ...(/denver/i.test(after.facts.locationText ?? "") ? [] : [`the state given on the card should complete the place the owner named; the place reads "${after.facts.locationText ?? ""}"`])],
   },
 ];
 

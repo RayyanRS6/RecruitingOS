@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeProvider, callPrompt, intakeCompilePrompt, intakeTurnPrompt, type IntakeContext } from "@ros/ai";
 import { IntakeQuestion, IntakeServerState, IntakeTurn, WrittenJob, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
-import { cvScoreFromReading, unresolvedFlags } from "@ros/core";
+import { adverseDecisionLineApplies, cvScoreFromReading, jobNoticesFor, unresolvedFlags } from "@ros/core";
 import { registerFakeHandlers } from "./fake-handlers";
 import { afterAnswers, afterTurn, alreadyAskedOf, draftFromWritten, fieldsKnownFromFacts, finalizeDraft, finalizePacket, inThePagesWords, mergeFacts, prepareQuestions, sameQuestion, typedSinceReply, withoutCardCount, withoutReadyClaim } from "./intake";
 
@@ -354,6 +354,129 @@ describe("tapped answers and the turn after them, with no database", () => {
   });
 });
 
+// Until 25 November 2026 the AI filled in the state of the place when it wrote the job, so an owner who typed "Denver"
+// still got Colorado's notices. It is no longer asked, and nothing else fills one in. So the place is answered only when
+// the owner's own words say the state, and its card comes back until they do: a required notice never goes missing.
+describe("the place of a job: its state is the owner's to say, and the card comes back until they do", () => {
+  const dana = { kind: "user" as const, id: "u1", name: "Dana" };
+  const at = "2026-11-25T10:00:00.000Z";
+  const assistantIn = (place: string) => `I need a dental assistant in ${place}, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.`;
+  const PLACE_CARD = "Where is the job? Give the city and state.";
+  /** The stand-in's turn on the owner's sentence, and what the server makes of it. */
+  const first = async (sentence: string) => {
+    const messages = [said(sentence)];
+    const t = await turn(ctx(messages));
+    return { messages, t, server: after(t, messages) };
+  };
+  const places = async (f: IntakeFacts, messages: IntakeMessage[]) => {
+    const record = draftFromWritten(await written(ctx(messages, f)), f, company.name);
+    const done = finalizeDraft(record, ctx(messages, f), { sessionId: "s1", aiRunId: "r1", state: IntakeServerState.parse({ pay: { by: dana, at, via: "typed", basis: "hourly", min: 24, max: 28 } }) });
+    // What the job's own place brings, the company's places aside: the notices on its page, and Colorado's line on a decision message.
+    return { locations: done.identity.locations, jurisdictions: done.compliance.jurisdictions, pageNotices: jobNoticesFor({ jobLocations: done.identity.locations }).map((n) => n.key), coloradoLine: adverseDecisionLineApplies({ jobLocations: done.identity.locations }) };
+  };
+
+  it("keeps the place card and holds the job for 'Denver' alone, also when it is answered with the city again, until the state is said", async () => {
+    const { messages, t, server } = await first(assistantIn("Denver"));
+    expect(t.factsExtracted.locationText).toBe("Denver");
+    // every other essential is in the sentence: only the place is still needed, it has its card, and the job cannot be written
+    expect(server).toMatchObject({ missing: ["location"], toAsk: ["location"], mayDraft: false });
+    expect(server.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    expect(fieldsKnownFromFacts(server.facts, true)).not.toContain("location");
+    // the city again is no state: the same card comes back, as often as it takes
+    const conversation = [...messages, replied(server.message)];
+    const again = afterAnswers({ answers: [{ questionId: server.questions[0].id, selected: [], own: ["Denver"], skipped: false }], messages: conversation, facts: server.facts, state: server.state, actor: dana, at });
+    expect(again.facts.locationText).toBe("Denver");
+    const second = afterTurn({ turn: await turn(ctx(again.messages, again.facts, { alreadyAsked: alreadyAskedOf(again.facts, again.state) })), messages: again.messages, facts: again.facts, state: again.state, actor: dana, at });
+    expect(second).toMatchObject({ missing: ["location"], mayDraft: false });
+    expect(second.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    // the state alone completes the place the owner already gave, and the job can be written
+    const stated = afterAnswers({ answers: [{ questionId: second.questions[0].id, selected: [], own: ["CO"], skipped: false }], messages: [...again.messages, replied(second.message)], facts: second.facts, state: second.state, actor: dana, at });
+    expect(stated.facts.locationText).toBe("Denver, CO");
+    expect(stated.summary).toEqual(["Where the job is: CO"]);
+    const third = afterTurn({ turn: await turn(ctx(stated.messages, stated.facts, { alreadyAsked: alreadyAskedOf(stated.facts, stated.state) })), messages: stated.messages, facts: stated.facts, state: stated.state, actor: dana, at });
+    expect(third).toMatchObject({ missing: [], mayDraft: true });
+    // Colorado's own rule now applies: its law asks the ad to describe the benefits, so that card is offered
+    expect(third.questions.map((q) => q.field)).toEqual(["benefits"]);
+    // and the job written from it is in Colorado, with Colorado's notices
+    const job = await places(third.facts, stated.messages);
+    expect(job.locations).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+    expect(job.jurisdictions).toContain("US-CO");
+    expect(job.pageNotices).toEqual(["ai_use", "privacy", "pay_transparency", "adverse_decision_explanation"]);
+    expect(job.coloradoLine).toBe(true);
+  });
+
+  it("passes 'Denver, CO' at once, and the written job's place has the state and Colorado's notices", async () => {
+    const { messages, server } = await first(assistantIn("Denver, CO"));
+    expect(server.facts.locationText).toBe("Denver, CO");
+    expect(server).toMatchObject({ missing: [], mayDraft: true });
+    expect(server.questions.map((q) => q.field)).toEqual(["benefits"]);
+    const job = await places(server.facts, messages);
+    expect(job.locations).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+    expect(job.jurisdictions).toContain("US-CO");
+    expect(job.pageNotices).toEqual(["ai_use", "privacy", "pay_transparency", "adverse_decision_explanation"]);
+    expect(job.coloradoLine).toBe(true);
+    // the city alone, had it been written so, would carry neither of Colorado's
+    expect(jobNoticesFor({ jobLocations: [{ city: "Denver", country: "US" }] }).map((n) => n.key)).toEqual(["ai_use", "privacy"]);
+    expect(adverseDecisionLineApplies({ jobLocations: [{ city: "Denver", country: "US" }] })).toBe(false);
+  });
+
+  it("asks again for 'Kansas City', which names no state, and reads Missouri from 'Kansas City, MO'", async () => {
+    const alone = await first(assistantIn("Kansas City"));
+    expect(alone.server.facts.locationText).toBe("Kansas City");
+    expect(alone.server).toMatchObject({ missing: ["location"], mayDraft: false });
+    expect(alone.server.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    const withState = await first(assistantIn("Kansas City, MO"));
+    expect(withState.server).toMatchObject({ missing: [], mayDraft: true, questions: [] });
+    const job = await places(withState.server.facts, withState.messages);
+    expect(job.locations).toEqual([{ city: "Kansas City", region: "MO", country: "US" }]);
+    expect(job.jurisdictions).toContain("US-MO");
+    expect(job.jurisdictions).not.toContain("US-KS");
+  });
+
+  // The assistant is told to write what the owner gave, and it knows where cities are. A state it adds is not the
+  // owner's: it is left off, and the card asks. A state the owner did write stays, however the assistant spells it.
+  it("leaves off a state the assistant added to a city the owner named without one, and keeps one the owner wrote", async () => {
+    const merged = (ownerSaid: string[], assistantRead: string, before: IntakeFacts = facts()) => mergeFacts(before, facts({ locationText: assistantRead }), ownerSaid.map((s) => said(s))).locationText;
+    expect(merged([assistantIn("Denver")], "Denver, CO")).toBe("Denver");
+    expect(merged([assistantIn("Denver")], "Denver, Colorado")).toBe("Denver");
+    expect(merged([assistantIn("Kansas City")], "Kansas City, MO")).toBe("Kansas City");
+    expect(merged([assistantIn("Kansas City")], "Kansas City, Kansas")).toBe("Kansas City");
+    // the owner wrote it: after the city in any of the usual ways, or by itself in a later message
+    expect(merged([assistantIn("Denver, CO")], "Denver, CO")).toBe("Denver, CO");
+    expect(merged([assistantIn("Denver, CO")], "Denver, Colorado")).toBe("Denver, Colorado");
+    expect(merged([assistantIn("denver co")], "Denver, CO")).toBe("Denver, CO");
+    expect(merged([assistantIn("Denver, Colorado")], "Denver, CO")).toBe("Denver, CO");
+    expect(merged([assistantIn("Denver"), "It is in Colorado."], "Denver, CO", facts({ locationText: "Denver" }))).toBe("Denver, CO");
+    expect(merged([assistantIn("Denver"), "Denver, CO"], "Denver, CO", facts({ locationText: "Denver" }))).toBe("Denver, CO");
+    // so with a state the assistant added, the server still asks for the place and holds the job
+    const { messages, t } = await first(assistantIn("Denver"));
+    const guessed = after({ ...t, factsExtracted: { ...t.factsExtracted, locationText: "Denver, CO" } }, messages);
+    expect(guessed.facts.locationText).toBe("Denver");
+    expect(guessed).toMatchObject({ missing: ["location"], mayDraft: false });
+    expect(guessed.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+  });
+
+  // As before this rule: a remote job whose owner names no place has no state of its own, and is not asked for one.
+  it("asks a remote job with no place for no state, and writes it with no state of its own", async () => {
+    const sentence = "I need a support agent, remote, full time, Monday to Friday, $20 to $24 an hour. Must-haves: two years in customer support.";
+    const { messages, t, server } = await first(sentence);
+    expect(t.factsExtracted.locationText).toBeUndefined();
+    expect(server.facts.remotePolicy).toBe("remote");
+    expect(server).toMatchObject({ missing: ["location"], mayDraft: false });
+    const answered = afterAnswers({ answers: [{ questionId: server.questions[0].id, selected: [], own: ["Anywhere in the US"], skipped: false }], messages: [...messages, replied(server.message)], facts: server.facts, state: server.state, actor: dana, at });
+    const next = afterTurn({ turn: await turn(ctx(answered.messages, answered.facts, { alreadyAsked: alreadyAskedOf(answered.facts, answered.state) })), messages: answered.messages, facts: answered.facts, state: answered.state, actor: dana, at });
+    expect(next.facts.locationText).toBe("Anywhere in the US");
+    expect(next).toMatchObject({ missing: [], mayDraft: true });
+    expect(fieldsKnownFromFacts(next.facts, true)).toContain("location");
+    // a remote job answers to every state with a rule for job ads, whatever its place: the benefits card, as before
+    expect(next.questions.map((q) => q.field)).toEqual(["benefits"]);
+    // written with no city named, its one place has no state of its own
+    const record = draftFromWritten({ ...(await written(ctx(answered.messages, next.facts))), identity: { title: "Support agent", cities: [], employmentType: "full_time" } }, next.facts, company.name);
+    expect(record.identity.locations).toEqual([{ country: "US" }]);
+    expect(record.identity.remotePolicy).toBe("remote");
+  });
+});
+
 describe("the job as written and then finished by the server", () => {
   const answered = facts({ title: "Registered Dental Hygienist", locationText: "Tustin, CA", remotePolicy: "hybrid", employmentType: "full_time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 45, compensationMax: 55, benefits: "Health cover", mustHaves: ["No active CA RDH license", "Periodontal charting"], formQuestions: ["Can you work Saturdays"], screeningQuestions: ["How do you explain perio findings to a patient?"] });
   const payState = (via: "typed" | "pay_card" = "pay_card") => IntakeServerState.parse({ pay: { by: { kind: "user", id: "u1", name: "Dana" }, at: "2026-11-18T09:10:00.000Z", via, basis: "hourly", min: 45, max: 55 } });
@@ -404,9 +527,15 @@ describe("the job as written and then finished by the server", () => {
     expect(await places("Portland, Oregon", ["Portland, Oregon"])).toEqual([{ city: "Portland", region: "OR", country: "US" }]);
     // two places in one state each get it; with no city written, the place is the state alone
     expect(await places("Irvine and Tustin, CA", ["Irvine", "Tustin"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }]);
-    expect(await places("California: Irvine and Tustin", ["Irvine", "Tustin"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }, { city: "Tustin", region: "CA", country: "US" }]);
     expect(await places("Orange County, CA", ["Irvine"])).toEqual([{ city: "Irvine", region: "CA", country: "US" }]);
     expect(await places("California", [])).toEqual([{ region: "CA", country: "US" }]);
+    // a state's name inside a city's name is not the state: the code after the comma is, and a city named like a state is not taken for it
+    expect(await places("Kansas City, MO", ["Kansas City"])).toEqual([{ city: "Kansas City", region: "MO", country: "US" }]);
+    expect(await places("Washington, DC", ["Washington"])).toEqual([{ city: "Washington", region: "DC", country: "US" }]);
+    expect(await places("Kansas City", ["Kansas City"])).toEqual([{ city: "Kansas City", country: "US" }]);
+    // a code written with no comma is read after its city, in one state or in two
+    expect(await places("Austin TX", ["Austin"])).toEqual([{ city: "Austin", region: "TX", country: "US" }]);
+    expect(await places("Austin TX and Reno NV", ["Austin", "Reno"])).toEqual([{ city: "Austin", region: "TX", country: "US" }, { city: "Reno", region: "NV", country: "US" }]);
     // places in different states: each city gets the state written with it, never the one written last for all of them
     const [tustin, reno] = [{ city: "Tustin", region: "CA", country: "US" }, { city: "Reno", region: "NV", country: "US" }];
     expect(await places("Tustin, CA and Reno, NV", ["Tustin", "Reno"])).toEqual([tustin, reno]);

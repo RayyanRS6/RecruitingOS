@@ -106,20 +106,79 @@ const STATE_CODES: Record<string, string> = {
   tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT", virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
 };
 const STATE_CODE_SET = new Set(Object.values(STATE_CODES));
+/** The states' names, the longest first: "West Virginia" before "Virginia", "Washington DC" before "Washington". */
+const STATE_NAMES = Object.keys(STATE_CODES).sort((a, b) => b.length - a.length);
+
+/** What may follow a state code at the end of a place: a full stop, a ZIP code, the country. */
+const AFTER_STATE_CODE = String.raw`\.?(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:US|USA|United States))?\s*$`;
+/** A state code after a comma, in any case: "Denver, CO", "Irvine, CA 92618, USA". */
+const CODE_AFTER_COMMA = new RegExp(String.raw`,\s*([A-Za-z]{2})${AFTER_STATE_CODE}`);
+/** A state code in capitals as the last word, after another word and no comma: "Austin TX", "Boulder CO 80302". */
+const CODE_AS_LAST_WORD = new RegExp(String.raw`[^\s,]\s+([A-Z]{2})${AFTER_STATE_CODE}`);
+const stateCodeOf = (found: RegExpMatchArray | null): string | null => {
+  const code = found?.[1]?.toUpperCase();
+  return code && STATE_CODE_SET.has(code) ? code : null;
+};
 
 /**
  * The US state a candidate wrote as their location ("Denver, CO", "Boulder, Colorado 80302", "Colorado"), or null when
- * it cannot be told. Free text: only a state code after a comma or a state's full name counts, never a guess.
+ * it cannot be told. Free text: only a state code after a comma or a state's full name counts, never a guess. A state's
+ * name counts wherever it stands ("Colorado Springs" is Colorado): this reading decides whether a candidate gets a
+ * state's line on a decision message, where reading one state too many only adds a line and missing one drops it. A
+ * job's own place is read by `stateOfPlace`, which is stricter.
  */
 export function regionFromLocationText(text: string | null | undefined): string | null {
   const t = (text ?? "").trim();
   if (!t) return null;
-  const code = t.match(/,\s*([A-Za-z]{2})\.?(?:\s+\d{5}(?:-\d{4})?)?\s*(?:,\s*(?:US|USA|United States))?\s*$/)?.[1]?.toUpperCase();
-  if (code && STATE_CODE_SET.has(code)) return code;
+  const code = stateCodeOf(t.match(CODE_AFTER_COMMA));
+  if (code) return code;
   const lower = t.toLowerCase();
-  const named = Object.keys(STATE_CODES).filter((name) => new RegExp(`(^|[^a-z])${name}($|[^a-z])`).test(lower)).sort((a, b) => b.length - a.length)[0];
   // "West Virginia" contains "virginia", "Washington DC" contains "washington": the longest name that matches wins.
-  return named ? STATE_CODES[named] : null;
+  const named = STATE_NAMES.find((name) => new RegExp(`(^|[^a-z])${name}($|[^a-z])`).test(lower));
+  return named ? STATE_CODES[named]! : null;
+}
+
+/**
+ * The US state of a job's place as its owner wrote it ("Tustin, CA", "Reno, Nevada", "Austin TX"), or null when the
+ * words do not say one. A job's state is on its page and decides its notices, and the job builder asks again when this
+ * finds none, so it never guesses: a state's name inside a longer place name is not the state. "Kansas City" is as
+ * often in Missouri as in Kansas, "Nevada City" is in California, and "Oklahoma City", "Virginia Beach" and "New York
+ * City" say a city, not a state. What counts:
+ * - the two-letter code after a comma, in any case, or in capitals as the last word after another word ("Austin TX");
+ *   a ZIP code and the country may follow it;
+ * - the full name where it ends one of the parts that commas separate ("New York", "Reno Nevada", "Boulder, Colorado
+ *   80302"), or begins a part after the first ("Reno, Nevada area").
+ * The last part that names a state is the one ("Indiana, Pennsylvania" is Pennsylvania), and within a part the longest
+ * name ("West Virginia" is not Virginia).
+ */
+export function stateOfPlace(text: string | null | undefined): string | null {
+  const t = (text ?? "").trim();
+  if (!t) return null;
+  const code = stateCodeOf(t.match(CODE_AFTER_COMMA)) ?? stateCodeOf(t.match(CODE_AS_LAST_WORD));
+  if (code) return code;
+  const letter = (ch: string) => /[a-z]/.test(ch);
+  const parts = t.toLowerCase().split(",").map((part) => part.trim().replace(/\s+\d{5}(?:-\d{4})?$/, "").replace(/\.$/, ""));
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i]!;
+    const named = STATE_NAMES.find((name) => (part.endsWith(name) && !letter(part.charAt(part.length - name.length - 1))) || (i > 0 && part.startsWith(name) && !letter(part.charAt(name.length))));
+    if (named) return STATE_CODES[named]!;
+  }
+  return null;
+}
+
+/** The state a text is, when it is a state and nothing else: its code in any case, or its full name ("CO", "co.", "Colorado"). */
+export function stateAlone(text: string | null | undefined): string | null {
+  const t = (text ?? "").trim().replace(/\.$/, "");
+  return STATE_CODES[t.toLowerCase()] ?? (STATE_CODE_SET.has(t.toUpperCase()) ? t.toUpperCase() : null);
+}
+
+/**
+ * Whether words begin with this state, as its code in any case or its full name: what follows a city in a person's own
+ * words when they wrote the state with it ("Denver, CO", "denver co", "Denver, Colorado").
+ */
+export function beginsWithState(words: string, state: string): boolean {
+  const t = words.replace(/^[\s,.(]+/, "").toLowerCase();
+  return [state.toLowerCase(), ...STATE_NAMES.filter((name) => STATE_CODES[name] === state)].some((s) => t.startsWith(s) && !/[a-z]/.test(t.charAt(s.length)));
 }
 
 /** Whether a decision message carries Colorado's line: the job is in Colorado, or the candidate wrote a Colorado location. */

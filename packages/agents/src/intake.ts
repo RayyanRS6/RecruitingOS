@@ -7,8 +7,8 @@ import {
 } from "@ros/contracts";
 import { intakeCompilePrompt, intakeExtractPrompt, intakeTurnPrompt, outOfCredit, routeDeadline, runPromptDetached, type AiRuntime, type IntakeContext } from "@ros/ai";
 import {
-  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
-  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, regionFromLocationText, screenCriterion, unresolvedFlags,
+  BENEFITS_DESCRIPTION_JURISDICTIONS, REACH_A_PERSON_LINE, applyAnswers, beginsWithState, dealBreakerOffer, disclosureLine, draftFactsKey, draftOwnerId, emit, formQuestionProblems, guardPacket, hiringTeamSignature, intakeReadiness, jobJurisdictions,
+  namesWorkArrangement, normalizeCriterion, normalizeFacts, payCard, payConfirmed, payKey, payTyped, placeAnswered, screenCriterion, stateOfPlace, unresolvedFlags,
 } from "@ros/core";
 import { companies, intakeSessions, rolePackets, roles, withPlatform, withTenant, type Db, type Queryable, type Tx } from "@ros/db";
 import { resumeAsWeWriteIt } from "./assistant-words";
@@ -132,14 +132,15 @@ function cardFields(q: Pick<IntakeQuestion, "field" | "mode" | "prompt">): Intak
 }
 
 /**
- * Card fields the facts already answer, so a card would ask it again. The work arrangement and the kind of job count
- * only as a value the job can keep, the same test the essentials use (`intakeReadiness`): words that are neither
- * answered nor asked would block the job with nothing to tap.
+ * Card fields the facts already answer, so a card would ask it again. The place, the work arrangement and the kind of
+ * job count only as a value the job can keep, the same test the essentials use (`intakeReadiness`): words that are
+ * neither answered nor asked would block the job with nothing to tap. So a place with no state in it ("Denver") is not
+ * answered yet (`placeAnswered`), and the assistant may ask for the state.
  */
 export function fieldsKnownFromFacts(f: IntakeFacts, payIsConfirmed: boolean): IntakeQuestionField[] {
   const out: IntakeQuestionField[] = [];
   if (f.title) out.push("title");
-  if (f.locationText) out.push("location");
+  if (placeAnswered(f)) out.push("location");
   if (RemotePolicy.safeParse(f.remotePolicy).success) out.push("remote_policy");
   if (EmploymentType.safeParse(f.employmentType).success) out.push("employment_type");
   if (f.schedule) out.push("schedule");
@@ -494,7 +495,8 @@ export function withoutReadyClaim(message: string): string {
  * guessing: the place (most of its words are the owner's) and the work arrangement (the owner named one in words they
  * typed, in any of the ordinary ways people say it, `namesWorkArrangement`; a pasted ad's mention is confirmed on a
  * card). Asked, never assumed. The arrangement the assistant wrote is read from its words ("On site", "Work from home")
- * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept.
+ * like the kind of job (`normalizeFacts`); words that name no arrangement, or more than one, are not kept. The state of
+ * the place is the owner's to say as well (`placeAsSaid`).
  */
 export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: IntakeMessage[]): IntakeFacts {
   const out = { ...normalizeFacts(prev) } as Record<string, unknown>;
@@ -508,10 +510,32 @@ export function mergeFacts(prev: IntakeFacts, next: IntakeFacts, messages?: Inta
     const words = ownerWordsOf(owner);
     const place = wordsOf(merged.locationText ?? "");
     if (merged.locationText !== prev.locationText && place.filter((w) => words.has(w)).length * 2 < place.length) merged.locationText = prev.locationText;
+    if (merged.locationText && merged.locationText !== prev.locationText) merged.locationText = placeAsSaid(merged.locationText, owner);
     if (merged.remotePolicy !== prev.remotePolicy && !owner.some((m) => (m.kind ?? "text") === "text" && namesWorkArrangement(m.content))) merged.remotePolicy = prev.remotePolicy;
   }
   if (!RemotePolicy.safeParse(merged.remotePolicy).success) delete merged.remotePolicy;
   return merged;
+}
+
+/**
+ * The place the assistant read, with a state only when the owner said it. The assistant is told to write what the owner
+ * gave, and it knows where cities are, so "Denver" can come back as "Denver, CO", and "Kansas City" with a guess. The
+ * state is on the job page and decides its notices: it is the owner's to say. A state written after the city is kept
+ * only when the owner's own words have that state after that city ("Denver, CO", "denver co", "Denver, Colorado"), or
+ * say it by itself ("It is in Colorado"); otherwise the city stands alone, and the card for the place asks for the state.
+ */
+function placeAsSaid(place: string, owner: readonly IntakeMessage[]): string {
+  const city = cityOf(place);
+  const state = city === place.trim() ? null : stateOfPlace(place);
+  if (!state) return place;
+  const c = city.toLowerCase();
+  const said = owner.some((m) => {
+    if (stateOfPlace(m.content) === state) return true;
+    const lower = m.content.toLowerCase();
+    for (let i = namedAt(lower, c, 0); i >= 0; i = namedAt(lower, c, i + 1)) if (beginsWithState(m.content.slice(i + c.length), state)) return true;
+    return false;
+  });
+  return said ? place : city;
 }
 
 function dedupe<T>(arr: T[]): T[] {
@@ -529,7 +553,7 @@ const actorOfTurn = (a: Actor): Actor => ({ kind: a.kind, id: a.id, ...(a.name ?
 /** Whether the law of the job's place asks the ad to describe the benefits, and nothing does yet. */
 function benefitsNeeded(facts: IntakeFacts, companyBenefits: string | undefined): boolean {
   if (facts.benefits?.trim() || companyBenefits?.trim()) return false;
-  const region = regionFromLocationText(facts.locationText);
+  const region = stateOfPlace(facts.locationText);
   const places = jobJurisdictions({ jobLocations: region ? [{ region, country: "US" }] : [], remotePolicy: facts.remotePolicy });
   return places.some((j) => BENEFITS_DESCRIPTION_JURISDICTIONS.includes(j));
 }
@@ -771,7 +795,7 @@ export async function draftIntake(db: Db, deps: IntakeDeps, input: { companyId: 
 function cityOf(written: string): string {
   const t = written.trim();
   const tail = t.match(/,\s*([^,]+)$/);
-  return tail && regionFromLocationText(`, ${tail[1]}`) ? t.slice(0, tail.index).trim() : t;
+  return tail && stateOfPlace(`, ${tail[1]}`) ? t.slice(0, tail.index).trim() : t;
 }
 
 /** Where `city` is named in `lower` at or after `from`, as a word of its own ("reno", not the end of "moreno"); -1 when it is not. */
@@ -785,11 +809,11 @@ function namedAt(lower: string, city: string, from: number): number {
 const BETWEEN_PLACES = /[;/&|\n]|\band\b/i;
 
 /**
- * The state of each city of a job, read from the owner's answer by the code's own reader (`regionFromLocationText`),
- * never a guess. An answer that names one state gives it to every place ("Irvine and Tustin, CA"). One that names
- * several gives each city the state written after its name ("Tustin, CA and Reno, NV": California, Nevada), or else
- * the next one written after it ("Irvine, Tustin, CA and Reno, NV": California for Irvine too); a city with none
- * after it, or one the answer does not name, has no state.
+ * The state of each city of a job, read from the owner's answer by the code's own reader of a job's place
+ * (`stateOfPlace`), never a guess. An answer that names one state gives it to every place ("Irvine and Tustin, CA").
+ * One that names several gives each city the state written after its name ("Tustin, CA and Reno, NV": California,
+ * Nevada), or else the next one written after it ("Irvine, Tustin, CA and Reno, NV": California for Irvine too); a
+ * city with none after it, or one the answer does not name, has no state.
  */
 function statesOf(cities: readonly string[], answer: string | undefined): Array<string | null> {
   const text = (answer ?? "").trim();
@@ -803,19 +827,21 @@ function statesOf(cities: readonly string[], answer: string | undefined): Array<
     if (i >= 0) from = i + c.length;
     return i;
   });
-  // The state written with a city: the first one between its name and the next place.
+  // The state written with a city: the first one between its name and the next place. The city's own name is left
+  // out of what is read, so a city named like a state is not taken for it ("Washington, DC" is not Washington state);
+  // one letter stands in for it, so a code written with no comma still follows a word ("Austin TX").
   const own = at.map((i, n) => {
     if (i < 0) return null;
     const end = i + cities[n]!.length;
     const next = text.slice(end).search(BETWEEN_PLACES);
     const parts = text.slice(end, Math.min(next < 0 ? text.length : end + next, ...at.filter((j) => j > i))).split(",");
     for (let k = 1; k <= parts.length; k += 1) {
-      const state = regionFromLocationText(parts.slice(0, k).join(","));
+      const state = stateOfPlace(`x${parts.slice(0, k).join(",")}`);
       if (state) return state;
     }
     return null;
   });
-  const all = new Set([regionFromLocationText(text), ...own].filter((s): s is string => !!s));
+  const all = new Set([stateOfPlace(text), ...own].filter((s): s is string => !!s));
   if (all.size <= 1) return at.map(() => [...all][0] ?? null);
   const nextWritten = (i: number) => at.map((j, m) => ({ j, state: own[m] })).filter((x) => x.j > i && x.state).sort((a, b) => a.j - b.j)[0]?.state ?? null;
   return at.map((i, n) => own[n] ?? (i < 0 ? null : nextWritten(i)));
@@ -827,8 +853,9 @@ function statesOf(cities: readonly string[], answer: string | undefined): Array<
  * - the work arrangement is the one the owner gave (a record without one reads as on site, as the record's own rule
  *   says, and cannot be published: the arrangement is an essential);
  * - the state of each of the job's places is read from the owner's answer by the code's own reader (`statesOf`), the
- *   reader the builder's benefits card already goes by; it decides which notices and legal checks apply, and a place
- *   whose state the answer does not say has none until a person sets it in the editor;
+ *   reader the builder's benefits card and its checklist go by; it decides which notices and legal checks apply. The
+ *   job is written only once the answer says a state (`placeAnswered`), so a place has its state here; the one job
+ *   written without is a remote job whose owner named no place;
  * - a question for the application form that asks about a protected characteristic is left out (never kept with a reason);
  * - the three lines under a candidate email are the code's (packages/core/src/compliance.ts), as the guard writes them
  *   on every save; the notices and their places are the guard's; the pay is `finishDraft`'s.
@@ -841,7 +868,7 @@ export function draftFromWritten(written: WrittenJob, facts: IntakeFacts, compan
   const states = statesOf(named, facts.locationText);
   const refused = new Set(formQuestionProblems(written.formQuestions).map((p) => p.index));
   return DraftRolePacketSchema.parse({
-    identity: { ...identity, locations: named.length ? named.map((city, i) => place(city, states[i] ?? null)) : [place(undefined, regionFromLocationText(facts.locationText))], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
+    identity: { ...identity, locations: named.length ? named.map((city, i) => place(city, states[i] ?? null)) : [place(undefined, stateOfPlace(facts.locationText))], ...(arrangement.success ? { remotePolicy: arrangement.data } : {}) },
     description: written.description,
     requirements: written.requirements,
     competencies: written.competencies,

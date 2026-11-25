@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { INTAKE_ESSENTIALS, IntakeQuestion, IntakeServerState, RolePacket, type DraftRolePacket, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import {
   IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, namesWorkArrangement, normalizeFacts, payCard, payConfirmed, payKey, payTyped,
-  sameRequirement, storedAnswer, typedByOwner,
+  placeAnswered, sameRequirement, storedAnswer, typedByOwner,
 } from "./intake-builder";
 
 const facts = (more: Partial<IntakeFacts> = {}): IntakeFacts => ({ mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...more });
@@ -122,6 +122,38 @@ describe("readiness: what a job needs before it is written and published", () =>
     expect(r.missing).toEqual(["remote_policy", "employment_type"]);
   });
 
+  // Until 25 November 2026 the AI filled in the state of a job's place when it wrote the job, so "Denver" alone still
+  // got Colorado's notices. It is no longer asked, and nothing else fills one in: the place is answered only once the
+  // owner's own words say the state, and until then it is still needed, with its card.
+  it("takes the place as answered only when the owner's words say the state", () => {
+    const place = (locationText: string, more: Partial<IntakeFacts> = {}) => {
+      const r = intakeReadiness({ facts: complete({ locationText, ...more }), state: state(paid), draft: null });
+      return { ...r.essentials.find((e) => e.key === "location")!, missing: r.missing, mayDraft: r.mayDraft, draftBlocker: r.draftBlocker, blockers: r.publish.blockers.map((b) => b.message) };
+    };
+    // a city alone: the words stay on the checklist, the place is still needed and the job cannot be written
+    expect(place("Denver")).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver", missing: ["location"], mayDraft: false, draftBlocker: "Still needed before the job can be written: where the job is.", blockers: ["Not set yet: where the job is.", "Write the job first, so you can check it."] });
+    expect(place("Denver, CO")).toMatchObject({ done: true, value: "Denver, CO", missing: [], mayDraft: true, draftBlocker: null });
+    for (const said of ["Denver, Colorado", "Denver CO", "Colorado", "Austin TX", "New York", "Tustin, CA 92780"]) expect(place(said), said).toMatchObject({ done: true, mayDraft: true });
+    // a state's name inside a city's name is no state: the card comes back for "Kansas City", and not for "Kansas City, MO"
+    for (const said of ["Kansas City", "Nevada City", "Oklahoma City", "Virginia Beach", "New York City", "Tustin", "Downtown"]) expect(place(said), said).toMatchObject({ done: false, missing: ["location"], mayDraft: false });
+    expect(place("Kansas City, MO")).toMatchObject({ done: true, mayDraft: true });
+    expect(placeAnswered({ locationText: "   " })).toBe(false);
+    expect(placeAnswered({})).toBe(false);
+  });
+
+  // The one way out, as before this rule: a job the owner said is remote, when the answer names no place at all.
+  it("asks a remote job for no state when its answer names no place, and for the state when it names one", () => {
+    const remote = (locationText: string) => placeAnswered({ locationText, remotePolicy: "remote" });
+    for (const said of ["Remote", "remote", "Fully remote", "100% remote", "Anywhere in the US", "Anywhere", "Nationwide", "Work from home", "Remote (US only)", "Remote, United States", "U.S.A.", "N/A"]) expect(remote(said), said).toBe(true);
+    for (const said of ["Denver", "Remote, team in Denver", "Kansas City", "Remote but near Austin"]) expect(remote(said), said).toBe(false);
+    expect(remote("Remote, Denver, CO")).toBe(true);
+    // only for a job the owner said is remote: on site and hybrid jobs are somewhere, and an unknown arrangement decides nothing
+    for (const remotePolicy of ["onsite", "hybrid", "wherever", undefined]) expect(placeAnswered({ locationText: "Remote", remotePolicy }), String(remotePolicy)).toBe(false);
+    const r = intakeReadiness({ facts: complete({ locationText: "Anywhere in the US", remotePolicy: "remote" }), state: state(paid), draft: null });
+    expect(r).toMatchObject({ missing: [], mayDraft: true });
+    expect(r.essentials.find((e) => e.key === "location")).toEqual({ key: "location", label: "Where the job is", done: true, value: "Anywhere in the US" });
+  });
+
   it("needs the pay set or confirmed by a person, not only stated", () => {
     const r = intakeReadiness({ facts: complete(), state: state(), draft: null });
     expect(r).toMatchObject({ missing: [], payConfirmed: false, mayDraft: false, draftBlocker: "Confirm the pay on the pay card before the job is written." });
@@ -191,6 +223,26 @@ describe("answers to the question cards", () => {
     expect(edit.summary).toEqual(["Job title: Software Engineer", "Where the job is: Austin, TX", "On site, hybrid or remote: Hybrid", "Schedule: Monday to Friday, 9 to 5", "Benefits: Health cover", "Full time or part time: Part-time, mornings"]);
     expect(edit.refused).toEqual([]);
     expect(edit.pay).toBeNull();
+  });
+
+  // The card for the place comes back while the place has no state, and the plain answer to that is the state alone.
+  // It completes the place already given, so the city is kept and the card is not asked a third time.
+  it("completes a place that lacks its state when the answer is a state alone, and takes any other answer as the place", () => {
+    const where = card({ id: "l", field: "location" });
+    const after = (before: string | undefined, own: string) => applyAnswers(facts({ locationText: before }), [where], [answer("l", { own: [own] })]);
+    expect(after("Denver", "CO").facts.locationText).toBe("Denver, CO");
+    expect(after("Denver", "co").facts.locationText).toBe("Denver, co");
+    expect(after("Denver", "Colorado").facts.locationText).toBe("Denver, Colorado");
+    expect(after("Kansas City", "MO").facts.locationText).toBe("Kansas City, MO");
+    // the summary line in the conversation is the owner's answer, as they typed it
+    expect(after("Denver", "CO").summary).toEqual(["Where the job is: CO"]);
+    // and each place now says its state, by the test the checklist uses
+    for (const [before, own] of [["Denver", "CO"], ["Denver", "co"], ["Denver", "Colorado"], ["Kansas City", "MO"]] as const) expect(placeAnswered(after(before, own).facts), `${before} + ${own}`).toBe(true);
+    // any other answer is the place: another city, the whole place again, a city alone once more, or a state when no place was given
+    expect(after("Denver", "Aurora, CO").facts.locationText).toBe("Aurora, CO");
+    expect(after("Denver", "Denver, CO").facts.locationText).toBe("Denver, CO");
+    expect(after("Denver", "Boulder").facts.locationText).toBe("Boulder");
+    expect(after(undefined, "Colorado").facts.locationText).toBe("Colorado");
   });
 
   it("sets the pay from the pay card as set by a person, and as confirmed when the figures were already there", () => {
