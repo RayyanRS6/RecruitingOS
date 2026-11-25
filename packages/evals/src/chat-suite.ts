@@ -1,6 +1,6 @@
 import type { RolePacket, ScreenProgress, ScreenTranscriptEntry, ScreenTurn } from "@ros/contracts";
 import { screenTurnPrompt, type ScreenContext } from "@ros/ai";
-import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, chatPlanFor, chatPromptOf, enforceChatTurn, unfairQuestion, type ChatFacts } from "@ros/agents";
+import { CHAT_CALM_LINE, EMPTY_SCREEN_PROGRESS, advanceProgress, asksByRequest, chatPacket, chatPlanFor, chatPromptOf, enforceChatTurn, unfairQuestion } from "@ros/agents";
 import { traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 
 /** The step a turn took on the item it was about (`chatNextMove` in @ros/core, which this package does not depend on). */
@@ -62,11 +62,8 @@ export const CHAT_PACKET = {
   communication: { candidateMayBeTold: ["the posted schedule"], tone: "warm", humanAlternativeText: "Reply to reach a person.", disclosureText: "" },
 } as unknown as RolePacket;
 
-/** What the candidate's CV and form say (their own information, which the chat may name). */
-export const CHAT_FACTS: ChatFacts = {
-  cv: ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Final-year IoT project at CUST: soil sensors and a water pump", "Skills: TypeScript, WebRTC, IoT"],
-  formAnswers: ["Do you have your own laptop for teaching? Yes."],
-};
+/** What the candidate's CV says (their own information, which the chat may name). The model is not given the form's answers. */
+export const CHAT_CV: string[] = ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Final-year IoT project at CUST: soil sensors and a water pump", "Skills: TypeScript, WebRTC, IoT"];
 
 const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
 const fives = (s: string) => {
@@ -118,12 +115,12 @@ function transcriptOf(c: ChatCase): ScreenTranscriptEntry[] {
   return c.transcript.map((t) => ({ ...t, at: "2026-10-15T10:00:00.000Z" }));
 }
 
-/** What the model is given for a case: the job, the chat's plan, the CV and the form's answers, as the app gives them. */
+/** What the model is given for a case: the job, the chat's plan and the CV's lines, as the app gives them. */
 export function chatCaseContext(c: ChatCase): ScreenContext {
   const progress = chatCaseProgress(c);
   const latest = [...c.transcript].reverse().find((t) => t.role === "candidate")?.content ?? "";
   if (!progress.chat) throw new Error(`case ${c.id} has no plan`);
-  return { company: { name: "Robotronics" }, packet: CHAT_PACKET, candidate: { firstName: "Meerub" }, progress, answers: {}, transcript: transcriptOf(c), latestCandidateMessage: latest, payShown: false, chat: chatPromptOf(chatPacket(CHAT_PACKET, progress), progress.chat, progress.currentQuestionKey, CHAT_FACTS) };
+  return { company: { name: "Robotronics" }, packet: CHAT_PACKET, candidate: { firstName: "Meerub" }, progress, answers: {}, transcript: transcriptOf(c), latestCandidateMessage: latest, payShown: false, chat: chatPromptOf(chatPacket(CHAT_PACKET, progress), progress.chat, progress.currentQuestionKey, CHAT_CV) };
 }
 
 /** A case's failures, from the model's raw turn: the code's rules applied as the app applies them, then the case's own checks. */

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ScreenTurn } from "@ros/contracts";
 import { FakeProvider, callPrompt, screenTurnPrompt } from "@ros/ai";
 import { registerFakeHandlers } from "@ros/agents";
-import { CHAT_FACTS, CHAT_PACKET, chatCaseContext, chatCaseFailures, chatCaseNotes, chatCases, runChatSuite, sharesFiveWords, shownAfterAnUnfairFollowUp } from "./chat-suite";
+import { CHAT_CV, CHAT_PACKET, chatCaseContext, chatCaseFailures, chatCaseNotes, chatCases, runChatSuite, sharesFiveWords, shownAfterAnUnfairFollowUp } from "./chat-suite";
 
 /**
  * The chat.* suites on the local stand-in model: every case passes, so the harness is sound; the real model
@@ -17,17 +17,20 @@ describe("chat.* suites", () => {
     return r.result.kind === "ok" ? r.result.output : null;
   };
 
-  it("gives the model the plan, the CV and the form's answers, as the app does", () => {
+  it("gives the model the plan and the CV's lines, as the app does, and not the form's answers", () => {
     const ctx = chatCaseContext(chatCases[0]);
-    expect(ctx.chat.formAnswers).toEqual(CHAT_FACTS.formAnswers);
-    expect(ctx.chat.cv).toEqual(CHAT_FACTS.cv);
+    expect(ctx.chat.cv).toEqual(CHAT_CV);
     expect(ctx.chat.current).toBe("arduino");
     // the plan as the app builds it: the job's own questions, already asked here, then the must-haves the resume does not show
     expect(ctx.chat.items.map((i) => [i.key, i.kind, i.state])).toEqual([["wq_explain", "question", "covered"], ["wq_room", "question", "covered"], ["wq_transport", "question", "covered"], ["arduino", "gap", "asking"], ["english", "gap", "open"]]);
     const system = screenTurnPrompt.system(ctx).map((b) => b.text).join("\n");
     expect(system).toContain("Chat plan (JSON):");
-    expect(system).toContain("<form_answers>\nForm answers (already given; never ask them again):\nDo you have your own laptop for teaching? Yes.\n</form_answers>");
-    expect(screenTurnPrompt.version).toBe(9);
+    // what the form already settled is left out of the plan in code, so the model is told nothing of the form (the code
+    // check of 25 November 2026: told "never ask again what the form asked", it passed over an item of the plan)
+    expect(ctx.chat).not.toHaveProperty("formAnswers");
+    for (const gone of ["form_answers", "Form answers", "application form", "laptop"]) expect(system, gone).not.toContain(gone);
+    expect(system).toContain("\n- Never ask about anything outside the plan.\n");
+    expect(screenTurnPrompt.version).toBe(10);
     // the job description is the chat's context, as data
     expect(system).toContain("<job_description>\nYou teach robotics and AI classes");
     // never asks for what the candidate already said, above all in their last reply
@@ -57,7 +60,7 @@ describe("chat.* suites", () => {
     expect(chatCaseFailures(bareYes, { ...base, reading: "vague", followUpReason: "nothing specific yet", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: false }, messageToCandidate: "Could you tell me about one specific time: what you did, and what came of it?" })).toEqual([]);
     // a failing case says what the model did and what the code made of it
     const notes = chatCaseNotes(bareYes, { ...base, questionKey: "english", reading: "concrete", answerRecorded: { questionKey: "arduino", answer: "Yes", complete: true }, messageToCandidate: "Noted." });
-    expect(notes[0]).toBe("item: arduino (gap, step direct, pushes 0); prompt screen.turn v9");
+    expect(notes[0]).toBe("item: arduino (gap, step direct, pushes 0); prompt screen.turn v10");
     expect(notes.some((n) => n.startsWith("model: {") && n.includes('"answer":"Yes"'))).toBe(true);
     expect(notes.at(-1)).toBe("turn: move=covered questionKey=wrap_up recorded=arduino: Yes done=false | Is there anything else you would like the hiring team to know before we finish?");
     const analog = chatCases.find((c) => c.id === "no_gets_the_analog")!;

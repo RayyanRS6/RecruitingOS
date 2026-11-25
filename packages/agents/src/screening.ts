@@ -7,7 +7,7 @@ import { resumeAsWeWriteIt } from "./assistant-words";
 import type { Integrations } from "@ros/integrations";
 import { unfairQuestion } from "./fair-question";
 import { SCORING_VIEW_VERSION, restoreQuotes, scoringView, withoutPlaceholders, type ScoringView } from "./scoring-view";
-import { TRIAGE_READINGS, checkedClaims, credentialFinding, formAnswerSaysNotHeld, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
+import { TRIAGE_READINGS, checkedClaims, credentialFinding, formAnswerLines, formAnswerSaysNotHeld, jobWords, linkReadingRuns, middle, namesCredential, sentenceAround } from "./triage";
 
 /**
  * The AI interview ("screen" in code): a web chat a shortlisted candidate does from an emailed link. This file is the
@@ -215,12 +215,13 @@ export function screenIntro(input: { companyName: string; firstName: string; pac
 /* The plan, and what the chat may know about the candidate                                                      */
 /* ------------------------------------------------------------------------------------------------------------ */
 
-/** What the chat may know about the candidate: their own CV lines, and their form answers as sentences. */
-export type ChatFacts = { cv: string[]; formAnswers: string[] };
-
 const line = (s: string, max = 200) => s.replace(/\s+/g, " ").trim().slice(0, max);
 
-/** The CV's positions, licences, certificates and skills as a few plain lines (the candidate's own information: the chat names it). */
+/**
+ * The CV's positions, licences, certificates and skills as a few plain lines (the candidate's own information: the chat
+ * names it). All the chat's model is told of the application: what the form already settled is left out of the plan in
+ * code (`chatGaps`), so the model is not given the form's answers.
+ */
 export function cvLinesOf(x: ApplicationRow["extraction"] | null | undefined): string[] {
   const cv: string[] = [];
   for (const p of (x?.positions ?? []).slice(0, 4)) cv.push(line(`${p.title}${p.employer ? ` at ${p.employer}` : ""}${p.startDate ? ` (${p.startDate}${p.current ? " to now" : p.endDate ? ` to ${p.endDate}` : ""})` : ""}${p.summary ? `: ${p.summary}` : ""}`));
@@ -230,9 +231,12 @@ export function cvLinesOf(x: ApplicationRow["extraction"] | null | undefined): s
   return cv;
 }
 
-/** The candidate's CV as a few plain lines, and every answer they gave on the application form as a sentence, so the chat never asks one again. */
-export function chatFactsOf(packet: Pick<RolePacket, "formQuestions">, app: Pick<ApplicationRow, "extraction" | "answers">): ChatFacts {
-  return { cv: cvLinesOf(app.extraction), formAnswers: formAnswerSentences(packet.formQuestions, formAnswersOf(app.answers)).map((s) => s.sentence) };
+/**
+ * Every answer the candidate gave on the application form as a sentence, in the form's order: what "Check your answers"
+ * lists as sent with their application. `packet`: the version they applied to, whose form they answered.
+ */
+export function formAnswersSent(packet: Pick<RolePacket, "formQuestions">, app: Pick<ApplicationRow, "answers">): string[] {
+  return formAnswerLines(packet, formAnswersOf(app.answers));
 }
 
 /** Said when "No" settles an item as not known: calm, and never a guess about what they can do. */
@@ -372,8 +376,8 @@ export function chatOpening(input: { firstName: string; cv: string[]; question: 
   return `Hi ${first}. ${said}\n\n${input.question}`;
 }
 
-/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, the CV and the form. `packet`: the chat's own (`chatPacket`). */
-export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, facts: ChatFacts): ChatPromptContext {
+/** The chat's state as the model sees it: the plan, each item's question, its ladder and the job's standard for it, and the CV's lines (`cvLinesOf`). `packet`: the chat's own (`chatPacket`). */
+export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string | null, cv: string[]): ChatPromptContext {
   const qs = new Map(packet.screening.questions.map((q) => [q.key, q]));
   return {
     section: plan.section,
@@ -384,8 +388,7 @@ export function chatPromptOf(packet: RolePacket, plan: ChatPlan, current: string
       return { key: i.key, kind: i.kind, required: i.required, state: i.state, step: i.step, pushes: i.pushes, question: q?.question ?? i.key, ladder: ladderApplies(packet, i), ...(q?.modelAnswer ? { modelAnswer: q.modelAnswer } : {}) };
     }),
     wrap: { key: CHAT_WRAP_KEY, question: CHAT_WRAP_QUESTION },
-    cv: facts.cv,
-    formAnswers: facts.formAnswers,
+    cv,
   };
 }
 
@@ -401,7 +404,7 @@ function turnContext(b: ScreenBundle, plan: ChatPlan, screen: Pick<ScreenRow, "p
     latestCandidateMessage: latest,
     // The same pay rule as the job page the candidate applied from.
     payShown: payShown(b.rolePacket.compensation, jobNoticesFor({ jobLocations: b.rolePacket.identity.locations, companyLocations: b.company.locations, overrides: b.company.settings.notices })),
-    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, chatFactsOf(b.appliedPacket, b.app)),
+    chat: chatPromptOf(b.packet, plan, screen.progress.currentQuestionKey, cvLinesOf(b.app.extraction)),
   };
 }
 
@@ -773,7 +776,11 @@ function modelWordsOf(packet: RolePacket, text: string): string {
  *   except a must-have settled as not known, which records nothing (never a "no" for a skill). A yes-or-no question,
  *   and a must-have that names a licence, certificate, permit or registration, have no ladder (`ladderApplies`): any
  *   reply is the answer, a "No" included, and nothing "similar" is asked for;
- * - the closing question is followed by the close; a close before the end goes on to what is left;
+ * - the plan is the code's: the model says whether its turn stays on the question being asked or leaves it, never where
+ *   it goes. A turn that leaves goes to the first question still open, in the plan's order, and to the closing question
+ *   only once every item is covered, settled as not known or skipped; wherever else the model went (an item out of its
+ *   turn, one already asked, the closing question, a close) the candidate reads the model's restatement and then that
+ *   question in the job's own words. The closing question is followed by the close;
  * - every message is one restatement and one question (`shapeChatMessage`), and never says the job's private standard
  *   for a question (`modelAnswer`), even in part.
  * Returns the turn and the step taken on the item, for the plan (`advanceProgress`).
@@ -808,12 +815,13 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   // A turn that stays on the question being asked and asks something about it is a follow-up, labelled or not.
   if (current && !t.done && !t.questionKey && !t.followUpReason && !t.candidateAskedAbout && !onlyQuestions(reply) && asksSomething(t.messageToCandidate)) t = { ...t, followUpReason: "asked for more" };
   const remaining = packet.screening.questions.filter((x) => x.key !== current && !asked.has(x.key) && !(x.key in answers) && !declined.has(x.key));
+  // Where a turn goes when it leaves the question being asked: the first one still open, in the plan's order, and the
+  // closing question once none is (`remaining` keeps that order, the closing question last). At the closing question
+  // nothing is left to go to.
+  const next = current === CHAT_WRAP_KEY ? undefined : remaining[0];
   if (unfairQuestion(modelWordsOf(packet, t.messageToCandidate))) {
     if (t.questionKey && !t.done) t = { ...t, messageToCandidate: "", followUpReason: null };
-    else {
-      const next = t.done ? undefined : remaining[0];
-      t = next ? { ...t, messageToCandidate: "", questionKey: next.key, followUpReason: null } : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: "" };
-    }
+    else t = next && !t.done ? { ...t, messageToCandidate: "", questionKey: next.key, followUpReason: null } : { ...t, done: true, questionKey: null, followUpReason: null, messageToCandidate: "" };
   }
 
   const item = plan?.items.find((i) => i.key === current) ?? null;
@@ -821,7 +829,6 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
   // A message the code put together here (the model's restatement, then the next question in the job's words) is final.
   let composed = false;
   const moveOn = (lead: string, recorded: ScreenTurn["answerRecorded"]): ScreenTurn => {
-    const next = remaining[0];
     composed = true;
     return next ? { ...t, questionKey: next.key, followUpReason: null, done: false, answerRecorded: recorded, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question } : { ...t, questionKey: null, followUpReason: null, done: true, answerRecorded: recorded, messageToCandidate: lead };
   };
@@ -874,11 +881,22 @@ export function enforceChatTurn(raw: ScreenTurn, packet: RolePacket, progress: S
     if (move.move === "unknown" && item.kind === "gap" && t.answerRecorded?.questionKey === item.key) t = { ...t, answerRecorded: null };
   }
 
-  // A close before the end goes on to what is left: the plan is the code's (and the model's words saying it was the end are not said).
-  if (t.done && current !== CHAT_WRAP_KEY && remaining.length) {
-    const next = remaining[0];
+  // The plan is the code's. Wherever else the model's turn went (an item out of its turn, one already asked, the closing
+  // question while one is open, a close before the end), it goes to `next`: the model's restatement, then that question in
+  // the job's own words. Of a close nothing is said: its words said it was the end.
+  const strays = !t.done && !!t.questionKey && t.questionKey !== next?.key;
+  if (next && (t.done || strays)) {
+    const lead = t.done ? (calm ? CHAT_CALM_LINE : "") : chatLead(t.messageToCandidate, { experience, calm, answering: !!t.candidateAskedAbout, known: q(t.questionKey)?.question });
     composed = true;
-    t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: calm ? `${CHAT_CALM_LINE}\n\n${next.question}` : next.question };
+    t = { ...t, done: false, questionKey: next.key, followUpReason: null, messageToCandidate: lead ? `${lead}\n\n${next.question}` : next.question };
+  } else if (strays) {
+    // Nothing is left to go to. At the closing question the turn stays on it (the candidate asked something; their answer
+    // to it brought the close above), and it never goes back to a question already asked. Anywhere else every question
+    // has been asked, the closing one too (a chat stored before the plan was held this way): the end of the questions.
+    const lead = chatLead(t.messageToCandidate, { experience, calm, answering: !!t.candidateAskedAbout, known: q(t.questionKey)?.question });
+    composed = true;
+    if (current === CHAT_WRAP_KEY) t = { ...t, questionKey: null, followUpReason: t.candidateAskedAbout ? t.followUpReason : t.followUpReason ?? "asked again", messageToCandidate: lead ? `${lead}\n\n${CHAT_WRAP_QUESTION}` : CHAT_WRAP_QUESTION };
+    else t = { ...t, questionKey: null, followUpReason: null, done: true, messageToCandidate: lead };
   }
   // Five words in a row of a private standard are never said, whichever question it belongs to: the model is given every one.
   const notes = packet.screening.questions.flatMap((x) => (x.modelAnswer ? [x.modelAnswer] : []));

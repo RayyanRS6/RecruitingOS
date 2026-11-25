@@ -5,7 +5,7 @@ import { chatCounter, tapFormatFor } from "@ros/core";
 import { SAMPLE_QUESTIONS } from "./fixtures/sample-questions";
 import { unfairQuestion } from "./fair-question";
 import {
-  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, gapQuestion,
+  CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, formAnswersSent, gapQuestion,
   nextQuestion, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending, yesNoFormAnswers,
 } from "./screening";
 
@@ -112,6 +112,10 @@ describe("what an AI interview asks", () => {
       { kind: "yes_no", key: "fq_saturdays", question: "Can you work Saturdays?", required: false },
     ] } as unknown as Pick<RolePacket, "formQuestions">;
     expect(yesNoFormAnswers(applied, { answers: { form: { fq_license: "no", fq_years: "1", fq_software: "Eaglesoft" } } } as never)).toEqual([LICENCE_NO]);
+    // "Check your answers" lists every answer they sent with the form, in the form's order, each as its sentence; the
+    // chat's model is given none of them
+    expect(formAnswersSent(applied, { answers: { form: { fq_license: "no", fq_years: "1", fq_software: "Eaglesoft" } } } as never)).toEqual([LICENCE_NO, "How many years have you charted? 1 years.", "Which software do you chart in? Eaglesoft."]);
+    expect(formAnswersSent(applied, { answers: null } as never)).toEqual([]);
   });
 
   it("a skipped question is never asked again, and counts toward the end of the questions", () => {
@@ -332,7 +336,7 @@ describe("what each turn of the chat is held to", () => {
     { key: "wq_explain", question: "How would you explain what a sensor is to six-year-olds?", required: true, lookFor: "uses a concrete everyday analogy and checks understanding with the children" },
     { key: "wq_room", question: "Several kits fail at once in a class of twenty. How do you handle the room?", required: true },
   ]);
-  const facts = { cv: ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Skills: TypeScript, WebRTC, IoT"], formAnswers: ["Do you have your own laptop for teaching? Yes."] };
+  const facts = { cv: ["Software engineer at CallsFlow (2023 to now): WebRTC calls platform", "Skills: TypeScript, WebRTC, IoT"] };
   const at = "2026-10-15T10:00:00.000Z";
   /**
    * A chat on `job` whose plan asks about these must-haves and then the job's questions. These cases are about what one
@@ -884,7 +888,7 @@ describe("what each turn of the chat is held to", () => {
     const ENGLISH_ASK = gapQuestion("Explaining technical ideas in English");
     expect(pk.screening.questions.slice(0, 2).map((x) => x.question)).toEqual([LICENCE_ASK, ENGLISH_ASK]);
     // the model is told which items have a ladder: the licence has none, the other must-have and an open question do
-    expect(chatPromptOf(pk, onLicence.chat!, "licence", facts).items.map((i) => [i.key, i.ladder])).toEqual([["licence", false], ["english", true], ["wq_explain", true], ["wq_room", true]]);
+    expect(chatPromptOf(pk, onLicence.chat!, "licence", facts.cv).items.map((i) => [i.key, i.ladder])).toEqual([["licence", false], ["english", true], ["wq_explain", true], ["wq_room", true]]);
     // a model that climbs the ladder all the same: the code moves on, and "No" is recorded as the answer
     const pressed = enforceChatTurn(turnOf({ reading: "not_done", followUpReason: "the analog", messageToCandidate: CHAT_LADDER_QUESTION.analog }), pk, onLicence, {}, { transcript: said("Q", "No"), latest: "No" });
     expect(pressed.move).toEqual({ key: "licence", move: "covered" });
@@ -986,6 +990,142 @@ describe("what each turn of the chat is held to", () => {
     const r = enforceChatTurn(turnOf({ done: true, reading: "concrete", messageToCandidate: "Thanks, that's everything." }), chatPacket(role, early), early, {}, { transcript: said("Q", "Like a thirsty finger that feels the water"), latest: "Like a thirsty finger that feels the water" });
     expect(r.turn).toMatchObject({ done: false, questionKey: "wq_room" });
     expect(r.turn.messageToCandidate).toBe("Several kits fail at once in a class of twenty. How do you handle the room?");
+  });
+
+  /**
+   * The plan is the code's (the code check of 25 November 2026). On the live site that day a job's form had asked about a
+   * certificate, the plan still held it, and the model went past it to the closing question; the code held the plan only
+   * against a close, so whether an item of the plan was asked rested on the model.
+   */
+  describe("where a turn goes is the plan's to say, never the model's", () => {
+    /** The robotics job with a certificate among its must-haves, and its plan as the app builds it: the job's questions, then the must-haves the resume does not show. */
+    const certified = { ...role, requirements: { mustHaves: [{ key: "cpr", text: "Current CPR certificate", rationale: "r" }, ...base.requirements.mustHaves], niceToHaves: [] } } as unknown as RolePacket;
+    const planned = (): ScreenProgress => ({ ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(certified, readingOf(["arduino"]), at) });
+    const ROOM = "Several kits fail at once in a class of twenty. How do you handle the room?";
+    const CPR_ASK = "This is one of the things the job needs: Current CPR certificate. Do you have it?";
+    const PAPER = "I would get the class on a paper task and fix the kits one at a time.";
+    const CLOSING = `Meerub, ${CHAT_WRAP_QUESTION[0]!.toLowerCase()}${CHAT_WRAP_QUESTION.slice(1)}`;
+
+    it("the plan is the job's questions, then the must-haves to ask about", () => {
+      expect(planned().chat?.items.map((i) => [i.key, i.kind])).toEqual([["wq_explain", "question"], ["wq_room", "question"], ["cpr", "gap"], ["english", "gap"]]);
+    });
+
+    it("a turn that goes to the closing question with a must-have still open asks that must-have: the model's restatement, then the question in the job's own words", () => {
+      const p = askingNow(planned(), "wq_room", ["wq_explain", "wq_room"]);
+      const early = enforceChatTurn(turnOf({ reading: "concrete", questionKey: CHAT_WRAP_KEY, messageToCandidate: `You would put the class on a paper task.\n\n${CLOSING}` }), chatPacket(certified, p), p, {}, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(early.move).toEqual({ key: "wq_room", move: "covered" });
+      expect(early.turn).toMatchObject({ questionKey: "cpr", done: false, followUpReason: null, answerRecorded: { questionKey: "wq_room", answer: PAPER } });
+      expect(early.turn.messageToCandidate).toBe(`You would put the class on a paper task.\n\n${CPR_ASK}`);
+      const next = advanceProgress(p, early.turn, early.move);
+      expect(next.currentQuestionKey).toBe("cpr");
+      expect(next.chat?.items.map((i) => i.state)).toEqual(["covered", "covered", "asking", "open"]);
+      expect(chatCounter(next.chat)?.label).toBe("Question 3 of 4");
+      // all in one paragraph, and with no restatement at all: the same question, in the job's words
+      const inOne = enforceChatTurn(turnOf({ reading: "concrete", questionKey: CHAT_WRAP_KEY, messageToCandidate: `You would put the class on a paper task. ${CLOSING}` }), chatPacket(certified, p), p, {}, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(inOne.turn.messageToCandidate).toBe(`You would put the class on a paper task.\n\n${CPR_ASK}`);
+      const bare = enforceChatTurn(turnOf({ reading: "concrete", questionKey: CHAT_WRAP_KEY, messageToCandidate: CLOSING }), chatPacket(certified, p), p, {}, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(bare.turn).toMatchObject({ questionKey: "cpr", done: false });
+      expect(bare.turn.messageToCandidate).toBe(CPR_ASK);
+      // the last must-have answered: only now the closing question, as the model wrote it
+      const last = askingNow(planned(), "english", ["wq_explain", "wq_room", "cpr", "english"]);
+      const end = enforceChatTurn(turnOf({ reading: "concrete", questionKey: CHAT_WRAP_KEY, messageToCandidate: `You ran a weekend club in English.\n\n${CLOSING}` }), chatPacket(certified, last), last, {}, { transcript: said("Q", "For two years I ran a weekend robotics club in English."), latest: "For two years I ran a weekend robotics club in English." });
+      expect(end.turn.questionKey).toBe(CHAT_WRAP_KEY);
+      expect(end.turn.messageToCandidate).toBe(`You ran a weekend club in English.\n\n${CLOSING}`);
+    });
+
+    it("a turn that jumps over an item, or goes back to one already asked, asks the first one still open", () => {
+      const p = askingNow(planned(), "wq_explain", ["wq_explain"]);
+      const finger = "Like a thirsty finger that feels when the soil is dry.";
+      const over = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "cpr", messageToCandidate: `You would call it a thirsty finger.\n\n${CPR_ASK}` }), chatPacket(certified, p), p, {}, { transcript: said("Q", finger), latest: finger });
+      expect(over.move).toEqual({ key: "wq_explain", move: "covered" });
+      expect(over.turn).toMatchObject({ questionKey: "wq_room", done: false });
+      expect(over.turn.messageToCandidate).toBe(`You would call it a thirsty finger.\n\n${ROOM}`);
+      // in the model's own words for the item it jumped to: none of them is said
+      const reworded = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "english", messageToCandidate: "You would call it a thirsty finger.\n\nTell me about a time you explained something technical in English. What did you say?" }), chatPacket(certified, p), p, {}, { transcript: said("Q", finger), latest: finger });
+      expect(reworded.turn.questionKey).toBe("wq_room");
+      expect(reworded.turn.messageToCandidate).toBe(`You would call it a thirsty finger.\n\n${ROOM}`);
+      // back to the first question, already asked and answered: the plan goes on
+      const onRoom = askingNow(planned(), "wq_room", ["wq_explain", "wq_room"]);
+      const back = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_explain", messageToCandidate: "You would put the class on a paper task.\n\nHow would you explain what a sensor is to six-year-olds?" }), chatPacket(certified, onRoom), onRoom, { wq_explain: finger }, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(back.turn).toMatchObject({ questionKey: "cpr", done: false });
+      expect(back.turn.messageToCandidate).toBe(`You would put the class on a paper task.\n\n${CPR_ASK}`);
+      // after "No" to an item with a ladder, settled as not known: the calm line, then the first one still open
+      const onEnglish = askingNow(planned(), "english", ["wq_explain", "wq_room", "cpr", "english"], { step: "smaller" });
+      const settled = enforceChatTurn(turnOf({ reading: "not_done", questionKey: "wq_room", messageToCandidate: "You have not done that.\n\nHow do you handle the room?" }), chatPacket(certified, onEnglish), onEnglish, {}, { transcript: said("Q", "No"), latest: "No" });
+      expect(settled.move).toEqual({ key: "english", move: "unknown" });
+      expect(settled.turn.questionKey).toBe(CHAT_WRAP_KEY);
+      expect(settled.turn.messageToCandidate).toBe(`${CHAT_CALM_LINE}\n\n${CHAT_WRAP_QUESTION}`);
+    });
+
+    it("the model may still stay on the item where the ladder allows, and a turn that follows the plan is left as the model wrote it", () => {
+      const p = askingNow(planned(), "wq_room", ["wq_explain", "wq_room"]);
+      const push = enforceChatTurn(turnOf({ reading: "vague", followUpReason: "nothing specific yet", messageToCandidate: "You would handle it.\n\nWhat would you do first?" }), chatPacket(certified, p), p, {}, { transcript: said("Q", "I'd handle it"), latest: "I'd handle it" });
+      expect(push.move).toEqual({ key: "wq_room", move: "push" });
+      expect(push.turn.questionKey).toBeNull();
+      expect(push.turn.messageToCandidate).toBe("You would handle it.\n\nWhat would you do first?");
+      const follows = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "cpr", messageToCandidate: "You would put the class on a paper task.\n\nThe job needs a current CPR certificate. Do you hold one?" }), chatPacket(certified, p), p, {}, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(follows.turn.questionKey).toBe("cpr");
+      expect(follows.turn.messageToCandidate).toBe("You would put the class on a paper task.\n\nThe job needs a current CPR certificate. Do you hold one?");
+    });
+
+    it("at the closing question nothing is left to go to: a turn that names another question stays on it", () => {
+      const p = askingNow(planned(), CHAT_WRAP_KEY, ["wq_explain", "wq_room", "cpr", "english", CHAT_WRAP_KEY]);
+      const asks = "Is it full time?";
+      const back = enforceChatTurn(turnOf({ candidateAskedAbout: "schedule", questionKey: "wq_room", messageToCandidate: `It is full time.\n\n${ROOM}` }), chatPacket(certified, p), p, {}, { transcript: said("Q", asks), latest: asks });
+      expect(back.move).toBeNull();
+      expect(back.turn).toMatchObject({ questionKey: null, done: false, answerRecorded: null });
+      expect(back.turn.messageToCandidate).toBe(`It is full time.\n\n${CHAT_WRAP_QUESTION}`);
+      expect(advanceProgress(p, back.turn, back.move).currentQuestionKey).toBe(CHAT_WRAP_KEY);
+      // their answer to the closing question brings the close, wherever the model points
+      const closes = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "wq_room", messageToCandidate: `Thank you, Meerub. You would put the class on a paper task.\n\n${ROOM}` }), chatPacket(certified, p), p, {}, { transcript: said("Q", "No, that is everything."), latest: "No, that is everything." });
+      expect(closes.turn).toMatchObject({ done: true, questionKey: null, answerRecorded: { questionKey: CHAT_WRAP_KEY, answer: "No, that is everything." } });
+      expect(closes.turn.messageToCandidate).toBe("Thank you, Meerub. You would put the class on a paper task.");
+    });
+
+    // A chat stored before the plan was held this way can stand on an item with the closing question already asked (the
+    // model could go back). It carries on: the item's answer is taken, and with nothing left to ask the questions end.
+    it("a chat from before that went back after the closing question ends when the item it stands on is answered, never on another question already asked", () => {
+      const p = askingNow(planned(), "wq_room", ["wq_explain", "cpr", "english", CHAT_WRAP_KEY, "wq_room"]);
+      expect(p.currentQuestionKey).toBe("wq_room");
+      const again = enforceChatTurn(turnOf({ reading: "concrete", questionKey: "cpr", messageToCandidate: `You would put the class on a paper task.\n\n${CPR_ASK}` }), chatPacket(certified, p), p, { wq_explain: "a", cpr: "Yes", english: "b", [CHAT_WRAP_KEY]: "c" }, { transcript: said("Q", PAPER), latest: PAPER });
+      expect(again.move).toEqual({ key: "wq_room", move: "covered" });
+      expect(again.turn).toMatchObject({ done: true, questionKey: null, answerRecorded: { questionKey: "wq_room", answer: PAPER } });
+      expect(again.turn.messageToCandidate).toBe("You would put the class on a paper task.");
+      expect(advanceProgress(p, again.turn, again.move)).toMatchObject({ currentQuestionKey: null });
+    });
+
+    it("a whole chat follows the plan to the closing question and the close, whatever each turn of the model says about where to go", () => {
+      let p = planned();
+      const first = nextQuestion(chatPacket(certified, p), p, {})!;
+      p = advanceProgress(p, turnOf({ questionKey: first.key, messageToCandidate: first.question }));
+      const transcript: ScreenTranscriptEntry[] = [{ role: "assistant", content: first.question, at, questionKey: first.key }];
+      const asked = [first.key];
+      const answers: Record<string, string> = {};
+      // a model that never follows the plan: the closing question, the last item, the first one again, a close, the closing question
+      const strays: Array<Partial<ScreenTurn>> = [{ questionKey: CHAT_WRAP_KEY }, { questionKey: "english" }, { questionKey: "wq_explain" }, { done: true }, { questionKey: CHAT_WRAP_KEY }];
+      let closed = false;
+      for (let n = 0; n < strays.length && !closed; n++) {
+        const reply = `Reply ${n + 1}: what I did, and what came of it.`;
+        transcript.push({ role: "candidate", content: reply, at });
+        const { turn, move } = enforceChatTurn(turnOf({ reading: "concrete", messageToCandidate: "You told me what you did.\n\nWhat else would you add?", ...strays[n] }), chatPacket(certified, p), p, answers, { transcript, latest: reply });
+        if (turn.answerRecorded) answers[turn.answerRecorded.questionKey] = turn.answerRecorded.answer;
+        p = advanceProgress(p, turn, move);
+        transcript.push({ role: "assistant", content: turn.messageToCandidate || "(the close)", at, ...(turn.questionKey ? { questionKey: turn.questionKey } : {}) });
+        if (turn.questionKey) asked.push(turn.questionKey);
+        closed = turn.done;
+      }
+      expect(asked).toEqual(["wq_explain", "wq_room", "cpr", "english", CHAT_WRAP_KEY]);
+      expect(closed).toBe(true);
+      expect(p.chat?.items.map((i) => [i.key, i.state])).toEqual([["wq_explain", "covered"], ["wq_room", "covered"], ["cpr", "covered"], ["english", "covered"]]);
+      expect(chatCounter(p.chat)?.label).toBe("All 4 questions done");
+      expect(Object.keys(answers)).toEqual(["wq_explain", "wq_room", "cpr", "english", CHAT_WRAP_KEY]);
+      // each question was asked in the job's own words, the certificate once and as yes or no
+      const shown = transcript.filter((t) => t.role === "assistant").map((t) => t.content);
+      expect(shown[1]).toBe(`You told me what you did.\n\n${ROOM}`);
+      expect(shown[2]).toBe(`You told me what you did.\n\n${CPR_ASK}`);
+      expect(shown[3]).toBe(`You told me what you did.\n\n${gapQuestion("Explaining technical ideas in English")}`);
+      expect(shown[4]).toBe(CHAT_WRAP_QUESTION);
+    });
   });
 
   it("never says the team's private note, even in part, and still runs the fairness check on every question", () => {

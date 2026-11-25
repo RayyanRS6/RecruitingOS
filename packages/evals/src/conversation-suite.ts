@@ -1,6 +1,6 @@
 import { CHAT_WRAP_KEY, type RolePacket, type ScreeningQuestion, type ScreenProgress, type ScreenTranscriptEntry, type ScreenTurn } from "@ros/contracts";
 import type { ScreenContext } from "@ros/ai";
-import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate, type ChatFacts } from "@ros/agents";
+import { EMPTY_SCREEN_PROGRESS, PERSON_OFFER, advanceProgress, chatClosingMessage, chatOpening, chatPacket, chatPlanFor, chatPromptOf, credentialMustHaves, enforceChatTurn, nextQuestion, redactProtected, saidByCandidate } from "@ros/agents";
 import { promisesATime } from "./chat-suite";
 import { clipText, traceTranscript, traceTurn, type CaseDiagnostics } from "./diagnostics";
 import { COOPERATIVE_PAY, cooperativeReply } from "./suites";
@@ -51,10 +51,8 @@ const COMPANY = "Eval Dental";
 const FIRST_NAME = "Alex";
 const SILENT: ScreenTurn = { messageToCandidate: " ", questionKey: null, answerRecorded: null, followUpReason: null, candidateAskedAbout: null, sentiment: "fine", done: false, humanRequested: false };
 
-/** What the chat may know of the candidate: a few lines of their CV, and their answers on the form as sentences. */
-function factsFor(job: RolePacket): ChatFacts {
-  return { cv: ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"], formAnswers: job.formQuestions.filter((q) => q.kind === "yes_no").map((q) => `${q.question} Yes.`) };
-}
+/** What the chat may know of the candidate: a few lines of their CV. */
+const CV = ["Registered Dental Hygienist at Harbor Dental (2019 to now)", "Skills: Dentrix, periodontal charting"];
 
 /**
  * One conversation, driven as the app drives a chat: Start asks the first question in code; then, for each reply, the
@@ -63,7 +61,6 @@ function factsFor(job: RolePacket): ChatFacts {
  * `failed`: why a model call gave no turn.
  */
 export async function runConversation(persona: Persona, job: RolePacket, run: (ctx: ScreenContext) => Promise<ScreenTurn | string>): Promise<{ conversation: Conversation; failed: string | null }> {
-  const facts = factsFor(job);
   const shownOnCv = [...credentialMustHaves(job)].map((requirementKey) => ({ requirementKey, met: "yes" as const, evidence: { source: "resume" as const, quote: "shown on the resume" } }));
   let progress: ScreenProgress = { ...EMPTY_SCREEN_PROGRESS, chat: chatPlanFor(job, { requirementFindings: shownOnCv }, AT) };
   const asked = () => chatPacket(job, progress);
@@ -74,7 +71,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
   const conversation = (done: boolean): Conversation => ({ job, questions: asked().screening.questions, turns, answers, done, progress, transcript });
   const first = nextQuestion(asked(), progress, answers);
   if (!first) return { conversation: conversation(false), failed: "the job asks nothing" };
-  const opening = chatOpening({ firstName: FIRST_NAME, cv: facts.cv, question: first.question });
+  const opening = chatOpening({ firstName: FIRST_NAME, cv: CV, question: first.question });
   transcript.push({ role: "assistant", content: opening, at: AT, questionKey: first.key, source: "system" });
   progress = advanceProgress(progress, { ...SILENT, messageToCandidate: opening, questionKey: first.key });
   let stayed = false;
@@ -89,7 +86,7 @@ export async function runConversation(persona: Persona, job: RolePacket, run: (c
     if (said === null) break;
     replied.push(asking);
     transcript.push({ role: "candidate", content: said, at: AT, source: "chat" });
-    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, facts) });
+    const raw = await run({ company: { name: COMPANY }, packet: job, candidate: { firstName: FIRST_NAME }, progress, answers, transcript: [...transcript], latestCandidateMessage: said, payShown: true, chat: chatPromptOf(asked(), plan, key, CV) });
     if (typeof raw === "string") return { conversation: conversation(false), failed: raw };
     const { turn, move } = enforceChatTurn(raw, asked(), progress, answers, { transcript, latest: said });
     if (turn.answerRecorded) answers = { ...answers, [turn.answerRecorded.questionKey]: redactProtected(turn.answerRecorded.answer) };
