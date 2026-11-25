@@ -60,8 +60,11 @@ export function packetFingerprint(packet: unknown): string {
   return createHash("sha256").update(stableJson(packet)).digest("hex").slice(0, 16);
 }
 
-/** The fairness check the server applies to every answer a card offers, for the evaluation harness. */
-export { screenCriterion } from "@ros/core";
+/**
+ * For the evaluation harness: the fairness check the server applies to every answer a card offers, and the guard's
+ * wording check for a text written from a saved job (a LinkedIn post, an Indeed listing).
+ */
+export { screenCriterion, wordingProblems } from "@ros/core";
 
 type IntakeInputs = { company: typeof companies.$inferSelect; session: IntakeSessionRow; state: IntakeServerState };
 
