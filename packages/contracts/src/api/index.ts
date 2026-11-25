@@ -69,9 +69,12 @@ export const SIGN_IN_REFUSAL = {
 } as const;
 export type SignInRefusalCode = keyof typeof SIGN_IN_REFUSAL;
 
+/** The table by code, for a code that comes from an address: a name every object has ("constructor") is no code. */
+const SIGN_IN_REFUSAL_BY_CODE: ReadonlyMap<string, string> = new Map(Object.entries(SIGN_IN_REFUSAL));
+
 /** What the sign-in page says for the code in its address: that code's sentence, or the general line for a code the table does not hold. */
 export function signInRefusalLine(code: string): string {
-  return Object.hasOwn(SIGN_IN_REFUSAL, code) ? SIGN_IN_REFUSAL[code as SignInRefusalCode] : "Sign-in failed. Try again.";
+  return SIGN_IN_REFUSAL_BY_CODE.get(code) ?? "Sign-in failed. Try again.";
 }
 
 /** The signed-in person as GET /api/v1/auth/me answers it; the API builds this shape and the web client reads it, so neither can drift. */
