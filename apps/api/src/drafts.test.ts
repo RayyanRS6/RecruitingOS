@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { HomeView, IntakeSessionList, IntakeSessionView, IntakeStartResponse } from "@ros/contracts";
+import { eq } from "drizzle-orm";
+import { draftTitleOf, type DraftSaved, type HomeView, type IntakeSessionList, type IntakeSessionView, type IntakeStartResponse } from "@ros/contracts";
+import { notifications } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
 import { seedCompany, signInAs, usePlan } from "./test-helpers";
@@ -60,5 +62,25 @@ describe("the drafts lists", () => {
     expect(asOwner).toEqual({ ...asTheirs, mine: false });
     // Home lists a person's own drafts only, an owner's too
     expect((await homeDrafts(owner)).map((d) => d.id)).not.toContain(theirs.id);
+  });
+
+  it("name a draft by its written job's title once the job is written, as the builder's heading does, and so does the notice of a take-over", async () => {
+    const member = await signInAs(container, app, { companyId, role: "hiring_manager", name: "Dana Example" });
+    const draft = await start(member, HYGIENIST);
+    // not written yet: the title from the answers
+    expect(draftTitleOf(draft)).toBe("registered dental hygienist");
+    expect((await listOf(member)).find((d) => d.id === draft.id)?.title).toBe("registered dental hygienist");
+    // written, and its title changed in the one editor; the answers still hold the first title
+    expect((await send(member, "POST", `${sessions}/${draft.id}/draft`)).status).toBe(200);
+    const saved = await send<DraftSaved>(member, "PATCH", `${sessions}/${draft.id}/draft`, { identity: { title: "Senior Dental Hygienist" } });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.session.facts.title).toBe("registered dental hygienist");
+    // the builder's heading and every list say the written job's title
+    expect(draftTitleOf(saved.body.session)).toBe("Senior Dental Hygienist");
+    for (const lines of [await listOf(member), await homeDrafts(member), await listOf(owner)]) expect(lines.find((d) => d.id === draft.id)?.title).toBe("Senior Dental Hygienist");
+    // taken over by an owner: the person who started it is told, by the same title
+    expect((await send(owner, "POST", `${sessions}/${draft.id}/take-over`)).status).toBe(200);
+    const told = await container.db.select({ title: notifications.title }).from(notifications).where(eq(notifications.kind, "intake.taken_over"));
+    expect(told.map((n) => n.title)).toEqual([expect.stringMatching(/ took over your draft: Senior Dental Hygienist$/)]);
   });
 });

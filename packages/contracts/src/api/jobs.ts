@@ -76,6 +76,16 @@ export type IntakeSessionResponse = IntakeDraftAnswer;
 /** GET /api/v1/intake/sessions: the drafts this person may continue, and the plan's room for another job. */
 export type IntakeSessionList = { sessions: IntakeSessionSummary[]; room: PlanRoom };
 
+/**
+ * A draft's title, the one rule for every place that shows it: the builder's heading, the draft's line on Home and on
+ * the Jobs page, and the notice that a draft was taken over. Once the job has been written, the written job's title
+ * (a person may have changed it in the editor); before that, the title from the answers. Null while neither names one,
+ * which a page shows as "Untitled job".
+ */
+export function draftTitleOf(draft: { facts: { title?: string | null }; draft?: { identity: { title?: string | null } } | null }): string | null {
+  return draft.draft?.identity.title?.trim() || draft.facts.title?.trim() || null;
+}
+
 /* ------------------------------------------------------------------------------------------------------------ */
 /* The one editor.                                                                                                */
 /* ------------------------------------------------------------------------------------------------------------ */

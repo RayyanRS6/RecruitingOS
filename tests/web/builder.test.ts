@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest,
+  AI_HELP_UPGRADE_QUESTION, INTAKE_ESSENTIALS, INTAKE_ESSENTIAL_LABEL, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX, IntakeAnswer, IntakeAnswersRequest, draftTitleOf,
   type IntakeQuestion, type IntakeReadiness, type IntakeSessionView,
 } from "../../packages/contracts/src/index";
 import {
-  DRAFT_STEP_LABELS, FIELD_LABEL, addOwn, answerOf, answerPayload, answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftTitle,
+  DRAFT_STEP_LABELS, FIELD_LABEL, addOwn, answerOf, answerPayload, answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps,
   draftingNow, echoText, enterSends, essentialsList, firstReplyKey, goTo, initialCards, isAnswered, messageLimit, messageProblem, nextLabel, parseAmount, payCardProblem, payFormFrom, payFormShown,
   payPayload, payProblem, pickHint, publishHelp, redraftWarning, refusedLines, removeOwn, replyWords, sessionKey, setDraft, setPayForm, togglePick, turnProblem, typeInstead, typedWithCards, writeHelp,
   type CardState, type Deck, type PayForm,
@@ -252,10 +252,13 @@ describe("what we know and what is still needed", () => {
     expect(publishHelp({ publish: { allowed: false, blockers: [] } }).lines).toEqual(["A few things are still needed."]);
   });
 
-  it("names the draft by its written title, else the title it was told, else nothing yet", () => {
-    expect(draftTitle({ facts: { title: "Hygienist" }, draft: { identity: { title: " Dental Hygienist " } } as never })).toBe("Dental Hygienist");
-    expect(draftTitle({ facts: { title: "Hygienist" }, draft: null })).toBe("Hygienist");
-    expect(draftTitle({ facts: { title: undefined }, draft: null })).toBeNull();
+  it("names the draft by its written title, else the title it was told, else nothing yet (the contracts' one rule, which the server's lists follow too)", () => {
+    expect(draftTitleOf({ facts: { title: "Hygienist" }, draft: { identity: { title: " Dental Hygienist " } } })).toBe("Dental Hygienist");
+    expect(draftTitleOf({ facts: { title: "Hygienist" }, draft: null })).toBe("Hygienist");
+    expect(draftTitleOf({ facts: { title: undefined }, draft: null })).toBeNull();
+    // a written job with no title of its own falls back to the answers', and blanks name nothing
+    expect(draftTitleOf({ facts: { title: " Hygienist " }, draft: { identity: { title: "  " } } })).toBe("Hygienist");
+    expect(draftTitleOf({ facts: { title: "  " } })).toBeNull();
   });
 
   it("warns before writing the job again replaces edits a person saved on it", () => {

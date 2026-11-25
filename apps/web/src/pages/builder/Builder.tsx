@@ -3,14 +3,14 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  appPaths, isOwnerOrAdmin,
+  appPaths, draftTitleOf, isOwnerOrAdmin,
   type IntakeAnswer, type IntakeAnswersRequest, type IntakeDraftAnswer, type IntakeMessageRequest, type IntakeSessionResponse, type IntakeTurnReply, type IntakeTurnResponse,
   type KeepPacketFlag, type PublishResult, type SetClosingDate,
 } from "@ros/contracts";
 import { Alert, Button, EmptyState, ErrorState, Icon, Menu, Pill, ProgressSteps, Skeleton, SplitView } from "@ros/ui";
 import { ApiError, api, errorCode, errorWords, type Me, planLimitOf } from "../../api/client";
 import {
-  answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftTitle, draftingNow, echoText,
+  answersPayload, answersToCarry, cardsKey, cardsToShow, carriedLine, closeDeck, composerPlaceholder, deckFor, draftSteps, draftingNow, echoText,
   firstReplyKey, initialCards, publishHelp, refusedLines, sessionKey, turnProblem, typedWithCards, typeInstead, writeHelp,
   type ButtonHelp, type Deck, type Problem,
 } from "../../builder";
@@ -224,7 +224,8 @@ export function Builder({ sessionId }: { sessionId: string }) {
   if (view.status === "compiled") return <EmptyState icon="roles" title="This draft is now a job" action={view.roleId ? <Link to={appPaths.job(view.roleId)} className="btn primary">Open the job</Link> : undefined} />;
   if (view.status !== "active") return <EmptyState icon="roles" title="This draft was discarded" action={startAgain} />;
 
-  const title = draftTitle(view);
+  // the one rule for a draft's title, the same one its line in a list is given by the server
+  const title = draftTitleOf(view);
   const written = !!view.draft;
   const cards = cardsToShow(view);
   const deckKey = cardsKey(cards);

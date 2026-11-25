@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ApplyRequest, MeResponse } from "./index";
 import { DataRequestKind, accessDecisionsFor, adminCompanyStatus } from "./admin";
 import { ApplicationAction, BulkApplicationAction, CandidateListQuery } from "./candidates";
-import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, roleActions } from "./jobs";
+import { CloseRole, DraftFieldEdit, IntakeAnswersRequest, PacketFieldEdit, ROLE_ACTION_BLOCKED, StartIntake, draftTitleOf, roleActions } from "./jobs";
 import { ALWAYS_EMAILED, NotificationKind, UpdateNotificationPreferences, emailsUpdate } from "./notifications";
 import { InviteMember, UpdateCompany, UpdateMember } from "./settings";
 import { appPaths } from "../domain/app-paths";
@@ -77,6 +77,17 @@ describe("the job builder and the one editor", () => {
     expect(DraftFieldEdit.safeParse({ baseVersion: 1 }).success).toBe(false);
     expect(DraftFieldEdit.safeParse({ keepFlags: [{ flagId: "f1", reason: "A real requirement of the job" }] }).success).toBe(false);
     expect(DraftFieldEdit.safeParse({ description: "Too short." }).error?.issues[0]?.message).toBe("The job description needs at least 50 characters.");
+  });
+
+  it("names a draft one way everywhere: by the written job's title once it is written, by the title from the answers before, and by nothing until one is known", () => {
+    const answers = { title: "Hygienist" };
+    expect(draftTitleOf({ facts: answers, draft: null })).toBe("Hygienist");
+    expect(draftTitleOf({ facts: answers })).toBe("Hygienist");
+    // the written job's title wins, also when a person changed it in the editor and the answers still say the first one
+    expect(draftTitleOf({ facts: answers, draft: { identity: { title: "Senior Dental Hygienist" } } })).toBe("Senior Dental Hygienist");
+    expect(draftTitleOf({ facts: {}, draft: { identity: { title: " Dental Hygienist " } } })).toBe("Dental Hygienist");
+    expect(draftTitleOf({ facts: answers, draft: { identity: { title: " " } } })).toBe("Hygienist");
+    for (const none of [{ facts: {} }, { facts: { title: "  " }, draft: null }, { facts: { title: null }, draft: { identity: {} } }]) expect(draftTitleOf(none)).toBeNull();
   });
 
   it("closes a job only with a confirmation", () => {

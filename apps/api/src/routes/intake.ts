@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { and, eq, sql } from "drizzle-orm";
 import {
-  AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine, isOwnerOrAdmin,
+  AI_HELP_BUSY_LINE, DraftFieldEdit, IntakeAnswersRequest, IntakeMessageRequest, KeepPacketFlag, SetClosingDate, StartIntake, aiHelpLine, draftTitleOf, isOwnerOrAdmin,
   type Actor, type DraftSaved, type IntakeDraftAnswer, type IntakeSessionList, type IntakeSessionResponse, type IntakeStartResponse, type IntakeTurnReply, type IntakeTurnResponse,
 } from "@ros/contracts";
 import { IntakeSessionError, applyIntakeAnswers, draftIntake, jobFromDraft, keepDraftFlag, runIntakeTurn, saveDraftEdit, sessionView, startIntakeSession, type IntakeSessionRow, type IntakeTurnOutcome } from "@ros/agents";
@@ -361,7 +361,7 @@ intakeRoutes.post("/sessions/:id/take-over", requireTenant, async (c) => {
     await tx.update(intakeSessions).set({ createdBy: actor, createdByUserId: t.userId }).where(eq(intakeSessions.id, row.id));
     await emit(tx, { type: "intake.taken_over", companyId: t.companyId, actor, subject: { type: "intake_session", id: row.id }, payload: { from: row.createdBy, fromUserId } });
     // The person who started it hears it from the product, not by finding the draft gone.
-    const title = normalizeFacts(row.facts).title ?? row.draftPacket?.identity.title ?? null;
+    const title = draftTitleOf({ facts: normalizeFacts(row.facts), draft: row.draftPacket });
     if (fromUserId) await notify(tx, { companyId: t.companyId, kind: "intake.taken_over", title: `${actor.name ?? "An owner or admin"} took over your draft${title ? `: ${title}` : ""}`, body: "They continue it from here. Nothing was sent to anyone, and the conversation so far is kept with the draft.", userIds: [fromUserId] });
   });
   return c.json((await draftAnswer(container, t, row.id)) satisfies IntakeSessionResponse);

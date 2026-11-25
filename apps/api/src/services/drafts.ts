@@ -1,5 +1,5 @@
 import { and, desc, eq, or, sql } from "drizzle-orm";
-import type { IntakeSessionSummary } from "@ros/contracts";
+import { draftTitleOf, type IntakeSessionSummary } from "@ros/contracts";
 import { sessionView, type IntakeSessionRow } from "@ros/agents";
 import { intakeSessions, type Tx } from "@ros/db";
 
@@ -14,7 +14,7 @@ export function draftSummary(row: IntakeSessionRow, viewerUserId: string): Intak
   return {
     id: row.id,
     status: row.status,
-    title: view.facts.title ?? view.draft?.identity.title ?? null,
+    title: draftTitleOf(view),
     startedBy: { userId: view.startedBy.userId, name: view.startedBy.name },
     mine: view.startedBy.mine,
     createdAt: new Date(row.createdAt).toISOString(),

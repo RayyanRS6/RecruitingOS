@@ -1,6 +1,6 @@
 import {
   formatPayRange, INTAKE_FIRST_MESSAGE_MAX, INTAKE_MESSAGE_MAX,
-  type DraftRolePacket, type IntakeAnswer, type IntakeFacts, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
+  type IntakeAnswer, type IntakePayCard, type IntakeProgressStage, type IntakeQuestion, type IntakeQuestionField,
   type IntakeReadiness, type IntakeRefusal, type IntakeSessionView, type IntakeTurnReply,
 } from "@ros/contracts";
 import type { StepState } from "@ros/ui";
@@ -338,11 +338,6 @@ export function publishHelp(r: Pick<IntakeReadiness, "publish">): ButtonHelp {
   if (r.publish.allowed) return { ready: true, lines: [] };
   const lines = r.publish.blockers.map((b) => b.message);
   return { ready: false, lines: lines.length ? lines : ["A few things are still needed."] };
-}
-
-/** The title the draft has so far, or null ("Untitled job", in grey, until it is known). */
-export function draftTitle(view: { facts: Pick<IntakeFacts, "title">; draft: Pick<DraftRolePacket, "identity"> | null }): string | null {
-  return view.draft?.identity.title?.trim() || view.facts.title?.trim() || null;
 }
 
 /**
