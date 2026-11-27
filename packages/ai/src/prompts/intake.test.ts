@@ -16,8 +16,20 @@ const compile = (more: Partial<IntakeContext> = {}) => text(intakeCompilePrompt.
 const GONE = /playbook|benchmark|market pay|ceiling|why (?:you|they) are hiring|reason for the hire|who interviews|interview plan|scorecard|decision[- ]?maker|final decision|evaluation|red flags|sourcing|approval|eligibility rule|knockout|draft it/i;
 
 describe("intake.turn: the builder's conversation", () => {
-  it("is version 10 on the standard tier's task", () => {
-    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 10, task: "intake.turn", agent: "intake" });
+  it("is version 11 on the standard tier's task", () => {
+    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 11, task: "intake.turn", agent: "intake" });
+  });
+
+  // Version 11 (28 November 2026, found on the live site) changes no word of the prompt: it changes how the reply is
+  // asked for. The API compiles a grammar on a format's first use and keeps it for at most 24 hours after the last one.
+  // For this format the compile took 50 to 90 seconds, so the first answer after a day in which nobody used the builder
+  // kept an owner waiting that long (89 s on 27 November, 50 s on 24 November; every answer after it about 5 s). The
+  // format goes into the instructions instead and the reply is validated in code, as it was until the API began to
+  // accept the format on 19 November. The builder's other two prompts are left as they were: neither showed the wait.
+  it("is asked the plain way, with no decoding grammar; the builder's other prompts are left as they were", () => {
+    expect(intakeTurnPrompt.grammar).toBe(false);
+    expect(intakeCompilePrompt.grammar).toBeUndefined();
+    expect(intakeExtractPrompt.grammar).toBeUndefined();
   });
 
   // Version 10 (November 2026, found on the live site). The page has held the place open until the owner says the state,
