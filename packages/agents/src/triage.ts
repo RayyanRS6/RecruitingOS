@@ -257,8 +257,8 @@ export function restoreReadingQuotes<T>(reading: T, view: Pick<ScoringView, "res
 /**
  * Whether a must-have's words name a licence, certificate, permit or registration. The one test for it: the licence rule
  * may settle only these (`credentialFinding`, in the CV reading and in the AI interview's scorecard), and the AI
- * interview asks about one of these once, as yes or no, and takes the answer (`gapQuestion` and `ladderApplies` in
- * screening.ts).
+ * interview asks about one of these once, as yes or no with the two buttons, and takes the answer (`gapQuestion`,
+ * `chatTapFormat` and `ladderApplies` in screening.ts).
  */
 export function namesCredential(text: string): boolean {
   return /licen[cs]|certif|permit|registration|registered|credential/i.test(text);

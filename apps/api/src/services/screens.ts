@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { SCREEN_ACTIVE_STATUSES, type Actor, type ChatCounter, type ReviewItem, type ScreenStatus, type TapAnswer, type TapFormat } from "@ros/contracts";
-import { chatCounter, tapFormatFor } from "@ros/core";
-import { answerWithdrawPrompt, currentQuestion, editScreenAnswer, formAnswersSent, loadScreenBundle, optOutOfScreen, reviewItems, runScreenTurn, screenIntro, startScreenConversation, submitScreenAnswers, withdrawPending, type ScreenDeps, type ScreenIntro, type TurnResult } from "@ros/agents";
+import { chatCounter } from "@ros/core";
+import { answerWithdrawPrompt, currentQuestion, currentTapFormat, editScreenAnswer, formAnswersSent, loadScreenBundle, optOutOfScreen, reviewItems, runScreenTurn, screenIntro, startScreenConversation, submitScreenAnswers, withdrawPending, type ScreenDeps, type ScreenIntro, type TurnResult } from "@ros/agents";
 import { applications, screens, withTenant, type Db, type Tx } from "@ros/db";
 import type { Container } from "../container";
 import { recordWithdrawal, withdrawApplication } from "./applications";
@@ -87,7 +87,7 @@ export async function conversationView(db: Db, ref: ConversationRef): Promise<Co
       firstName: b.candidate.firstName,
       intro: screenIntro({ companyName: b.company.name, firstName: b.candidate.firstName, packet: b.rolePacket, noticeOverrides: b.company.settings.notices }),
       transcript: screen.transcript.map((t) => ({ role: t.role, content: t.content, ...(t.questionKey ? { questionKey: t.questionKey } : {}) })),
-      current: q ? { key: q.key, question: q.question, tap: tapFormatFor(q, packet.compensation), answered: screen.answers[q.key] !== undefined } : null,
+      current: q ? { key: q.key, question: q.question, tap: currentTapFormat(packet, screen.progress), answered: screen.answers[q.key] !== undefined } : null,
       review: phase === "review" ? reviewItems(screen, b.rolePacket) : null,
       withdrawPending: open && withdrawPending(screen.transcript),
       counter: chatCounter(screen.progress.chat),
