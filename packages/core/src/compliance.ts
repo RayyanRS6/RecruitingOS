@@ -179,12 +179,19 @@ export function stateOfPlace(text: string | null | undefined): string | null {
  * "Colorado"). Not "LA" by itself, which is Los Angeles as often as Louisiana, and not "Washington" by itself, which
  * is the state or the capital: the owner then says which ("California", "CA", "Louisiana", "New Orleans, LA"; "WA",
  * "DC").
+ *
+ * `inAMessage`: the words are a message of the conversation, not an answer typed into a card's own box. There "ok",
+ * "hi", "or", "in" and "me" are words first (`CODES_THAT_ARE_WORDS`): as a bare code they are no state, and the name
+ * says it ("Oklahoma"). Every other code, and every name, reads the same in both.
  */
-export function stateAlone(text: string | null | undefined): string | null {
+export function stateAlone(text: string | null | undefined, where: { inAMessage?: boolean } = {}): string | null {
   const t = (text ?? "").trim().replace(/\.$/, "");
-  const code = t.toUpperCase();
   if (t.toLowerCase() === BARE_WASHINGTON) return null;
-  return stateNamed(t.toLowerCase()) ?? (STATE_CODE_SET.has(code) && code !== "LA" ? code : null);
+  const named = stateNamed(t.toLowerCase());
+  if (named) return named;
+  const code = t.toUpperCase();
+  if (!STATE_CODE_SET.has(code) || code === "LA") return null;
+  return where.inAMessage && CODES_THAT_ARE_WORDS.has(code) ? null : code;
 }
 
 /**

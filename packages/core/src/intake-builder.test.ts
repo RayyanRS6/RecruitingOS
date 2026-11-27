@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { INTAKE_ESSENTIALS, IntakeQuestion, IntakeServerState, RolePacket, type DraftRolePacket, type IntakeFacts, type IntakeMessage } from "@ros/contracts";
 import {
   IntakeEditError, amountsIn, applyAnswers, basisFromText, dealBreakerOffer, draftFactsKey, intakeReadiness, looksLikePastedAd, namesWorkArrangement, normalizeFacts, payCard, payConfirmed, payKey, payTyped,
-  placeAnswered, sameRequirement, storedAnswer, typedByOwner,
+  placeAnswered, placeCompletedBy, sameRequirement, storedAnswer, typedByOwner,
 } from "./intake-builder";
 
 const facts = (more: Partial<IntakeFacts> = {}): IntakeFacts => ({ mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...more });
@@ -265,6 +265,46 @@ describe("answers to the question cards", () => {
     expect(after("Denver", "Denver, CO").facts.locationText).toBe("Denver, CO");
     expect(after("Denver", "Boulder").facts.locationText).toBe("Boulder");
     expect(after(undefined, "Colorado").facts.locationText).toBe("Colorado");
+  });
+
+  // The card's "Or type your own answer" puts the cursor in the message box, so most owners give the state as a message
+  // to the assistant, not in the card's own box. One reading completes the place in both (`placeCompletedBy`). Found on
+  // the live site in November 2026: "CO" typed after "Denver" completed nothing, and the same card came back each time.
+  it("completes the place by one reading, whether the state is typed in the card's box or as a message", () => {
+    const where = card({ id: "l", field: "location" });
+    const onTheCard = (before: string, own: string) => applyAnswers(facts({ locationText: before }), [where], [answer("l", { own: [own] })]).facts.locationText;
+    for (const [before, words, place] of [
+      ["Denver", "CO", "Denver, CO"], ["Denver", "co", "Denver, co"], ["Denver", "CO.", "Denver, CO"], ["Denver", " Colorado ", "Denver, Colorado"], ["Denver", "colorado.", "Denver, colorado"],
+      ["Austin", "TX", "Austin, TX"], ["Kansas City", "MO", "Kansas City, MO"], ["Fort Washington", "Maryland", "Fort Washington, Maryland"], ["Seattle", "WA", "Seattle, WA"], ["Downtown LA", "CA", "Downtown LA, CA"],
+    ] as const) {
+      expect(placeCompletedBy(before, words, { inAMessage: true }), `${before} + ${words}, as a message`).toBe(place);
+      expect(placeCompletedBy(before, words), `${before} + ${words}, on the card`).toBe(place);
+      expect(onTheCard(before, words.trim()), `${before} + ${words}, through the card's answer`).toBe(place);
+      expect(placeAnswered({ locationText: place }), place).toBe(true);
+    }
+    // nothing to complete: no place yet, or the place has its state
+    for (const before of [undefined, null, "", "   ", "Denver, CO", "Austin TX", "Colorado"]) {
+      expect(placeCompletedBy(before, "CO", { inAMessage: true }), String(before)).toBeNull();
+      expect(placeCompletedBy(before, "CO"), String(before)).toBeNull();
+    }
+    // not a state and nothing else: another place, a sentence with the state in it, a city
+    for (const words of ["Aurora, CO", "Denver, CO", "CO is fine, and it is on site", "CO, on site", "It is in Colorado.", "Boulder", "on site", ""]) {
+      expect(placeCompletedBy("Denver", words, { inAMessage: true }), words).toBeNull();
+      expect(placeCompletedBy("Denver", words), words).toBeNull();
+    }
+    // the exceptions stay in both: "LA" alone and "Washington" alone complete nothing
+    for (const [before, words] of [["Downtown", "LA"], ["New Orleans", "la."], ["Seattle", "Washington"], ["Fort Washington", "washington."]] as const) {
+      expect(placeCompletedBy(before, words, { inAMessage: true }), `${before} + ${words}`).toBeNull();
+      expect(placeCompletedBy(before, words), `${before} + ${words}`).toBeNull();
+    }
+    // In a message "ok", "hi", "or", "in" and "me" are words first: "ok" after "Denver" must never make an Oklahoma job.
+    // Typed alone they complete nothing there; in the card's own box, where only the place is asked, they still do.
+    for (const [before, words] of [["Denver", "ok"], ["Denver", "OK"], ["Tulsa", "OK"], ["Honolulu", "hi"], ["Portland", "OR"], ["Gary", "in"], ["Bangor", "me"]] as const) {
+      expect(placeCompletedBy(before, words, { inAMessage: true }), `${before} + ${words}`).toBeNull();
+      expect(placeCompletedBy(before, words), `${before} + ${words}`).toBe(`${before}, ${words}`);
+    }
+    // by its name each of those five completes the place in a message too
+    for (const [before, words] of [["Tulsa", "Oklahoma"], ["Honolulu", "Hawaii"], ["Portland", "Oregon"], ["Gary", "Indiana"], ["Bangor", "Maine"]] as const) expect(placeCompletedBy(before, words, { inAMessage: true }), `${before} + ${words}`).toBe(`${before}, ${words}`);
   });
 
   // "LA" by itself is Los Angeles as often as Louisiana: it completes nothing and says no state, however often it is
