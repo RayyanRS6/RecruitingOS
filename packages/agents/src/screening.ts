@@ -183,14 +183,31 @@ export function nextQuestion(packet: RolePacket, progress: ScreenProgress, answe
   return packet.screening.questions.find((q) => !asked.has(q.key) && !(q.key in answers) && !declined.has(q.key)) ?? null;
 }
 
-/** The tap answer the current question offers, if any. */
-export function currentTapFormat(packet: RolePacket, progress: Pick<ScreenProgress, "currentQuestionKey">): TapFormat | null {
+/**
+ * The tap answer a question of the chat offers, if any. The one place that says so: the chat's page
+ * (`currentTapFormat`), a posted tap (`tapWords`) and "Check your answers" (`reviewItems`) all ask here, so the buttons
+ * a candidate sees are the ones the code takes.
+ * - One of the job's interview questions goes by its kind and its words (`tapFormatFor`).
+ * - A must-have the chat asks about (`plan` says which questions those are) goes by the must-have, as its question does
+ *   (`gapQuestion`): one that names a licence, certificate, permit or registration is asked "… Do you have it?", and
+ *   "Yes" or "No" is its whole answer (`ladderApplies`), so it offers the two buttons. Any other is asked about from
+ *   their own work and offers none: a tapped "No" would stand as a "no" for a skill.
+ * `packet`: the chat's own (`chatPacket`), which keeps the job's must-haves.
+ */
+function chatTapFormat(packet: RolePacket, plan: ChatPlan | null | undefined, question: ScreeningQuestion): TapFormat | null {
+  const item = plan?.items.find((i) => i.key === question.key);
+  if (item?.kind === "gap") return ladderApplies(packet, item) ? null : { kind: "yes_no" };
+  return tapFormatFor(question, packet.compensation);
+}
+
+/** The tap answer the current question offers, if any (`chatTapFormat`). `packet`: the chat's own (`chatPacket`). */
+export function currentTapFormat(packet: RolePacket, progress: Pick<ScreenProgress, "currentQuestionKey" | "chat">): TapFormat | null {
   const q = currentQuestion(packet, progress);
-  return q ? tapFormatFor(q, packet.compensation) : null;
+  return q ? chatTapFormat(packet, progress.chat, q) : null;
 }
 
 /** The words a tap on the current question is recorded as, or null when it does not fit it. */
-export function tapWords(packet: RolePacket, progress: Pick<ScreenProgress, "currentQuestionKey">, tap: TapAnswer, now: Date = new Date()): string | null {
+export function tapWords(packet: RolePacket, progress: Pick<ScreenProgress, "currentQuestionKey" | "chat">, tap: TapAnswer, now: Date = new Date()): string | null {
   const format = currentTapFormat(packet, progress);
   return format ? tapAnswerText(format, tap, now) : null;
 }
@@ -257,7 +274,8 @@ export const CHAT_LADDER_QUESTION: Readonly<Record<"push" | "analog" | "smaller"
 /**
  * What the chat says about a must-have the CV does not show: always true, whether or not it is on the CV in other words.
  * A licence, certificate, permit or registration (`namesCredential`, the scorecard's own test for one) is held or it is
- * not, so it is asked as a plain yes or no, once (`ladderApplies`); anything else is asked about from their own work.
+ * not, so it is asked as a plain yes or no, once (`ladderApplies`), with Yes and No to tap (`chatTapFormat`); anything
+ * else is asked about from their own work.
  */
 export function gapQuestion(text: string): string {
   const need = text.trim().replace(/[.!?]+$/, "");
@@ -341,7 +359,9 @@ export function chatPlanFor(packet: RolePacket, reading: Pick<EvidenceAssessment
 /**
  * The questions as the chat asks them, for every reader of the job record (the turn rules, the pages, the scorecard):
  * the plan's items in order (one of the job's interview questions as it is; a must-have as `gapQuestion`), then the
- * closing question. Before the chat has a plan, the job record as it is. Reading it twice gives the same.
+ * closing question. Before the chat has a plan, the job record as it is. Reading it twice gives the same. A must-have's
+ * question carries the open kind, which decides nothing about it: its ladder and its tap answer go by the must-have
+ * (`ladderApplies`, `chatTapFormat`).
  */
 export function chatPacket(packet: RolePacket, progress: Pick<ScreenProgress, "chat"> | null | undefined): RolePacket {
   const plan = progress?.chat;
@@ -1364,10 +1384,11 @@ export function reviewItems(screen: Pick<ScreenRow, "answers" | "progress">, pac
   const declined = new Set(screen.progress.declined ?? []);
   const edits = screen.progress.edits ?? {};
   const own = new Set((screen.progress.chat?.items ?? []).filter((i) => i.kind === "question").map((i) => i.key));
-  return chatPacket(packet, screen.progress).screening.questions.filter((q) => own.has(q.key) || screen.answers[q.key] !== undefined).map((q) => {
+  const chat = chatPacket(packet, screen.progress);
+  return chat.screening.questions.filter((q) => own.has(q.key) || screen.answers[q.key] !== undefined).map((q) => {
     const answer = screen.answers[q.key] ?? null;
     const status = answer !== null ? ((edits[q.key] ?? 0) > 0 ? "edited" : "answered") : declined.has(q.key) ? "declined" : "unanswered";
-    return { key: q.key, question: q.question, answer, status, tap: tapFormatFor(q, packet.compensation) };
+    return { key: q.key, question: q.question, answer, status, tap: chatTapFormat(chat, screen.progress.chat, q) };
   });
 }
 
@@ -1383,7 +1404,7 @@ export async function editScreenAnswer(q: Queryable, input: { screenId: string; 
   if (!question) return { ok: false, error: "That question is not part of this conversation." };
   const now = input.now ?? new Date();
   const typed = input.text?.trim().slice(0, 2000) ?? "";
-  const tapped = input.tap ? tapWords(packet, { currentQuestionKey: question.key }, input.tap, now) : null;
+  const tapped = input.tap ? tapWords(packet, { ...screen.progress, currentQuestionKey: question.key }, input.tap, now) : null;
   const words = tapped ?? typed;
   if (!words) return { ok: false, error: input.tap ? "That answer does not fit this question. Please type it instead." : "Please type an answer first." };
   const recorded = tapped ?? redactProtected(words);

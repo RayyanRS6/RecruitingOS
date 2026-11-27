@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { identityFromClaims, PROVIDER_LABELS } from "./claims";
 import { base64url, signHs256, verifyJwt } from "./jwt";
 import { generateTotpSecret, otpauthUri, verifyTotp } from "./totp";
@@ -51,9 +52,9 @@ export class FakeIdentityProvider implements IdentityProvider {
   async exchangeCode(input: { code: string; codeVerifier: string }): Promise<{ accessToken: string }> {
     const entry = this.codes.get(input.code);
     this.codes.delete(input.code);
-    if (!entry || entry.expiresAt < Date.now()) throw new IdentityError("exchange_failed", "The sign-in could not be completed. Try again.");
+    if (!entry || entry.expiresAt < Date.now()) throw new IdentityError("exchange_failed", SIGN_IN_REFUSAL.exchange_failed);
     const challenge = base64url.encode(createHash("sha256").update(input.codeVerifier).digest());
-    if (challenge !== entry.codeChallenge) throw new IdentityError("exchange_failed", "The sign-in could not be completed. Try again.");
+    if (challenge !== entry.codeChallenge) throw new IdentityError("exchange_failed", SIGN_IN_REFUSAL.exchange_failed);
     return { accessToken: this.mint(entry.input) };
   }
   /** Mints a token exactly as the managed service would. Tests call this directly. */

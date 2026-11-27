@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, desc, eq } from "drizzle-orm";
 import { CHAT_WRAP_KEY, type CandidatePanel, type ScreenTurn } from "@ros/contracts";
+import { gapQuestion, namesCredential } from "@ros/agents";
 import { aiRuns, applications, assessments, candidates, companies, events, notifications, screens } from "@ros/db";
 import { createApp } from "./app";
 import { createContainer, type Container } from "./container";
@@ -12,7 +13,7 @@ import { applicationForm, plantJob, seedCompany, usePlan } from "./test-helpers"
  * person" leads to one plain choice that closes the AI interview as the candidate's own choice, tells the hiring team
  * once, sends them nothing the candidate typed, changes nothing when pressed again, and is rate-limited per link. And a
  * must-have the candidate answered No about on the application form is not asked about again, while a licence or a
- * certificate the chat does ask about is asked once, as yes or no.
+ * certificate the chat does ask about is asked once, as yes or no, with the Yes and No buttons of a yes-or-no question.
  */
 describe("AI interview rules: the follow-up cap, choosing a person instead, and what is not asked twice", () => {
   let container: Container;
@@ -34,12 +35,13 @@ describe("AI interview rules: the follow-up cap, choosing a person instead, and 
   const decodeEntities = (html: string) => html.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   const pageOf = async (path: string) => decodeEntities(await (await app.request(path)).text());
 
-  /** Someone applies, the team shortlists them, and they press Start: the job's first question is on the page. */
-  async function interview(p: { first: string; last: string; email: string }) {
-    expect((await app.request(`/careers/${slug}/jobs/${roleId}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: p.last, email: p.email }) })).status).toBe(302);
+  /** Someone applies (to `role`, with `resume`, where given), the team shortlists them, and they press Start: the job's first question is on the page. */
+  async function interview(p: { first: string; last: string; email: string; role?: string; resume?: string }) {
+    const role = p.role ?? roleId;
+    expect((await app.request(`/careers/${slug}/jobs/${role}/apply`, { method: "POST", body: applicationForm({ firstName: p.first, lastName: p.last, email: p.email }, p.resume) })).status).toBe(302);
     await container.drain();
     const [cand] = await container.db.select().from(candidates).where(eq(candidates.email, p.email));
-    const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, roleId), eq(applications.candidateId, cand.id)));
+    const [a] = await container.db.select().from(applications).where(and(eq(applications.roleId, role), eq(applications.candidateId, cand.id)));
     expect(a.stage).toBe("triaged");
     expect((await app.request(`/api/v1/applications/${a.id}/actions`, { method: "POST", headers: { "content-type": "application/json", cookie: owner }, body: JSON.stringify({ action: "shortlist" }) })).status).toBe(200);
     await container.drain();
@@ -266,5 +268,135 @@ describe("AI interview rules: the follow-up cap, choosing a person instead, and 
     expect(scr.answers.mh_xray).toBe("No");
     expect(scr.progress.currentQuestionKey).toBe(CHAT_WRAP_KEY);
     expect(scr.transcript.filter((t) => t.role === "assistant").map((t) => t.content).join("\n")).not.toMatch(/something similar|small moment/);
+  });
+
+  /**
+   * 27 November 2026: the chat asked "… Do you have it?" about a certificate the job needs and took a typed "Yes" or "No"
+   * as the whole answer, but the page offered only the reply box. It now offers the two buttons a yes-or-no question of
+   * the job's has, on the chat's page and on "Check your answers", and a tap is taken as a tap on that question is.
+   */
+  describe("the chat's own question about a certificate the job needs has the Yes and No buttons of a yes-or-no question", () => {
+    // a resume that shows neither of this job's two must-haves: a certificate, and a skill
+    const RESUME = "Dental Assistant at Park Dental 2018 - present\nChairside assisting daily with two dentists\nDentrix";
+    // the chat's question about each, as the app's own rule words it: only the certificate is held or not
+    const CERTIFICATE = gapQuestion("Radiography certificate");
+    const CHARTING = gapQuestion("Periodontal charting");
+    let job = "";
+    /** The Yes and No buttons as a page draws them for the question `about`, posting to `action`; `skip`: with the chat's own "Skip this question". */
+    const yesNo = (action: string, about: string, skip = false) => `<form method="post" action="${action}"><input type="hidden" name="tap" value="yes_no"/><fieldset class="actions" aria-label="Your answer to: ${about}"><button class="btn secondary" type="submit" name="choice" value="yes">Yes</button><button class="btn secondary" type="submit" name="choice" value="no">No</button>${skip ? '<button class="link-action" type="submit" name="action" value="skip" formnovalidate="">Skip this question</button>' : ""}</fieldset></form>`;
+    /** The box for their own words, one click away beside the buttons, as beside every tap answer. */
+    const OWN_WORDS = '<details class="own-words"><summary>Answer in your own words instead</summary>';
+    /** Someone whose chat is on the certificate: they applied with that resume, were shortlisted, pressed Start and skipped the job's own three questions. */
+    const atTheCertificate = async (first: string) => {
+      const who = await interview({ first, last: "Tester", email: `${first.toLowerCase()}.tester@rules.test`, role: job, resume: RESUME });
+      const base = `/c/screen/${who.token}`;
+      for (let n = 0; n < QUESTIONS.length; n++) expect((await form(base, { action: "skip" })).status).toBe(302);
+      expect((await screenOf(who.application.id)).progress.currentQuestionKey).toBe("mh_xray");
+      return { ...who, base };
+    };
+
+    beforeAll(async () => {
+      const [company] = await container.db.select({ id: companies.id }).from(companies).where(eq(companies.slug, slug));
+      job = await plantJob(container, { companyId: company.id, title: "Dental Assistant, charting", packet: (p) => { p.screening.questions = QUESTIONS.map((q) => ({ ...q })); p.requirements.mustHaves = [...p.requirements.mustHaves, { key: "mh_perio", text: "Periodontal charting" }]; } });
+    });
+
+    it("on the chat's page it has the two buttons of the job's own yes-or-no question, with their own words one click away, and a typed answer is still taken; a must-have asked about from their own work has only the box", async () => {
+      expect([namesCredential("Radiography certificate"), namesCredential("Periodontal charting")]).toEqual([true, false]);
+      expect(CERTIFICATE).toBe("This is one of the things the job needs: Radiography certificate. Do you have it?");
+      const { application, token } = await interview({ first: "Tess", last: "Tester", email: "tess.tester@rules.test", role: job, resume: RESUME });
+      const base = `/c/screen/${token}`;
+      let scr = await screenOf(application.id);
+      expect(scr.progress.chat?.items.map((i) => [i.key, i.kind])).toEqual([["license", "question"], ["charting", "question"], ["patient", "question"], ["mh_xray", "gap"], ["mh_perio", "gap"]]);
+      // the job's own yes-or-no question, as it was: its two buttons, and a tap is its answer
+      expect(await pageOf(base)).toContain(yesNo(base, QUESTIONS[0].question, true));
+      expect((await form(base, { tap: "yes_no", choice: "yes" })).headers.get("location")).toBe(base);
+      expect((await screenOf(application.id)).answers).toEqual({ license: "Yes" });
+      // two open questions answered in their own words: the stand-in model's turn moves the chat on to the certificate
+      for (const answer of ["I probe six points a tooth on every adult patient and note bleeding and recession.", "A nervous patient wanted to stop, so I slowed down and explained each step; she rebooked with me."]) expect((await form(base, { message: answer })).status).toBe(302);
+      scr = await screenOf(application.id);
+      expect(scr.progress.currentQuestionKey).toBe("mh_xray");
+      expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", questionKey: "mh_xray" });
+      expect(scr.transcript.at(-1)?.content.endsWith(`\n\n${CERTIFICATE}`)).toBe(true);
+      // the page: the same two buttons, and the box for their own words one click away
+      const asked = await pageOf(base);
+      expect(asked).toContain('<p class="meta">Question 4 of 5</p>');
+      expect(asked).toContain(yesNo(base, CERTIFICATE, true));
+      expect(asked).toContain(`${OWN_WORDS}<form method="post" action="${base}" class="reply"><label for="message">Your reply<span class="sr-only"> to: ${CERTIFICATE}</span></label><textarea id="message" name="message"`);
+      // typed in that box, "No" is its whole answer as it was, and the chat moves on
+      expect((await form(base, { message: "No" })).headers.get("location")).toBe(base);
+      scr = await screenOf(application.id);
+      expect(scr.answers.mh_xray).toBe("No");
+      expect(scr.progress.currentQuestionKey).toBe("mh_perio");
+      // the other must-have names no licence or certificate: asked about from their own work, with the reply box and no buttons
+      const open = await pageOf(base);
+      expect(open).toContain('<p class="meta">Question 5 of 5</p>');
+      expect(open).toContain(`Your reply<span class="sr-only"> to: ${CHARTING}</span>`);
+      expect(open).not.toContain('name="tap"');
+      expect(open).not.toContain('name="choice"');
+      expect(open).not.toContain(OWN_WORDS);
+    });
+
+    it("a No tapped on it is recorded as the candidate's own word and is the whole answer, taken in code, and the chat moves on; a Yes likewise; a tap posted for the other must-have saves nothing", async () => {
+      const { application, screenId, base } = await atTheCertificate("Uma");
+      const tapped = await form(base, { tap: "yes_no", choice: "no" });
+      expect(tapped.status).toBe(302);
+      expect(tapped.headers.get("location")).toBe(base);
+      const scr = await screenOf(application.id);
+      // the word a typed "No" is recorded as, so the scorecard reads the same answer either way
+      expect(scr.answers).toEqual({ mh_xray: "No" });
+      expect(scr.transcript.at(-2)).toMatchObject({ role: "candidate", content: "No", source: "tap", questionKey: "mh_xray" });
+      // the next item in the job's own words after the tap's own line: nothing "similar" is asked for
+      expect(scr.transcript.at(-1)).toMatchObject({ role: "assistant", content: `Noted: No.\n\n${CHARTING}`, questionKey: "mh_perio", source: "system" });
+      expect(scr.progress.currentQuestionKey).toBe("mh_perio");
+      expect(scr.progress.chat?.items.find((i) => i.key === "mh_xray")).toMatchObject({ state: "covered", step: "direct", pushes: 0 });
+      expect(await pageOf(base)).toContain('<p class="meta">Question 5 of 5</p>');
+      // a tap never reaches the model: this chat has asked it nothing
+      expect((await container.db.select().from(aiRuns).where(eq(aiRuns.task, "screen.turn"))).filter((r) => (r.inputRef as { screenId?: string }).screenId === screenId)).toEqual([]);
+      expect((await eventsFor("screen.answer_tapped", screenId)).map((e) => (e.payload as { questionKey?: string }).questionKey)).toEqual(["mh_xray"]);
+      // a No posted for the must-have asked about from their own work (a page that went stale) fits nothing, and nothing is saved
+      expect((await form(base, { tap: "yes_no", choice: "no" })).headers.get("location")).toBe(`${base}?error=tap`);
+      const refused = await screenOf(application.id);
+      expect(refused.answers).toEqual({ mh_xray: "No" });
+      expect(refused.transcript).toHaveLength(scr.transcript.length);
+      expect(refused.progress.currentQuestionKey).toBe("mh_perio");
+      // Yes, tapped, likewise
+      const other = await atTheCertificate("Vera");
+      expect(await pageOf(other.base)).toContain(yesNo(other.base, CERTIFICATE, true));
+      expect((await form(other.base, { tap: "yes_no", choice: "yes" })).headers.get("location")).toBe(other.base);
+      const held = await screenOf(other.application.id);
+      expect(held.answers).toEqual({ mh_xray: "Yes" });
+      expect(held.transcript.at(-2)).toMatchObject({ role: "candidate", content: "Yes", source: "tap", questionKey: "mh_xray" });
+      expect(held.transcript.at(-1)).toMatchObject({ role: "assistant", content: `Noted: Yes.\n\n${CHARTING}`, questionKey: "mh_perio", source: "system" });
+      expect(held.progress.currentQuestionKey).toBe("mh_perio");
+    });
+
+    it("check-your-answers offers, to change its answer, the control the job's own yes-or-no question gets there, and a change tapped there is taken the same way", async () => {
+      const { application, base } = await atTheCertificate("Wren");
+      // answered in their own words, then the rest of the chat, to "Check your answers"
+      for (const answer of ["No", "I charted pocket depths for the hygienist at Park Dental for about a year.", "Nothing more, thank you."]) expect((await form(base, { message: answer })).status).toBe(302);
+      const review = await pageOf(base);
+      expect(review).toContain("<h1>Check your answers</h1>");
+      expect(review).toContain(`<li class="answer" id="a-mh_xray"><div class="answer-head"><p class="answer-q">4. ${CERTIFICATE}</p></div><p class="pre">No</p>`);
+      // to change it: the two buttons, as for the job's own yes-or-no question, and the box one click away
+      const change = `${base}/answers/mh_xray`;
+      const edit = await pageOf(change);
+      expect(edit).toContain(yesNo(change, CERTIFICATE));
+      expect(edit).toContain(OWN_WORDS);
+      expect(await pageOf(`${base}/answers/license`)).toContain(yesNo(`${base}/answers/license`, QUESTIONS[0].question));
+      // the must-have answered from their own work keeps the box, with their words in it
+      const own = await pageOf(`${base}/answers/mh_perio`);
+      expect(own).not.toContain('name="tap"');
+      expect(own).toContain(">I charted pocket depths for the hygienist at Park Dental for about a year.</textarea>");
+      // a change tapped there: the new word, beside the earlier one in the record
+      expect((await form(change, { tap: "yes_no", choice: "yes" })).headers.get("location")).toBe(`${base}?changed=mh_xray#a-mh_xray`);
+      const scr = await screenOf(application.id);
+      expect(scr.answers.mh_xray).toBe("Yes");
+      expect(scr.transcript.at(-1)).toMatchObject({ role: "candidate", content: "Yes", source: "edit", questionKey: "mh_xray" });
+      expect(scr.progress.edits).toEqual({ mh_xray: 1 });
+      expect(await pageOf(`${base}?changed=mh_xray`)).toContain(`<p class="answer-q">4. ${CERTIFICATE}</p><span class="pill">Changed</span></div><p class="pre">Yes</p>`);
+      // as a change tapped on the job's own yes-or-no question, which they had skipped, always was
+      expect((await form(`${base}/answers/license`, { tap: "yes_no", choice: "no" })).headers.get("location")).toBe(`${base}?changed=license#a-license`);
+      expect((await screenOf(application.id)).answers.license).toBe("No");
+    });
   });
 });

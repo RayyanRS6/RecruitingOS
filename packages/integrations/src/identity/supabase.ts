@@ -1,3 +1,4 @@
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { identityFromClaims, PROVIDER_LABELS } from "./claims";
 import { verifyJwt, type Jwks } from "./jwt";
 import { IdentityError, type IdentityProvider, type MfaFactor, type TotpEnrolment, type VerifiedIdentity } from "./types";
@@ -40,9 +41,9 @@ export class SupabaseIdentityProvider implements IdentityProvider {
     if (!this.cfg.url || !this.cfg.anonKey) throw new IdentityError("not_configured", "Sign-in is not configured.");
     const f = this.cfg.fetch ?? fetch;
     const res = await f(`${this.issuer}/token?grant_type=pkce`, { method: "POST", headers: { "content-type": "application/json", apikey: this.cfg.anonKey }, body: JSON.stringify({ auth_code: input.code, code_verifier: input.codeVerifier }) });
-    if (!res.ok) throw new IdentityError("exchange_failed", "The sign-in could not be completed. Try again.");
+    if (!res.ok) throw new IdentityError("exchange_failed", SIGN_IN_REFUSAL.exchange_failed);
     const body = (await res.json()) as { access_token?: string };
-    if (!body.access_token) throw new IdentityError("exchange_failed", "The sign-in could not be completed. Try again.");
+    if (!body.access_token) throw new IdentityError("exchange_failed", SIGN_IN_REFUSAL.exchange_failed);
     return { accessToken: body.access_token };
   }
   private async jwks(): Promise<Jwks> {

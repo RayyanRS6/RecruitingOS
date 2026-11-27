@@ -46,6 +46,7 @@ export interface IdentityProvider {
   /** Which sign-in methods this deployment offers, in display order. */
   providers(): Array<{ key: string; label: string }>;
   authorizeUrl(input: { provider: string; redirectTo: string; codeChallenge: string; state: string }): string;
+  /** A code that cannot be exchanged is refused as `exchange_failed`, in the sign-in page's own sentence for that code (`SIGN_IN_REFUSAL` in packages/contracts): none is written here. */
   exchangeCode(input: { code: string; codeVerifier: string }): Promise<{ accessToken: string }>;
   verify(accessToken: string): Promise<VerifiedIdentity>;
   listFactors(accessToken: string): Promise<MfaFactor[]>;
