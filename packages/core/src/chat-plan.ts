@@ -168,7 +168,8 @@ export function asksYesOrNo(question: string): boolean {
  * places a noun after in, at, on, to, near or within asks nothing open (`RELATIVE_CLAUSE`): "Do you hold an active RDA
  * license in the state where this office is located?" keeps its buttons, while "Can you confirm the state where you are
  * licensed?" asks which state and is typed. Skills, examples and motivation are always typed: they need the candidate's
- * own words.
+ * own words. This reads one of the job's own questions. What a question of the chat offers, its own about a must-have
+ * included, is `chatTapFormat`'s to say (packages/agents/src/screening.ts), which asks here for the job's.
  */
 export function tapFormatFor(question: Pick<ScreeningQuestion, "kind" | "question">, compensation: Pick<RolePacket["compensation"], "basis" | "currency">): TapFormat | null {
   const text = question.question.trim();

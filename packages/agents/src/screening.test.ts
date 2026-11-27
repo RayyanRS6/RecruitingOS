@@ -8,6 +8,7 @@ import {
   CHAT_CALM_LINE, CHAT_LADDER_QUESTION, EMPTY_SCREEN_PROGRESS, PERSON_OFFER, SCORECARD_READINGS, WITHDRAW_CONFIRM_KEY, advanceProgress, askedQuestions, asksByRequest, candidateWordsOf, chatClosingMessage, chatCodeLead, chatGaps, chatNextLine, chatOpening, chatPacket, chatPlanFor, chatPromptOf, currentTapFormat, enforceChatTurn, formAnswersSent, gapQuestion,
   nextQuestion, onlyQuestions, redactProtected, reviewItems, saidByCandidate, scorecardOutcome, scorecardReadings, screenCommand, screenIntro, tapWords, withdrawPending, yesNoFormAnswers,
 } from "./screening";
+import { namesCredential } from "./triage";
 
 /**
  * The AI interview's rules in code: what the chat asks and in which order, what each turn of the model is held to, what
@@ -1457,5 +1458,83 @@ describe("Yes and No in the AI interview only for a question asked as yes or no 
     expect(currentTapFormat(packet, progress)).toBeNull();
     expect(tapWords(packet, progress, { kind: "yes_no", choice: "yes" })).toBeNull();
     expect(reviewItems({ answers: { [certs.key]: "X-ray and BLS." }, progress }, packet)[0]).toMatchObject({ key: certs.key, answer: "X-ray and BLS.", tap: null });
+  });
+});
+
+/**
+ * 27 November 2026: the chat asked "… Do you have it?" about a licence the job needs and took "Yes" or "No" as the whole
+ * answer, but the candidate had to type the word: the buttons went by a question's kind and opening words, and the chat's
+ * own question about a must-have has neither. Every value here is what the app's rules produce: the plan
+ * (`chatPlanFor`), the chat's questions (`chatPacket`, `gapQuestion`) and the test for a credential (`namesCredential`).
+ */
+describe("Yes and No for the chat's own question about a licence, certificate, permit or registration the job needs (27 November 2026)", () => {
+  // the resume reading left three must-haves not shown: the licence, the charting and the permit
+  const plan = chatPlanFor(hygienist, readingOf(["mh_xray", "mh_dentrix", "mh_nitrous"]), startedAt);
+  const packet = chatPacket(hygienist, { chat: plan });
+  const asking = (key: string): ScreenProgress => ({ ...EMPTY_SCREEN_PROGRESS, chat: plan, askedKeys: [key], currentQuestionKey: key });
+  const asked = (key: string) => packet.screening.questions.find((q) => q.key === key)!.question;
+  const NO = { kind: "yes_no", choice: "no" } as const;
+  const YES = { kind: "yes_no", choice: "yes" } as const;
+
+  it("while it is the chat's current item it offers the two buttons, as a yes-or-no question of the job's does; a must-have asked about from their own work offers none", () => {
+    expect(plan.items.map((i) => [i.key, i.kind])).toEqual([["license", "question"], ["experience", "question"], ["pay", "question"], ["mh_license", "gap"], ["mh_perio", "gap"], ["mh_permit", "gap"]]);
+    for (const [key, need] of [["mh_license", "Active CA RDH license"], ["mh_permit", "Local anesthesia permit"]] as const) {
+      expect(namesCredential(need), need).toBe(true);
+      expect(asked(key)).toBe(gapQuestion(need));
+      expect(asked(key)).toMatch(/\. Do you have it\?$/);
+      expect(currentTapFormat(packet, asking(key)), need).toEqual({ kind: "yes_no" });
+      // the same control as the job's own yes-or-no question
+      expect(currentTapFormat(packet, asking(key)), need).toEqual(currentTapFormat(packet, asking("license")));
+    }
+    // asked about from their own work: typed, as it was
+    expect(namesCredential("Periodontal charting")).toBe(false);
+    expect(asked("mh_perio")).toBe(gapQuestion("Periodontal charting"));
+    expect(asked("mh_perio")).toMatch(/What can you tell me about it from your own work\?$/);
+    expect(currentTapFormat(packet, asking("mh_perio"))).toBeNull();
+    // the job's own questions and the closing question, as they were
+    expect(currentTapFormat(packet, asking("license"))).toEqual({ kind: "yes_no" });
+    expect(currentTapFormat(packet, asking("experience"))).toBeNull();
+    expect(currentTapFormat(packet, asking("pay"))).toEqual({ kind: "pay_range", basis: "hourly", currency: "USD" });
+    expect(currentTapFormat(packet, asking(CHAT_WRAP_KEY))).toBeNull();
+    expect(currentTapFormat(packet, { ...EMPTY_SCREEN_PROGRESS, chat: plan })).toBeNull();
+    // a must-have has the buttons exactly where it is asked as yes or no, and where "No" is its whole answer: where it
+    // has no ladder, as the model is told
+    const gaps = chatPromptOf(packet, plan, null, []).items.filter((i) => i.kind === "gap");
+    expect(gaps.map((i) => [i.key, i.ladder])).toEqual([["mh_license", false], ["mh_perio", true], ["mh_permit", false]]);
+    for (const i of gaps) {
+      expect(currentTapFormat(packet, asking(i.key)) !== null, i.key).toBe(/\. Do you have it\?$/.test(i.question));
+      expect(currentTapFormat(packet, asking(i.key)) !== null, i.key).toBe(!i.ladder);
+    }
+  });
+
+  it("a tap on it is recorded as the candidate's own Yes or No, the words a tap on the job's yes-or-no question is recorded as; a tap fits no other must-have", () => {
+    for (const key of ["mh_license", "mh_permit"]) {
+      expect(tapWords(packet, asking(key), YES), key).toBe("Yes");
+      expect(tapWords(packet, asking(key), NO), key).toBe("No");
+      expect(tapWords(packet, asking(key), NO), key).toBe(tapWords(packet, asking("license"), NO));
+      // an answer of another shape does not fit it (a stale page, a forged post)
+      expect(tapWords(packet, asking(key), { kind: "pay_range", min: 50 }), key).toBeNull();
+    }
+    // a tapped "No" about a skill would stand as its answer, which a "No" about a skill never does: nothing is taken
+    expect(tapWords(packet, asking("mh_perio"), NO)).toBeNull();
+    expect(tapWords(packet, asking("mh_perio"), YES)).toBeNull();
+  });
+
+  it("check-your-answers offers for its answer the control a yes-or-no question of the job's gets, the one a change posted there is checked against", () => {
+    const screen = { answers: { license: "Yes", mh_license: "No", mh_perio: "Six points a tooth.", mh_permit: "Yes" }, progress: { ...EMPTY_SCREEN_PROGRESS, chat: plan, phase: "review" as const } };
+    const items = reviewItems(screen, hygienist);
+    const tapOf = (key: string) => items.find((i) => i.key === key)!.tap;
+    expect(items.map((i) => [i.key, i.answer])).toEqual([["license", "Yes"], ["experience", null], ["pay", null], ["mh_license", "No"], ["mh_perio", "Six points a tooth."], ["mh_permit", "Yes"]]);
+    expect(tapOf("mh_license")).toEqual({ kind: "yes_no" });
+    expect(tapOf("mh_permit")).toEqual({ kind: "yes_no" });
+    expect(tapOf("mh_license")).toEqual(tapOf("license"));
+    expect(tapOf("mh_perio")).toBeNull();
+    expect(tapOf("experience")).toBeNull();
+    expect(tapOf("pay")).toEqual({ kind: "pay_range", basis: "hourly", currency: "USD" });
+    // a change posted from that page is checked as the question being changed: for every line, the control it was offered
+    for (const i of items) expect(currentTapFormat(packet, { ...screen.progress, currentQuestionKey: i.key }), i.key).toEqual(i.tap);
+    expect(tapWords(packet, { ...screen.progress, currentQuestionKey: "mh_license" }, YES)).toBe("Yes");
+    // the list is the same from the job's record and from the chat's own questions
+    expect(reviewItems(screen, packet)).toEqual(items);
   });
 });
