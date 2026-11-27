@@ -82,13 +82,18 @@ ${PROTECTED_TRAITS_RULE}
 /**
  * The builder's conversation: one short reply, the facts read from the owner's words, and up to three question cards for
  * what is missing. Whether the job can be written is the server's to work out and the page's to say, never the model's.
+ *
+ * Asked the plain way (`grammar: false`, version 11): an owner waits on this reply, and its format is large (34 fields,
+ * 13 of them optional). Compiling a grammar for it kept the first answer after a quiet day waiting 50 to 90 seconds on
+ * the live site; every answer after it took about 5.
  */
 export const intakeTurnPrompt: PromptDef<IntakeContext, IntakeTurn> = {
   key: "intake.turn",
-  version: 10,
+  version: 11,
   task: "intake.turn",
   agent: "intake",
   schema: IntakeTurn,
+  grammar: false,
   system: (ctx) => {
     const ad = adBlock(ctx);
     const asked = askedBlock(ctx);

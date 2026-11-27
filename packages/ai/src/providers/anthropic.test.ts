@@ -118,6 +118,37 @@ describe("the Anthropic adapter", () => {
     expect(sent[2]!.output_config?.format).toBeUndefined();
   });
 
+  // Found on the live site, November 2026. The API compiles a grammar on a schema's first use and keeps it for at most 24
+  // hours after the last one. For intake.turn's format the compile took 50 to 90 seconds, so the job builder's first
+  // answer after a quiet day kept its owner waiting that long. A prompt can ask for no grammar at all.
+  it("sends a prompt that asks for no grammar once, the plain way: no output format, the schema in the instructions", async () => {
+    const schema = z.object({ reply: z.string(), done: z.boolean() });
+    const { client, sent } = fakeClient([reply({ text: '{"reply":"Where is the job?","done":false}' }), reply({ text: '{"reply":"Thanks.","done":true}' })]);
+    const provider = new AnthropicProvider(undefined, client);
+
+    const out = await provider.structured({ ...request(schema), grammar: false }, "claude-haiku-5-5");
+    expect(out).toMatchObject({ kind: "ok", output: { reply: "Where is the job?", done: false } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.output_config?.format).toBeUndefined();
+    expect(sent[0]!.output_config?.effort).toBe("medium");
+    expect(sent[0]!.system!.at(-1)!.text).toContain(instructionSchema(schema));
+
+    // Nothing was remembered about the schema: a prompt that shares it and wants the grammar still asks with it.
+    await provider.structured(request(schema), "claude-haiku-5-5");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.output_config?.format).toEqual({ type: "json_schema", schema: expect.objectContaining({ type: "object" }) });
+  });
+
+  it("gives a plain reply that does not validate its one correction turn, still with no output format", async () => {
+    const schema = z.object({ reply: z.string(), done: z.boolean() });
+    const { client, sent } = fakeClient([reply({ text: '{"reply":"Where is the job?"}' }), reply({ text: '{"reply":"Where is the job?","done":false}' })]);
+    const out = await new AnthropicProvider(undefined, client).structured({ ...request(schema), grammar: false }, "claude-haiku-5-5");
+    expect(out).toMatchObject({ kind: "ok", output: { reply: "Where is the job?", done: false } });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.output_config?.format).toBeUndefined();
+    expect(sent[1]!.messages!.at(-1)!.content).toContain("does not validate against the JSON Schema");
+  });
+
   it("writes zod's own schema into the instructions: a record may hold keys, and a maximum count stays a rule", async () => {
     // A rule's expectation is a record; the grammar version of the schema says it may hold no keys at all.
     const schema = z.object({ expectation: z.record(z.string(), z.unknown()), mustHaves: z.array(z.string()).max(6) });

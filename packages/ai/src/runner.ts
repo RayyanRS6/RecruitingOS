@@ -106,6 +106,7 @@ export async function callPrompt<TInput, TOutput>(rt: AiRuntime, prompt: PromptD
       system,
       messages: attempts === 1 ? messages : [...messages, { role: "assistant" as const, content: "(previous output was invalid)" }, { role: "user" as const, content: `Your previous output did not match the required schema: ${lastError.slice(0, 1500)}. Produce a valid object.` }],
       schema: prompt.schema,
+      grammar: prompt.grammar,
       inputRef: meta.inputRef ?? {},
       maxTokens: meta.maxTokens,
       effort: rt.efforts?.[TASK_TIER[prompt.task]] ?? effortForTask(prompt.task),

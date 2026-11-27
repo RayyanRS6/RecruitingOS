@@ -12,6 +12,14 @@ export type PromptDef<TInput, TOutput> = {
   system: (input: TInput) => SystemBlock[];
   /** Renders the user turn(s). */
   messages: (input: TInput) => Array<{ role: "user" | "assistant"; content: string }>;
+  /**
+   * `false`: the reply is never asked for with a decoding grammar. The schema is written into the instructions and the
+   * reply is validated in code, with one correction turn: the provider's plain path, the one a schema the API refuses to
+   * compile takes. For a prompt a person waits on whose answer format is large. The API compiles a grammar on a schema's
+   * first use and keeps it for at most 24 hours after the last one, and on the live site that compile made the job
+   * builder's first answer after a quiet day take 50 to 90 seconds (November 2026).
+   */
+  grammar?: false;
 };
 
 export function promptHash(blocks: SystemBlock[]): string {
