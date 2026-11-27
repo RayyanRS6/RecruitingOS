@@ -139,8 +139,9 @@ export const ScreenTurn = z.object({
 export type ScreenTurn = z.infer<typeof ScreenTurn>;
 
 /**
- * Tap answers: the questions a candidate can answer by tapping, worked out in code from the question's kind and wording.
- * Recorded word for word, without the model. Typing still works.
+ * Tap answers: the questions a candidate can answer by tapping, worked out in code: for one of the job's questions from
+ * its kind and wording, for the chat's own question about a must-have from the must-have (`chatTapFormat` in
+ * packages/agents). Recorded word for word, without the model. Typing still works.
  */
 export const TapFormat = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("yes_no") }),
