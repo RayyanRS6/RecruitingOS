@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { SIGN_IN_REFUSAL } from "@ros/contracts";
 import { identityFromClaims } from "./claims";
 import { FakeIdentityProvider } from "./fake";
+import { SupabaseIdentityProvider } from "./supabase";
 import { totp } from "./totp";
 
 /**
@@ -47,5 +49,25 @@ describe("the providers a verified identity carries", () => {
     expect(raised.aal).toBe("aal2");
     expect(raised.provider).toBe("google");
     expect(raised.providers).toEqual(["google", "azure"]);
+  });
+});
+
+/**
+ * Both providers refuse a sign-in code they cannot exchange the same way: the code `exchange_failed`, with the one
+ * sentence the sign-in page shows for it (`SIGN_IN_REFUSAL` in packages/contracts), which neither writes for itself.
+ */
+describe("a sign-in code that cannot be exchanged", () => {
+  it("is refused as exchange_failed in the sign-in page's sentence for that code, by the fake issuer and by the managed service", async () => {
+    const refusal = { code: "exchange_failed", message: "The sign-in could not be completed. Try again." };
+    expect(SIGN_IN_REFUSAL.exchange_failed).toBe(refusal.message);
+    const fake = new FakeIdentityProvider({ apiBaseUrl: "http://localhost:3000" });
+    // a code that was never issued, and a real one presented with another verifier
+    await expect(fake.exchangeCode({ code: "never-issued", codeVerifier: "verifier" })).rejects.toMatchObject(refusal);
+    const code = fake.issueCode({ email: "dana@brightline.test", codeChallenge: "the-challenge-of-another-verifier" });
+    await expect(fake.exchangeCode({ code, codeVerifier: "verifier" })).rejects.toMatchObject(refusal);
+    // the managed service turns the code down, or answers without a token
+    const service = (status: number) => new SupabaseIdentityProvider({ url: "https://project.supabase.test", anonKey: "publishable", fetch: (async () => new Response("{}", { status })) as typeof fetch });
+    await expect(service(400).exchangeCode({ code: "c", codeVerifier: "verifier" })).rejects.toMatchObject(refusal);
+    await expect(service(200).exchangeCode({ code: "c", codeVerifier: "verifier" })).rejects.toMatchObject(refusal);
   });
 });
