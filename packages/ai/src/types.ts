@@ -28,6 +28,8 @@ export type StructuredRequest<T> = {
   system: SystemBlock[];
   messages: Message[];
   schema: z.ZodType<T>;
+  /** `false`: never ask with a decoding grammar; the schema goes into the instructions instead (`PromptDef.grammar`). */
+  grammar?: false;
   /** References to inputs (ids and hashes), never raw PII beyond what the prompt already contains. */
   inputRef: Record<string, unknown>;
   maxTokens?: number;

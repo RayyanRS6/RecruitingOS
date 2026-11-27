@@ -159,6 +159,10 @@ type CallState = { started: number; endsAt: number; signal: AbortSignal; usage: 
  * express (a maximum count, a date pattern) is validated here and gets a correction turn instead of surfacing as a
  * provider error. When the API cannot compile a prompt's schema into a grammar, the request is sent again without
  * constrained decoding, with the schema in the instructions, and the reply is validated the same way.
+ *
+ * A prompt may ask for that plain request from the start (`grammar: false`, see `PromptDef`). The API compiles a grammar
+ * on a schema's first use and keeps it for at most 24 hours after the last one; a request that meets no compiled grammar
+ * waits for the compile, and for a large schema that took 50 to 90 seconds on the live site (intake.turn, November 2026).
  */
 export class AnthropicProvider implements AiProvider {
   readonly id = "anthropic";
@@ -194,7 +198,8 @@ export class AnthropicProvider implements AiProvider {
     const timer = setTimeout(() => deadline.abort(), endsAt - started);
     const call: CallState = { started, endsAt, signal: deadline.signal, usage, replying: false };
     try {
-      if (!tooLargeForGrammar.has(req.schema)) {
+      // A prompt that asks for no grammar (`grammar: false`) goes straight to the plain request, on every call.
+      if (req.grammar !== false && !tooLargeForGrammar.has(req.schema)) {
         try {
           const format = { type: "json_schema" as const, schema: zodOutputFormat(req.schema).schema };
           const params = { ...base, output_config: effort ? { format, effort } : { format } } satisfies MessageStreamParams;

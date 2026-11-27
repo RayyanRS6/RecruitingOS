@@ -174,6 +174,15 @@ describe("the deadline of the request a call serves", () => {
   });
 });
 
+describe("a prompt that asks for no decoding grammar", () => {
+  it("reaches the provider as that, on every attempt; a prompt that says nothing keeps the grammar", async () => {
+    const { rt, requests } = runtime([invalid(), ok, ok]);
+    await callPrompt(rt, { ...prompt, grammar: false }, null, { companyId: null });
+    await callPrompt(rt, prompt, null, { companyId: null });
+    expect(requests.map((r) => r.grammar)).toEqual([false, false, undefined]);
+  });
+});
+
 /**
  * What a call that failed costs on the company's AI credit, through the real Anthropic adapter against a stand-in client:
  * the hold is about 1.6 cents on Haiku 5.5, and it stays only where a reply began (the SDK's stream says "connect").
