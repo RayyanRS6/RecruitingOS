@@ -1,6 +1,6 @@
 import { INTAKE_ESSENTIALS, mustHaveOf, repeatsMustHave, type IntakeExtraction, type IntakeFacts, type IntakeQuestion, type IntakeTurn, type JobPosts, type WrittenJob } from "@ros/contracts";
 import { ASKED_WORDS, type StructuredRequest } from "@ros/ai";
-import { normalizeCriterion } from "@ros/core";
+import { normalizeCriterion, normalizeFacts, placeAnswered, placeCompletedBy } from "@ros/core";
 
 /**
  * The stand-in provider's answers for the job builder (intake.turn, intake.compile, intake.extract) and for a published
@@ -90,8 +90,10 @@ function placeIn(text: string): string | undefined {
 /**
  * intake.turn: the facts read from the owner's own words, and up to three cards for the essentials still missing, in
  * their order, never one the notes list as already asked. Nothing is assumed: the place and the work arrangement are
- * taken only from what the owner wrote. As the prompt asks, the reply never says that the job can be written or that
- * everything is in (the page shows that); it does say which essentials are still needed once their cards were asked.
+ * taken only from what the owner wrote. As the prompt asks, a city without its state does not answer the place: it is
+ * still missing (counted as the page counts it, `placeAnswered`), a card asks for the state, and a state the owner then
+ * types by itself completes the place. The reply never says that the job can be written or that everything is in (the
+ * page shows that); it does say which essentials are still needed once their cards were asked.
  */
 export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   const c = contextFrom(req);
@@ -115,6 +117,10 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   if (!facts.locationText) {
     const place = placeIn(all);
     if (place) facts.locationText = place;
+  } else if (c.facts.title) {
+    // The owner's answer to "which state?": a state and nothing else, typed after a city that has none.
+    const completed = placeCompletedBy(facts.locationText, last, { inAMessage: true });
+    if (completed) facts.locationText = completed;
   }
   // Facts in plain words, as the prompt asks ("Full time", not "full_time"): the server reads the kind of job, the pay
   // basis and the work arrangement from the words (`normalizeFacts`).
@@ -177,7 +183,7 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
   facts.declinedCriteria = [...facts.declinedCriteria, ...declinedNow];
 
   const has: Record<(typeof INTAKE_ESSENTIALS)[number], boolean> = {
-    title: !!facts.title, location: !!facts.locationText, remote_policy: !!facts.remotePolicy, compensation_range: facts.compensationMin !== undefined && !!facts.compensationBasis,
+    title: !!facts.title, location: placeAnswered(normalizeFacts(facts)), remote_policy: !!facts.remotePolicy, compensation_range: facts.compensationMin !== undefined && !!facts.compensationBasis,
     employment_type: !!facts.employmentType, schedule: !!facts.schedule, must_haves: facts.mustHaves.length > 0,
   };
   const missing = INTAKE_ESSENTIALS.filter((e) => !has[e]);
@@ -189,7 +195,9 @@ export function fakeIntakeTurn(req: StructuredRequest<unknown>): IntakeTurn {
     if (questions.length < 3) questions.push({ id: `fake_${questions.length + 1}`, ...q });
   };
   if (!has.title) ask({ field: "title", prompt: "What is the job title?", mode: "free", options: [], allowOwn: true, why: "It is the first thing candidates read." });
-  if (!has.location) ask({ field: "location", prompt: "Where is the job?", mode: "single", options: c.companyPlace ? [{ label: c.companyPlace, value: c.companyPlace, origin: "assistant" }] : [], allowOwn: true, why: "Candidates look for jobs near them, and the place decides which notices the job page carries." });
+  // A place with no state in it is asked for its state; no place at all, for the place.
+  if (!has.location && facts.locationText) ask({ field: "location", prompt: "Which state is the job in?", mode: "free", options: [], allowOwn: true, why: "The state is on the job page, and it decides which notices the page carries." });
+  else if (!has.location) ask({ field: "location", prompt: "Where is the job?", mode: "single", options: c.companyPlace ? [{ label: c.companyPlace, value: c.companyPlace, origin: "assistant" }] : [], allowOwn: true, why: "Candidates look for jobs near them, and the place decides which notices the job page carries." });
   // An option's value is the words the job keeps, as the prompt asks, never a code: the server draws the work
   // arrangement's three answers itself, and reads the kind of job from the words.
   if (!has.remote_policy) ask({ field: "remote_policy", prompt: "Is the job on site, hybrid or remote?", mode: "single", options: [{ label: "On site", value: "On site", origin: "assistant" }, { label: "Hybrid", value: "Hybrid", origin: "assistant" }, { label: "Remote", value: "Remote", origin: "assistant" }], allowOwn: false, why: "Candidates decide whether to apply on it." });

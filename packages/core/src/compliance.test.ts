@@ -106,6 +106,23 @@ describe("a state and nothing else", () => {
     for (const text of ["Washington", "washington", "WASHINGTON", "Washington.", " Washington "]) expect(stateAlone(text), text).toBeNull();
     for (const [text, state] of [["WA", "WA"], ["wa", "WA"], ["DC", "DC"], ["Washington DC", "DC"], ["District of Columbia", "DC"]] as const) expect(stateAlone(text), text).toBe(state);
   });
+
+  // The same answer typed as a message to the assistant is read the same way, so that "CO" completes "Denver" there as
+  // it does on the card. One difference: in a message "ok", "hi", "or", "in" and "me" are words first, in any case, and
+  // "ok" typed after "Denver" must never make the job an Oklahoma job. Alone they are no state there; the name is.
+  it("is read the same in a message, but for the five codes that are also words", () => {
+    for (const [text, state] of [["CO", "CO"], ["co", "CO"], ["CO.", "CO"], [" Co ", "CO"], ["Colorado", "CO"], ["colorado.", "CO"], ["TX", "TX"], ["new york", "NY"], ["DC", "DC"], ["WA", "WA"]] as const) {
+      expect(stateAlone(text, { inAMessage: true }), text).toBe(state);
+      expect(stateAlone(text), text).toBe(state);
+    }
+    for (const [text, state] of [["OK", "OK"], ["ok", "OK"], ["Ok.", "OK"], ["HI", "HI"], ["hi", "HI"], ["OR", "OR"], ["or", "OR"], ["IN", "IN"], ["in", "IN"], ["ME", "ME"], ["me", "ME"]] as const) {
+      expect(stateAlone(text, { inAMessage: true }), text).toBeNull();
+      expect(stateAlone(text), text).toBe(state);
+    }
+    for (const [text, state] of [["Oklahoma", "OK"], ["Hawaii", "HI"], ["Oregon", "OR"], ["Indiana", "IN"], ["Maine", "ME"], ["louisiana", "LA"]] as const) expect(stateAlone(text, { inAMessage: true }), text).toBe(state);
+    // the exceptions stay, and a message that is more than the state is not one
+    for (const text of ["LA", "la.", "Washington", "washington.", "CO is fine, and it is on site", "CO, on site", "It is CO", "Denver, CO", "Denver", "ok then", ""]) expect(stateAlone(text, { inAMessage: true }), text).toBeNull();
+  });
 });
 
 describe("a state written after a city, in a person's own words", () => {
@@ -124,6 +141,14 @@ describe("a state said by itself, in a person's own words", () => {
     for (const [said, state] of [["It is in Colorado.", "CO"], ["it's in colorado", "CO"], ["Colorado", "CO"], ["The job is in West Virginia, by the way.", "WV"], ["It is in New Mexico!", "NM"], ["Denver, CO", "CO"], ["It is in WA.", "WA"], ["It is in Washington DC.", "DC"], ["Where the job is: Colorado", "CO"], ["Where the job is: CO", "CO"]] as const) expect(saysState(said, state), said).toBe(true);
     // not another state, not a name inside a longer one, and never a bare "Washington"
     for (const [said, state] of [["It is in Colorado.", "CA"], ["It is in West Virginia.", "VA"], ["It is in Arkansas.", "KS"], ["We are in Kansas City.", "KS"], ["Near the Nevada border.", "NV"], ["It is in Washington.", "WA"], ["It is in Washington.", "DC"], ["We work at Fort Washington.", "WA"], ["Washington", "WA"], ["It is in LA.", "LA"], ["I need a dental assistant in Denver, on site, full time.", "CO"]] as const) expect(saysState(said, state), `${said} / ${state}`).toBe(false);
+  });
+
+  // This reader is asked about every message of a conversation, so two letters by themselves say no state to it: "ok"
+  // is a word, and "MA", "PA" and "MD" are jobs. A state and nothing else is read where it is the answer just given
+  // (`stateAlone`; the job builder's `placeCompletedBy`). Nor do two letters at the start or in the middle of a longer
+  // message say one ("Oh, and it is hybrid").
+  it("is never two letters alone, nor two letters at the start or in the middle of a longer message", () => {
+    for (const [said, state] of [["ok", "OK"], ["hi", "HI"], ["MA", "MA"], ["pa", "PA"], ["co", "CO"], ["LA", "LA"], ["CO is fine, and it is on site", "CO"], ["CO, on site", "CO"], ["Oh, and it is hybrid.", "OH"], ["Ok, it is on site.", "OK"], ["Come in, it is on site", "IN"]] as const) expect(saysState(said, state), `${said} / ${state}`).toBe(false);
   });
 });
 

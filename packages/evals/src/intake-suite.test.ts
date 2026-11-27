@@ -29,7 +29,7 @@ function standIn() {
     const draft = r.result.output;
     return { draft, finish: (d: WrittenJob = draft): RolePacket => finalizePacket(d, ctx, { sessionId: "eval", aiRunId: "r" }) };
   };
-  return { call, written, tasks: () => fake.calls.map((c) => c.task) };
+  return { fake, call, written, tasks: () => fake.calls.map((c) => c.task) };
 }
 
 const byId = (id: string): IntakeCase => {
@@ -51,11 +51,15 @@ const serverOf = (id: string, t: IntakeTurn): AfterTurn => afterTurn({ turn: t, 
  * model's reading, and what the server makes of the turn.
  */
 const judge = (id: string, t: IntakeTurn): string[] => byId(id).expectTurn!({ ...t, factsExtracted: mergeFacts({ ...EMPTY_FACTS }, t.factsExtracted, firstMessage(id)) }, serverOf(id, t));
+/** What an assistant reads from the sentence that names Denver and no state (the two cases of the city alone), the place aside. */
+const DENVER_READ: IntakeFacts = { ...EMPTY_FACTS, title: "Dental assistant", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28, mustHaves: ["Radiography certificate"] };
+/** A turn on that sentence that reads the city and asks for its state on a card of its own. */
+const askedOnACard: IntakeTurn = turn({ factsExtracted: { ...DENVER_READ, locationText: "Denver" }, questions: [card({ field: "location", prompt: "Which state is Denver in?", mode: "free", options: [], allowOwn: true, why: "The state is on the job page." })] });
 
 describe("the job builder's suites on the stand-in", () => {
   it("pass, every case, driven as the runner drives them", async () => {
     const suites: Array<[string, IntakeCase[], boolean]> = [["intake.golden", intakeGolden, true], ["intake.illegal_criteria", intakeIllegal, true], ["intake.job_ad", intakeJobAd, false], ["intake.proxy_refusal", intakeProxyRefusal, false]];
-    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 7], ["intake.illegal_criteria", 5], ["intake.job_ad", 2], ["intake.proxy_refusal", 3]]);
+    expect(suites.map(([name, cases]) => [name, cases.length])).toEqual([["intake.golden", 8], ["intake.illegal_criteria", 5], ["intake.job_ad", 2], ["intake.proxy_refusal", 3]]);
     for (const [name, cases, compile] of suites) {
       for (const c of cases) expect((await runIntakeCase(standIn().call, c, compile)).failures, `${name} ${c.id}`).toEqual([]);
     }
@@ -202,17 +206,63 @@ describe("the card loop: answers tapped on the cards, then the next turn", () =>
     expect(s.tasks()).toEqual(["intake.turn", "intake.turn", "intake.turn"]);
     // the state completes the place; Colorado's law asks for the benefits on the ad, so that card follows, and is left alone
     expect(out.notes).toEqual(["round 1: answered location; skipped none; cards after it: benefits", "round 2: answered none; skipped benefits; cards after it: none"]);
-    // a model that adds the state itself changes nothing: the app leaves it off, still needs the place and shows its card
-    const read = { ...EMPTY_FACTS, title: "Dental assistant", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 24, compensationMax: 28, mustHaves: ["Radiography certificate"] };
-    const guessed = serverOf(id, turn({ factsExtracted: { ...read, locationText: "Denver, CO" } }));
+    // a model that adds the state itself changes nothing on the page: the app leaves it off, still needs the place and
+    // shows its own card for it
+    const assumed = turn({ factsExtracted: { ...DENVER_READ, locationText: "Denver, CO" } });
+    const guessed = serverOf(id, assumed);
     expect(guessed.facts.locationText).toBe("Denver");
     expect(guessed).toMatchObject({ missing: ["location"], mayDraft: false });
-    expect(judge(id, turn({ factsExtracted: { ...read, locationText: "Denver, CO" } }))).toEqual([]);
+    expect(guessed.questions.map((q) => q.field)).toEqual(["location"]);
     // and were the app ever to take the city alone as answered, as it did before, or to show no card, each fails the case
-    expect(byId(id).expectTurn!(turn({}), { ...guessed, mayDraft: true, missing: [], questions: [] })).toEqual([
+    expect(byId(id).expectTurn!(askedOnACard, { ...guessed, mayDraft: true, missing: [], questions: [] })).toEqual([
       'the owner named a city and no state, so the place is still needed; the page takes "Denver" as answered',
       "the place is still needed and the page shows no card for it",
     ]);
+  });
+
+  // intake.turn 10 tells the assistant that a city without its state is not enough. On the live site it had taken
+  // "Denver" as the place answered: its message named one thing still needed while the page asked for two.
+  it("fails an assistant that takes the city alone as the place answered, and passes one that asks for the state on a card or in its message", () => {
+    const id = "city_alone_then_its_state_on_the_card";
+    const TOOK_THE_CITY = "the assistant took the city alone as the place answered: no card of its own asks for the place, and its message does not ask for the state";
+    // it added the state itself, or read the city and said no more about it, as on the live site
+    expect(judge(id, turn({ factsExtracted: { ...DENVER_READ, locationText: "Denver, CO" } }))).toEqual([TOOK_THE_CITY]);
+    expect(judge(id, turn({ assistantMessage: "Got it: a dental assistant in Denver.", factsExtracted: { ...DENVER_READ, locationText: "Denver" } }))).toEqual([TOOK_THE_CITY]);
+    // it asks for the state
+    expect(judge(id, askedOnACard)).toEqual([]);
+    expect(judge(id, turn({ assistantMessage: "Got it. One thing is still needed: the state Denver is in.", factsExtracted: { ...DENVER_READ, locationText: "Denver" } }))).toEqual([]);
+  });
+
+  // The card for the place has "Or type your own answer", which puts the cursor in the message box, so most owners give
+  // the state as a message. Found on the live site in November 2026: "CO" typed after "Denver" completed nothing, the
+  // assistant said it had set "Denver, CO", and the same card came back each time.
+  it("takes the state the owner types as a message, whatever the assistant makes of it, and fails a page that still asks for the place", async () => {
+    const id = "city_alone_then_its_state_typed";
+    const s = standIn();
+    expect((await runIntakeCase(s.call, byId(id), true)).failures).toEqual([]);
+    // one turn for each of the two messages, and no job written: the case checks none
+    expect(s.tasks()).toEqual(["intake.turn", "intake.turn"]);
+    // the first turn as on the live site (the city read, nothing asked for it), then whatever the assistant makes of "CO":
+    // nothing, the place with its state as it wrote it there, or a card that asks for the state again
+    const driven = async (second: IntakeTurn) => {
+      const scripted = standIn();
+      scripted.fake.scriptNext("intake.turn", turn({ factsExtracted: { ...DENVER_READ, locationText: "Denver" } }));
+      scripted.fake.scriptNext("intake.turn", second);
+      return (await runIntakeCase(scripted.call, byId(id), true)).failures;
+    };
+    expect(await driven(turn({ assistantMessage: "Noted." }))).toEqual([]);
+    expect(await driven(turn({ assistantMessage: "Thanks, I've set the location to Denver, CO.", factsExtracted: { ...EMPTY_FACTS, locationText: "Denver, CO" } }))).toEqual([]);
+    expect(await driven({ ...askedOnACard, assistantMessage: "Which state is Denver in?" })).toEqual([]);
+    // and were the app to leave the place as it stood after the first message, as it did on the live site, the case fails on each count
+    const stuck = serverOf(id, turn({ factsExtracted: { ...DENVER_READ, locationText: "Denver" } }));
+    expect(byId(id).expectTurn!(turn({}), stuck)).toEqual([
+      'the state typed by itself should complete the place the owner named; the place reads "Denver"',
+      "the owner typed the state, and the page still asks for the place",
+      "the page shows the card for the place again",
+      "every essential is in, so the job should be ready to write; the page still asks for location",
+    ]);
+    // a place that lost its city fails too
+    expect(byId(id).expectTurn!(turn({}), { ...stuck, facts: { ...stuck.facts, locationText: "CO" }, missing: [], questions: [], mayDraft: true })).toEqual(['the state typed by itself should complete the place the owner named; the place reads "CO"']);
   });
 });
 

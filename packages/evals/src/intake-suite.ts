@@ -234,6 +234,8 @@ const DENTAL_ASSISTANT_TAPS: IntakeTapRound = {
 const PAY_24_TO_28: IntakeTapRound = { compensation: { pay: { basis: "hourly", min: 24, max: 28 } } };
 /** The state alone, on the card for the place: an offered answer that names Colorado, else the owner's own "CO". Every other card is left alone. */
 const PLACE_IN_COLORADO: IntakeTapRound = { location: { pick: /colorado|\bco\b/i, own: "CO" } };
+/** Every essential but the state of the place: the owner names the city alone. */
+const DENVER_NO_STATE = "I need a dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.";
 
 /** Writing a job: what the conversation reads and asks, and the job written from it. */
 export const intakeGolden: IntakeCase[] = [
@@ -382,18 +384,43 @@ export const intakeGolden: IntakeCase[] = [
     // job, so the job still got its state's notices. It is no longer asked, and a state it adds to the place it reads is
     // left off: the state is the owner's to say. So after this sentence the place is still needed, it has its card and
     // the job cannot be written; the state given on that card completes the place, and then it can.
+    //
+    // Since intake.turn 10 the assistant is told so too (a city without its state is not enough). On the live site it
+    // had taken "Denver" as the place answered: its message named one thing still needed while the page asked for two.
+    // So its own reply must ask for the state as well, on a card of its own or in its message.
     id: "city_alone_then_its_state_on_the_card",
     provenance: "synthetic",
     vertical: "dental",
-    ownerMessages: ["I need a dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate."],
-    expectTurn: (_t, after) => {
+    ownerMessages: [DENVER_NO_STATE],
+    expectTurn: (t, after) => {
       const f: string[] = [];
       if (after.mayDraft || !after.missing.includes("location")) f.push(`the owner named a city and no state, so the place is still needed; the page takes "${after.facts.locationText ?? ""}" as answered`);
       if (!after.questions.some((q) => q.field === "location")) f.push("the place is still needed and the page shows no card for it");
+      if (!t.questions.some((q) => q.field === "location") && !/\bstate\b/i.test(t.assistantMessage)) f.push("the assistant took the city alone as the place answered: no card of its own asks for the place, and its message does not ask for the state");
       return f;
     },
     taps: [PLACE_IN_COLORADO, PLACE_IN_COLORADO, PLACE_IN_COLORADO],
     expectAfterTaps: (after) => [...readyAfterTaps(after), ...(/denver/i.test(after.facts.locationText ?? "") ? [] : [`the state given on the card should complete the place the owner named; the place reads "${after.facts.locationText ?? ""}"`])],
+  },
+  {
+    // The same answer the way the page sends it for most owners. The card for the place has "Or type your own answer",
+    // which puts the cursor in the message box, so the state arrives as an ordinary message and a turn of the
+    // conversation. Found on the live site in November 2026: "CO" typed after "Denver" completed nothing, the assistant
+    // said it had set "Denver, CO", and the page asked for the place again, each time. After the message the place is
+    // answered and keeps its city, no card asks for it, and the job can be written.
+    id: "city_alone_then_its_state_typed",
+    provenance: "synthetic",
+    vertical: "dental",
+    ownerMessages: [DENVER_NO_STATE, "CO"],
+    expectTurn: (_t, after) => {
+      const f: string[] = [];
+      const place = after.facts.locationText ?? "";
+      if (!/denver/i.test(place) || !/\bco\b|colorado/i.test(place)) f.push(`the state typed by itself should complete the place the owner named; the place reads "${place}"`);
+      if (after.missing.includes("location")) f.push("the owner typed the state, and the page still asks for the place");
+      if (after.questions.some((q) => q.field === "location")) f.push("the page shows the card for the place again");
+      if (!after.mayDraft) f.push(`every essential is in, so the job should be ready to write; the page still asks for ${after.missing.join(", ") || "the pay to be confirmed"}`);
+      return f;
+    },
   },
 ];
 

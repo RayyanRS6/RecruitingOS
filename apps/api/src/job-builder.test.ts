@@ -474,17 +474,19 @@ describe("the job builder", () => {
   // state, and its card comes back until they do: a job's notices follow its state, and none may go missing.
   it("asks for the place again while its state is missing, holds 'Write the job', and writes a Colorado job once the state is said", async () => {
     const PLACE_CARD = "Where is the job? Give the city and state.";
+    // the stand-in assistant's own card: it is told that a city without its state is not enough (intake.turn 10)
+    const STATE_CARD = "Which state is the job in?";
     let draft = await start(owner, "Dental assistant in Denver, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
-    // "Denver" stays on the checklist, still needed, with its card; nothing else is missing
+    // "Denver" stays on the checklist, still needed, with a card that asks for the state; nothing else is missing
     expect(draft.facts.locationText).toBe("Denver");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"], draftBlocker: "Still needed before the job can be written: where the job is." });
     expect(draft.readiness.essentials.find((e) => e.key === "location")).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver" });
-    expect(draft.questions.map((q) => [q.field, q.prompt])).toEqual([["location", PLACE_CARD]]);
+    expect(draft.questions.map((q) => [q.field, q.prompt])).toEqual([["location", STATE_CARD]]);
     // "Write the job" is refused, with the reason
     const early = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
     expect(early.status).toBe(409);
     expect(((await early.json()) as Refusal).error).toMatchObject({ code: "not_ready", message: "Still needed before the job can be written: where the job is." });
-    // answered with the city again: the card is there again
+    // answered with the city again: the assistant asks once, so the server's own card for the place is there now
     draft = (await answerCards(owner, draft, { location: "Denver" })).session;
     expect(draft.readiness.missing).toEqual(["location"]);
     expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
@@ -511,7 +513,8 @@ describe("the job builder", () => {
     let draft = await start(owner, "Dental assistant in Downtown LA, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     expect(draft.facts.locationText).toBe("Downtown LA");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
-    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the stand-in assistant's own card for the state the first time, the server's card for the place after that
+    expect(draft.questions.map((q) => q.prompt)).toEqual(["Which state is the job in?"]);
     // "LA" on the card, twice: the place is "LA", it still has no state, and the card is there again
     for (let n = 0; n < 2; n += 1) {
       draft = (await answerCards(owner, draft, { location: "LA" })).session;
@@ -542,7 +545,8 @@ describe("the job builder", () => {
     let draft = await start(owner, "Dental assistant in Fort Washington, on site, full time, Monday to Friday, $24 to $28 an hour. Must-haves: radiography certificate.");
     expect(draft.facts.locationText).toBe("Fort Washington");
     expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
-    expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+    // the stand-in assistant's own card for the state the first time, the server's card for the place after that
+    expect(draft.questions.map((q) => q.prompt)).toEqual(["Which state is the job in?"]);
     // "Washington" on the card completes nothing: the place is "Washington", with no state, and the card is there again
     draft = (await answerCards(owner, draft, { location: "Washington" })).session;
     expect(draft.facts.locationText).toBe("Washington");
@@ -560,6 +564,208 @@ describe("the job builder", () => {
     const session = ((await w.json()) as { session: IntakeSessionView }).session;
     expect(session.draft?.identity.locations).toEqual([{ city: "Fort Washington", region: "MD", country: "US" }]);
     expect(session.legalCheck?.jurisdictions).toEqual(["US-MD"]);
+  });
+
+  // Found on the live site in November 2026, the way a first-time owner meets it. The card for the place has "Or type
+  // your own answer…", which puts the cursor in the message box: the answer is an ordinary message, a turn of the
+  // conversation, not an answer sent on the card. "CO" typed there after "Denver" was read as no state: the assistant
+  // said it had set "Denver, CO", the page still listed "Denver" as still needed, and the same card came back, each time.
+  // The first turn, and the turns that answer "CO", are scripted with what the real model answered there; what the server
+  // makes of them is its own.
+  describe("the state of the place typed as a message", () => {
+    const PLACE_CARD = "Where is the job? Give the city and state.";
+    const ARRANGEMENT_CARD = "Is the job on site, hybrid or remote?";
+    const warehouse = (place: string) => `TEST - not a real job. Warehouse associate in ${place}, full time, Monday to Friday 8 a.m. to 5 p.m., $20 to $24 an hour. Must have a current forklift certification.`;
+    const assistant = (assistantMessage: string, read: Record<string, unknown> = {}, questions: unknown[] = []) => container.fake!.scriptNext("intake.turn", { assistantMessage, factsExtracted: { mustHaves: [], niceToHaves: [], formQuestions: [], dealBreakers: [], declinedCriteria: [], ...read }, questions });
+    const arrangementCard = { id: "a1", field: "remote_policy", prompt: ARRANGEMENT_CARD, mode: "single", options: ["On site", "Hybrid", "Remote"].map((label) => ({ label, value: label, origin: "assistant" })), allowOwn: false };
+    /** The owner's first message, answered as on the live site: the city read with no state, and one card, for the work arrangement. */
+    const begin = async (place: string): Promise<IntakeSessionView> => {
+      assistant("One thing is still needed: whether the job is on site, hybrid or remote. Pick it on the card below.", { title: "Warehouse associate", locationText: place, employmentType: "Full time", schedule: "Monday to Friday, 8 a.m. to 5 p.m.", compensationBasis: "hourly", compensationMin: 20, compensationMax: 24, mustHaves: ["Current forklift certification"] }, [arrangementCard]);
+      const draft = await start(owner, warehouse(place));
+      expect(draft.facts.locationText).toBe(place);
+      // the page, rightly: two things are still needed, each with its card
+      expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location", "remote_policy"], draftBlocker: "Still needed before the job can be written: where the job is, on site, hybrid or remote." });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD, ARRANGEMENT_CARD]);
+      return draft;
+    };
+    /** Words typed in the message box and sent: an ordinary message, and the assistant's turn on it. */
+    const type = async (draft: IntakeSessionView, message: string): Promise<IntakeSessionView> => {
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/messages`, { message });
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as IntakeTurnResponse).session;
+    };
+    const placeOf = (draft: IntakeSessionView) => draft.readiness.essentials.find((e) => e.key === "location");
+    const lastReply = (draft: IntakeSessionView) => draft.messages.filter((m) => m.role === "assistant").at(-1)?.content;
+    const SET_IT = "Thanks, I've set the location to Denver, CO. The only thing still needed is whether the job is on site, hybrid or remote, so you can type it in.";
+
+    it("completes 'Denver' with 'CO': the place is answered, its card does not come back, and the job is written as a Colorado job", async () => {
+      let draft = await begin("Denver");
+      // as on the live site: the assistant read "Denver, CO" and says it set it. Now the page agrees.
+      assistant(SET_IT, { locationText: "Denver, CO" });
+      draft = await type(draft, "CO");
+      expect(draft.facts.locationText).toBe("Denver, CO");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: true, value: "Denver, CO" });
+      expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["remote_policy"], draftBlocker: "Still needed before the job can be written: on site, hybrid or remote." });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([ARRANGEMENT_CARD]);
+      expect(lastReply(draft)).toBe(SET_IT);
+      expect(draft.messages.filter((m) => m.role === "owner").map((m) => [m.kind, m.content])).toEqual([["text", warehouse("Denver")], ["text", "CO"]]);
+      // the rest goes in on its card: the job can be written, and Colorado's own rule brings the benefits card
+      draft = (await answerCards(owner, draft, { remote_policy: "onsite" })).session;
+      expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [], draftBlocker: null });
+      expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+      const w = await json(owner, "POST", `${sessions}/${draft.id}/draft`);
+      expect(w.status, await w.clone().text()).toBe(200);
+      draft = ((await w.json()) as { session: IntakeSessionView }).session;
+      expect(draft.draft?.identity.locations).toEqual([{ city: "Denver", region: "CO", country: "US" }]);
+      expect(draft.draft?.compliance.jurisdictions).toContain("US-CO");
+      expect(draft.legalCheck?.jurisdictions).toEqual(["US-CO"]);
+      expect(draft.legalCheck?.items.map((i) => i.key)).toEqual(["pay_range", "benefits", "closing_date"]);
+    });
+
+    it("completes the place whatever the assistant made of the message: nothing, the city again, a card that asks again, or its own stand-in reply", async () => {
+      // the assistant read nothing new
+      let draft = await begin("Denver");
+      assistant("Noted.");
+      draft = await type(draft, "CO");
+      expect(draft.facts.locationText).toBe("Denver, CO");
+      expect(draft.readiness.missing).toEqual(["remote_policy"]);
+      expect(draft.questions.map((q) => q.prompt)).toEqual([ARRANGEMENT_CARD]);
+      // it wrote the city again, and asked for the state on a card of its own: that card is not shown, the place is answered
+      draft = await begin("Denver");
+      assistant("Which state is Denver in?", { locationText: "Denver" }, [{ id: "a1", field: "location", prompt: "Which state is Denver in?", mode: "free", options: [], allowOwn: true }]);
+      draft = await type(draft, "co.");
+      expect(draft.facts.locationText).toBe("Denver, co");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Denver, co" });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([ARRANGEMENT_CARD]);
+      // the stand-in's own reply
+      draft = await begin("Denver");
+      draft = await type(draft, "CO");
+      expect(draft.facts.locationText).toBe("Denver, CO");
+      expect(draft.readiness.missing).toEqual(["remote_policy"]);
+      expect(draft.questions.map((q) => q.field)).toEqual(["remote_policy"]);
+      // the state by its name, as before, and another city and state
+      draft = await begin("Denver");
+      assistant("Got it: Denver, Colorado.", { locationText: "Denver, CO" });
+      draft = await type(draft, "Colorado");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Denver, Colorado" });
+      draft = await begin("Austin");
+      assistant("Noted.");
+      draft = await type(draft, "TX");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Austin, TX" });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([ARRANGEMENT_CARD]);
+    });
+
+    // The place stays answered on later turns. The assistant tidies what it reads ("Denver, co" as "Denver, CO"): the same
+    // city and state spelled another way add nothing, so the state is not taken off again and the card stays away.
+    it("keeps the place answered when the assistant later spells it its own way", async () => {
+      let draft = await begin("Denver");
+      assistant("Noted.");
+      draft = await type(draft, "co");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Denver, co" });
+      for (const spelled of ["Denver, CO", "Denver, Colorado"]) {
+        assistant("Noted.", { locationText: spelled, niceToHaves: ["Dentrix"] });
+        draft = await type(draft, "Nice to have: Dentrix.");
+        expect(placeOf(draft), spelled).toEqual({ key: "location", label: "Where the job is", done: true, value: spelled });
+        expect(draft.readiness.missing, spelled).toEqual(["remote_policy"]);
+        expect(draft.questions.map((q) => q.prompt), spelled).toEqual([ARRANGEMENT_CARD]);
+      }
+      // and so does a state given in the card's own box: "co" there, then the assistant's "Denver, CO"
+      draft = await begin("Denver");
+      draft = (await answerCards(owner, draft, { location: "co", remote_policy: "onsite" })).session;
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Denver, co" });
+      assistant("Noted.", { locationText: "Denver, CO", niceToHaves: ["Dentrix"] });
+      draft = await type(draft, "Nice to have: Dentrix.");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: true, value: "Denver, CO" });
+      expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    });
+
+    // The page sends typed words with the cards already answered on the deck: the answers, and the words as a note beside
+    // them. The note is the owner's message all the same, so the state typed there completes the place too.
+    it("completes the place when the state is typed beside an answered card", async () => {
+      let draft = await begin("Denver");
+      const r = await json(owner, "POST", `${sessions}/${draft.id}/answers`, { answers: [{ questionId: draft.questions.find((q) => q.field === "remote_policy")!.id, selected: ["onsite"] }], note: "CO" });
+      expect(r.status, await r.clone().text()).toBe(200);
+      draft = ((await r.json()) as IntakeTurnResponse).session;
+      expect(draft.messages.filter((m) => m.role === "owner").slice(-2).map((m) => [m.kind, m.content])).toEqual([["answers", "On site, hybrid or remote: On site"], ["text", "CO"]]);
+      expect(draft.facts).toMatchObject({ locationText: "Denver, CO", remotePolicy: "onsite" });
+      expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+      expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+    });
+
+    it("completes nothing on 'LA' after 'Downtown', nor on 'Washington' after 'Seattle': the place is still asked", async () => {
+      let draft = await begin("Downtown");
+      assistant("Thanks, I've set the location to Downtown, LA.", { locationText: "Downtown, LA" });
+      draft = await type(draft, "LA");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Downtown" });
+      expect(draft.readiness.missing).toEqual(["location", "remote_policy"]);
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD, ARRANGEMENT_CARD]);
+      draft = await begin("Seattle");
+      assistant("Thanks, I've set the location to Seattle, WA.", { locationText: "Seattle, WA" });
+      draft = await type(draft, "Washington");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Seattle" });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD, ARRANGEMENT_CARD]);
+      // said so that it can only be the state, it completes the place
+      assistant("Noted.");
+      draft = await type(draft, "WA");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Seattle, WA" });
+    });
+
+    // The safe side: only a message that is the state and nothing else is read as the answer about the place. A longer
+    // one is the assistant's to read, and a state it writes from a bare code inside a sentence is left off: the work
+    // arrangement said there is taken, the place is still asked, and "CO" by itself then answers it.
+    it("does not read 'CO is fine, and it is on site' as the place's state: the arrangement is taken, the place is asked, and 'CO' answers it", async () => {
+      let draft = await begin("Denver");
+      assistant("Thanks, I've set the location to Denver, CO, and the job as on site.", { locationText: "Denver, CO", remotePolicy: "On site" });
+      draft = await type(draft, "CO is fine, and it is on site");
+      expect(draft.facts.remotePolicy).toBe("onsite");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver" });
+      expect(draft.readiness).toMatchObject({ mayDraft: false, missing: ["location"] });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+      assistant("Noted.");
+      draft = await type(draft, "CO");
+      expect(placeOf(draft)).toMatchObject({ done: true, value: "Denver, CO" });
+      expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+      expect(draft.questions.map((q) => q.field)).toEqual(["benefits"]);
+    });
+
+    // "ok" is a word first. Typed alone it completes nothing by itself, so "ok" after "Denver" never makes an Oklahoma
+    // job; after "Tulsa" it is Oklahoma once the assistant, reading the conversation, writes "Tulsa, OK" too.
+    it("never takes 'ok' alone for Oklahoma by itself, and takes 'OK' after 'Tulsa' when the assistant read Oklahoma too", async () => {
+      let draft = await begin("Denver");
+      assistant("Great. Pick the work arrangement on the card.", { locationText: "Denver, CO" });
+      draft = await type(draft, "ok");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Denver" });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD, ARRANGEMENT_CARD]);
+      draft = await begin("Tulsa");
+      assistant("Noted.");
+      draft = await type(draft, "OK");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Tulsa" });
+      assistant("Thanks, I've set the location to Tulsa, OK.", { locationText: "Tulsa, OK" });
+      draft = await type(draft, "OK");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: true, value: "Tulsa, OK" });
+      expect(draft.questions.map((q) => q.prompt)).toEqual([ARRANGEMENT_CARD]);
+    });
+
+    // "MA", "PA" and "MD" are jobs too. While the card for the title is still open, two letters typed as a message may
+    // be its answer: they complete nothing by themselves, so a medical assistant's job in Springfield is not made a
+    // Massachusetts job. The place is still asked, and with the title in, the state typed alone answers it.
+    it("does not take 'MA' for Massachusetts while the title is still asked, and takes 'IL' once the title is in", async () => {
+      assistant("Two things are still needed: the job title and the state.", { locationText: "Springfield", remotePolicy: "On site", employmentType: "Full time", schedule: "Monday to Friday", compensationBasis: "hourly", compensationMin: 20, compensationMax: 24, mustHaves: ["One year in a medical office"] });
+      let draft = await start(owner, "I need someone in Springfield, on site, full time, Monday to Friday, $20 to $24 an hour. Must have one year in a medical office.");
+      expect(draft.readiness.missing).toEqual(["title", "location"]);
+      expect(draft.questions.map((q) => q.prompt)).toEqual(["What is the job title?", PLACE_CARD]);
+      // the owner answers the card for the title in the message box: "MA", a medical assistant
+      assistant("Got it: a medical assistant.", { title: "MA" });
+      draft = await type(draft, "MA");
+      expect(draft.facts.title).toBe("MA");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: false, value: "Springfield" });
+      expect(draft.readiness.missing).toEqual(["location"]);
+      expect(draft.questions.map((q) => q.prompt)).toEqual([PLACE_CARD]);
+      assistant("Noted.");
+      draft = await type(draft, "IL");
+      expect(placeOf(draft)).toEqual({ key: "location", label: "Where the job is", done: true, value: "Springfield, IL" });
+      expect(draft.readiness).toMatchObject({ mayDraft: true, missing: [] });
+    });
   });
 
   it("holds a Colorado job until the ad describes the benefits, and gives it a closing date when it is published", async () => {

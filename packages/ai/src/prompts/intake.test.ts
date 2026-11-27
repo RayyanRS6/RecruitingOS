@@ -16,8 +16,18 @@ const compile = (more: Partial<IntakeContext> = {}) => text(intakeCompilePrompt.
 const GONE = /playbook|benchmark|market pay|ceiling|why (?:you|they) are hiring|reason for the hire|who interviews|interview plan|scorecard|decision[- ]?maker|final decision|evaluation|red flags|sourcing|approval|eligibility rule|knockout|draft it/i;
 
 describe("intake.turn: the builder's conversation", () => {
-  it("is version 9 on the standard tier's task", () => {
-    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 9, task: "intake.turn", agent: "intake" });
+  it("is version 10 on the standard tier's task", () => {
+    expect(intakeTurnPrompt).toMatchObject({ key: "intake.turn", version: 10, task: "intake.turn", agent: "intake" });
+  });
+
+  // Version 10 (November 2026, found on the live site). The page has held the place open until the owner says the state,
+  // and the model was not told: after "Warehouse associate in Denver" its message said one thing was still needed, the
+  // work arrangement, while the page asked for two. The essentials' line for the place says it now, in a few words, and
+  // nothing else of the prompt changed.
+  it("says that a city without its state does not answer the place", () => {
+    const line = turn().split("\n").find((l) => l.startsWith("- where the job is"));
+    expect(line).toBe("- where the job is (city and state: a city without its state is not enough);");
+    expect(turn().match(/without its state/g)).toHaveLength(1);
   });
 
   // Version 8, after the real models' first run on the builder (19 November 2026): they held a job back for the hours
